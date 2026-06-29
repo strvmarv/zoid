@@ -13,6 +13,8 @@ pub mod glyph {
     pub const USER_TURN: char = '›';
     pub const CARET: char = '▌';
     pub const SHIFT: char = '⇧';
+    pub const RETURN: char = '⏎';
+    pub const WARNING: char = '⚠';
 }
 
 /// Colors (visual-language table, spec §16 / docs/ux/README.md).

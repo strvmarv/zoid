@@ -67,7 +67,7 @@ pub fn render_chat(frame: &mut Frame, turns: &[Turn], input: &TextArea<'_>, stre
     let status = Line::from(vec![
         Span::styled(" CHAT ", Style::new().fg(color::CHAT_ACCENT)),
         Span::styled(
-            format!("· {}Tab Build · ⏎ send · ^C quit", glyph::SHIFT),
+            format!("· {}Tab Build · {} send · ^C quit", glyph::SHIFT, glyph::RETURN),
             Style::new().fg(color::DIM),
         ),
     ]);

@@ -148,7 +148,12 @@ async fn run<B: ratatui::backend::Backend>(
                                 let provider = app.provider.clone();
                                 let tx = delta_tx.clone();
                                 tokio::spawn(async move {
-                                    let _ = provider.stream(&req, tx).await;
+                                    let _ = provider.stream(&req, tx.clone()).await;
+                                    // Always terminate the turn: providers that end their stream without an
+                                    // explicit Done (e.g. a truncated/timed-out SSE response) must not leave
+                                    // the UI stuck in `streaming`. A redundant Done in the normal case is
+                                    // harmless (it just sets streaming=false again).
+                                    let _ = tx.send(ProviderEvent::Done).await;
                                 });
                             }
                         }
@@ -164,7 +169,7 @@ async fn run<B: ratatui::backend::Backend>(
                     }
                     ProviderEvent::Usage(_) => { /* token ledger lands in P3 */ }
                     ProviderEvent::Error(msg) => {
-                        app.record(EventKind::AssistantMessage { text: format!("⚠ {msg}") }).await?;
+                        app.record(EventKind::AssistantMessage { text: format!("{} {msg}", zoid_tui::tokens::glyph::WARNING) }).await?;
                         app.streaming = false;
                     }
                     ProviderEvent::Done => { app.streaming = false; }
