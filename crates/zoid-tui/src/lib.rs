@@ -1,1 +1,4 @@
-// zoid-tui — stub (populated by a later task)
+//! zoid-tui — design tokens and ratatui render functions. Every view renders
+//! from the `tokens` module (spec §16).
+
+pub mod tokens;
