@@ -65,12 +65,11 @@ pub fn parse_event(event_type: &str, data: &str) -> Option<ProviderEvent> {
     }
 }
 
-use crate::{FakeProvider, Provider};
+use crate::Provider;
 use anyhow::Result;
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
-use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// Streaming Anthropic Messages API provider.
@@ -131,20 +130,6 @@ impl Provider for AnthropicProvider {
             }
         }
         Ok(())
-    }
-}
-
-/// Pick the provider from the environment: real Anthropic when
-/// `ANTHROPIC_API_KEY` is set & non-empty, otherwise an offline fake that
-/// echoes a canned reply (so the binary runs without a key).
-pub fn default_provider() -> Arc<dyn Provider> {
-    match std::env::var("ANTHROPIC_API_KEY") {
-        Ok(key) if !key.is_empty() => Arc::new(AnthropicProvider::new(key)),
-        _ => Arc::new(FakeProvider::new(vec![
-            ProviderEvent::TextDelta("(no ANTHROPIC_API_KEY — offline echo) ".into()),
-            ProviderEvent::TextDelta("hello from zoid's fake provider.".into()),
-            ProviderEvent::Done,
-        ])),
     }
 }
 

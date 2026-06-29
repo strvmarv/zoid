@@ -7,6 +7,7 @@ pub mod anthropic;
 pub mod ollama;
 
 use anyhow::Result;
+use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
@@ -73,6 +74,54 @@ impl Provider for FakeProvider {
             }
         }
         Ok(())
+    }
+}
+
+/// Select the provider from the environment:
+/// `OLLAMA_API_KEY` → Ollama Cloud; else `ANTHROPIC_API_KEY` → Anthropic;
+/// else an offline `FakeProvider` (so the binary always runs).
+pub fn default_provider() -> Arc<dyn Provider> {
+    if let Ok(key) = std::env::var("OLLAMA_API_KEY") {
+        if !key.is_empty() {
+            return Arc::new(ollama::OllamaProvider::new(key));
+        }
+    }
+    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+        if !key.is_empty() {
+            return Arc::new(anthropic::AnthropicProvider::new(key));
+        }
+    }
+    Arc::new(FakeProvider::new(vec![
+        ProviderEvent::TextDelta("(no OLLAMA_API_KEY / ANTHROPIC_API_KEY — offline echo) ".into()),
+        ProviderEvent::TextDelta("hello from zoid's fake provider.".into()),
+        ProviderEvent::Done,
+    ]))
+}
+
+/// The default model id matching the selected provider (overridden by
+/// `$ZOID_MODEL` in the binary).
+pub fn default_model() -> &'static str {
+    if std::env::var("OLLAMA_API_KEY").map(|k| !k.is_empty()).unwrap_or(false) {
+        ollama::DEFAULT_OLLAMA_MODEL
+    } else {
+        anthropic::DEFAULT_MODEL
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    #[test]
+    fn default_model_constants_are_wired() {
+        // The two provider defaults are distinct and non-empty; default_model()
+        // returns one of them. (Env-based branch selection is exercised at
+        // runtime / manual smoke — env vars are process-global and unsafe to
+        // mutate in parallel tests.)
+        assert_eq!(anthropic::DEFAULT_MODEL, "claude-sonnet-4-6");
+        assert_eq!(ollama::DEFAULT_OLLAMA_MODEL, "glm-5.2:cloud");
+        let m = default_model();
+        assert!(m == anthropic::DEFAULT_MODEL || m == ollama::DEFAULT_OLLAMA_MODEL);
     }
 }
 

@@ -20,7 +20,7 @@ use input::{classify, KeyAction};
 use zoid_core::event::{Event, EventKind};
 use zoid_core::projection::{transcript, Role};
 use zoid_core::session::SessionHandle;
-use zoid_provider::anthropic::{default_provider, DEFAULT_MODEL};
+use zoid_provider::{default_model, default_provider};
 use zoid_provider::{CompletionRequest, Message, MsgRole, Provider, ProviderEvent};
 use zoid_tui::chat::render_chat;
 
@@ -90,7 +90,7 @@ async fn main() -> Result<()> {
     let session = SessionHandle::spawn(path.to_str().context("session DB path is not valid UTF-8")?)?;
     let events = session.snapshot().await?;
 
-    let model = std::env::var("ZOID_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+    let model = std::env::var("ZOID_MODEL").unwrap_or_else(|_| default_model().to_string());
 
     let mut app = App {
         session,
