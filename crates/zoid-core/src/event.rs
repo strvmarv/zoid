@@ -21,6 +21,7 @@ pub struct TokenStat {
 pub enum EventKind {
     UserMessage { text: String },
     AssistantMessage { text: String },
+    ModelDelta { text: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,5 +70,15 @@ mod tests {
         assert_eq!(ev.branch, BranchId::default());
         assert_eq!(ev.tokens, None);
         assert_eq!(ev.parent, None);
+    }
+
+    #[test]
+    fn model_delta_round_trips() {
+        let id = Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
+        let ev = Event::new(id, None, 42, EventKind::ModelDelta { text: "tok".into() });
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, back);
+        assert!(matches!(back.kind, EventKind::ModelDelta { .. }));
     }
 }

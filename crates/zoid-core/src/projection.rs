@@ -16,9 +16,10 @@ pub struct Turn {
 pub fn transcript(events: &[Event]) -> Vec<Turn> {
     events
         .iter()
-        .map(|e| match &e.kind {
-            EventKind::UserMessage { text } => Turn { role: Role::User, text: text.clone() },
-            EventKind::AssistantMessage { text } => Turn { role: Role::Assistant, text: text.clone() },
+        .filter_map(|e| match &e.kind {
+            EventKind::UserMessage { text } => Some(Turn { role: Role::User, text: text.clone() }),
+            EventKind::AssistantMessage { text } => Some(Turn { role: Role::Assistant, text: text.clone() }),
+            EventKind::ModelDelta { .. } => None, // temporary: Task 3 folds deltas into AssistantMessage turns
         })
         .collect()
 }
