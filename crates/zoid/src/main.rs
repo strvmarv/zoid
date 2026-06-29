@@ -1,56 +1,174 @@
 mod input;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::{
-    event::{self, Event as CEvent, KeyCode, KeyModifiers},
+    event::{Event as CEvent, EventStream},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{backend::Backend, prelude::CrosstermBackend, Terminal};
+use futures_util::StreamExt;
+use ratatui::{prelude::CrosstermBackend, Terminal};
 use std::io::stdout;
-use std::path::Path;
-use zoid_core::projection::{transcript, Turn};
-use zoid_core::store::EventStore;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::mpsc;
+use tui_textarea::TextArea;
+use ulid::Ulid;
+
+use input::{classify, KeyAction};
+use zoid_core::event::{Event, EventKind};
+use zoid_core::projection::{transcript, Role};
+use zoid_core::session::SessionHandle;
+use zoid_provider::anthropic::{default_provider, DEFAULT_MODEL};
+use zoid_provider::{CompletionRequest, Message, MsgRole, Provider, ProviderEvent};
 use zoid_tui::chat::render_chat;
 
+const SYSTEM_PROMPT: &str = "You are zoid, a terminal coding assistant. Be concise and precise.";
+
 /// Resolve the session DB path: `$ZOID_DB` if set, else `./.zoid/session.db`.
-fn db_path() -> String {
+fn db_path() -> Result<PathBuf> {
     if let Ok(p) = std::env::var("ZOID_DB") {
-        return p;
+        return Ok(PathBuf::from(p));
     }
     let dir = Path::new(".zoid");
-    let _ = std::fs::create_dir_all(dir);
-    dir.join("session.db").to_string_lossy().into_owned()
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    Ok(dir.join("session.db"))
 }
 
-fn main() -> Result<()> {
-    // Boot: open the log, replay it into the current transcript.
-    let store = EventStore::open(&db_path())?;
-    let turns = transcript(&store.load_all()?);
+/// Wall-clock millis since the epoch — supplied by the binary (core stays clock-free).
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
 
-    // Enter the TUI.
+struct App {
+    session: SessionHandle,
+    events: Vec<Event>,
+    provider: Arc<dyn Provider>,
+    model: String,
+    textarea: TextArea<'static>,
+    streaming: bool,
+}
+
+impl App {
+    /// Append an event both durably (session actor) and to the in-memory log
+    /// the UI renders from.
+    async fn record(&mut self, kind: EventKind) -> Result<()> {
+        let ev = Event::new(Ulid::new(), None, now_ms(), kind);
+        self.session.append(ev.clone()).await?;
+        self.events.push(ev);
+        Ok(())
+    }
+
+    /// Build the provider request from the current transcript.
+    fn request(&self) -> CompletionRequest {
+        let messages = transcript(&self.events)
+            .into_iter()
+            .map(|t| Message {
+                role: match t.role {
+                    Role::User => MsgRole::User,
+                    Role::Assistant => MsgRole::Assistant,
+                },
+                content: t.text,
+            })
+            .collect();
+        CompletionRequest {
+            model: self.model.clone(),
+            system: Some(SYSTEM_PROMPT.to_string()),
+            messages,
+            max_tokens: 4096,
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let path = db_path()?;
+    let session = SessionHandle::spawn(path.to_str().context("session DB path is not valid UTF-8")?)?;
+    let events = session.snapshot().await?;
+
+    let model = std::env::var("ZOID_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+
+    let mut app = App {
+        session,
+        events,
+        provider: default_provider(),
+        model,
+        textarea: TextArea::default(),
+        streaming: false,
+    };
+
     enable_raw_mode()?;
     let mut out = stdout();
     execute!(out, EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(out))?;
 
-    let result = run(&mut terminal, &turns);
+    let result = run(&mut terminal, &mut app).await;
 
-    // Restore the terminal regardless of how `run` ended.
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
+    // Restore the terminal on every exit path — drive through errors, don't bail.
+    let _ = disable_raw_mode();
+    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    let _ = terminal.show_cursor();
     result
 }
 
-fn run<B: Backend>(terminal: &mut Terminal<B>, turns: &[Turn]) -> Result<()> {
+async fn run<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    app: &mut App,
+) -> Result<()> {
+    let mut term_events = EventStream::new();
+    // Long-lived delta channel; each provider turn clones the sender.
+    let (delta_tx, mut delta_rx) = mpsc::channel::<ProviderEvent>(256);
+
     loop {
-        terminal.draw(|f| render_chat(f, turns))?;
-        if let CEvent::Key(key) = event::read()? {
-            let quit = key.code == KeyCode::Char('q')
-                || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL));
-            if quit {
-                return Ok(());
+        let turns = transcript(&app.events);
+        terminal.draw(|f| render_chat(f, &turns, &app.textarea, app.streaming))?;
+
+        tokio::select! {
+            maybe_term = term_events.next() => {
+                match maybe_term {
+                    Some(Ok(CEvent::Key(key))) => {
+                        match classify(key) {
+                            KeyAction::Quit => return Ok(()),
+                            KeyAction::ToggleMode => { /* Build mode arrives in P6 — no-op */ }
+                            KeyAction::Newline => { app.textarea.insert_newline(); }
+                            KeyAction::Edit => { app.textarea.input(key); }
+                            KeyAction::Submit => {
+                                if app.streaming { continue; } // ignore submits mid-stream
+                                let text = app.textarea.lines().join("\n");
+                                if text.trim().is_empty() { continue; }
+                                app.textarea = TextArea::default();
+                                app.record(EventKind::UserMessage { text }).await?;
+                                app.streaming = true;
+
+                                let req = app.request();
+                                let provider = app.provider.clone();
+                                let tx = delta_tx.clone();
+                                tokio::spawn(async move {
+                                    let _ = provider.stream(&req, tx).await;
+                                });
+                            }
+                        }
+                    }
+                    Some(Ok(_)) => { /* resize/mouse/etc: redraw on next loop */ }
+                    Some(Err(_)) | None => return Ok(()),
+                }
+            }
+            Some(pe) = delta_rx.recv() => {
+                match pe {
+                    ProviderEvent::TextDelta(s) => {
+                        app.record(EventKind::ModelDelta { text: s }).await?;
+                    }
+                    ProviderEvent::Usage(_) => { /* token ledger lands in P3 */ }
+                    ProviderEvent::Error(msg) => {
+                        app.record(EventKind::AssistantMessage { text: format!("⚠ {msg}") }).await?;
+                        app.streaming = false;
+                    }
+                    ProviderEvent::Done => { app.streaming = false; }
+                }
             }
         }
     }

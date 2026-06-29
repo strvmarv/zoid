@@ -2,7 +2,6 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-#[allow(dead_code)] // allow(dead_code): consumed by the loop in Task 11
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyAction {
     Quit,
@@ -14,7 +13,6 @@ pub enum KeyAction {
 
 /// Classify a key press for the Chat loop. Order matters: control combos and
 /// special keys are matched before falling through to plain editing.
-#[allow(dead_code)] // allow(dead_code): consumed by the loop in Task 11
 pub fn classify(key: KeyEvent) -> KeyAction {
     match (key.code, key.modifiers) {
         (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => KeyAction::Quit,
