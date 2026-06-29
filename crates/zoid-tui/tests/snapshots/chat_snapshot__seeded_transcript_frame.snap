@@ -1,0 +1,13 @@
+---
+source: crates/zoid-tui/tests/chat_snapshot.rs
+assertion_line: 22
+expression: terminal.backend().to_string()
+---
+" zoid CHAT ⎇ main                                           "
+"› what's causing the 500?                                   "
+"zoid an unwrapped lookup in the handler.                    "
+"                                                            "
+"                                                            "
+"                                                            "
+"                                                            "
+" CHAT · ⇧Tab Build · q quit                                 "
