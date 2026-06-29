@@ -3,6 +3,7 @@
 
 pub mod event;
 pub mod projection;
+pub mod store;
 
 #[cfg(test)]
 mod smoke {
