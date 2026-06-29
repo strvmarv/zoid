@@ -3,8 +3,13 @@
 //! Self-contained like the `anthropic` module; uses the crate's `Provider` seam.
 //! Task 1: request body + chunk parser. Task 2: the provider + wiring.
 
-use crate::{CompletionRequest, MsgRole, ProviderEvent, Usage};
+use crate::{CompletionRequest, MsgRole, Provider, ProviderEvent, Usage};
+use anyhow::Result;
+use async_trait::async_trait;
+use eventsource_stream::Eventsource;
+use futures_util::StreamExt;
 use serde_json::{json, Value};
+use tokio::sync::mpsc;
 
 /// Default model when `$ZOID_MODEL` is unset (GLM on Ollama Cloud).
 pub const DEFAULT_OLLAMA_MODEL: &str = "glm-5.2:cloud";
@@ -62,6 +67,66 @@ pub fn parse_chunk(data: &str) -> Option<ProviderEvent> {
     }
 
     None
+}
+
+/// Streaming Ollama Cloud provider (OpenAI-compatible Chat Completions API).
+pub struct OllamaProvider {
+    api_key: String,
+    base_url: String,
+    client: reqwest::Client,
+}
+
+impl OllamaProvider {
+    pub fn new(api_key: String) -> Self {
+        Self {
+            api_key,
+            base_url: "https://ollama.com".to_string(),
+            client: reqwest::Client::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl Provider for OllamaProvider {
+    async fn stream(&self, req: &CompletionRequest, sink: mpsc::Sender<ProviderEvent>) -> Result<()> {
+        let resp = self
+            .client
+            .post(format!("{}/v1/chat/completions", self.base_url))
+            .header("authorization", format!("Bearer {}", self.api_key))
+            .header("content-type", "application/json")
+            .json(&request_body(req))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            let _ = sink.send(ProviderEvent::Error(format!("HTTP {status}: {text}"))).await;
+            return Ok(());
+        }
+
+        let mut stream = resp.bytes_stream().eventsource();
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(event) => {
+                    if let Some(pe) = parse_chunk(&event.data) {
+                        let is_done = matches!(pe, ProviderEvent::Done);
+                        if sink.send(pe).await.is_err() {
+                            break;
+                        }
+                        if is_done {
+                            break;
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = sink.send(ProviderEvent::Error(e.to_string())).await;
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
