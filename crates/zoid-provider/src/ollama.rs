@@ -1,12 +1,10 @@
-//! The Ollama Cloud provider via the OpenAI-compatible Chat Completions API
-//! (`POST {base}/v1/chat/completions`, SSE streaming, `data: [DONE]` terminator).
+//! The Ollama Cloud provider via the native Chat API
+//! (`POST {base}/api/chat`, NDJSON streaming, `"done":true` terminator).
 //! Self-contained like the `anthropic` module; uses the crate's `Provider` seam.
-//! Task 1: request body + chunk parser. Task 2: the provider + wiring.
 
-use crate::{CompletionRequest, MsgRole, Provider, ProviderEvent, Usage};
+use crate::{CompletionRequest, MsgRole, Provider, ProviderEvent};
 use anyhow::Result;
 use async_trait::async_trait;
-use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
@@ -14,10 +12,9 @@ use tokio::sync::mpsc;
 /// Default model when `$ZOID_MODEL` is unset (GLM on Ollama Cloud).
 pub const DEFAULT_OLLAMA_MODEL: &str = "glm-5.2:cloud";
 
-/// Build the OpenAI-compatible request body. The system prompt becomes a
-/// leading `{"role":"system"}` message (OpenAI puts system inside `messages`).
-/// `stream_options` is intentionally omitted (some servers reject unknown
-/// fields; usage is not needed in P1a).
+/// Build the native Ollama `/api/chat` request body. System prompt is a leading
+/// `{"role":"system"}` message. Only `model`/`messages`/`stream` are sent — the
+/// native API does not take OpenAI's `max_tokens`/`stream_options`.
 pub fn request_body(req: &CompletionRequest) -> Value {
     let mut messages: Vec<Value> = Vec::new();
     if let Some(sys) = &req.system {
@@ -32,44 +29,36 @@ pub fn request_body(req: &CompletionRequest) -> Value {
     json!({
         "model": req.model,
         "stream": true,
-        "max_tokens": req.max_tokens,
         "messages": messages,
     })
 }
 
-/// Parse one OpenAI-compatible SSE `data:` payload into a `ProviderEvent`.
-/// The terminator is the literal `[DONE]`. Content lives at
-/// `choices[0].delta.content`; a usage-bearing chunk maps to `Usage`.
-/// Empty/role-only/finish chunks and malformed JSON return `None` (never panics).
-pub fn parse_chunk(data: &str) -> Option<ProviderEvent> {
-    let data = data.trim();
-    if data == "[DONE]" {
+/// Parse one native NDJSON line into a `ProviderEvent`.
+/// `{"done":true,...}` → `Done`; `{"error":"..."}` → `Error`;
+/// `message.content` non-empty → `TextDelta`; everything else
+/// (thinking-only/empty/blank/malformed) → `None`. Never panics.
+pub fn parse_line(line: &str) -> Option<ProviderEvent> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let v: Value = serde_json::from_str(line).ok()?;
+
+    if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+        return Some(ProviderEvent::Error(err.to_string()));
+    }
+    if v.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
         return Some(ProviderEvent::Done);
     }
-    let v: Value = serde_json::from_str(data).ok()?;
-
-    if let Some(text) = v
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c0| c0.get("delta"))
-        .and_then(|d| d.get("content"))
-        .and_then(|t| t.as_str())
-    {
+    if let Some(text) = v.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_str()) {
         if !text.is_empty() {
             return Some(ProviderEvent::TextDelta(text.to_string()));
         }
     }
-
-    if let Some(usage) = v.get("usage").filter(|u| !u.is_null()) {
-        let input = usage.get("prompt_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
-        let output = usage.get("completion_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
-        return Some(ProviderEvent::Usage(Usage { input_tokens: input, output_tokens: output }));
-    }
-
     None
 }
 
-/// Streaming Ollama Cloud provider (OpenAI-compatible Chat Completions API).
+/// Streaming Ollama Cloud provider (native Chat API).
 pub struct OllamaProvider {
     api_key: String,
     base_url: String,
@@ -91,7 +80,7 @@ impl Provider for OllamaProvider {
     async fn stream(&self, req: &CompletionRequest, sink: mpsc::Sender<ProviderEvent>) -> Result<()> {
         let resp = self
             .client
-            .post(format!("{}/v1/chat/completions", self.base_url))
+            .post(format!("{}/api/chat", self.base_url))
             .header("authorization", format!("Bearer {}", self.api_key))
             .header("content-type", "application/json")
             .json(&request_body(req))
@@ -105,24 +94,41 @@ impl Provider for OllamaProvider {
             return Ok(());
         }
 
-        let mut stream = resp.bytes_stream().eventsource();
-        while let Some(item) = stream.next().await {
-            match item {
-                Ok(event) => {
-                    if let Some(pe) = parse_chunk(&event.data) {
-                        let is_done = matches!(pe, ProviderEvent::Done);
-                        if sink.send(pe).await.is_err() {
-                            break;
-                        }
-                        if is_done {
-                            break;
+        // Native /api/chat streams newline-delimited JSON. Buffer raw bytes and
+        // split on b'\n' (safe: newline never appears inside a multibyte UTF-8
+        // sequence), decoding only complete lines.
+        let mut stream = resp.bytes_stream();
+        let mut buf: Vec<u8> = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    buf.extend_from_slice(&bytes);
+                    while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                        let line: Vec<u8> = buf.drain(..=pos).collect();
+                        let line = String::from_utf8_lossy(&line);
+                        if let Some(pe) = parse_line(&line) {
+                            let is_done = matches!(pe, ProviderEvent::Done);
+                            if sink.send(pe).await.is_err() {
+                                return Ok(());
+                            }
+                            if is_done {
+                                return Ok(());
+                            }
                         }
                     }
                 }
                 Err(e) => {
                     let _ = sink.send(ProviderEvent::Error(e.to_string())).await;
-                    break;
+                    return Ok(());
                 }
+            }
+        }
+
+        // Flush any trailing line without a final newline.
+        if !buf.is_empty() {
+            let line = String::from_utf8_lossy(&buf);
+            if let Some(pe) = parse_line(&line) {
+                let _ = sink.send(pe).await;
             }
         }
         Ok(())
@@ -136,7 +142,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn body_maps_system_to_leading_message_and_sets_stream() {
+    fn native_body_has_stream_and_system_leading_message_no_openai_fields() {
         let req = CompletionRequest {
             model: "glm-5.2:cloud".into(),
             system: Some("be terse".into()),
@@ -150,59 +156,55 @@ mod tests {
         assert_eq!(body, json!({
             "model": "glm-5.2:cloud",
             "stream": true,
-            "max_tokens": 1024,
             "messages": [
                 { "role": "system", "content": "be terse" },
                 { "role": "user", "content": "hi" },
                 { "role": "assistant", "content": "hello" },
             ],
         }));
+        // native body must NOT carry OpenAI-only fields
+        assert!(body.get("max_tokens").is_none());
+        assert!(body.get("stream_options").is_none());
     }
 
     #[test]
     fn body_without_system_has_no_system_message() {
         let req = CompletionRequest {
-            model: "m".into(),
-            system: None,
+            model: "m".into(), system: None,
             messages: vec![Message { role: MsgRole::User, content: "x".into() }],
             max_tokens: 8,
         };
-        let body = request_body(&req);
-        assert_eq!(body["messages"], json!([{ "role": "user", "content": "x" }]));
-        assert!(body.get("stream_options").is_none());
+        assert_eq!(request_body(&req)["messages"], json!([{ "role": "user", "content": "x" }]));
     }
 
     #[test]
-    fn parses_content_delta() {
-        let data = r#"{"choices":[{"index":0,"delta":{"content":"Hel"}}]}"#;
-        assert_eq!(parse_chunk(data), Some(ProviderEvent::TextDelta("Hel".into())));
+    fn parses_content_delta_line() {
+        let line = r#"{"model":"glm-5.2:cloud","message":{"role":"assistant","content":"Hel"},"done":false}"#;
+        assert_eq!(parse_line(line), Some(ProviderEvent::TextDelta("Hel".into())));
     }
 
     #[test]
-    fn parses_done_sentinel() {
-        assert_eq!(parse_chunk("[DONE]"), Some(ProviderEvent::Done));
+    fn thinking_only_line_yields_none() {
+        let line = r#"{"message":{"role":"assistant","content":"","thinking":"reasoning"},"done":false}"#;
+        assert_eq!(parse_line(line), None);
     }
 
     #[test]
-    fn parses_usage_chunk() {
-        let data = r#"{"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":12}}"#;
-        assert_eq!(parse_chunk(data),
-            Some(ProviderEvent::Usage(Usage { input_tokens: 7, output_tokens: 12 })));
+    fn done_line_yields_done() {
+        let line = r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","eval_count":58}"#;
+        assert_eq!(parse_line(line), Some(ProviderEvent::Done));
     }
 
     #[test]
-    fn empty_content_and_role_only_chunks_yield_none() {
-        // first chunk often carries role but no content
-        assert_eq!(parse_chunk(r#"{"choices":[{"delta":{"role":"assistant"}}]}"#), None);
-        // explicit empty content
-        assert_eq!(parse_chunk(r#"{"choices":[{"delta":{"content":""}}]}"#), None);
-        // finish chunk with no content/usage
-        assert_eq!(parse_chunk(r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#), None);
+    fn error_line_yields_error() {
+        assert_eq!(parse_line(r#"{"error":"Unauthorized"}"#),
+            Some(ProviderEvent::Error("Unauthorized".into())));
     }
 
     #[test]
-    fn malformed_data_yields_none_not_panic() {
-        assert_eq!(parse_chunk("not json"), None);
-        assert_eq!(parse_chunk(""), None);
+    fn empty_and_malformed_lines_yield_none() {
+        assert_eq!(parse_line(""), None);
+        assert_eq!(parse_line("   "), None);
+        assert_eq!(parse_line("not json"), None);
     }
 }
