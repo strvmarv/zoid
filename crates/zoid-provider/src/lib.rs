@@ -4,6 +4,7 @@
 //! (no dependency on `zoid-core`) so the provider/plugin surface stays decoupled.
 
 pub mod anthropic;
+pub mod ollama;
 
 use anyhow::Result;
 use async_trait::async_trait;
