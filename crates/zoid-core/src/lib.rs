@@ -1,6 +1,8 @@
 //! zoid-core — the event-sourced spine: an append-only log, a SQLite store,
 //! and pure projections over the log.
 
+pub mod event;
+
 #[cfg(test)]
 mod smoke {
     #[test]
