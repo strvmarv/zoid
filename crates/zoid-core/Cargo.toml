@@ -9,6 +9,7 @@ serde_json = { workspace = true }
 ulid = { workspace = true }
 rusqlite = { workspace = true }
 anyhow = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
