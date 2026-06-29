@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BranchId(pub String);
 
 impl Default for BranchId {
@@ -46,11 +46,28 @@ mod tests {
     #[test]
     fn event_json_round_trips() {
         let id = Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
-        let ev = Event::new(id, None, 1_700_000_000, EventKind::UserMessage { text: "hi".into() });
+        let parent = Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAW").unwrap();
+        let ev = Event {
+            id,
+            parent: Some(parent),
+            branch: BranchId("feature".to_string()),
+            ts: 1_700_000_000,
+            kind: EventKind::AssistantMessage { text: "hello".into() },
+            tokens: Some(TokenStat { input: 1, output: 2, cached: 3 }),
+        };
         let json = serde_json::to_string(&ev).unwrap();
         let back: Event = serde_json::from_str(&json).unwrap();
         assert_eq!(ev, back);
-        assert_eq!(back.branch, BranchId::default());
-        assert_eq!(back.tokens, None);
+        assert_eq!(back.parent, Some(parent));
+        assert_eq!(back.tokens, Some(TokenStat { input: 1, output: 2, cached: 3 }));
+    }
+
+    #[test]
+    fn event_new_defaults() {
+        let id = Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
+        let ev = Event::new(id, None, 1_700_000_000, EventKind::UserMessage { text: "hi".into() });
+        assert_eq!(ev.branch, BranchId::default());
+        assert_eq!(ev.tokens, None);
+        assert_eq!(ev.parent, None);
     }
 }
