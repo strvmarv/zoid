@@ -12,3 +12,6 @@ spikes/dotnet-spike/out-aot
 
 # misc
 *.log
+
+# zoid local session data
+/.zoid/
