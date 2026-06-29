@@ -2,6 +2,7 @@
 //! and pure projections over the log.
 
 pub mod event;
+pub mod projection;
 
 #[cfg(test)]
 mod smoke {
