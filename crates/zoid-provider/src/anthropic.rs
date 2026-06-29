@@ -65,6 +65,89 @@ pub fn parse_event(event_type: &str, data: &str) -> Option<ProviderEvent> {
     }
 }
 
+use crate::{FakeProvider, Provider};
+use anyhow::Result;
+use async_trait::async_trait;
+use eventsource_stream::Eventsource;
+use futures_util::StreamExt;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+
+/// Streaming Anthropic Messages API provider.
+pub struct AnthropicProvider {
+    api_key: String,
+    base_url: String,
+    client: reqwest::Client,
+}
+
+impl AnthropicProvider {
+    pub fn new(api_key: String) -> Self {
+        Self {
+            api_key,
+            base_url: "https://api.anthropic.com".to_string(),
+            client: reqwest::Client::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl Provider for AnthropicProvider {
+    async fn stream(&self, req: &crate::CompletionRequest, sink: mpsc::Sender<ProviderEvent>) -> Result<()> {
+        let resp = self
+            .client
+            .post(format!("{}/v1/messages", self.base_url))
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&request_body(req))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            let _ = sink.send(ProviderEvent::Error(format!("HTTP {status}: {text}"))).await;
+            return Ok(());
+        }
+
+        let mut stream = resp.bytes_stream().eventsource();
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(event) => {
+                    if let Some(pe) = parse_event(&event.event, &event.data) {
+                        let is_done = matches!(pe, ProviderEvent::Done);
+                        if sink.send(pe).await.is_err() {
+                            break; // receiver gone
+                        }
+                        if is_done {
+                            break;
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = sink.send(ProviderEvent::Error(e.to_string())).await;
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Pick the provider from the environment: real Anthropic when
+/// `ANTHROPIC_API_KEY` is set & non-empty, otherwise an offline fake that
+/// echoes a canned reply (so the binary runs without a key).
+pub fn default_provider() -> Arc<dyn Provider> {
+    match std::env::var("ANTHROPIC_API_KEY") {
+        Ok(key) if !key.is_empty() => Arc::new(AnthropicProvider::new(key)),
+        _ => Arc::new(FakeProvider::new(vec![
+            ProviderEvent::TextDelta("(no ANTHROPIC_API_KEY — offline echo) ".into()),
+            ProviderEvent::TextDelta("hello from zoid's fake provider.".into()),
+            ProviderEvent::Done,
+        ])),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
