@@ -40,7 +40,7 @@
   <div class="head"><h1>zoid — the autonomy contract</h1><p>Engage at the bookends; autonomous in between; interrupt only on a blocker.</p></div>
   <div class="flow">
     <b><span class="eng">① BRAINSTORM → PLAN</span></b> <span class="dim">(you, in Chat — define + approve the contract)</span>
-    &nbsp;→&nbsp; <b><span class="auto">② EXECUTE</span></b> <span class="dim">(agent, autonomous — self-gates: tdd + critic review, retry on fail)</span>
+    &nbsp;→&nbsp; <b><span class="auto">② EXECUTE</span></b> <span class="dim">(agent, autonomous — one subagent per task; self-gates: tdd → spec &amp; quality review, retry on fail)</span>
     &nbsp;⛔&nbsp;<span class="del">blocker?</span> <span class="dim">→ pause + notify → you resolve → resume</span>
     &nbsp;→&nbsp; <b><span class="eng">③ FINALIZE</span></b> <span class="dim">(you — review the finished branch, merge/PR)</span>
   </div>
@@ -51,16 +51,16 @@
     <div class="main" style="grid-template-columns:1.1fr 1.1fr 0.7fr;">
       <div class="pane">
         <div class="plabel"><span>① overview · status</span><span class="dim">auto-gating · no prompts</span></div>
-<div class="row"><span class="acc">phase 1</span> <span class="ok">✓✓</span>   <span class="acc">phase 2</span> <span class="ok">✓</span><span class="del">⛔</span>   <span class="acc">phase 3</span> <span class="warn">◐</span>   <span class="acc">phase 4</span> ☐
+<div class="row"><span class="acc">phase 1</span> <span class="ok">✓✓</span>   <span class="acc">phase 2</span> <span class="ok">✓</span><span class="del">⛔</span>   <span class="acc">phase 3</span> ☐   <span class="acc">phase 4</span> ☐
 <span class="dim">──────────────────────────────────────</span>
- <span class="ok">✓</span> T1 ILimiter      <span class="ok">self-reviewed ✓ · merged</span>
- <span class="ok">✓</span> T2 per-IP store   <span class="ok">self-reviewed ✓ · merged</span>
- <span class="ok">✓</span> T3 middleware     <span class="ok">self-reviewed ✓ · merged</span>
+ <span class="ok">✓</span> T1 ILimiter      <span class="ok">tdd·spec·quality ✓ · merged</span>
+ <span class="ok">✓</span> T2 per-IP store   <span class="ok">tdd·spec·quality ✓ · merged</span>
+ <span class="ok">✓</span> T3 middleware     <span class="ok">tdd·spec·quality ✓ · merged</span>
 <span style="background:#3a1414;"> <span class="del">⛔</span> T4 config binding  <span class="del">BLOCKED — needs you</span>      </span>
- <span class="warn">◐</span> T5 integ tests    <span class="warn">⠿ running (indep of T4)</span>
+ <span class="dim">☐ T5 integ tests    queued · waits on T4</span>
  <span class="dim">☐ T6 docs           blocked by T5</span>
 <span class="dim">──────────────────────────────────────</span>
-<span class="dim">gates resolved by agent: 3/3 passed (critic+tdd)
+<span class="dim">self-gates passed by agent: 3/3 (tdd+spec+quality)
 retries this run: 2 (auto-fixed)</span>
 
 <div class="blocker">
@@ -71,34 +71,34 @@ valid shapes exist; I won't guess:
  <span class="acc">[1]</span> flat map   route → burst
  <span class="acc">[2]</span> nested     route → { burst, window }
 
-<span class="ok">[1] [2]</span>  or  <span class="acc">[type to describe]</span>   <span class="dim">· other tasks keep running</span></div>
+<span class="ok">[1] [2]</span>  or  <span class="acc">[type to describe]</span>   <span class="dim">· execution paused</span></div>
 </div></div>
       </div>
       <div class="pane">
         <div class="plabel"><span>② follow · reasoning</span><span class="dim">orchestrator</span></div>
 <div class="row"><span class="br">orchestrator</span> <span class="dim">⠿ live</span>
 
- T1 → critic review: <span class="ok">passed</span> → merged
- T2 → critic review: <span class="ok">passed</span> → merged
+ T1 → spec ✓ · quality ✓ → merged
+ T2 → spec ✓ · quality ✓ → merged
  T3 → tdd failed once (off-by-one)
    ↳ <span class="ok">auto-fixed</span>, re-ran, green → merged
- dispatched T5 (independent of T4)
+ reached T4 (next in dependency order)
 
  T4: plan acceptance is ambiguous on the
  config shape. Both satisfy "configurable
  per route" but imply different APIs.
  <span class="del">This is a real fork in intent — escalating
  rather than guessing.</span>
- <span class="del">⛔ paused T4 · 🔔 notified you</span>
+ <span class="del">⛔ paused execution · 🔔 notified you</span>
 
- <span class="dim">▌ T5 continues meanwhile…</span>
+ <span class="dim">▌ nothing proceeds until you answer…</span>
 
 <span class="dim">you'll only see me here if you choose to
 watch — nothing here needs you except ⛔.</span></div>
       </div>
       <div class="rail">
         <div class="plabel"><span>rail</span><span class="dim">^E ^K ^G</span></div>
-        <div class="drawer on"><div class="dh"><span class="acc">④ economy</span><span class="dim">^E</span></div>
+        <div class="drawer on"><div class="dh"><span class="acc">⑤ economy</span><span class="dim">^E</span></div>
 <div class="row">total <span class="gauge"><i style="width:64%;background:linear-gradient(90deg,#3fb950,#d29922)"></i></span>
  128k/200k
 spend rate ok · leash on</div></div>
@@ -111,13 +111,13 @@ spend rate ok · leash on</div></div>
 <div class="row"><span class="dim">3 constraints active</span></div></div>
       </div>
     </div>
-    <div class="sb"><span class="mode build">BUILD</span><span>autonomous</span><span class="del">1 blocker · T4</span><span>3 merged · T5 running</span><span class="sp"></span><span class="dim">answer ⛔ to unblock · esc/:chat · you can walk away otherwise</span></div>
+    <div class="sb"><span class="mode build">BUILD</span><span>autonomous</span><span class="del">1 blocker · T4</span><span>paused · 3 merged</span><span class="sp"></span><span class="dim">answer ⛔ to unblock · esc/:chat · you can walk away otherwise</span></div>
   </div>
-  <p class="cap"><b>Mid-execution (rare interrupt):</b> three tasks self-gated and merged with no prompts; T3 auto-fixed a failure; only a genuine intent fork (T4) escalates — with a notification, while independent work (T5) keeps running. This card is the <em>only</em> thing that needs you here.</p>
+  <p class="cap"><b>Mid-execution (rare interrupt):</b> three tasks self-gated and merged with no prompts; T3 auto-fixed a failure; only a genuine intent fork (T4) escalates — with a notification, <em>pausing the run</em>. This card is the <em>only</em> thing that needs you here.</p>
 
   <!-- WINDOW 2: REVIEW / FINALIZE -->
   <div class="winL">
-    <div class="tb"><span class="name">zoid</span><span class="mode review">REVIEW</span><span class="dim">finalize · ⎇ feat/rate-limiting</span><span class="sp"></span><span class="ok">✓ complete · 🔔 done 14:51</span></div>
+    <div class="tb"><span class="name">zoid</span><span class="mode build">BUILD</span><span class="mode review">finalize</span><span class="dim">⎇ feat/rate-limiting</span><span class="sp"></span><span class="ok">✓ complete · 🔔 done 14:51</span></div>
     <div class="main" style="grid-template-columns:1fr 1.2fr;">
       <div class="pane">
         <div class="plabel"><span>summary &amp; decisions · audit</span><span class="dim">you weren't watching — here's what I did</span></div>
@@ -132,8 +132,8 @@ spend rate ok · leash on</div></div>
      <span class="dim">reason: your steering note</span>
  <span class="br">•</span> T4 config = <span class="acc">nested</span> shape
      <span class="dim">reason: your blocker answer [2]</span>
- <span class="br">•</span> serialized T1→T4 merge (Cargo.toml)
-     <span class="dim">reason: avoided overlap conflict</span>
+ <span class="br">•</span> ordered T4 after T3 (shared wiring)
+     <span class="dim">reason: T4 builds on T3's middleware</span>
  <span class="br">•</span> added 429-on-empty-bucket test
      <span class="dim">reason: gap critic caught</span>
 <span class="dim">──────────────────────────────────────</span>
@@ -160,13 +160,13 @@ spend rate ok · leash on</div></div>
 }</div>
       </div>
     </div>
-    <div class="sb"><span class="mode review">REVIEW</span><span class="sp"></span>
+    <div class="sb"><span class="mode build">BUILD</span><span class="mode review">finalize</span><span class="sp"></span>
       <span class="btn primary">[a] merge → main</span>
       <span class="btn">[p] open PR</span>
       <span class="btn warn">[c] request changes → new loop</span>
       <span class="btn del">[d] discard branch</span>
     </div>
   </div>
-  <p class="cap"><b>Bookend 2 (finalize):</b> a focused Review mode — left = summary + the <em>autonomous decisions log</em> (audit what happened while you were away, jump to any decision's diff), right = changed-files tree + diff preview. Then merge / PR / send back for another loop / discard. <b>This + the plan approval are the only required engagements.</b></p>
+  <p class="cap"><b>Bookend 2 (finalize):</b> Build's last step (a green accent within Build, not a separate mode) — left = summary + the <em>autonomous decisions log</em> (audit what happened while you were away, jump to any decision's diff), right = changed-files tree + diff preview. Then merge / PR / send back for another loop / discard. <b>This + the plan approval are the only required engagements.</b></p>
 </body>
 </html>

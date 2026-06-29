@@ -64,16 +64,16 @@
         <div class="card plan">
           <div class="ch"><span>▾ plan.md — derived from spec + code · review before execute</span><span class="dim">^Z focus</span></div>
           <div class="cb">
-<div class="sl">tasks · bite-sized TDD · 6 tasks · 4 phases · 2∥ · grounded in real modules</div>
-<div class="row"><span class="amber">phase 1</span> T1 <span class="ty">ILimiter</span>+bucket <span class="acc">crates/limiter/</span> ∥ T2 per-IP store
-<span class="amber">phase 2</span> T3 middleware <span class="acc">api/middleware.rs</span>(new)→T1 ∥ T4 config→T2
+<div class="sl">tasks · bite-sized TDD · 6 tasks · 4 phases · sequential, dependency-ordered · grounded in real modules</div>
+<div class="row"><span class="amber">phase 1</span> T1 <span class="ty">ILimiter</span>+bucket <span class="acc">crates/limiter/</span> · T2 per-IP store
+<span class="amber">phase 2</span> T3 middleware <span class="acc">api/middleware.rs</span>(new)→T1 · T4 config→T2
 <span class="amber">phase 3</span> T5 integration tests →T3,T4    <span class="amber">phase 4</span> T6 docs →T5
 <span class="dim">each task: write failing test → run(fails) → minimal impl → run(passes) → commit</span></div>
 <div class="sl">per-task gate (autonomous) · criteria → gates</div>
 <div class="row">TDD → <span class="acc">spec-compliance review</span> → <span class="acc">code-quality review</span> → fix-loop → merge
 ☑per-IP→T1,T2 · ☑429→T3 · ☑burst→T4 · ☑/healthz→T3 · ☑docs→T6</div>
 <div class="sl">risks surfaced by reading code</div>
-<div class="row"><span class="warn">•</span> no middleware layer today (T3 introduces) · <span class="warn">•</span> T1&amp;T4 touch Cargo.toml → serialize merge
+<div class="row"><span class="warn">•</span> no middleware layer today (T3 introduces) · <span class="warn">•</span> error enum has no 429 variant → T3 extends it
 <span class="dim">pre-flight scan: ✓ no plan/constraint conflicts</span></div>
           </div>
           <div class="act">

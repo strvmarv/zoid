@@ -31,7 +31,7 @@
   .cap{color:var(--mut);font-size:13px;margin:6px 14px 22px;}.cap b{color:#c9d1d9;}
 </style></head>
 <body>
-  <div class="head"><h1>zoid — Chat mode (full scale)</h1><p>Conversation + manual implementation. You drive; the agent assists one action at a time. No fleet, no autonomy.</p></div>
+  <div class="head"><h1>zoid — Chat mode (full scale)</h1><p>Conversation + manual implementation. You drive; the agent assists one action at a time. No autonomous loop.</p></div>
 
   <div class="winL">
     <div class="tb"><span class="name">zoid</span><span class="mode chat">CHAT</span><span>⎇ <span class="br">main</span></span><span class="dim">~/proj</span><span class="dim">⌃ altitude: detail</span><span class="sp"></span><span class="acc">claude-opus-4-8</span><span>58k / 200k</span><span class="ok">● idle</span></div>
@@ -81,8 +81,8 @@ churn <span class="spark ok">▁▂▁▃▁</span>
         <div class="drawer"><div class="dh"><span class="dim">▸ palette</span><span class="dim">^P</span></div></div>
       </div>
     </div>
-    <div class="input"><span class="acc">›</span><span>message zoid…</span><span class="dim">⏎ send · ⇧⏎ newline · / commands · v select · ⌃scroll zoom · F2 Build</span></div>
-    <div class="sb"><span class="mode chat">CHAT</span><span>⎇ <span class="br">main</span> · manual</span><span class="sp"></span><span class="dim">^5 context · ^P palette · F2 → Build</span></div>
+    <div class="input"><span class="acc">›</span><span>message zoid…</span><span class="dim">⏎ send · ⇧⏎ newline · / commands · v select · ⌃scroll zoom · ⇧Tab Build</span></div>
+    <div class="sb"><span class="mode chat">CHAT</span><span>⎇ <span class="br">main</span> · manual</span><span class="sp"></span><span class="dim">^5 context · ^P palette · ⇧Tab → Build</span></div>
   </div>
   <p class="cap"><b>Manual cadence:</b> read → propose → <em>you</em> approve → <b>one</b> edit → stop. ④ object-first verbs let you act on a selected expression (<span class="dim">db.find(id).unwrap()</span>) without typing; ⑤ context lives in a light rail; ① zoom on the titlebar. When an ask is genuinely multi-step, the agent offers <b>Build</b> — and the conversation carries straight in. No autonomy here; that's Build's job.</p>
 </body></html>

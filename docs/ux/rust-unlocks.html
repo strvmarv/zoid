@@ -74,7 +74,7 @@
     </div>
   </div>
 </div>
-<p class="opt-cap"><b>Unlocks:</b> because immediate-mode redraws a fresh buffer each frame with **no GC pauses**, zoom can *animate* (turns visibly fold/unfold), drawers **slide**, mode-switches **transition**, streaming has a smooth caret, and the Build fleet shows **live motion**. Most TUIs feel "steppy"; zoid can feel fluid — a signature polish that's hard to copy. <span class="dim">(A motion budget + reduced-motion setting; v1 can ship a few key transitions.)</span></p>
+<p class="opt-cap"><b>Unlocks:</b> because immediate-mode redraws a fresh buffer each frame with **no GC pauses**, zoom can *animate* (turns visibly fold/unfold), drawers **slide**, mode-switches **transition**, streaming has a smooth caret, and Build progress shows **live motion**. Most TUIs feel "steppy"; zoid can feel fluid — a signature polish that's hard to copy. <span class="dim">(A motion budget + reduced-motion setting; v1 can ship a few key transitions.)</span></p>
 
 <!-- R3 TREE-SITTER -->
 <h3 class="h3lbl">Ⓡ3 · tree-sitter code rendering — real highlighting + structural folding</h3>
@@ -99,15 +99,14 @@
 <h3 class="h3lbl">Ⓡ4 · Live high-FPS data viz — the economy as a dashboard</h3>
 <div class="option" data-choice="viz" onclick="toggleSelect(this)">
   <div class="win">
-    <div class="titlebar"><span class="name">zoid</span><span class="mode" style="background:#3d2a0a;color:#e3b341;padding:1px 8px;border-radius:4px;">BUILD</span><span class="dim">live meters update as agents work</span><span class="sp"></span></div>
+    <div class="titlebar"><span class="name">zoid</span><span class="mode" style="background:#3d2a0a;color:#e3b341;padding:1px 8px;border-radius:4px;">BUILD</span><span class="dim">live meters update as the subagent works</span><span class="sp"></span></div>
     <div class="body">
 <div class="row">context  <span class="gauge"><i style="width:71%;background:linear-gradient(90deg,#3fb950,#d29922)"></i></span> 142k/200k   churn <span class="spark ok">▁▂▃▅▂▇▃▂</span>
 <span class="dim">────────────────────────────────────────────</span>
-agent#1 <span class="gauge"><i style="width:100%;background:#3fb950"></i></span> <span class="ok">✓ T1</span>     tps <span class="spark acc">▃▅▆▇▆▅</span>
-agent#2 <span class="gauge"><i style="width:100%;background:#3fb950"></i></span> <span class="ok">✓ T2</span>     tps <span class="spark acc">▂▄▆▅▇▆</span>
-agent#3 <span class="gauge"><i style="width:62%;background:#d29922"></i></span> <span class="warn">◐ T3</span>     tps <span class="spark acc">▅▆▇▆▇█</span>
-agent#4 <span class="gauge"><i style="width:38%;background:#d29922"></i></span> <span class="warn">◐ T4</span>     tps <span class="spark acc">▃▄▃▅▄▆</span></div>
+orchestrator                              tps <span class="spark acc">▃▅▆▇▆▅</span>
+<span class="acc">▸ T3 subagent</span> <span class="gauge"><i style="width:62%;background:#d29922"></i></span> <span class="warn">◐ active</span>  tps <span class="spark acc">▅▆▇▆▇█</span>
+<span class="dim">done  <span class="ok">✓ T1</span> · <span class="ok">✓ T2</span>     queued  ☐ T4 · T5 · T6</span></div>
     </div>
   </div>
 </div>
-<p class="opt-cap"><b>Unlocks:</b> ratatui's native sparkline/gauge/chart widgets + high-FPS redraw turn the context economy ⑤ and the Build fleet into a **live dashboard** — animated token meters, per-agent throughput sparklines, real-time churn — without jank. Makes the "economy" concept tangible and glanceable. <span class="dim">(Gauges/sparklines are cheap v1 wins; fancy charts can use Ⓡ1 graphics later.)</span></p>
+<p class="opt-cap"><b>Unlocks:</b> ratatui's native sparkline/gauge/chart widgets + high-FPS redraw turn the context economy ⑤ and Build progress into a **live dashboard** — animated token meters, subagent throughput sparklines, real-time churn — without jank. Makes the "economy" concept tangible and glanceable. <span class="dim">(Gauges/sparklines are cheap v1 wins; fancy charts can use Ⓡ1 graphics later.)</span></p>

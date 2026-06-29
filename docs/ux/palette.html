@@ -41,15 +41,15 @@ zoid  ● edited users.rs +3 -1 · ✓ cargo check
 
     <!-- palette overlay -->
     <div class="palette">
-      <div class="pq"><span class="car">⌘</span><span class="q">fork</span><span class="cur">▌</span><span style="margin-left:auto;color:var(--dim);font-size:12px;">fuzzy · all actions</span></div>
+      <div class="pq"><span class="car">⌘</span><span class="q">compact</span><span class="cur">▌</span><span style="margin-left:auto;color:var(--dim);font-size:12px;">fuzzy · all actions</span></div>
 
       <div class="grp">mode</div>
-      <div class="it"><span class="ic">⇢</span> Switch to Build <span class="dim">— continue this conversation into the loop</span><span class="k">:build · F2</span></div>
+      <div class="it"><span class="ic">⇢</span> Switch to Build <span class="dim">— continue this conversation into the loop</span><span class="k">⇧Tab · :build</span></div>
 
-      <div class="grp">branch ⎇</div>
-      <div class="it sel"><span class="ic">⎇</span> <span class="acc">Fork from here</span> <span class="dim">— new branch at this turn</span><span class="k">:fork</span></div>
-      <div class="it"><span class="ic">⤺</span> Undo last turn <span class="dim">— move head back</span><span class="k">u</span></div>
-      <div class="it"><span class="ic">◷</span> Go to turn / time-travel… <span class="dim">— jump head</span><span class="k">gt</span></div>
+      <div class="grp" style="opacity:.5;">branch ⎇ <span style="text-transform:none;">· post-v1</span></div>
+      <div class="it" style="opacity:.5;"><span class="ic">⎇</span> Fork from here <span class="dim">— new branch at this turn</span><span class="k">:fork</span></div>
+      <div class="it" style="opacity:.5;"><span class="ic">⤺</span> Undo last turn <span class="dim">— move head back</span><span class="k">u</span></div>
+      <div class="it" style="opacity:.5;"><span class="ic">◷</span> Go to turn / time-travel… <span class="dim">— jump head</span><span class="k">gt</span></div>
 
       <div class="grp">navigate</div>
       <div class="it"><span class="ic">ƒ</span> Go to symbol… <span class="dim">(tree-sitter)</span><span class="k">gs</span></div>
@@ -58,7 +58,7 @@ zoid  ● edited users.rs +3 -1 · ✓ cargo check
       <div class="grp">context ⑤</div>
       <div class="it"><span class="ic">●</span> Pin file to context<span class="k"></span></div>
       <div class="it"><span class="ic">✕</span> Evict cold items <span class="dim">— free tokens</span><span class="k"></span></div>
-      <div class="it"><span class="ic">⊟</span> Compact context now<span class="k"></span></div>
+      <div class="it sel"><span class="ic">⊟</span> <span class="acc">Compact context now</span><span class="k"></span></div>
 
       <div class="grp">settings</div>
       <div class="it"><span class="ic">◑</span> Toggle reduced motion<span class="k"></span></div>
@@ -71,7 +71,7 @@ zoid  ● edited users.rs +3 -1 · ✓ cargo check
       <div class="pf"><span>↑↓ move</span><span>⏎ run</span><span>esc close</span><span>type to filter</span><span class="dim">results rank by recency + match</span></div>
     </div>
 
-    <div class="cmdline">: build<span class="dim">         ← vim-style direct command (:build :fork :model gpt… :q) for power users</span></div>
+    <div class="cmdline">: build<span class="dim">         ← vim-style direct command (:build :model … :pin :q) for power users</span></div>
   </div>
-  <p class="cap"><b>Two entry points:</b> <b>^P</b> opens the fuzzy, mode-aware palette — grouped (mode · branch · navigate · context · settings · recipes), each row showing its <em>keybind</em> so you learn shortcuts by using it; results rank by recency + match. <b>:</b> is the direct command line for power users. The palette surfaces <em>global</em> verbs (switch mode, fork, settings) plus actions relevant to the <em>current mode</em>. Mode-switch (<span class="dim">:build / :chat</span>) lives here and on <span class="dim">F2</span>.</p>
+  <p class="cap"><b>Two entry points:</b> <b>^P</b> opens the fuzzy, mode-aware palette — grouped (mode · branch · navigate · context · settings · recipes), each row showing its <em>keybind</em> so you learn shortcuts by using it; results rank by recency + match. <b>:</b> is the direct command line for power users. The palette surfaces <em>global</em> verbs (switch mode, settings) plus actions relevant to the <em>current mode</em>. Mode-switch (<span class="dim">:build / :chat</span>) lives here and on <span class="dim">⇧Tab</span>.</p>
 </body></html>

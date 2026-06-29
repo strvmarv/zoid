@@ -45,15 +45,15 @@
     <div class="tb"><span class="name">zoid</span><span class="mode build">BUILD</span><span class="dim">execute · subagent-dev</span><span class="sp"></span><span class="dim">🔔 notified</span><span class="badge">⛔ 1 blocked</span></div>
     <div class="main">
       <div class="pane">
-        <div class="plabel"><span>① overview</span><span class="dim">others keep running</span></div>
+        <div class="plabel"><span>① overview</span><span class="dim">execution paused</span></div>
 <div class="row"> <span class="ok">✓</span> T1 ILimiter     <span class="ok">merged</span>
  <span class="ok">✓</span> T2 per-IP store  <span class="ok">merged</span>
  <span class="ok">✓</span> T3 middleware    <span class="ok">merged</span>
-<span style="background:#3a1414;"> <span class="del">⛔</span> T4 config binding  <span class="del">BLOCKED</span>           </span>
- <span class="warn">◐</span> T5 integ tests   <span class="warn">⠿ running (independent)</span>
- <span class="dim">☐ T6 docs         blocked by T5</span>
+<span style="background:#3a1414;"> <span class="del">⛔</span> T4 config binding  <span class="del">BLOCKED — needs you</span> </span>
+ <span class="dim">☐ T5 integ tests   queued · waits on T4</span>
+ <span class="dim">☐ T6 docs          queued · waits on T5</span>
 <span class="dim">────────────────────────────</span>
-<span class="dim">5/6 progressing · 1 needs you</span></div>
+<span class="del">paused</span> · 3/6 done · 1 needs you</div>
       </div>
       <div class="pane">
         <div class="plabel"><span>② follow · why it escalated</span><span class="dim">orchestrator</span></div>
@@ -62,21 +62,21 @@
  per route" — two valid shapes, both
  satisfy it but imply different APIs.
  <span class="del">A real fork in intent → I won't guess.</span>
- paused T4, kept T5 running, notified
- you. answer below to resume.</div>
+ paused execution, notified you.
+ answer below to resume.</div>
       </div>
     </div>
     <!-- the decision card (ambiguity type) -->
     <div class="blocker">
-      <div class="bh"><span>⛔ BLOCKER · T4 · intent ambiguity</span><span class="dim">paused · independent tasks continue</span></div>
+      <div class="bh"><span>⛔ BLOCKER · T4 · intent ambiguity</span><span class="dim">paused · execution waits for you</span></div>
       <div class="bb"><div class="row">"burst configurable per route" — which shape?
  <span class="acc">[1]</span> flat map      route → burst
  <span class="acc">[2]</span> nested table  route → { burst, window }   <span class="dim">(richer, matches future rate-window work)</span></div></div>
       <div class="act"><span class="btn ok">[1]</span><span class="btn ok">[2]</span><span class="btn">type to describe…</span><span class="btn">o · open plan.md</span><span class="btn">s · follow T4 stream</span></div>
     </div>
-    <div class="sb"><span class="mode build">BUILD</span><span class="badge">⛔ 1 blocked</span><span>5/6 progressing</span><span class="sp"></span><span class="dim">persists until resolved · answer to resume · esc/:chat</span></div>
+    <div class="sb"><span class="mode build">BUILD</span><span class="badge">⛔ 1 blocked</span><span>paused · 3/6 done</span><span class="sp"></span><span class="dim">persists until resolved · answer to resume · esc/:chat</span></div>
   </div>
-  <p class="cap"><b>Blocked state is persistent</b>, not a fleeting toast: the <span class="badge">⛔ 1 blocked</span> badge sits in the title + status bar until resolved, so a missed notification isn't fatal. Independent tasks (T5) keep running. The stream explains <em>why</em> it escalated; the card asks the decision.</p>
+  <p class="cap"><b>Blocked state is persistent</b>, not a fleeting toast: the <span class="badge">⛔ 1 blocked</span> badge sits in the title + status bar until resolved, so a missed notification isn't fatal. Because one task runs at a time, a blocker <b>pauses the run</b> until you answer. The stream explains <em>why</em> it escalated; the card asks the decision.</p>
 
   <!-- Second blocker type: outward-facing consent -->
   <div class="h3">A different blocker type — outward-facing action (the one that makes autonomous-only safe):</div>

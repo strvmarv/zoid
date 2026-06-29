@@ -41,58 +41,54 @@
   .dh{font-size:12px;letter-spacing:.05em;text-transform:uppercase;display:flex;justify-content:space-between;margin-bottom:10px;}
   .cap{color:var(--mut);font-size:13px;margin:6px 14px 22px;}
   .cap b{color:#c9d1d9;}
+  .pipe{border:1px solid var(--line2);border-radius:8px;background:#0b0f14;padding:11px 14px;margin-top:14px;}
 </style>
 </head>
 <body>
-  <div class="head"><h1>zoid — Build mode</h1><p>Full-bleed mock · Overview | Stream + mode-aware rail · ~2× scale</p></div>
+  <div class="head"><h1>zoid — Build mode</h1><p>Full-bleed mock · Overview | Stream + mode-aware rail · ~2× scale · one subagent at a time</p></div>
 
   <div class="winL">
-    <div class="tb"><span class="name">zoid</span><span class="mode build">BUILD</span><span class="dim">subagent-dev · add rate limiting to public API</span><span class="sp"></span><span class="dim">claude-opus-4-8 · 4 worktrees · 241k tok</span><span class="warn">● 1 gate</span></div>
+    <div class="tb"><span class="name">zoid</span><span class="mode build">BUILD</span><span class="dim">execute · add rate limiting to public API</span><span class="sp"></span><span class="dim">claude-opus-4-8 · wt-3 active · 142k tok</span><span class="warn">◐ T3 running</span></div>
     <div class="main">
 
       <!-- OVERVIEW -->
       <div class="pane">
         <div class="plabel"><span>① overview · status</span><span class="dim">j/k select · o diff · p pause</span></div>
-<div class="row"><span class="acc">phase 1 · scaffold</span>   <span class="ok">✓✓</span>      <span class="acc">phase 2 · integrate</span>   <span class="warn">◐◐</span><span class="dim">☐</span>      <span class="acc">phase 3 · verify</span>   <span class="dim">☐</span>      <span class="acc">phase 4 · finish</span>   <span class="dim">☐</span>
+<div class="row"><span class="acc">phase 1 · scaffold</span>   <span class="ok">✓✓</span>      <span class="acc">phase 2 · integrate</span>   <span class="warn">◐</span><span class="dim">☐</span>      <span class="acc">phase 3 · verify</span>   <span class="dim">☐</span>      <span class="acc">phase 4 · finish</span>   <span class="dim">☐</span>
 <span class="dim">──────────────────────────────────────────────────────────────────</span>
- <span class="ok">✓</span>  T1  define ILimiter trait + TokenBucket      <span class="gauge"><i style="width:100%;background:#3fb950"></i></span>  <span class="ok">tdd ✓8 · reviewed ✓ · merged ⎇</span>
- <span class="ok">✓</span>  T2  per-IP store with idle sweep             <span class="gauge"><i style="width:100%;background:#3fb950"></i></span>  <span class="ok">tdd ✓11 · reviewed ✓ · merged ⎇</span>
+ <span class="ok">✓</span>  T1  define ILimiter trait + TokenBucket      <span class="gauge"><i style="width:100%;background:#3fb950"></i></span>  <span class="ok">tdd ✓8 · spec ✓ · quality ✓ · merged ⎇</span>
+ <span class="ok">✓</span>  T2  per-IP store with idle sweep             <span class="gauge"><i style="width:100%;background:#3fb950"></i></span>  <span class="ok">tdd ✓11 · spec ✓ · quality ✓ · merged ⎇</span>
 <span class="sel"> ◐  T3  rate-limit middleware                                                       </span>
-       agent#3 · wt-3                              <span class="gauge"><i style="width:62%;background:#d29922"></i></span>  <span class="warn">⠿ tdd red→green 6/9</span>   <span class="acc">◀ following</span>
- <span class="warn">◐</span>  T4  config binding (per-route burst)         <span class="gauge"><i style="width:38%;background:#d29922"></i></span>  <span class="warn">⠿ writing impl</span>
- <span class="dim">☐  T5  integration tests (429 + Retry-After headers)    blocked by T3, T4</span>
- <span class="dim">☐  T6  docs + migration note                            blocked by T5</span>
+       subagent · wt-3                            <span class="gauge"><i style="width:62%;background:#d29922"></i></span>  <span class="warn">⠿ tdd red→green 6/9</span>   <span class="acc">◀ following</span>
+ <span class="dim">☐  T4  config binding (per-route burst)                   queued · runs after T3</span>
+ <span class="dim">☐  T5  integration tests (429 + Retry-After headers)     blocked by T3, T4</span>
+ <span class="dim">☐  T6  docs + migration note                             blocked by T5</span>
 <span class="dim">──────────────────────────────────────────────────────────────────</span>
- fleet throughput  <span class="spark ok">▅▆▇▆▇█▇▆▇█▆▅</span>      elapsed 4m12s      2/6 done · 2 running
+ progress  <span class="spark ok">▅▆▇▆▇█▇▆</span>      elapsed 4m12s      2/6 done · 1 running
 
- <span class="warn">▸ GATE</span>   T1 ready to merge → <span class="br">main</span>
-         <span class="dim">ILimiter.rs +41 · token_bucket.rs +63 · token_bucket_tests.rs +88   ·   8 tests green</span>
-         <span class="ok">[a] approve &amp; merge</span>     <span class="del">[r] request changes</span>     <span class="acc">[o] open full diff</span>     <span class="dim">[s] skip gate</span></div>
+ <div class="pipe"><span class="warn">▸ T3 review pipeline</span> <span class="dim">(autonomous — no approval needed)</span>
+   <span class="warn">tdd ◐ 6/9</span>  →  <span class="dim">spec ☐</span>  →  <span class="dim">quality ☐</span>  →  <span class="dim">merge ⎇</span>
+   <span class="dim">failures auto-retry/fix; only a blocker stops for you. T3 merges to the build branch when all gates pass.</span></div></div>
       </div>
 
       <!-- STREAM -->
       <div class="pane">
-        <div class="plabel"><span>② follow · reasoning</span><span><span class="tab on">orchestrator</span> &nbsp;<span class="tab">T3 agent#3</span> &nbsp;<span class="dim">[f] cycle</span></span></div>
+        <div class="plabel"><span>② follow · reasoning</span><span><span class="tab on">orchestrator</span> &nbsp;<span class="tab">T3 subagent</span> &nbsp;<span class="dim">[f] cycle</span></span></div>
 <div class="row"><span class="br">orchestrator</span> <span class="dim">⠿ live</span>
 
- planned phase 2 → 2 parallel tasks, no shared deps detected at plan time
- dispatched <span class="acc">T3</span> → agent#3   (worktree wt-3, branched from main@a1f9)
- dispatched <span class="acc">T4</span> → agent#4   (worktree wt-4, branched from main@a1f9)
+ phase 2 → tasks run <span class="acc">one at a time</span>, in dependency order
 
- <span class="ok">T1</span> returned: 8 tests green, diff within plan scope
-   → opening a <span class="warn">review gate</span> before it merges to main
+ <span class="ok">T1</span>, <span class="ok">T2</span> complete: self-gated (tdd · spec · quality)
+   → merged to the build branch — <span class="dim">no prompts</span>
 
- evaluated <span class="ok">T2</span> against the plan's acceptance criteria:
-   <span class="ok">✓</span> per-IP token bucket            (item 2)
-   <span class="ok">✓</span> idle sweep prevents unbounded growth
+ dispatched <span class="acc">T3</span> → subagent   (worktree wt-3, branched from build@a1f9)
 
  watching <span class="acc">T3</span>: tdd loop red→green (6/9)
-   ↳ missing a 429-on-empty-bucket case — nudged agent#3 to add it
+   ↳ missing a 429-on-empty-bucket case — nudged the subagent to add it
 
- <span class="del">⚠</span> detected <span class="acc">T3</span> and <span class="acc">T4</span> both modify Cargo.toml
-   → will serialize their merges to avoid a conflict (⚠ flagged in changed-files)
+ next in queue:
+   <span class="dim">T4</span> config binding   → then <span class="dim">T5</span> integration (waits on T3, T4)
 
- <span class="dim">▌ awaiting your approval to merge T1…</span>
  <span class="caret">▌</span>
 
  <span class="dim">[f] follow T3's raw stream — its tool calls, tdd loop, and diff as it types
@@ -104,33 +100,30 @@
         <div class="plabel"><span>rail · build drawers</span><span class="dim">^E ^K ^G</span></div>
 
         <div class="drawer on">
-          <div class="dh"><span class="acc">④ economy · tokens</span><span class="dim">^E</span></div>
+          <div class="dh"><span class="acc">⑤ economy · tokens</span><span class="dim">^E</span></div>
 <div class="row">total  <span class="gauge gsm"><i style="width:71%;background:linear-gradient(90deg,#3fb950,#d29922)"></i></span>  142k / 200k
 churn  <span class="spark ok">▁▂▃▅▂▇▃▂</span>  <span class="warn">▲ T3 spike</span>
 <span class="dim">────────────────────────────</span>
- orchestrator   22k   <span class="spark acc">▃▅▆▅</span>
- #1 (T1)        18k   <span class="dim">idle</span>
- #2 (T2)        12k   <span class="dim">idle</span>
- #3 (T3)        31k   <span class="spark acc">▆▇█▇</span> <span class="warn">▲</span>
- #4 (T4)         9k   <span class="spark acc">▃▄▅</span>
+ orchestrator    22k   <span class="spark acc">▃▅▆▅</span>
+<span class="acc">▸ T3 (active)</span>    31k   <span class="spark acc">▆▇█▇</span> <span class="warn">▲</span>
 <span class="dim">────────────────────────────</span>
-leash: pause delegates &lt; 5k  <span class="ok">on</span></div>
+<span class="dim">done   T1 18k · T2 12k</span>
+leash: pause before next subagent &lt; 5k  <span class="ok">on</span></div>
         </div>
 
         <div class="drawer on">
           <div class="dh"><span class="acc">B · changed files</span><span class="dim">^K</span></div>
 <div class="row"><span class="dim">▾ crates/limiter/src/</span>
    middleware.rs    <span class="add">+14</span> <span class="del">-6</span>  <span class="warn">T3</span>
-   token_bucket.rs  <span class="add">+63</span>     <span class="ok">T1</span> <span class="del">⚠T3</span>
+   token_bucket.rs  <span class="add">+63</span>     <span class="ok">T1</span> <span class="warn">⚠T3</span>
    bucket_store.rs  <span class="add">+40</span>     <span class="ok">T2</span>
 <span class="dim">▾ crates/api/src/</span>
-   config.rs        <span class="add">+12</span>     <span class="warn">T4</span>
    middleware_wire  <span class="add">+8</span>      <span class="warn">T3</span>
 <span class="dim">▾ ./</span>
-   Cargo.toml       <span class="add">+3</span>      <span class="ok">T1</span> <span class="del">⚠T4</span>
+   Cargo.toml       <span class="add">+3</span>      <span class="ok">T1</span>
 <span class="dim">────────────────────────────</span>
-12 files · <span class="add">+231</span> <span class="del">-47</span> · <span class="del">⚠ 2</span>
-<span class="dim">⏎ open diff · ⚠ = touched by 2 tasks</span></div>
+5 files · <span class="add">+128</span> <span class="del">-6</span> · <span class="warn">⚠ 1</span>
+<span class="dim">⏎ open diff · ⚠ = touched by &gt;1 task</span></div>
         </div>
 
         <div class="drawer">
@@ -141,14 +134,14 @@ leash: pause delegates &lt; 5k  <span class="ok">on</span></div>
  • don't break public API sig
 <span class="dim">────────────────────────────</span>
 <span class="acc">▸</span> note → <span class="warn">T3</span>: "exempt /healthz"
-   <span class="ok">[⏎ send to agent#3]</span></div>
+   <span class="ok">[⏎ send to subagent]</span></div>
         </div>
 
       </div>
     </div>
-    <div class="sb"><span class="mode build">BUILD</span><span>phase 2/4</span><span>2/6 done · 2 running</span><span class="warn">1 gate</span><span class="sp"></span><span class="dim">Tab pane · ^Z zoom pane · j/k task · f follow · ^E/^K/^G drawers · esc/:chat → Chat</span></div>
+    <div class="sb"><span class="mode build">BUILD</span><span>phase 2/4</span><span>2/6 done · 1 running</span><span class="ok">self-gating · no prompts</span><span class="sp"></span><span class="dim">Tab pane · ⇧Tab mode · ^Z zoom · j/k task · f follow · ^E/^K/^G · esc/:chat → Chat</span></div>
   </div>
 
-  <p class="cap"><b>Build:</b> two wide panes (overview · stream) + the mode-aware rail (economy · changed-files · steering). The changed-files tree groups the fleet's edits by directory with per-file diff stat + owning task; <span style="color:#f85149">⚠</span> marks files touched by 2+ tasks. ⏎ opens a file's diff (full-screen). Selecting a task with j/k filters the tree to it; ^Z zooms any pane full-screen.</p>
+  <p class="cap"><b>Build:</b> executes the plan <b>one task at a time</b>, in dependency order — a fresh subagent per task in its own worktree (T3 active; T4 queued). Each task <b>self-gates</b> (tdd → spec-review → quality-review → fix) and merges to the build branch <b>autonomously — you're never prompted to approve a merge</b>; only a blocker stops for you. Two wide panes (overview · stream) + the mode-aware rail (economy · changed-files · steering). In changed-files, <span style="color:#d29922">⚠</span> marks a file touched by more than one task (informational). Selecting a task with j/k filters the tree to it; ^Z zooms any pane full-screen.</p>
 </body>
 </html>
