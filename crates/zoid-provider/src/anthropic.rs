@@ -1,7 +1,7 @@
 //! The real streaming Anthropic provider (reqwest + SSE).
 //! Task 6: request body. Task 7: SSE parsing. Task 8: the provider + selection.
 
-use crate::{CompletionRequest, Message, MsgRole};
+use crate::{CompletionRequest, MsgRole};
 use serde_json::{json, Value};
 
 /// Default model when `$ZOID_MODEL` is unset (latest Claude Sonnet).
@@ -35,6 +35,7 @@ pub fn request_body(req: &CompletionRequest) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Message;
     use serde_json::json;
 
     #[test]
