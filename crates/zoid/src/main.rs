@@ -1,3 +1,5 @@
+mod input;
+
 use anyhow::Result;
 use crossterm::{
     event::{self, Event as CEvent, KeyCode, KeyModifiers},
