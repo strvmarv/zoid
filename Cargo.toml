@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/zoid-core", "crates/zoid-provider", "crates/zoid-tui", "crates/zoid"]
+exclude = ["spikes"]
 resolver = "2"
 
 [workspace.package]
@@ -12,12 +13,16 @@ ulid = { version = "1", features = ["serde"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 anyhow = "1"
 ratatui = "0.29"
-crossterm = "0.28"
+crossterm = { version = "0.28", features = ["event-stream"] }
 async-trait = "0.1"
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+eventsource-stream = "0.2"
+futures-util = "0.3"
+tui-textarea = "0.7"
 proptest = "1"
 insta = "1"
 tempfile = "3"
-tokio = { version = "1", features = ["macros", "rt"] }
 
 [profile.release]
 opt-level = "z"
