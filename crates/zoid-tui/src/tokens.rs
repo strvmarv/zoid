@@ -1,8 +1,6 @@
 //! The single source of truth for glyphs and colors (spec §16). Values are
 //! copied verbatim from docs/ux/README.md's visual-language table.
 
-use ratatui::style::Color;
-
 /// Glyphs (visual-language table, spec §16 / docs/ux/README.md).
 pub mod glyph {
     pub const EDIT: char = '●';
@@ -32,6 +30,7 @@ pub mod color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::style::Color;
 
     #[test]
     fn tokens_match_visual_language_table() {
