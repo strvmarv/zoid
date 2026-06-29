@@ -1,6 +1,6 @@
 ---
 source: crates/zoid-tui/tests/chat_snapshot.rs
-assertion_line: 9
+assertion_line: 12
 expression: terminal.backend().to_string()
 ---
 " zoid CHAT ⎇ main                                           "
@@ -9,5 +9,7 @@ expression: terminal.backend().to_string()
 "                                                            "
 "                                                            "
 "                                                            "
-"                                                            "
-" CHAT · ⇧Tab Build · q quit                                 "
+"┌ message ─────────────────────────────────────────────────┐"
+"│                                                          │"
+"└──────────────────────────────────────────────────────────┘"
+" CHAT · ⇧Tab Build · ⏎ send · ^C quit                       "

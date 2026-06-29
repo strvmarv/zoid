@@ -12,6 +12,7 @@ pub mod glyph {
     pub const BLOCKER: char = '⛔';
     pub const USER_TURN: char = '›';
     pub const CARET: char = '▌';
+    pub const SHIFT: char = '⇧';
 }
 
 /// Colors (visual-language table, spec §16 / docs/ux/README.md).

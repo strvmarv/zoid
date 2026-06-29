@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 ratatui = { workspace = true }
 zoid-core = { path = "../zoid-core" }
+tui-textarea = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
