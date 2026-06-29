@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zoid — command palette</title>
+<style>
+  :root{--bg:#0d1117;--line:#30363d;--line2:#21262d;--dim:#6e7681;--txt:#c9d1d9;
+    --acc:#58a6ff;--ok:#3fb950;--warn:#d29922;--del:#f85149;--br:#bc8cff;--mut:#8b949e;--blue:#79c0ff;--amber:#e3b341;}
+  *{box-sizing:border-box;}
+  html,body{margin:0;background:#010409;color:var(--txt);font-family:"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;}
+  .head{padding:14px 22px 2px;}.head h1{margin:0;font-size:18px;color:#e6edf3;}.head p{margin:2px 0 0;font-size:13px;color:var(--mut);}
+  .winL{position:relative;background:var(--bg);border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:14.5px;line-height:1.7;margin:14px 12px;width:calc(100vw - 24px);min-height:640px;}
+  .tb{display:flex;gap:16px;align-items:center;padding:11px 20px;border-bottom:1px solid var(--line);background:#161b22;color:var(--mut);font-size:13.5px;}
+  .tb .name{color:var(--txt);font-weight:700;font-size:16px;}.tb .sp{flex:1;}
+  .mode.chat{background:#0d2a4d;color:var(--blue);font-weight:700;padding:2px 12px;border-radius:5px;font-size:12px;}
+  .dim{color:var(--dim);}.acc{color:var(--acc);}.ok{color:var(--ok);}.br{color:var(--br);}.blue{color:var(--blue);}.amber{color:var(--amber);}.mut{color:var(--mut);}
+  .behind{padding:18px 30px;color:#30363d;}
+  .behind .row{white-space:pre;}
+  .scrim{position:absolute;inset:44px 0 0 0;background:#010409aa;}
+  .palette{position:absolute;left:50%;top:90px;transform:translateX(-50%);width:min(720px,90%);
+    background:#0d1117;border:1px solid var(--acc);border-radius:12px;box-shadow:0 24px 60px #000c;overflow:hidden;}
+  .pq{display:flex;gap:10px;align-items:center;padding:13px 16px;border-bottom:1px solid var(--line2);font-size:16px;}
+  .pq .car{color:var(--acc);} .pq .q{color:#e6edf3;} .pq .cur{color:var(--acc);}
+  .grp{padding:8px 16px 2px;color:var(--acc);font-size:11px;letter-spacing:.09em;text-transform:uppercase;opacity:.8;}
+  .it{display:flex;align-items:center;gap:10px;padding:5px 16px;}
+  .it .k{margin-left:auto;color:var(--dim);font-size:12px;border:1px solid var(--line2);border-radius:4px;padding:0 6px;}
+  .it.sel{background:#16335c;}
+  .it .ic{width:16px;color:var(--mut);}
+  .pf{padding:9px 16px;border-top:1px solid var(--line2);color:var(--dim);font-size:12.5px;display:flex;gap:16px;}
+  .cmdline{position:absolute;left:0;right:0;bottom:0;background:#0b0f14;border-top:1px solid var(--line);padding:8px 20px;color:var(--blue);font-size:14px;}
+  .cap{color:var(--mut);font-size:13px;margin:8px 14px 22px;}.cap b{color:#c9d1d9;}
+</style></head>
+<body>
+  <div class="head"><h1>zoid — command palette (^P) &amp; command line (:)</h1><p>Fuzzy, mode-aware action launcher that shows each keybind (teaches its own shortcuts). : for direct commands.</p></div>
+
+  <div class="winL">
+    <div class="tb"><span class="name">zoid</span><span class="mode chat">CHAT</span><span>⎇ <span class="br">main</span></span><span class="sp"></span><span class="dim">^P palette · : command</span></div>
+    <!-- dimmed content behind -->
+    <div class="behind"><div class="row">› what's causing the 500 on /users/:id …
+zoid  ● edited users.rs +3 -1 · ✓ cargo check
+›</div></div>
+    <div class="scrim"></div>
+
+    <!-- palette overlay -->
+    <div class="palette">
+      <div class="pq"><span class="car">⌘</span><span class="q">fork</span><span class="cur">▌</span><span style="margin-left:auto;color:var(--dim);font-size:12px;">fuzzy · all actions</span></div>
+
+      <div class="grp">mode</div>
+      <div class="it"><span class="ic">⇢</span> Switch to Build <span class="dim">— continue this conversation into the loop</span><span class="k">:build · F2</span></div>
+
+      <div class="grp">branch ⎇</div>
+      <div class="it sel"><span class="ic">⎇</span> <span class="acc">Fork from here</span> <span class="dim">— new branch at this turn</span><span class="k">:fork</span></div>
+      <div class="it"><span class="ic">⤺</span> Undo last turn <span class="dim">— move head back</span><span class="k">u</span></div>
+      <div class="it"><span class="ic">◷</span> Go to turn / time-travel… <span class="dim">— jump head</span><span class="k">gt</span></div>
+
+      <div class="grp">navigate</div>
+      <div class="it"><span class="ic">ƒ</span> Go to symbol… <span class="dim">(tree-sitter)</span><span class="k">gs</span></div>
+      <div class="it"><span class="ic">▤</span> Open file…<span class="k">^F</span></div>
+
+      <div class="grp">context ⑤</div>
+      <div class="it"><span class="ic">●</span> Pin file to context<span class="k"></span></div>
+      <div class="it"><span class="ic">✕</span> Evict cold items <span class="dim">— free tokens</span><span class="k"></span></div>
+      <div class="it"><span class="ic">⊟</span> Compact context now<span class="k"></span></div>
+
+      <div class="grp">settings</div>
+      <div class="it"><span class="ic">◑</span> Toggle reduced motion<span class="k"></span></div>
+      <div class="it"><span class="ic">◆</span> Set model…<span class="k"></span></div>
+      <div class="it"><span class="ic">🔔</span> Set notify-cmd…<span class="k"></span></div>
+
+      <div class="grp" style="opacity:.5;">recipes <span style="text-transform:none;">· post-v1</span></div>
+      <div class="it" style="opacity:.5;"><span class="ic">▷</span> Run recipe…<span class="k"></span></div>
+
+      <div class="pf"><span>↑↓ move</span><span>⏎ run</span><span>esc close</span><span>type to filter</span><span class="dim">results rank by recency + match</span></div>
+    </div>
+
+    <div class="cmdline">: build<span class="dim">         ← vim-style direct command (:build :fork :model gpt… :q) for power users</span></div>
+  </div>
+  <p class="cap"><b>Two entry points:</b> <b>^P</b> opens the fuzzy, mode-aware palette — grouped (mode · branch · navigate · context · settings · recipes), each row showing its <em>keybind</em> so you learn shortcuts by using it; results rank by recency + match. <b>:</b> is the direct command line for power users. The palette surfaces <em>global</em> verbs (switch mode, fork, settings) plus actions relevant to the <em>current mode</em>. Mode-switch (<span class="dim">:build / :chat</span>) lives here and on <span class="dim">F2</span>.</p>
+</body></html>

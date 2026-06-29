@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zoid — Build pipeline (stepped)</title>
+<style>
+  :root{--bg:#0d1117;--line:#30363d;--line2:#21262d;--dim:#6e7681;--txt:#c9d1d9;
+    --acc:#58a6ff;--ok:#3fb950;--warn:#d29922;--del:#f85149;--add:#3fb950;--br:#bc8cff;--mut:#8b949e;--amber:#e3b341;--ty:#7ee787;}
+  *{box-sizing:border-box;}
+  html,body{margin:0;background:#010409;color:var(--txt);font-family:"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;}
+  .head{padding:14px 22px 2px;}.head h1{margin:0;font-size:18px;color:#e6edf3;}.head p{margin:2px 0 0;font-size:13px;color:var(--mut);}
+  .winL{background:var(--bg);border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:15px;line-height:1.7;margin:14px 12px;width:calc(100vw - 24px);}
+  .tb{display:flex;gap:18px;align-items:center;padding:12px 22px;border-bottom:1px solid var(--line);background:#161b22;color:var(--mut);font-size:14px;}
+  .tb .name{color:var(--txt);font-weight:700;font-size:17px;}.tb .sp{flex:1;}
+  .mode.build{background:#3d2a0a;color:var(--amber);font-weight:700;padding:2px 14px;border-radius:5px;font-size:13px;}
+  .steps{display:flex;gap:0;align-items:center;padding:9px 22px;border-bottom:1px solid var(--line2);background:#0b0e13;font-size:12.5px;flex-wrap:wrap;}
+  .step{color:var(--dim);padding:2px 10px;border-radius:4px;}
+  .step.done{color:var(--ok);} .step.now{color:#010409;background:var(--amber);font-weight:700;} .step.todo{color:var(--dim);}
+  .arr{color:var(--line);padding:0 2px;}
+  .dim{color:var(--dim);}.acc{color:var(--acc);}.ok{color:var(--ok);}.warn{color:var(--warn);}.del{color:var(--del);}.add{color:var(--add);}.br{color:var(--br);}.amber{color:var(--amber);}.ty{color:var(--ty);}
+  .main{display:grid;grid-template-columns:1fr minmax(680px,1040px) 1fr;min-height:660px;}
+  .gutter{background:#0b0e13;}
+  .col{padding:16px 26px;border-left:1px solid var(--line2);border-right:1px solid var(--line2);}
+  .row{white-space:pre;}
+  .sb{display:flex;gap:18px;padding:11px 22px;border-top:1px solid var(--line);background:#161b22;color:var(--mut);font-size:13px;}.sb .sp{flex:1;}
+  .card{border-radius:10px;margin:12px 0;border:1px solid var(--line2);}
+  .card.spec{border-color:#2f6f4f;background:#0c1b13;}
+  .card.plan{border-color:var(--amber);background:#1a1404;}
+  .ch{display:flex;justify-content:space-between;align-items:center;padding:9px 16px;border-bottom:1px solid var(--line2);font-weight:700;font-size:14px;}
+  .card.spec .ch{color:#5ddf9c;} .card.plan .ch{color:var(--amber);}
+  .cb{padding:12px 16px;}
+  .sl{color:var(--acc);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin:11px 0 5px;}.sl:first-child{margin-top:0;}
+  .act{display:flex;gap:8px;flex-wrap:wrap;padding:11px 16px;border-top:1px solid var(--line2);}
+  .btn{border:1px solid var(--line);border-radius:6px;padding:5px 12px;color:var(--txt);font-size:13px;}
+  .btn.ok{border-color:var(--ok);color:var(--ok);font-weight:700;}.btn.amber{border-color:var(--amber);color:var(--amber);}
+  .cap{color:var(--mut);font-size:13px;margin:6px 14px 22px;}.cap b{color:#c9d1d9;}
+</style></head>
+<body>
+  <div class="head"><h1>zoid — Build mode is a stepped pipeline (superpowers 7-phase loop)</h1><p>Switched from Chat (conversation carried in). Build steps through; two approvals up front (spec, plan), then autonomous.</p></div>
+
+  <div class="winL">
+    <div class="tb"><span class="name">zoid</span><span class="mode build">BUILD</span><span class="dim">add rate limiting</span><span class="sp"></span><span class="acc">claude-opus-4-8</span><span>96k / 200k</span></div>
+    <div class="steps">
+      <span class="step done">✓ brainstorm</span><span class="arr">→</span>
+      <span class="step done">✓ spec</span><span class="arr">→</span>
+      <span class="step done">✓ worktree</span><span class="arr">→</span>
+      <span class="step now">plan ◀ approve</span><span class="arr">→</span>
+      <span class="step todo">execute</span><span class="arr">→</span>
+      <span class="step todo">final review</span><span class="arr">→</span>
+      <span class="step todo">finalize</span>
+    </div>
+    <div class="main">
+      <div class="gutter"></div>
+      <div class="col">
+<div class="row"><span class="dim">— conversation carried in from Chat; brainstorm continued here —</span>
+<span class="acc">›</span> add rate limiting to the public API
+<span class="mut">zoid</span> per-IP / 429+Retry-After / per-route burst? <span class="acc">›</span> yes to all
+<span class="mut">zoid</span> <span class="ok">✓ spec written &amp; approved</span> · <span class="ok">✓ worktree wt/rate-limit + clean baseline</span>
+<span class="mut">zoid</span> <span class="dim">⠿ read codebase → drafting plan…</span> <span class="warn">note: no middleware layer yet → T3 adds one</span></div>
+
+        <div class="card spec">
+          <div class="ch"><span>✓ spec.md — approved</span><span class="dim">▸ collapsed · ^Z</span></div>
+          <div class="cb"><div class="row"><span class="ok">acceptance</span> ☑per-IP bucket ☑429+Retry-After ☑per-route burst ☑/healthz exempt ☑docs</div></div>
+        </div>
+
+        <div class="card plan">
+          <div class="ch"><span>▾ plan.md — derived from spec + code · review before execute</span><span class="dim">^Z focus</span></div>
+          <div class="cb">
+<div class="sl">tasks · bite-sized TDD · 6 tasks · 4 phases · 2∥ · grounded in real modules</div>
+<div class="row"><span class="amber">phase 1</span> T1 <span class="ty">ILimiter</span>+bucket <span class="acc">crates/limiter/</span> ∥ T2 per-IP store
+<span class="amber">phase 2</span> T3 middleware <span class="acc">api/middleware.rs</span>(new)→T1 ∥ T4 config→T2
+<span class="amber">phase 3</span> T5 integration tests →T3,T4    <span class="amber">phase 4</span> T6 docs →T5
+<span class="dim">each task: write failing test → run(fails) → minimal impl → run(passes) → commit</span></div>
+<div class="sl">per-task gate (autonomous) · criteria → gates</div>
+<div class="row">TDD → <span class="acc">spec-compliance review</span> → <span class="acc">code-quality review</span> → fix-loop → merge
+☑per-IP→T1,T2 · ☑429→T3 · ☑burst→T4 · ☑/healthz→T3 · ☑docs→T6</div>
+<div class="sl">risks surfaced by reading code</div>
+<div class="row"><span class="warn">•</span> no middleware layer today (T3 introduces) · <span class="warn">•</span> T1&amp;T4 touch Cargo.toml → serialize merge
+<span class="dim">pre-flight scan: ✓ no plan/constraint conflicts</span></div>
+          </div>
+          <div class="act">
+            <span class="btn ok">⏎ approve &amp; execute (autonomous)</span>
+            <span class="btn">e edit</span><span class="btn amber">r refine via chat</span>
+            <span class="btn">E $EDITOR plan.md</span><span class="btn">↩ back to spec</span>
+          </div>
+        </div>
+<div class="row"><span class="dim">after approval: no more prompts until finalize — unless a ⛔ blocker.</span></div>
+      </div>
+      <div class="gutter"></div>
+    </div>
+    <div class="sb"><span class="mode build">BUILD</span><span>step 4/7 · plan</span><span class="sp"></span><span class="dim">⏎ approve → autonomous execute · esc/:chat returns to manual</span></div>
+  </div>
+  <p class="cap"><b>Build = the whole loop, stepped.</b> The step bar (top) shows the superpowers 7 phases and where you are. Conversation carried in from Chat; brainstorm continued; spec approved &amp; collapsed; worktree+baseline auto; now the <b>plan</b> (code-grounded, bite-sized TDD tasks, criteria→gates, risks surfaced, pre-flight ✓) awaits approval. Approve → autonomous <b>execute</b> (per-task: TDD → spec-review → quality-review → fix-loop) → <b>final broad review</b> → <b>finalize</b>. Two approvals up front; blocker-only after.</p>
+</body></html>

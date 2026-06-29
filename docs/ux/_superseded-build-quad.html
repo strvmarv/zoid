@@ -1,0 +1,110 @@
+<h2>Build mode — 2×2 quad</h2>
+<p class="subtitle">Two columns, two rows. Top: status · reasoning. Bottom: artifact · cost. Each pane ~half width/height. Tab focus · ^Z zoom a pane full-screen · j/k selects a task and drives ②③④. Confirm or tweak.</p>
+
+<style>
+  .win{--bg:#0d1117;--line:#30363d;--line2:#21262d;--dim:#6e7681;--txt:#c9d1d9;
+    --acc:#58a6ff;--ok:#3fb950;--warn:#d29922;--del:#f85149;--add:#3fb950;--br:#bc8cff;--mut:#8b949e;--pink:#f778ba;
+    --kw:#ff7b72;--fn:#d2a8ff;--str:#a5d6ff;--num:#79c0ff;--cm:#8b949e;--ty:#7ee787;
+    background:var(--bg);border:1px solid var(--line);border-radius:10px;overflow:hidden;
+    font-family:"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;font-size:12px;line-height:1.55;color:var(--txt);margin:6px 0;width:100%;}
+  .titlebar{display:flex;gap:14px;align-items:center;padding:7px 14px;border-bottom:1px solid var(--line);background:#161b22;color:var(--mut);font-size:11.5px;}
+  .titlebar .name{color:var(--txt);font-weight:700;}.titlebar .sp{flex:1;}
+  .mode.build{background:#3d2a0a;color:#e3b341;font-weight:700;padding:1px 10px;border-radius:4px;font-size:11px;}
+  .dim{color:var(--dim);}.acc{color:var(--acc);}.ok{color:var(--ok);}.warn{color:var(--warn);}.del{color:var(--del);}.add{color:var(--add);}.br{color:var(--br);}.mut{color:var(--mut);}.pink{color:var(--pink);}
+  .kw{color:var(--kw);}.fn{color:var(--fn);}.str{color:var(--str);}.num{color:var(--num);}.cm{color:var(--cm);}.ty{color:var(--ty);}
+  .quad{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;min-height:520px;}
+  .pane{padding:10px 14px;border-right:1px solid var(--line2);border-bottom:1px solid var(--line2);overflow:hidden;}
+  .pane:nth-child(2),.pane:nth-child(4){border-right:none;}
+  .pane:nth-child(3),.pane:nth-child(4){border-bottom:none;}
+  .pane.focus{box-shadow:inset 0 0 0 1px var(--acc);}
+  .plabel{color:var(--acc);font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;margin-bottom:8px;display:flex;justify-content:space-between;opacity:.9;}
+  .row{white-space:pre;}
+  .statusbar{display:flex;gap:14px;padding:6px 14px;border-top:1px solid var(--line);background:#161b22;color:var(--mut);font-size:11px;align-items:center;}
+  .gauge{display:inline-block;width:90px;height:7px;background:#21262d;border-radius:5px;overflow:hidden;vertical-align:middle;}
+  .gauge>i{display:block;height:100%;}
+  .gsm{width:54px;}
+  .spark{letter-spacing:1px;}
+  .tab{border:1px solid var(--line2);border-radius:3px;padding:0 5px;color:var(--dim);font-size:10px;}
+  .tab.on{border-color:var(--acc);color:var(--acc);}
+  .sel{background:#16335c;color:#cfe3ff;}
+  .caret{color:var(--acc);}
+  .cap{color:var(--mut);font-size:13px;margin:8px 2px 4px;}
+  .cap b{color:#c9d1d9;}
+</style>
+
+<div class="win">
+  <div class="titlebar"><span class="name">zoid</span><span class="mode build">BUILD</span><span class="dim">subagent-dev · add rate limiting</span><span class="sp"></span><span class="dim">4 worktrees · 241k tok</span><span class="warn">1 gate</span></div>
+  <div class="quad">
+
+    <!-- TL: OVERVIEW -->
+    <div class="pane focus">
+      <div class="plabel"><span>① overview · status</span><span class="dim">j/k select · o diff · p pause</span></div>
+<div class="row"><span class="acc">phase 1 scaffold</span> <span class="ok">✓✓</span>   <span class="acc">phase 2 integrate</span> <span class="warn">◐◐</span>☐   <span class="acc">3 verify</span> ☐   <span class="acc">4 finish</span> ☐
+<span class="dim">──────────────────────────────────────────</span>
+ <span class="ok">✓</span> T1 ILimiter        <span class="gauge"><i style="width:100%;background:#3fb950"></i></span> <span class="ok">tdd✓ rev✓ merged</span>
+ <span class="ok">✓</span> T2 per-IP store     <span class="gauge"><i style="width:100%;background:#3fb950"></i></span> <span class="ok">tdd✓ rev✓ merged</span>
+<span class="sel"> ◐ T3 middleware       </span><span class="gauge"><i style="width:62%;background:#d29922"></i></span> <span class="warn">⠿ tdd 6/9</span> <span class="acc">◀</span>
+ <span class="warn">◐</span> T4 config binding    <span class="gauge"><i style="width:38%;background:#d29922"></i></span> <span class="warn">⠿ impl</span>
+ <span class="dim">☐ T5 integration tests  (blocked T3,T4)</span>
+ <span class="dim">☐ T6 docs               (blocked T5)</span>
+<span class="dim">──────────────────────────────────────────</span>
+fleet <span class="spark ok">▅▆▇▆▇█</span>   <span class="warn">▸ GATE</span> T1 → <span class="br">main</span>  <span class="ok">[a]</span> <span class="del">[r]</span> <span class="acc">[o]</span></div>
+    </div>
+
+    <!-- TR: STREAM -->
+    <div class="pane">
+      <div class="plabel"><span>② follow · reasoning</span><span><span class="tab on">orchestrator</span> <span class="tab">T3 agent#3</span> <span class="dim">[f]</span></span></div>
+<div class="row"><span class="br">orchestrator</span> <span class="dim">⠿ live</span>
+ planned phase 2 → 2 tasks
+ dispatched <span class="acc">T3</span>→agent#3  (wt-3)
+ dispatched <span class="acc">T4</span>→agent#4  (wt-4)
+ <span class="ok">T1</span> returned: 8 tests green
+ → opening <span class="warn">review gate</span> for T1
+ evaluated T2 vs acceptance:
+   <span class="ok">✓</span> matches plan item 2
+ watching T3: tdd red→green (6/9)
+   needs a 429-on-empty case
+ <span class="dim">▌ awaiting your approval to merge T1</span>
+ <span class="caret">▌</span>
+
+<span class="dim">[f] → follow T3's raw stream (tool calls,
+     tdd loop, diff as it types)</span></div>
+    </div>
+
+    <!-- BL: DIFF -->
+    <div class="pane">
+      <div class="plabel"><span>③ diff · artifact</span><span><span class="tab on">diff</span> <span class="tab">tests</span> <span class="dim">d/t · T3</span></span></div>
+<div class="row"><span class="cm">// crates/limiter/src/middleware.rs</span>
+<span class="kw">pub fn</span> <span class="fn">check</span>(<span class="ty">&self</span>, ip: <span class="ty">IpAddr</span>) -> <span class="ty">bool</span> {
+<span class="del">-   if self.over_limit(ip) {</span>
+<span class="del">-       return false;</span>
+<span class="del">-   }</span>
+<span class="add">+   let b = self.buckets</span>
+<span class="add">+       .entry(ip).or_default();</span>
+<span class="add">+   b.refill(now);</span>
+<span class="add">+   b.try_take(1)</span>
+}
+<span class="add">+14</span> <span class="del">-6</span>  ·  <span class="warn">tdd 6/9 green</span>  ·  wt-3</div>
+    </div>
+
+    <!-- BR: ECONOMY -->
+    <div class="pane">
+      <div class="plabel"><span>④ economy · cost</span><span class="dim">tokens</span></div>
+<div class="row">total  <span class="gauge"><i style="width:71%;background:linear-gradient(90deg,#3fb950,#d29922)"></i></span> 142k / 200k
+churn  <span class="spark ok">▁▂▃▅▂▇▃▂</span>   <span class="warn">▲ T3 spike</span>
+<span class="dim">──────────────────────────</span>
+<span class="dim">per agent</span>      tok    tps
+ orchestrator   22k   <span class="spark acc">▃▅▆▅</span>
+ #1 (T1)        18k   <span class="dim">idle</span>
+ #2 (T2)        12k   <span class="dim">idle</span>
+ #3 (T3)        31k   <span class="spark acc">▆▇█▇</span> <span class="warn">▲</span>
+ #4 (T4)         9k   <span class="spark acc">▃▄▅</span>
+<span class="dim">──────────────────────────</span>
+leash: pause delegates if &lt; 5k  <span class="ok">on</span></div>
+    </div>
+
+  </div>
+  <div class="statusbar"><span class="mode build">BUILD</span><span>phase 2/4</span><span>2/6 done</span><span class="warn">1 gate</span><span class="sp"></span><span class="dim">Tab pane · ^Z zoom · j/k task · f follow · d/t diff·tests · esc/:chat</span></div>
+</div>
+<p class="cap"><b>2×2:</b> top row = what/why (overview · stream), bottom row = artifact/cost (diff · economy). Each pane ~half the screen — plenty of room for the diff and the orchestrator narration. <b>^Z</b> zooms any pane full; <b>j/k</b> selects a task and panes ②③④ retarget to it; responsive fallback → tabbed single-pane on narrow terminals.</p>
+<p class="cap"><b>Confirm?</b> If the quad + pane assignment looks right, I'll refresh the Build scene in the confirmation walkthrough and fold all Build-mode detail into the spec. Tell me any swaps (pane positions, the d/t toggle, follow tabs) in the terminal.</p>

@@ -1,0 +1,70 @@
+<h2>Modal zoid — Chat ⇄ Build (like vim/helix)</h2>
+<p class="subtitle">Top-level modes, persistent indicator in the status bar, one keystroke (or agent suggestion) to switch. Chat mode <em>is</em> the calm B2 we designed; Build mode <em>is</em> the loop. Same event log underneath — the mode just swaps the surface + keymap.</p>
+
+<style>
+  .win{--bg:#0d1117;--line:#30363d;--line2:#21262d;--dim:#6e7681;--txt:#c9d1d9;
+    --acc:#58a6ff;--ok:#3fb950;--warn:#d29922;--del:#f85149;--add:#3fb950;--br:#bc8cff;--mut:#8b949e;--pink:#f778ba;
+    background:var(--bg);border:1px solid var(--line);border-radius:10px;overflow:hidden;
+    font-family:"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;font-size:12px;line-height:1.5;color:var(--txt);margin:6px 0;}
+  .titlebar{display:flex;gap:14px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--line);background:#161b22;color:var(--mut);font-size:11px;}
+  .titlebar .name{color:var(--txt);font-weight:600;}.titlebar .sp{flex:1;}
+  .dim{color:var(--dim);}.acc{color:var(--acc);}.ok{color:var(--ok);}.warn{color:var(--warn);}.del{color:var(--del);}.add{color:var(--add);}.br{color:var(--br);}.mut{color:var(--mut);}.pink{color:var(--pink);}
+  .body{padding:11px 15px;min-height:230px;}
+  .row{white-space:pre;}
+  .statusbar{display:flex;gap:14px;padding:5px 12px;border-top:1px solid var(--line2);background:#161b22;color:var(--mut);font-size:11px;align-items:center;}
+  .mode{font-weight:700;padding:1px 9px;border-radius:4px;letter-spacing:.05em;}
+  .mode.chat{background:#0d2a4d;color:#79c0ff;}
+  .mode.build{background:#3d2a0a;color:#e3b341;}
+  .opt-cap{color:var(--mut);font-size:13px;margin:6px 2px 22px;}
+  .opt-cap b{color:#c9d1d9;font-weight:600;}
+  .h3lbl{margin:22px 2px 4px;font-size:14.5px;}
+  .grp{margin:16px 0 6px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#58a6ff;opacity:.8;border-bottom:1px solid var(--line2);padding-bottom:5px;}
+  .gutter{background:#0b0e13;}
+</style>
+
+<div class="grp">CHAT mode — calm, conversation-first (= Layout B2)</div>
+<div class="win">
+  <div class="titlebar"><span class="name">zoid</span><span class="mode chat">CHAT</span><span class="dim">~/proj</span><span class="sp"></span><span class="acc">opus-4.8</span><span>142k / 200k</span></div>
+  <div class="body" style="display:grid;grid-template-columns:1fr minmax(440px,640px) 240px;">
+    <div class="gutter"></div>
+    <div>
+<div class="row"><span class="acc">›</span> add rate limiting to the public API endpoints
+
+<span class="mut">zoid</span> That's a multi-step change — impl, config,
+  tests, docs. Want me to run it as a loop?
+  <span class="br">▸ switch to Build mode?</span>  <span class="ok">[⏎ yes]</span> <span class="dim">[no, keep chatting]</span>
+
+<span class="acc">›</span> <span class="dim">first, explain the token-bucket tradeoff_</span></div>
+    </div>
+    <div style="border-left:1px solid var(--line2);padding-left:10px;">
+<div class="row"><span class="acc">CONTEXT ⑤</span>
+<span class="ok">●</span> auth.cs 18k
+  tokens.cs 12k
+  docs.md 6k <span class="del">cold</span>
+<span class="dim">152k/200k</span></div>
+    </div>
+  </div>
+  <div class="statusbar"><span class="mode chat">CHAT</span><span>⎇ <span class="br">main</span></span><span class="sp"></span><span class="dim">F2 / :build → Build · ^P palette · ⌃scroll zoom</span></div>
+</div>
+<p class="opt-cap"><b>Chat mode</b> = everything we designed: calm column, summonable drawers, context cockpit ⑤, object verbs ④, semantic zoom ①. The agent can <em>suggest</em> switching to Build; you can also just keep talking.</p>
+
+<div class="grp">BUILD mode — the loop (fleet · phases · gates · worktrees)</div>
+<div class="win">
+  <div class="titlebar"><span class="name">zoid</span><span class="mode build">BUILD</span><span class="dim">recipe: subagent-dev</span><span class="sp"></span><span class="dim">3 worktrees · 218k tok</span></div>
+  <div class="body">
+<div class="row"><span class="br">add rate limiting</span>   <span class="acc">phase 1 scaffold</span> <span class="ok">✓✓</span>  <span class="acc">phase 2 integrate</span> <span class="warn">◐◐</span>☐  <span class="acc">phase 3 verify</span> ☐  <span class="acc">4 finish</span> ☐
+  <span class="ok">✓</span> T1 ILimiter        <span class="dim">agent#1 · tdd green · reviewed</span>
+  <span class="ok">✓</span> T2 token bucket     <span class="dim">agent#2 · tdd green · reviewed</span>
+  <span class="warn">◐</span> T3 wire middleware  <span class="dim">agent#3 · ⠿ red→green</span>      <span class="acc">[o] worktree diff</span>
+  <span class="warn">◐</span> T4 config binding   <span class="dim">agent#4 · ⠿ running</span>
+  <span class="dim">☐ T5 integration tests   (blocked: T3,T4)</span>
+  <span class="dim">☐ T6 docs                (blocked: T5)</span>
+
+<span class="warn">▸ gate</span> T2 wants to merge to <span class="br">main</span> — review diff?  <span class="ok">[a] approve</span> <span class="del">[r] request changes</span></div>
+  </div>
+  <div class="statusbar"><span class="mode build">BUILD</span><span>phase 2/4</span><span>2/6 done</span><span class="sp"></span><span class="dim">esc / :chat → Chat · [p] pause · [j/k] task · [o] open</span></div>
+</div>
+<p class="opt-cap"><b>Build mode</b> = the L3 workflow surface: live fleet, phase progress, tdd+review gates, per-task worktrees, parallel race ③ when a task is forked. Its own keymap (j/k navigate tasks, o open worktree, p pause). <span class="acc">esc</span> or <span class="acc">:chat</span> drops you back into Chat, which kept running underneath.</p>
+
+<div class="grp">the paradigm</div>
+<p class="opt-cap" style="margin-top:6px;"><b>Modes are the top-level navigation.</b> v1 ships <b>Chat</b> + <b>Build</b>. Switching is manual (<span class="acc">F2</span> / <span class="acc">:build</span> / <span class="acc">:chat</span>) or agent-suggested — never silent. The shared event log means a finished Build leaves a collapsed summary card in the Chat transcript (re-expandable via ① zoom). Later, new modes slot in as peers — e.g. <span class="dim">Canvas</span> (② branch map) or <span class="dim">Review</span> — without disturbing these two. <br><br><b>Look right?</b> If yes, this is the last big paradigm decision — I'll write up the full spec next. Tell me any tweaks (mode names, switch keys, whether Build should be suggested aggressively or quietly) in the terminal.</p>

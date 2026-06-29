@@ -1,0 +1,113 @@
+<h2>What the Rust base unlocks for the UX</h2>
+<p class="subtitle">Four capabilities that were impractical on the old stack and are natural on Rust (ratatui immediate-mode + graphics-protocol images + tree-sitter + GC-free redraw). They layer onto Chat/Build. Multi-select what excites you; note v1 vs later in the terminal.</p>
+
+<style>
+  .win{--bg:#0d1117;--line:#30363d;--line2:#21262d;--dim:#6e7681;--txt:#c9d1d9;
+    --acc:#58a6ff;--ok:#3fb950;--warn:#d29922;--del:#f85149;--add:#3fb950;--br:#bc8cff;--mut:#8b949e;--pink:#f778ba;
+    --kw:#ff7b72;--fn:#d2a8ff;--str:#a5d6ff;--num:#79c0ff;--cm:#8b949e;--ty:#7ee787;
+    background:var(--bg);border:1px solid var(--line);border-radius:10px;overflow:hidden;
+    font-family:"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;font-size:12.5px;line-height:1.55;color:var(--txt);margin:6px 0;}
+  .titlebar{display:flex;gap:14px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--line);background:#161b22;color:var(--mut);font-size:11px;}
+  .titlebar .name{color:var(--txt);font-weight:700;}.titlebar .sp{flex:1;}
+  .dim{color:var(--dim);}.acc{color:var(--acc);}.ok{color:var(--ok);}.warn{color:var(--warn);}.del{color:var(--del);}.add{color:var(--add);}.br{color:var(--br);}.mut{color:var(--mut);}.pink{color:var(--pink);}
+  .kw{color:var(--kw);}.fn{color:var(--fn);}.str{color:var(--str);}.num{color:var(--num);}.cm{color:var(--cm);}.ty{color:var(--ty);}
+  .body{padding:12px 15px;}
+  .row{white-space:pre;}
+  .opt-cap{color:var(--mut);font-size:13px;margin:6px 2px 22px;}
+  .opt-cap b{color:#c9d1d9;font-weight:600;}
+  .h3lbl{margin:24px 2px 4px;font-size:15px;}
+  .imgtag{display:inline-block;font-size:10px;color:#0d1117;background:#bc8cff;border-radius:3px;padding:0 5px;margin-left:6px;vertical-align:middle;letter-spacing:.04em;}
+  /* fake raster chart */
+  .chart{height:120px;border:1px solid var(--line2);border-radius:6px;position:relative;overflow:hidden;background:#0b0e13;}
+  .area{position:absolute;left:0;right:0;bottom:0;height:78%;
+    background:linear-gradient(180deg,rgba(63,185,80,.45),rgba(210,153,34,.10) 70%,transparent);
+    clip-path:polygon(0 100%,0 70%,12% 64%,24% 66%,36% 52%,48% 55%,60% 40%,72% 44%,84% 26%,100% 18%,100% 100%);}
+  .arealine{position:absolute;left:0;right:0;bottom:0;height:78%;
+    border:0;clip-path:polygon(0 70%,12% 64%,24% 66%,36% 52%,48% 55%,60% 40%,72% 44%,84% 26%,100% 18%,100% 18.8%,84% 26.8%,72% 44.8%,60% 40.8%,48% 55.8%,36% 52.8%,24% 66.8%,12% 64.8%,0 70.8%);background:#3fb950;}
+  .grid3{position:absolute;inset:0;background-image:repeating-linear-gradient(0deg,transparent,transparent 23px,rgba(255,255,255,.04) 23px,rgba(255,255,255,.04) 24px);}
+  .filmstrip{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;}
+  .frame{border:1px solid var(--line2);border-radius:6px;padding:8px;background:#0b0e13;}
+  .flabel{font-size:10px;color:var(--acc);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px;}
+  .spark{font-family:monospace;letter-spacing:1px;}
+  .gauge{display:inline-block;width:120px;height:8px;background:#21262d;border-radius:5px;overflow:hidden;vertical-align:middle;}
+  .gauge>i{display:block;height:100%;}
+</style>
+
+<!-- R1 INLINE GRAPHICS -->
+<h3 class="h3lbl">Ⓡ1 · Inline raster graphics <span class="imgtag">Kitty / Sixel</span></h3>
+<div class="option" data-choice="graphics" onclick="toggleSelect(this)">
+  <div class="win">
+    <div class="titlebar"><span class="name">zoid</span><span class="dim">⑤ context economy — rendered as a real image, not ASCII</span><span class="sp"></span><span class="acc">opus-4.8</span></div>
+    <div class="body">
+      <div class="row" style="margin-bottom:8px;"><span class="acc">›</span> show me token usage this session</div>
+      <div class="chart"><div class="grid3"></div><div class="area"></div><div class="arealine"></div>
+        <span style="position:absolute;top:6px;left:8px;font-size:10px;color:#8b949e;">tokens / turn · cum 1.2M</span>
+        <span style="position:absolute;bottom:6px;right:8px;font-size:10px;color:#f85149;">⚠ turn 31 fork spike</span>
+      </div>
+      <div class="row" style="margin-top:8px;"><span class="mut">zoid</span> auth.cs re-sent 6× drove the turn-31 spike — pinned it.</div>
+    </div>
+  </div>
+</div>
+<p class="opt-cap"><b>Unlocks:</b> the churn timeline ⑤c, the session/branch map ②, and dependency/plan graphs can render as **actual pixel images** inline — crisp charts, diagrams, even rendered-markdown figures — on terminals that support the graphics protocols (Kitty, WezTerm, iTerm2, Sixel). <b>Graceful fallback</b> to ASCII sparklines where unsupported. <span class="dim">(Mostly POST-V1 polish, but designing the renderer with a pluggable "image-or-ASCII" backend is a v1 decision.)</span></p>
+
+<!-- R2 FLUID MOTION -->
+<h3 class="h3lbl">Ⓡ2 · Fluid motion — animation as a first-class layer</h3>
+<div class="option" data-choice="motion" onclick="toggleSelect(this)">
+  <div class="win">
+    <div class="titlebar"><span class="name">zoid</span><span class="dim">semantic-zoom ① as an animated transition (no GC hitches)</span></div>
+    <div class="body">
+      <div class="filmstrip">
+        <div class="frame"><div class="flabel">frame 1 · detail</div>
+<div class="row"><span class="acc">›</span> add rate limiting
+<span class="mut">zoid</span> read auth.cs
+  <span class="ok">●</span> edited limiter.cs
+  <span class="ok">●</span> edited config.cs
+  <span class="ok">✓</span> 12 tests</div></div>
+        <div class="frame"><div class="flabel">frame 2 · collapsing…</div>
+<div class="row"><span class="acc">›</span> add rate limiting
+<span class="mut">zoid</span> <span class="dim">edited 2 · ✓</span>
+<span class="dim">  ⌄ folding…</span>
+</div></div>
+        <div class="frame"><div class="flabel">frame 3 · overview</div>
+<div class="row"><span class="acc">›</span> add rate limiting  <span class="ok">●●✓</span></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="opt-cap"><b>Unlocks:</b> because immediate-mode redraws a fresh buffer each frame with **no GC pauses**, zoom can *animate* (turns visibly fold/unfold), drawers **slide**, mode-switches **transition**, streaming has a smooth caret, and the Build fleet shows **live motion**. Most TUIs feel "steppy"; zoid can feel fluid — a signature polish that's hard to copy. <span class="dim">(A motion budget + reduced-motion setting; v1 can ship a few key transitions.)</span></p>
+
+<!-- R3 TREE-SITTER -->
+<h3 class="h3lbl">Ⓡ3 · tree-sitter code rendering — real highlighting + structural folding</h3>
+<div class="option" data-choice="treesitter" onclick="toggleSelect(this)">
+  <div class="win">
+    <div class="titlebar"><span class="name">zoid</span><span class="dim">diff drawer · tree-sitter highlights + fold function bodies</span><span class="sp"></span><span class="acc">auth.cs</span></div>
+    <div class="body">
+<div class="row"><span class="cm">// rate_limit.rs</span>  <span class="dim">▾ 2 fns · ⌄ fold all</span>
+<span class="kw">pub fn</span> <span class="fn">check</span>(<span class="ty">&self</span>, ip: <span class="ty">IpAddr</span>) -> <span class="ty">bool</span> {  <span class="dim">▸ folded (12 lines)</span>
+<span class="del">- </span>  <span class="kw">if</span> token == store.<span class="fn">lookup</span>(id) { <span class="kw">return</span> <span class="num">true</span> }
+<span class="add">+ </span>  <span class="kw">let</span> p = jwt.<span class="fn">validate</span>(<span class="str">&token</span>, &params)<span class="kw">?</span>;
+<span class="add">+ </span>  p.identity.<span class="fn">is_auth</span>().<span class="fn">unwrap_or</span>(<span class="num">false</span>)
+}
+<span class="kw">fn</span> <span class="fn">refill</span>(<span class="ty">&mut self</span>) { <span class="dim">▸ folded (8 lines)</span> }
+<span class="dim">selection: ▌ fn `check` · ⏎ for verbs ④</span></div>
+    </div>
+  </div>
+</div>
+<p class="opt-cap"><b>Unlocks:</b> real syntax highlighting in diffs/transcript (tree-sitter grammars, not regex), **structural folding** (collapse function bodies in a diff), code breadcrumbs, and accurate **symbol selection** for object-first verbs ④. Also powers a *code-aware* semantic zoom (collapse to signatures). <span class="dim">(Symbol selection + highlighting are strong v1 candidates; folding is fast-follow.)</span></p>
+
+<!-- R4 LIVE VIZ -->
+<h3 class="h3lbl">Ⓡ4 · Live high-FPS data viz — the economy as a dashboard</h3>
+<div class="option" data-choice="viz" onclick="toggleSelect(this)">
+  <div class="win">
+    <div class="titlebar"><span class="name">zoid</span><span class="mode" style="background:#3d2a0a;color:#e3b341;padding:1px 8px;border-radius:4px;">BUILD</span><span class="dim">live meters update as agents work</span><span class="sp"></span></div>
+    <div class="body">
+<div class="row">context  <span class="gauge"><i style="width:71%;background:linear-gradient(90deg,#3fb950,#d29922)"></i></span> 142k/200k   churn <span class="spark ok">▁▂▃▅▂▇▃▂</span>
+<span class="dim">────────────────────────────────────────────</span>
+agent#1 <span class="gauge"><i style="width:100%;background:#3fb950"></i></span> <span class="ok">✓ T1</span>     tps <span class="spark acc">▃▅▆▇▆▅</span>
+agent#2 <span class="gauge"><i style="width:100%;background:#3fb950"></i></span> <span class="ok">✓ T2</span>     tps <span class="spark acc">▂▄▆▅▇▆</span>
+agent#3 <span class="gauge"><i style="width:62%;background:#d29922"></i></span> <span class="warn">◐ T3</span>     tps <span class="spark acc">▅▆▇▆▇█</span>
+agent#4 <span class="gauge"><i style="width:38%;background:#d29922"></i></span> <span class="warn">◐ T4</span>     tps <span class="spark acc">▃▄▃▅▄▆</span></div>
+    </div>
+  </div>
+</div>
+<p class="opt-cap"><b>Unlocks:</b> ratatui's native sparkline/gauge/chart widgets + high-FPS redraw turn the context economy ⑤ and the Build fleet into a **live dashboard** — animated token meters, per-agent throughput sparklines, real-time churn — without jank. Makes the "economy" concept tangible and glanceable. <span class="dim">(Gauges/sparklines are cheap v1 wins; fancy charts can use Ⓡ1 graphics later.)</span></p>

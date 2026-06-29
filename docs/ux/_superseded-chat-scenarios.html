@@ -1,0 +1,196 @@
+<h2>zoid — full-size scenarios (current design, for confirmation)</h2>
+<p class="subtitle">Updated to the Rust base + chosen UX: modal Chat/Build, context economy ⑤ (tokens), semantic zoom ①, object-first verbs ④, delegates ⑧c, plus Ⓡ3 tree-sitter highlighting, Ⓡ4 live viz, Ⓡ2 motion (⟳ = animates). Confirm or flag tweaks in the terminal.</p>
+
+<style>
+  .win{--bg:#0d1117;--line:#30363d;--line2:#21262d;--dim:#6e7681;--txt:#c9d1d9;
+    --acc:#58a6ff;--ok:#3fb950;--warn:#d29922;--del:#f85149;--add:#3fb950;--br:#bc8cff;--mut:#8b949e;--pink:#f778ba;
+    --kw:#ff7b72;--fn:#d2a8ff;--str:#a5d6ff;--num:#79c0ff;--cm:#8b949e;--ty:#7ee787;
+    background:var(--bg);border:1px solid var(--line);border-radius:10px;overflow:hidden;
+    font-family:"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;font-size:12.5px;line-height:1.55;color:var(--txt);margin:6px 0 4px;width:100%;}
+  .titlebar{display:flex;gap:16px;align-items:center;padding:7px 14px;border-bottom:1px solid var(--line);background:#161b22;color:var(--mut);font-size:11.5px;}
+  .titlebar .name{color:var(--txt);font-weight:700;}.titlebar .sp{flex:1;}
+  .dim{color:var(--dim);}.acc{color:var(--acc);}.ok{color:var(--ok);}.warn{color:var(--warn);}.del{color:var(--del);}.add{color:var(--add);}.br{color:var(--br);}.mut{color:var(--mut);}.pink{color:var(--pink);}
+  .kw{color:var(--kw);}.fn{color:var(--fn);}.str{color:var(--str);}.num{color:var(--num);}.cm{color:var(--cm);}.ty{color:var(--ty);}
+  .mode{font-weight:700;padding:1px 10px;border-radius:4px;letter-spacing:.06em;font-size:11px;}
+  .mode.chat{background:#0d2a4d;color:#79c0ff;} .mode.build{background:#3d2a0a;color:#e3b341;}
+  .body{padding:12px 16px;}
+  .row{white-space:pre;}
+  .gutter{background:#0b0e13;}
+  .statusbar{display:flex;gap:16px;padding:6px 14px;border-top:1px solid var(--line2);background:#161b22;color:var(--mut);font-size:11px;align-items:center;}
+  .drawer{border:1px solid var(--acc);border-radius:6px;background:#0d1626;padding:8px 10px;margin-bottom:9px;}
+  .drawer.br{border-color:var(--br);background:#15101f;}
+  .dhead{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px;display:flex;justify-content:space-between;}
+  .chip{border:1px solid var(--br);border-radius:6px;background:#15101f;padding:3px 9px;display:inline-block;}
+  .sel{background:#16335c;color:#cfe3ff;}
+  .pop{border:1px solid var(--acc);border-radius:6px;background:#0d1626;padding:7px 10px;box-shadow:0 8px 24px #000a;display:inline-block;}
+  .card{border:1px solid var(--ok);border-radius:6px;background:#0c1f14;padding:8px 11px;}
+  .scene{margin:26px 2px 4px;font-size:14px;color:#c9d1d9;}
+  .scene b{color:#58a6ff;}
+  .cap{color:var(--mut);font-size:12.5px;margin:4px 2px 18px;}
+  .spark{letter-spacing:1px;}
+  .gauge{display:inline-block;width:90px;height:7px;background:#21262d;border-radius:5px;overflow:hidden;vertical-align:middle;}
+  .gauge>i{display:block;height:100%;}
+  .anim{font-size:10px;color:#0d1117;background:#58a6ff;border-radius:3px;padding:0 5px;margin-left:6px;}
+  .bar{height:8px;border-radius:5px;background:#21262d;overflow:hidden;display:inline-block;width:90px;vertical-align:middle;}
+  .bar>i{display:block;height:100%;}
+</style>
+
+<!-- SCENE 1 -->
+<div class="scene">① <b>Chat mode</b> — calm column, context economy (tokens + churn sparkline Ⓡ4), active Build suggestion</div>
+<div class="win">
+  <div class="titlebar"><span class="name">zoid</span><span class="mode chat">CHAT</span><span>⎇ <span class="br">main</span></span><span class="dim">~/proj</span><span class="sp"></span><span class="acc">claude-opus-4-8</span><span>152k / 200k <span class="bar"><i style="width:76%;background:linear-gradient(90deg,#3fb950,#d29922)"></i></span></span><span class="ok">● idle</span></div>
+  <div style="display:grid;grid-template-columns:1fr minmax(560px,860px) 300px;min-height:420px;">
+    <div class="gutter"></div>
+    <div class="body" style="border-left:1px solid var(--line2);border-right:1px solid var(--line2);">
+<div class="row"><span class="acc">›</span> the public API has no rate limiting — anonymous clients can hammer it.
+  add rate limiting to all public endpoints.
+
+<span class="mut">zoid</span>  Today every request hits the controller directly via
+   <span class="acc">api/routing/public_router.rs</span>. I'd add a middleware layer.
+   <span class="dim">⠿ read</span> public_router.rs · app.rs   <span class="dim">(idle)</span>
+
+<span class="acc">›</span> what algorithm and why?
+
+<span class="mut">zoid</span>  Token bucket — O(1)/req, smooth bursts, easy to reason about.
+   Per-IP for an anonymous API.
+
+   Multi-step: middleware, config, per-IP store, tests, docs.
+   <span class="chip"><span class="br">▸ run as a Build loop?</span> <span class="ok">[⏎ yes]</span> <span class="dim">[n] keep chatting</span></span>
+
+<span class="acc">›</span> <span class="dim">_</span></div>
+    </div>
+    <div class="body">
+      <div class="drawer">
+        <div class="dhead"><span class="acc">⑤ context · tokens</span><span class="dim">^5</span></div>
+<div class="row"><span class="ok">●</span> public_router.rs 14k <span class="del">███</span>
+  app.rs           9k <span class="warn">██░</span>
+  docs/api.md      6k <span class="del">cold</span>
+  system+tools    22k <span class="dim">lock</span>
+churn <span class="spark ok">▁▂▃▂▅▃▂</span> <span class="anim">⟳</span>
+<span class="acc">[x] evict cold → -6k</span></div>
+      </div>
+      <div class="drawer br" style="margin-bottom:0;">
+        <div class="dhead"><span class="br">⎇ branch</span><span class="dim">^B</span></div>
+<div class="row">main · 5 turns
+<span class="dim">no forks</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="statusbar"><span class="mode chat">CHAT</span><span>⎇ <span class="br">main</span></span><span>5 turns · 152k tok</span><span class="sp"></span><span class="dim">F2/:build · ^P palette · ^5 context · ⌃scroll zoom</span></div>
+</div>
+<p class="cap">Calm reading column; context economy in tokens with a live churn sparkline (Ⓡ4, ⟳ animates as turns stream). Agent actively offers Build but won't switch without ⏎.</p>
+
+<!-- SCENE 2 -->
+<div class="scene">② <b>Build mode</b> — fleet with live gauges/sparklines (Ⓡ4), tree-sitter diff (Ⓡ3), gate waiting</div>
+<div class="win">
+  <div class="titlebar"><span class="name">zoid</span><span class="mode build">BUILD</span><span class="dim">recipe: subagent-dev</span><span class="sp"></span><span class="dim">4 worktrees · 241k tok</span></div>
+  <div class="body" style="min-height:420px;">
+<div class="row"><span class="br">add rate limiting</span>  <span class="acc">phase 1 scaffold</span> <span class="ok">✓✓</span>  <span class="acc">phase 2 integrate</span> <span class="warn">◐◐</span>☐  <span class="acc">phase 3 verify</span> ☐  <span class="acc">4 finish</span> ☐
+<span class="dim">──────────────────────────────────────────────────────────────────────</span>
+ <span class="ok">✓</span> T1 ILimiter         <span class="gauge"><i style="width:100%;background:#3fb950"></i></span> <span class="ok">tdd✓ reviewed✓ merged</span>
+ <span class="ok">✓</span> T2 per-IP store      <span class="gauge"><i style="width:100%;background:#3fb950"></i></span> <span class="ok">tdd✓ reviewed✓ merged</span>
+ <span class="warn">◐</span> T3 middleware        <span class="gauge"><i style="width:62%;background:#d29922"></i></span> <span class="warn">⠿ red→green 6/9</span> tps <span class="spark acc">▅▆▇▆▇█</span>
+ <span class="warn">◐</span> T4 config binding     <span class="gauge"><i style="width:38%;background:#d29922"></i></span> <span class="warn">⠿ impl</span>        tps <span class="spark acc">▃▄▃▅▄▆</span>
+ <span class="dim">☐ T5 integration tests  (blocked T3,T4)   ☐ T6 docs (blocked T5)</span>
+<span class="dim">──────────────────────────────────────────────────────────────────────</span>
+<span class="acc">diff · limiter.rs</span> <span class="dim">(tree-sitter Ⓡ3)</span>
+ <span class="kw">pub fn</span> <span class="fn">check</span>(<span class="ty">&self</span>, ip: <span class="ty">IpAddr</span>) -> <span class="ty">bool</span> {
+ <span class="del">-</span>   <span class="kw">if</span> self.<span class="fn">over_limit</span>(ip) { <span class="kw">return</span> <span class="num">false</span> }
+ <span class="add">+</span>   <span class="kw">let</span> b = self.buckets.<span class="fn">entry</span>(ip).<span class="fn">or_default</span>();
+ <span class="add">+</span>   b.<span class="fn">try_take</span>(<span class="num">1</span>)
+ }
+
+<span class="warn">▸ GATE</span> T1 ready to merge to <span class="br">main</span> — <span class="ok">[a] approve</span> <span class="del">[r] changes</span> <span class="acc">[o] diff</span></div>
+  </div>
+  <div class="statusbar"><span class="mode build">BUILD</span><span>phase 2/4</span><span>2/6 done</span><span class="warn">1 gate</span><span class="sp"></span><span class="dim">j/k task · o open · p pause · esc/:chat</span></div>
+</div>
+<p class="cap">Fleet board with live per-agent gauges + throughput sparklines (Ⓡ4); the diff renders with real tree-sitter highlighting (Ⓡ3). Nothing merges without a gate.</p>
+
+<!-- SCENE 3 -->
+<div class="scene">③ <b>Chat · semantic zoom ①</b> zoomed out (Ⓡ2 animates the fold) — 38-turn session as a map</div>
+<div class="win">
+  <div class="titlebar"><span class="name">zoid</span><span class="mode chat">CHAT</span><span class="acc">⌃ altitude: overview</span><span class="anim">⟳ fold</span><span class="sp"></span><span>38 turns · 1.2M tok</span></div>
+  <div class="body" style="min-height:420px;">
+<div class="row"><span class="dim">28</span> <span class="acc">›</span> add rate limiting to public API          <span class="ok">●●●●●●</span> <span class="ok">✓62</span>  <span class="br">⎇main</span> <span class="dim">Build·6</span>
+<span class="dim">29</span> <span class="acc">›</span> tighten the migration note               <span class="ok">●</span>           <span class="br">⎇main</span>
+<span class="dim">30</span> <span class="acc">›</span> limiter trips on health checks           <span class="dim">⠿</span><span class="ok">●●</span> <span class="ok">✓</span>    <span class="br">⎇main</span>
+<span class="dim">31</span> <span class="br">⎇</span> fork: try sliding-window                 <span class="ok">●●●●</span> <span class="del">✗ slower</span> <span class="pink">⎇try:sliding</span>
+<span class="dim">32</span> <span class="acc">›</span> keep token bucket                        <span class="dim">—</span>           <span class="br">⎇main</span>
+<span class="dim">33</span> <span class="acc">›</span> add Retry-After + 429 body               <span class="ok">●●</span> <span class="ok">✓</span>     <span class="br">⎇main</span>
+<span class="dim">34</span> <span class="acc">›</span> wire limiter metrics to /healthz         <span class="ok">●●●</span> <span class="warn">◐</span>    <span class="br">⎇main</span>
+<span class="dim">35</span> <span class="acc">›</span> explain per-IP sweep / leak safety       <span class="dim">— answer</span>  <span class="br">⎇main</span>
+<span class="dim">36</span> <span class="acc">›</span> config burst size per route              <span class="ok">●●</span> <span class="ok">✓</span>     <span class="br">⎇main</span>
+<span class="dim">37</span> <span class="acc">›</span> run full suite                           <span class="ok">✓ 214</span>     <span class="br">⎇main</span>
+<span class="dim">38</span> <span class="acc">›</span> draft the PR description                  <span class="dim">— answer</span>  <span class="br">⎇main</span> <span class="acc">◀ here</span>
+
+<span class="dim">⌃scroll to descend (animated) · ⏎ jump to a turn · / filter</span></div>
+  </div>
+  <div class="statusbar"><span class="mode chat">CHAT</span><span>⎇ <span class="br">main</span></span><span>38 turns · 1 abandoned fork</span><span class="sp"></span><span class="dim">⌃scroll zoom · ⏎ jump</span></div>
+</div>
+<p class="cap">Whole session as one-liners (prompt + glyphs + branch); zoom in/out animates the fold (Ⓡ2). Abandoned fork visible; ⏎ jumps (time-travel).</p>
+
+<!-- SCENE 4 -->
+<div class="scene">④ <b>Chat · object-first verbs</b> on a tree-sitter symbol (Ⓡ3 + ④)</div>
+<div class="win">
+  <div class="titlebar"><span class="name">zoid</span><span class="mode chat">CHAT</span><span class="dim">select a symbol → agent verbs</span><span class="sp"></span><span class="acc">claude-opus-4-8</span></div>
+  <div class="body" style="min-height:420px;">
+<div class="row"><span class="mut">zoid</span>  here's the failing function:
+
+   <span class="kw">pub fn</span> <span class="sel">try_take</span>(<span class="ty">&mut self</span>, n: <span class="ty">u32</span>) -> <span class="ty">bool</span> {   <span class="dim">◀ symbol selected (tree-sitter)</span>
+       self.<span class="fn">refill</span>();
+       <span class="kw">if</span> self.tokens >= n { self.tokens -= n; <span class="num">true</span> }
+       <span class="kw">else</span> { <span class="num">false</span> }
+   }
+
+<span class="pop"><span class="acc">▸ verbs for fn `try_take`</span>  <span class="dim">(↑↓ · ⏎ · no typing)</span>
+   <span class="ok">▸</span> explain this function
+   <span class="ok">▸</span> write tests for it       <span class="dim">→ tdd</span>
+   <span class="ok">▸</span> find call sites          <span class="dim">tree-sitter refs</span>
+   <span class="ok">▸</span> refactor (extract refill timing)
+   <span class="ok">▸</span> send to a delegate        <span class="dim">→ async, own branch ⑧c</span></span>
+
+<span class="dim">  v/mouse select · works on symbols, errors, diff hunks, files, tests</span></div>
+    </div>
+  </div>
+  <div class="statusbar"><span class="mode chat">CHAT</span><span>⎇ <span class="br">main</span></span><span class="sp"></span><span class="dim">v select · ⏎ run verb · esc</span></div>
+</div>
+<p class="cap">tree-sitter makes a real symbol (not a text range) selectable; verbs are scoped to "a function," including handing it to a delegate. Zero prose for the common case.</p>
+
+<!-- SCENE 5 -->
+<div class="scene">⑤ <b>Build → done</b> — collapsed summary card in Chat (Ⓡ2 fold), a delegate still running ⑧c</div>
+<div class="win">
+  <div class="titlebar"><span class="name">zoid</span><span class="mode chat">CHAT</span><span>⎇ <span class="br">main</span></span><span class="sp"></span><span class="acc">claude-opus-4-8</span><span>96k / 200k <span class="bar"><i style="width:48%;background:linear-gradient(90deg,#3fb950,#d29922)"></i></span></span></div>
+  <div style="display:grid;grid-template-columns:1fr minmax(560px,860px) 300px;min-height:420px;">
+    <div class="gutter"></div>
+    <div class="body" style="border-left:1px solid var(--line2);border-right:1px solid var(--line2);">
+<div class="row"><span class="acc">›</span> add rate limiting to all public endpoints
+
+<span class="card"><span class="ok">✓ Build complete</span> · <span class="br">subagent-dev</span> · 6 tasks · 4 phases   <span class="dim">[space] expand ⟳ [c] canvas</span>
+   <span class="add">+312</span> <span class="del">−47</span> · 7 files · <span class="ok">62 tests green</span> · 241k tokens · all gates passed → merged</span>
+
+<span class="mut">zoid</span>  Done. Per-IP token bucket, 429 + Retry-After, burst configurable. Next?
+
+<span class="acc">›</span> also add structured request logging — background it, don't block me.
+
+<span class="mut">zoid</span>  Spun up a delegate; keep working. <span class="dim">⠿</span></div>
+    </div>
+    <div class="body">
+      <div class="drawer br">
+        <div class="dhead"><span class="br">⑧c delegates</span><span class="acc">inbox 1 ▾</span></div>
+<div class="row"><span class="warn">▶</span> structured req logging
+  <span class="dim">⠿ 2/5 · 18k tok</span> <span class="spark acc">▃▅▆▅</span>
+  <span class="dim">⎇ delegate/req-logging</span>
+<span class="ok">✓</span> migration note
+  <span class="acc">done → [review]</span></div>
+      </div>
+      <div class="drawer" style="margin-bottom:0;">
+        <div class="dhead"><span class="acc">⑤ context</span><span class="dim">^5</span></div>
+<div class="row"><span class="dim">freed after Build:</span>
+<span class="ok">●</span> limiter.rs 7k
+<span class="dim">96k/200k healthy</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="statusbar"><span class="mode chat">CHAT</span><span>⎇ <span class="br">main</span></span><span>1 delegate running</span><span class="sp"></span><span class="dim">space expand · i inbox · ^5 context</span></div>
+</div>
+<p class="cap">Finished Build folds to a one-card summary (Ⓡ2); conversation resumes; a delegate runs on its own branch with a live progress sparkline. Context drops back to healthy.</p>

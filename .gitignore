@@ -1,0 +1,14 @@
+# Brainstorming visual companion (local mockups; canonical UX lives in docs/ux/)
+.superpowers/
+
+# Rust build output
+/target
+spikes/rust-spike/target
+
+# .NET spike build output
+spikes/dotnet-spike/bin
+spikes/dotnet-spike/obj
+spikes/dotnet-spike/out-aot
+
+# misc
+*.log
