@@ -102,6 +102,25 @@ pub fn selectable_objects(msgs: &[ChatMsg]) -> Vec<Obj> {
     files.into_iter().chain(syms).chain(errors).collect()
 }
 
+/// Agent verbs scoped to an object kind (spec ④).
+pub fn verbs_for(kind: ObjectKind) -> &'static [&'static str] {
+    match kind {
+        ObjectKind::File => &["explain", "summarize", "find usages"],
+        ObjectKind::Symbol => &["explain", "find references", "add test"],
+        ObjectKind::Error => &["explain", "fix"],
+    }
+}
+
+/// Compose the scoped prompt a verb would run against an object. In P4d this
+/// text is placed in the input box (queued); P5 dispatches it to a subagent.
+pub fn verb_prompt(verb: &str, obj: &Obj) -> String {
+    match obj.kind {
+        ObjectKind::File => format!("{verb} the file `{}`", obj.target),
+        ObjectKind::Symbol => format!("{verb} `{}` in `{}`", obj.target, obj.context),
+        ObjectKind::Error => format!("{verb} this error: {}", obj.target),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +165,32 @@ mod tests {
         ];
         let objs = selectable_objects(&msgs);
         assert!(objs.iter().all(|o| o.kind != ObjectKind::File));
+    }
+
+    #[test]
+    fn verbs_are_scoped_to_kind() {
+        assert!(verbs_for(ObjectKind::Error).contains(&"fix"));
+        assert!(verbs_for(ObjectKind::Symbol).contains(&"add test"));
+        assert!(verbs_for(ObjectKind::File).contains(&"explain"));
+    }
+
+    #[test]
+    fn verb_prompt_scopes_to_the_object() {
+        let sym = Obj {
+            kind: ObjectKind::Symbol,
+            label: "parse  (src/ast.rs)".into(),
+            target: "parse".into(),
+            context: "src/ast.rs".into(),
+        };
+        let p = verb_prompt("explain", &sym);
+        assert!(p.contains("parse"));
+        assert!(p.contains("src/ast.rs"));
+
+        let file = Obj { kind: ObjectKind::File, label: "src/ast.rs".into(), target: "src/ast.rs".into(), context: String::new() };
+        assert!(verb_prompt("summarize", &file).contains("src/ast.rs"));
+
+        let err = Obj { kind: ObjectKind::Error, label: "error: shell".into(), target: "FAILED".into(), context: String::new() };
+        assert!(verb_prompt("fix", &err).to_lowercase().contains("fix"));
     }
 
     #[test]
