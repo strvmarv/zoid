@@ -10,8 +10,9 @@
 use ratatui::{backend::TestBackend, Terminal};
 use tui_textarea::TextArea;
 use zoid_core::projection::ChatMsg;
+use zoid_tui::chat::ChatView;
 use zoid_tui::render_shell;
-use zoid_tui::state::{DrawerId, Mode, Overlay, ShellState};
+use zoid_tui::state::{DrawerId, Mode, Overlay, ShellState, Zoom};
 use zoid_tui::EconomyView;
 
 fn seeded() -> Vec<ChatMsg> {
@@ -126,8 +127,9 @@ fn main() {
     let input = TextArea::default();
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
+    let view = ChatView { zoom: Zoom::Normal, caret_on: true, reveal: None };
     terminal
-        .draw(|f| render_shell(f, &state, &economy, &msgs, &input, false, true))
+        .draw(|f| render_shell(f, &state, &economy, &msgs, &input, false, &view))
         .unwrap();
 
     // A ruler makes column drift obvious at a glance.

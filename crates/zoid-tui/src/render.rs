@@ -4,7 +4,7 @@
 //! from `tokens` (spec §16). Geometry comes from `layout::compute` — the same
 //! rects mouse hit-testing uses.
 
-use crate::chat::conversation_lines;
+use crate::chat::{conversation_view, ChatView};
 use crate::economy_view::EconomyView;
 use crate::layout::{compute, ShellLayout};
 use crate::palette::{all_items, nav, selectable_matches, PaletteItem};
@@ -27,7 +27,7 @@ pub fn render_shell(
     msgs: &[ChatMsg],
     input: &TextArea<'_>,
     streaming: bool,
-    caret_on: bool,
+    view: &ChatView,
 ) {
     let layout = compute(frame.area(), state);
 
@@ -35,7 +35,7 @@ pub fn render_shell(
 
     match state.mode {
         Mode::Chat => {
-            let body = conversation_lines(msgs, streaming, caret_on);
+            let body = conversation_view(msgs, view, streaming);
             frame.render_widget(Paragraph::new(body).scroll((state.conversation_scroll, 0)), layout.conversation);
         }
         Mode::Build => render_build_placeholder(frame, layout.conversation),

@@ -21,6 +21,7 @@ use zoid_core::session::SessionHandle;
 use zoid_provider::{default_model, default_provider};
 use zoid_provider::Provider;
 use zoid_tools::Tool;
+use zoid_tui::chat::ChatView;
 use zoid_tui::layout::compute;
 use zoid_tui::render_shell;
 use zoid_tui::route::{palette_selected_command, route_key, route_mouse};
@@ -156,7 +157,8 @@ async fn run<B: ratatui::backend::Backend>(
             let economy = zoid_tui::EconomyView::build(&window, &churn, &ledger, &policy, 0);
             let elapsed = app.started.elapsed().as_millis() as u64;
             let caret = zoid_tui::motion::caret_on(elapsed, 1000, app.shell.reduced_motion);
-            render_shell(f, &app.shell, &economy, &msgs, &app.textarea, app.streaming, caret);
+            let view = ChatView { zoom: app.shell.zoom, caret_on: caret, reveal: None };
+            render_shell(f, &app.shell, &economy, &msgs, &app.textarea, app.streaming, &view);
         })?;
 
         tokio::select! {
