@@ -278,6 +278,7 @@ A single subsystem underlies **⑤ context** and **⑧ agents**: both are *token
   - **Chat** is safe by **human-in-the-loop**: you see every action as it happens and drive each turn, so cwd execution needs no sandbox and no blocker machinery — anything outward-facing is simply something you're present to approve.
   - **Build** is safe by **isolation + the finalize bookend**: work happens in worktrees and nothing reaches `main` until you finalize, so in-sandbox actions are recoverable and need no prompts. **Outward-facing/irreversible actions** that escape the sandbox (force-push to main, prod/network writes, deleting external data, spending money) are **blockers** — escalated, not executed unilaterally.
   - All actions and escalations are events (auditable, replayable) and surface in the finalize decisions log.
+  - **Permission review `[POST-V1]`:** the v1 safety story above is *deterministic* (human-in-the-loop in Chat; isolation + blockers in Build) — no model reviews actions. A future **tier 1.5** local semantic risk gate (reuse the in-process embedder/reranker to flag paraphrased/obfuscated dangers a rule-matcher misses), and a further tier 2 generative judge, are designed-for behind a `PermissionReviewer` seam but **deferred** (§12). Lower priority than the roadmap phases.
 
 ---
 
@@ -331,6 +332,7 @@ The build proceeds as a sequence of **vertical slices**. Each phase (a) compiles
 - **② Canvas mode** (branch-DAG map) — with **undo** (move head), **fork** (new head), and **time-travel** to an arbitrary turn (all event-log-native, surfaced here).
 - **Ⓡ1 inline raster graphics** (Sixel/Kitty/iTerm2) — render-backend seam built earlier, spectacle later.
 - **WASM** + out-of-process (MCP-style) plugins; additional providers; model auto-routing.
+- **Permission tier 1.5 — local semantic risk scoring** (§9): an LLM-reviewed permission gate that reuses the in-process local embedder/reranker (e.g. bge-small) to score a *proposed* tool call against danger-exemplars + natural-language deny-policies, escalating Allow→Ask/Deny on paraphrased/obfuscated dangers that static rules (tier 1) miss. Designed-for behind a `PermissionReviewer` seam; **no generative model, no provider tokens**. Verdicts are recorded as events so deterministic replay reads the verdict, never re-runs the model. A generative judge (small local instruct model *or* the configured remote provider, tier 2) is a further deferral.
 
 ---
 
