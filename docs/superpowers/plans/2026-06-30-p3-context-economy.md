@@ -1567,6 +1567,8 @@ git commit -m "feat(tui): render ⑤ economy drawer (items/heat/churn/ledger) + 
 
 ### Task 10: Manual control — selection, pin/evict keys, palette, commands
 
+> **DEFERRED post-P3 (user decision, 2026-06-30).** P3 ships *automated* context management + *observability* only; the explicit user-command surface (economy-row selection, pin/evict keybinds, `:evict-cold`, `:set ceiling`, palette wiring, `ShellState.policy`/`economy_selected`) lands in a later phase. The underlying machinery is already merged (the `ContextMutation` event in T2, the pin/evict fold in T5, the assembler honoring pins in T6) — only the user-facing triggers are deferred. This task is retained here as the spec for that future phase; **it is NOT executed in the P3 loop (T8 → T9 → T11).**
+
 **Files:**
 - Modify: `crates/zoid-tui/src/state.rs` (selection + policy)
 - Modify: `crates/zoid-tui/src/command.rs` (new commands)
@@ -1865,7 +1867,11 @@ In `crates/zoid/src/main.rs`, build the view each frame and pass it:
             let window = zoid_core::context::context_window(&app.events);
             let churn = zoid_core::economy::churn_timeline(&app.events);
             let ledger = zoid_core::economy::token_ledger(&app.events);
-            let economy = zoid_tui::EconomyView::build(&window, &churn, &ledger, &app.shell.policy, app.shell.economy_selected);
+            // T10 (manual control: shell.policy / shell.economy_selected) is DEFERRED post-P3.
+            // Until then the policy is the default (auto-evict-cold ON, no ceiling) and there is
+            // no row selection — the drawer is read-only/observability-only.
+            let policy = zoid_core::assembler::ContextPolicy::default();
+            let economy = zoid_tui::EconomyView::build(&window, &churn, &ledger, &policy, 0);
             render_shell(f, &app.shell, &economy, &msgs, &app.textarea, app.streaming);
         })?;
 ```
