@@ -297,6 +297,27 @@ A single subsystem underlies **⑤ context** and **⑧ agents**: both are *token
 - **WASM plugins `[POST-V1 — deferred, not forgotten]`:** in-process, sandboxed, capability-secured `wasmtime` modules for the rarer case of a *native* in-process tool/provider wanting near-native speed and OS-level isolation without a subprocess. The spike validated `wasmtime` embeds and statically links cleanly, so the host-function boundary is designed now and the crate is added at the plugin phase — kept out of the v1 build (smaller binary, faster LTO, §3). **Lower priority than MCP**, but explicitly retained.
 - **`[V1]`:** ship a fixed, curated set of providers/tools compiled in; design the trait interfaces (and the MCP + WASM host boundaries) now so the plugin surface is an add-on, not a refactor.
 
+### 10.1 Configuration `[V1: minimal — formalizes what exists; POST-V1: full surface]`
+
+v1 codifies only the configuration that **already exists in code** plus a precedence model; the broader surface is enumerated as deferred decisions (below) so nothing is designed by accident.
+
+- **Two namespaces, one principle (§10's "adopt, don't invent").** *zoid-native* config lives in zoid's own namespace; *adopted ecosystem entities* are read from their conventional Claude-style locations.
+  - **zoid-native:** `~/.config/zoid/config.toml` (user global) and `./.zoid/config.toml` (project) — TOML (Rust-idiomatic). The session DB already lives at `./.zoid/session.db`.
+  - **adopted entities `[POST-V1 loaders]`:** `.claude/agents/*.md`, skills, `.claude/commands/*.md`, and MCP server definitions (`.mcp.json`-style) — read from the ecosystem's locations (§10), not redefined.
+- **Precedence (low → high):** compiled defaults → user global → project `./.zoid/config.toml` → local gitignored `./.zoid/config.local.toml` → `ZOID_*` environment → CLI flags.
+- **Current knobs (the whole v1 surface):** `OLLAMA_API_KEY` / `ANTHROPIC_API_KEY` (provider select **+ secret**), `ZOID_MODEL` (model), `ZOID_DB` (session DB path), `ZOID_REDUCED_MOTION` (motion §6.4). Provider `base_url` is currently hardcoded per provider.
+- **Secrets rule:** API keys are **never** read from committed config — environment, the gitignored `config.local.toml`, or (later) an OS keyring only.
+- **Surfacing:** settings appear **read-only** in the `^P` palette's *settings* group (§6.5); editing is file-first — **no in-TUI settings editor in v1**.
+
+**`[POST-V1]` — configuration decisions to review & decide before they're built** (deferred, but the scope is recorded so it isn't designed piecemeal):
+- **Format finality:** TOML for zoid-native vs JSON for `settings.json`-parity with the adopted dialect; whether to read a Claude-style `settings.json` directly.
+- **Secrets handling:** OS keyring integration (cf. the Billy pattern) vs env-only; per-provider credential resolution; redaction in logs/events.
+- **Entity-discovery paths:** exact search order and precedence for adopted `.claude/`-style agents/skills/commands across user vs project scope; enable/disable lists; project-trust (don't auto-run agents/MCP from an untrusted cloned repo).
+- **Provider/model config:** `base_url` override (local Ollama vs Cloud), per-mode or per-agent model selection, model auto-routing, request parameters (temperature, max-tokens).
+- **Per-subsystem policy as config:** economy ⑤ token ceilings + auto-evict/compact thresholds (§8); permission rules + path scopes (the deferred tier-1/1.5 gate, §9/§12); `notify-cmd` + notification channel toggles (§6.0).
+- **User-authored modes:** the `ModePolicy` descriptor load path + discovery (§4.2, §6.6).
+- **Validation & UX:** schema validation + actionable errors on malformed config; config hot-reload vs restart; an in-TUI settings editor; a `zoid config` CLI; first-run/onboarding to capture provider + key.
+
 ---
 
 ## 11. Error Handling & Resilience
@@ -368,6 +389,7 @@ The build proceeds as a sequence of **vertical slices**. Each phase (a) compiles
 8. **Naming** — confirm "zoid" as the product/binary name; mode names "Chat"/"Build" (finalize is Build's last step, not a separate mode).
 9. **Context-heat fidelity (⑤a)** — "usage heat" is a heuristic (output references, tool targeting, prompt-cache accounting), not true attention (unavailable via API). A weak heuristic makes "cold" misleading and risks bad auto-evictions. Mitigate: conservative auto-evict (suggest, or only evict clearly-cold + unpinned), pin always overrides, tune the heuristic against real sessions; never auto-evict pinned items.
 10. **Fake-provider drift** — the agent-loop tests replay scripted SSE against a fake provider (§13), which can drift from real Anthropic behavior (new event types, tool-call framing, error shapes), leaving tests green while the live client breaks. Mitigate: periodic contract tests against the live API; version the fake against a captured real transcript.
+11. **Configuration surface** — only the *minimal* surface is specified (§10.1: existing `ZOID_*`/key env vars + precedence + the `.zoid/`-vs-`.claude/` split). The **full surface is unresolved** and listed in §10.1's `[POST-V1]` block: format finality (TOML vs `settings.json`-parity), secrets/keyring, entity-discovery paths + project-trust, per-mode/agent provider+model config, policy-as-config (economy ceilings, permission rules, notifications), `ModePolicy` load path, validation/hot-reload/in-TUI editor/onboarding. Decide each before building it — don't let config accrete piecemeal.
 
 ---
 
