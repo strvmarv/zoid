@@ -14,15 +14,15 @@ use tokio::sync::mpsc;
 use tui_textarea::TextArea;
 use ulid::Ulid;
 
+use zoid::agent::{run_agent_turn, AgentUpdate};
 use zoid::input::{classify, KeyAction};
 use zoid_core::event::{Event, EventKind};
-use zoid_core::projection::{transcript, Role};
+use zoid_core::projection::transcript;
 use zoid_core::session::SessionHandle;
 use zoid_provider::{default_model, default_provider};
-use zoid_provider::{CompletionRequest, Message, MsgRole, Provider, ProviderEvent};
+use zoid_provider::Provider;
+use zoid_tools::Tool;
 use zoid_tui::chat::render_chat;
-
-const SYSTEM_PROMPT: &str = "You are zoid, a terminal coding assistant. Be concise and precise.";
 
 /// Resolve the session DB path: `$ZOID_DB` if set, else `./.zoid/session.db`.
 fn db_path() -> Result<PathBuf> {
@@ -46,6 +46,7 @@ struct App {
     session: SessionHandle,
     events: Vec<Event>,
     provider: Arc<dyn Provider>,
+    tools: Arc<Vec<Box<dyn Tool>>>,
     model: String,
     textarea: TextArea<'static>,
     streaming: bool,
@@ -59,29 +60,6 @@ impl App {
         self.session.append(ev.clone()).await?;
         self.events.push(ev);
         Ok(())
-    }
-
-    /// Build the provider request from the current transcript.
-    fn request(&self) -> CompletionRequest {
-        let messages = transcript(&self.events)
-            .into_iter()
-            .map(|t| Message {
-                role: match t.role {
-                    Role::User => MsgRole::User,
-                    Role::Assistant => MsgRole::Assistant,
-                },
-                content: t.text,
-                tool_calls: Vec::new(),
-                tool_name: None,
-            })
-            .collect();
-        CompletionRequest {
-            model: self.model.clone(),
-            system: Some(SYSTEM_PROMPT.to_string()),
-            messages,
-            max_tokens: 4096,
-            tools: vec![],
-        }
     }
 }
 
@@ -97,6 +75,7 @@ async fn main() -> Result<()> {
         session,
         events,
         provider: default_provider(),
+        tools: Arc::new(zoid_tools::registry()),
         model,
         textarea: TextArea::default(),
         streaming: false,
@@ -121,8 +100,7 @@ async fn run<B: ratatui::backend::Backend>(
     app: &mut App,
 ) -> Result<()> {
     let mut term_events = EventStream::new();
-    // Long-lived delta channel; each provider turn clones the sender.
-    let (delta_tx, mut delta_rx) = mpsc::channel::<ProviderEvent>(256);
+    let (ui_tx, mut ui_rx) = mpsc::channel::<AgentUpdate>(256);
 
     loop {
         let turns = transcript(&app.events);
@@ -138,23 +116,21 @@ async fn run<B: ratatui::backend::Backend>(
                             KeyAction::Newline => { app.textarea.insert_newline(); }
                             KeyAction::Edit => { app.textarea.input(key); }
                             KeyAction::Submit => {
-                                if app.streaming { continue; } // ignore submits mid-stream
+                                if app.streaming { continue; }
                                 let text = app.textarea.lines().join("\n");
                                 if text.trim().is_empty() { continue; }
                                 app.textarea = TextArea::default();
                                 app.record(EventKind::UserMessage { text }).await?;
                                 app.streaming = true;
 
-                                let req = app.request();
                                 let provider = app.provider.clone();
-                                let tx = delta_tx.clone();
+                                let tools = app.tools.clone();
+                                let session = app.session.clone();
+                                let seed = app.events.clone();
+                                let model = app.model.clone();
+                                let ui = ui_tx.clone();
                                 tokio::spawn(async move {
-                                    let _ = provider.stream(&req, tx.clone()).await;
-                                    // Always terminate the turn: providers that end their stream without an
-                                    // explicit Done (e.g. a truncated/timed-out SSE response) must not leave
-                                    // the UI stuck in `streaming`. A redundant Done in the normal case is
-                                    // harmless (it just sets streaming=false again).
-                                    let _ = tx.send(ProviderEvent::Done).await;
+                                    let _ = run_agent_turn(provider, tools, session, seed, model, ui, now_ms).await;
                                 });
                             }
                         }
@@ -163,18 +139,10 @@ async fn run<B: ratatui::backend::Backend>(
                     Some(Err(_)) | None => return Ok(()),
                 }
             }
-            Some(pe) = delta_rx.recv() => {
-                match pe {
-                    ProviderEvent::TextDelta(s) => {
-                        app.record(EventKind::ModelDelta { text: s }).await?;
-                    }
-                    ProviderEvent::Usage(_) => { /* token ledger lands in P3 */ }
-                    ProviderEvent::Error(msg) => {
-                        app.record(EventKind::AssistantMessage { text: format!("{} {msg}", zoid_tui::tokens::glyph::WARNING) }).await?;
-                        app.streaming = false;
-                    }
-                    ProviderEvent::Done => { app.streaming = false; }
-                    ProviderEvent::ToolCall(_) => { /* agent loop wires this up in P1b */ }
+            Some(update) = ui_rx.recv() => {
+                match update {
+                    AgentUpdate::Appended(ev) => { app.events.push(ev); }
+                    AgentUpdate::TurnComplete => { app.streaming = false; }
                 }
             }
         }
