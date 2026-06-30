@@ -146,7 +146,9 @@ async fn run<B: ratatui::backend::Backend>(
             // no row selection — the drawer is read-only/observability-only.
             let policy = zoid_core::assembler::ContextPolicy::default();
             let economy = zoid_tui::EconomyView::build(&window, &churn, &ledger, &policy, 0);
-            render_shell(f, &app.shell, &economy, &msgs, &app.textarea, app.streaming);
+            // TODO(p4b T3): caret_on will be driven by a wall-clock blink timer in the bin's
+            // event loop; steady `true` here matches current always-on caret behavior.
+            render_shell(f, &app.shell, &economy, &msgs, &app.textarea, app.streaming, true);
         })?;
 
         tokio::select! {

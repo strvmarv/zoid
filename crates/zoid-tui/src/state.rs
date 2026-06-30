@@ -65,6 +65,9 @@ pub struct ShellState {
     pub files: Vec<String>,
     /// Current branch label for the Branch drawer (P2: read from `.git/HEAD`).
     pub branch: String,
+    /// Reduced-motion accessibility setting (spec §13). When true, animations
+    /// resolve to their final state instantly. Bin sets it from ZOID_REDUCED_MOTION.
+    pub reduced_motion: bool,
 }
 
 impl ShellState {
@@ -88,6 +91,7 @@ impl ShellState {
             conversation_scroll: 0,
             files: Vec::new(),
             branch: "main".into(),
+            reduced_motion: false,
         }
     }
 
@@ -217,6 +221,12 @@ mod tests {
         s.open_drawer(DrawerId::Branch);
         assert!(s.rail_visible);
         assert!(s.drawer(DrawerId::Branch).unwrap().open);
+    }
+
+    #[test]
+    fn new_has_reduced_motion_off_by_default() {
+        let s = ShellState::new();
+        assert!(!s.reduced_motion); // motion on by default; bin flips it from env
     }
 
     #[test]

@@ -20,7 +20,7 @@ fn draw_econ(state: &ShellState, econ: &EconomyView, msgs: &[ChatMsg], w: u16, h
     let input = TextArea::default();
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| render_shell(f, state, econ, msgs, &input, false)).unwrap();
+    terminal.draw(|f| render_shell(f, state, econ, msgs, &input, false, true)).unwrap();
     terminal.backend().to_string()
 }
 
@@ -134,7 +134,7 @@ fn economy_drawer_selection_highlights_only_when_rail_focused() {
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| render_shell(f, &s, &seeded_economy(), &seeded(), &input, false))
+            .draw(|f| render_shell(f, &s, &seeded_economy(), &seeded(), &input, false, true))
             .unwrap();
         terminal
             .backend()

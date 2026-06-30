@@ -127,7 +127,7 @@ fn main() {
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|f| render_shell(f, &state, &economy, &msgs, &input, false))
+        .draw(|f| render_shell(f, &state, &economy, &msgs, &input, false, true))
         .unwrap();
 
     // A ruler makes column drift obvious at a glance.

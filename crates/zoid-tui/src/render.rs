@@ -27,6 +27,7 @@ pub fn render_shell(
     msgs: &[ChatMsg],
     input: &TextArea<'_>,
     streaming: bool,
+    caret_on: bool,
 ) {
     let layout = compute(frame.area(), state);
 
@@ -34,7 +35,7 @@ pub fn render_shell(
 
     match state.mode {
         Mode::Chat => {
-            let body = conversation_lines(msgs, streaming);
+            let body = conversation_lines(msgs, streaming, caret_on);
             frame.render_widget(Paragraph::new(body).scroll((state.conversation_scroll, 0)), layout.conversation);
         }
         Mode::Build => render_build_placeholder(frame, layout.conversation),

@@ -11,7 +11,7 @@ use zoid_core::projection::ChatMsg;
 
 /// Build the conversation lines (user/assistant turns + inline tool cards).
 /// Shared by `render_chat` and the modal `render_shell`.
-pub fn conversation_lines<'a>(msgs: &'a [ChatMsg], streaming: bool) -> Vec<Line<'a>> {
+pub fn conversation_lines<'a>(msgs: &'a [ChatMsg], streaming: bool, caret_on: bool) -> Vec<Line<'a>> {
     let last = msgs.len().saturating_sub(1);
     if msgs.is_empty() {
         return vec![Line::styled("  (no messages yet)", Style::new().fg(color::DIM))];
@@ -27,7 +27,7 @@ pub fn conversation_lines<'a>(msgs: &'a [ChatMsg], streaming: bool) -> Vec<Line<
             }
             ChatMsg::Assistant { text, tool_calls } => {
                 let mut shown = text.clone();
-                if streaming && i == last && tool_calls.is_empty() {
+                if streaming && caret_on && i == last && tool_calls.is_empty() {
                     shown.push(glyph::CARET);
                 }
                 if !shown.is_empty() || tool_calls.is_empty() {
@@ -83,7 +83,7 @@ pub fn render_chat(frame: &mut Frame, msgs: &[ChatMsg], input: &TextArea<'_>, st
     frame.render_widget(Paragraph::new(title), chunks[0]);
 
     // Conversation: user/assistant text turns + inline tool cards.
-    let body = conversation_lines(msgs, streaming);
+    let body = conversation_lines(msgs, streaming, true);
     frame.render_widget(Paragraph::new(body), chunks[1]);
 
     // Input box (bordered text area).
@@ -136,5 +136,24 @@ fn truncate(s: &str, max: usize) -> String {
         format!("{head}…")
     } else {
         s.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn caret_shows_only_when_streaming_and_caret_on() {
+        use crate::tokens::glyph;
+        let msgs = vec![ChatMsg::Assistant { text: "hi".into(), tool_calls: vec![] }];
+        let has_caret = |streaming, caret| {
+            conversation_lines(&msgs, streaming, caret)
+                .iter()
+                .any(|l| l.spans.iter().any(|s| s.content.contains(glyph::CARET)))
+        };
+        assert!(has_caret(true, true), "streaming + caret_on → caret shown");
+        assert!(!has_caret(true, false), "caret_on=false suppresses caret while streaming");
+        assert!(!has_caret(false, true), "not streaming → no caret");
     }
 }
