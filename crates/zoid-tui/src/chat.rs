@@ -9,6 +9,59 @@ use ratatui::{
 use tui_textarea::TextArea;
 use zoid_core::projection::ChatMsg;
 
+/// Build the conversation lines (user/assistant turns + inline tool cards).
+/// Shared by `render_chat` and the modal `render_shell`.
+pub fn conversation_lines<'a>(msgs: &'a [ChatMsg], streaming: bool) -> Vec<Line<'a>> {
+    let last = msgs.len().saturating_sub(1);
+    if msgs.is_empty() {
+        return vec![Line::styled("  (no messages yet)", Style::new().fg(color::DIM))];
+    }
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, m) in msgs.iter().enumerate() {
+        match m {
+            ChatMsg::User(text) => {
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{} ", glyph::USER_TURN), Style::new().fg(color::CHAT_ACCENT)),
+                    Span::styled(text.clone(), Style::new().fg(color::TXT)),
+                ]));
+            }
+            ChatMsg::Assistant { text, tool_calls } => {
+                let mut shown = text.clone();
+                if streaming && i == last && tool_calls.is_empty() {
+                    shown.push(glyph::CARET);
+                }
+                if !shown.is_empty() || tool_calls.is_empty() {
+                    lines.push(Line::from(vec![
+                        Span::styled("zoid ".to_string(), Style::new().fg(color::DIM)),
+                        Span::styled(shown, Style::new().fg(color::TXT)),
+                    ]));
+                }
+                for tc in tool_calls {
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("  {} ", glyph::EDIT), Style::new().fg(color::CHAT_ACCENT)),
+                        Span::styled(tc.name.clone(), Style::new().fg(color::TXT).bold()),
+                        Span::styled(format!("({})", arg_summary(&tc.args)), Style::new().fg(color::DIM)),
+                        Span::styled(format!(" {} peek", glyph::RETURN), Style::new().fg(color::DIM)),
+                    ]));
+                }
+            }
+            ChatMsg::ToolResult { name, output, is_error, .. } => {
+                let (mark, mark_color) = if *is_error {
+                    (glyph::WARNING, color::ERROR)
+                } else {
+                    (glyph::PASS, color::OK)
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {mark} "), Style::new().fg(mark_color)),
+                    Span::styled(name.clone(), Style::new().fg(color::DIM)),
+                    Span::styled(format!(" → {}", first_line(output)), Style::new().fg(color::DIM)),
+                ]));
+            }
+        }
+    }
+    lines
+}
+
 /// Render the Chat surface: title bar, conversation column, input box, status bar.
 /// When `streaming` is true, a caret `▌` trails the in-progress assistant text
 /// (only when the last message is an Assistant turn with no tool calls).
@@ -30,55 +83,7 @@ pub fn render_chat(frame: &mut Frame, msgs: &[ChatMsg], input: &TextArea<'_>, st
     frame.render_widget(Paragraph::new(title), chunks[0]);
 
     // Conversation: user/assistant text turns + inline tool cards.
-    let last = msgs.len().saturating_sub(1);
-    let body: Vec<Line> = if msgs.is_empty() {
-        vec![Line::styled("  (no messages yet)", Style::new().fg(color::DIM))]
-    } else {
-        let mut lines: Vec<Line> = Vec::new();
-        for (i, m) in msgs.iter().enumerate() {
-            match m {
-                ChatMsg::User(text) => {
-                    lines.push(Line::from(vec![
-                        Span::styled(format!("{} ", glyph::USER_TURN), Style::new().fg(color::CHAT_ACCENT)),
-                        Span::styled(text.clone(), Style::new().fg(color::TXT)),
-                    ]));
-                }
-                ChatMsg::Assistant { text, tool_calls } => {
-                    let mut shown = text.clone();
-                    if streaming && i == last && tool_calls.is_empty() {
-                        shown.push(glyph::CARET);
-                    }
-                    if !shown.is_empty() || tool_calls.is_empty() {
-                        lines.push(Line::from(vec![
-                            Span::styled("zoid ".to_string(), Style::new().fg(color::DIM)),
-                            Span::styled(shown, Style::new().fg(color::TXT)),
-                        ]));
-                    }
-                    for tc in tool_calls {
-                        lines.push(Line::from(vec![
-                            Span::styled(format!("  {} ", glyph::EDIT), Style::new().fg(color::CHAT_ACCENT)),
-                            Span::styled(tc.name.clone(), Style::new().fg(color::TXT).bold()),
-                            Span::styled(format!("({})", arg_summary(&tc.args)), Style::new().fg(color::DIM)),
-                            Span::styled(format!(" {} peek", glyph::RETURN), Style::new().fg(color::DIM)),
-                        ]));
-                    }
-                }
-                ChatMsg::ToolResult { name, output, is_error, .. } => {
-                    let (mark, mark_color) = if *is_error {
-                        (glyph::WARNING, color::ERROR)
-                    } else {
-                        (glyph::PASS, color::OK)
-                    };
-                    lines.push(Line::from(vec![
-                        Span::styled(format!("  {mark} "), Style::new().fg(mark_color)),
-                        Span::styled(name.clone(), Style::new().fg(color::DIM)),
-                        Span::styled(format!(" → {}", first_line(output)), Style::new().fg(color::DIM)),
-                    ]));
-                }
-            }
-        }
-        lines
-    };
+    let body = conversation_lines(msgs, streaming);
     frame.render_widget(Paragraph::new(body), chunks[1]);
 
     // Input box (bordered text area).
