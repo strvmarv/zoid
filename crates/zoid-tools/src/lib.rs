@@ -2,7 +2,9 @@
 //! Tools run in the process working directory (Chat is safe by human presence,
 //! spec §9); no path-jailing here.
 
+pub mod edit;
 pub mod read;
+pub mod search;
 pub mod write;
 
 use serde_json::Value;
@@ -37,6 +39,8 @@ pub fn registry() -> Vec<Box<dyn Tool>> {
     vec![
         Box::new(read::ReadFile),
         Box::new(write::WriteFile),
+        Box::new(edit::EditFile),
+        Box::new(search::Search),
     ]
 }
 
@@ -72,6 +76,8 @@ mod tests {
         assert_eq!(names.len(), count, "tool names must be unique");
         assert!(names.contains(&"read_file"));
         assert!(names.contains(&"write_file"));
+        assert!(names.contains(&"edit_file"));
+        assert!(names.contains(&"search"));
     }
 
     #[test]
