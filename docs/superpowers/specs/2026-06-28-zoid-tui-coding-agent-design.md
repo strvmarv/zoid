@@ -111,9 +111,15 @@ Events are small, append-only, and serialized via `serde` (JSON, or a compact bi
 The top level is a **state machine over the shared event log**. A *mode* is **`(main-area layout, registered rail drawers, keymap, projection set)`**. Switching modes never copies state — it swaps the active surface. This:
 - dissolves keymap collisions (each mode owns its keys),
 - makes "where does X render" a non-question (it renders in its mode's main area or a rail drawer),
-- gives a clean extensibility seam: a new capability is "a new mode, or a tool/drawer registered into a mode" — a future Canvas mode or a WASM plugin can register its own rail drawers without touching the core.
+- gives a clean extensibility seam — **modes are the primary extension point** (§10): a new capability is "a new mode, or a tool/drawer registered into a mode," and a future Canvas mode or WASM plugin can register its own rail drawers without touching the core.
 
-v1 modes: **Chat · Build** (§6). Build is a *stepped pipeline* (brainstorm → spec → plan → execute → final review → finalize); "Review/finalize" is Build's last step, not a separate mode.
+**Modes as an extension point `[V1: seam; POST-V1: user-authored]`.** Beyond the surface tuple, a mode carries a **policy**: what happens *between user turns* — act, or yield to the human. (Chat = the human is the clock: read → propose → you approve → one edit → stop. Build = the agent self-advances through its pipeline, yielding only at checkpoints. Everything else — rail affordances, prompt, tool allow-list, autonomy — is downstream of that one decision.) Concretely:
+- Mode identity is an **open `ModeId`** (newtype, consts for built-ins), *not* a closed enum. In the event-sourced core this buys forward-compatibility: a `ModeChanged { to: ModeId }` event written under a since-removed custom mode still **replays** — an unresolved id falls back to Chat.
+- A `ModeRegistry` holds `impl Mode` entries. **Chat is the floor**: the registry is constructed with it, it cannot be deregistered, and it is the fallback whenever a `ModeId` fails to resolve or a mode errors at runtime.
+- **Chat and Build are both native `impl Mode`** — Build is authored as the *first* mode behind the trait, never a hardcoded branch. Proving the seam with two built-ins is what keeps it honest.
+- **User-authored modes `[POST-V1]`** are *declarative* `ModePolicy` descriptors (autonomy level, optional phase sequence, tool allow-list, prompt overlay) run by one generic `DeclarativeMode` impl — no per-mode code, no plugin code path. The descriptor shape is designed now; the file loader is deferred to demand. Scripted/WASM mode *logic* is out of scope (a WASM plugin may still register tools/drawers — §10 — just not a mode's decision function).
+
+v1 modes: **Chat · Build** (§6), both behind the `Mode` seam above. Build is a *stepped pipeline* (brainstorm → spec → plan → execute → final review → finalize); "Review/finalize" is Build's last step, not a separate mode.
 
 ### 4.3 The rail (per-mode drawers)
 A reusable right-rail component hosts **stackable, collapsible drawers**; **each mode owns its own drawer set** (modes are isolated — the rail is a shared *component*, not shared *contents*). Chat: context-economy ⑤ / files / branch / palette. Build: economy ⑤ / changed-files-tree / steering. Panes are for what you watch continuously; rail drawers are for what you consult contextually.
@@ -222,8 +228,9 @@ A finished Build collapses to a **summary card** back in Chat (re-expandable, �
 - Mode switch: **`⇧Tab`** (toggle Chat⇄Build) · `:build`/`:chat`. Canonical mock: `docs/ux/palette.html`.
 
 ### 6.6 Future modes `[POST-V1]`
-New capabilities slot in as peer modes (with their own layout + rail drawers) without disturbing the v1 pair:
+New capabilities slot in as peer modes (with their own layout + rail drawers) behind the `Mode` seam (§4.2), without disturbing the v1 pair:
 - **Canvas mode** ② — the branch DAG as a 2-D map; enter a node to time-travel.
+- **User-authored modes** — declarative `ModePolicy` descriptors (no code) run by the generic `DeclarativeMode` impl; Chat stays the non-removable fallback. The descriptor shape is fixed in v1 (§4.2); only the loader is deferred.
 
 ---
 
@@ -276,7 +283,8 @@ A single subsystem underlies **⑤ context** and **⑧ agents**: both are *token
 
 ## 10. Extensibility
 
-Rust enables a stronger extensibility story than the abandoned .NET/AOT plan (which was forced out-of-process). Three layered seams:
+Rust enables a stronger extensibility story than the abandoned .NET/AOT plan (which was forced out-of-process). Four layered seams:
+- **Modes `[V1: seam; POST-V1: user-authored]`:** the **primary** extension point (§4.2). Built-ins (Chat, Build) ship as native `impl Mode` behind a `ModeRegistry`; user-authored modes arrive as declarative `ModePolicy` descriptors run by one generic interpreter — no code execution, like recipes. Chat is the non-removable fallback. Scripted/WASM mode *logic* is out of scope; a WASM plugin extends tools/providers/drawers, not a mode's decision function.
 - **Recipes/workflows `[POST-V1]`:** declarative files (yaml/markdown), interpreted (L3). No code execution required to author a workflow.
 - **WASM plugins `[POST-V1]`:** tools/providers/recipes as **in-process, sandboxed, capability-secured WASM modules** via `wasmtime` (spike-validated as trivial to embed and statically linked). Language-agnostic — authors compile from any language to WASM. Near-native speed, no subprocess overhead, OS-isolated by the WASM sandbox + an explicit capability/host-function surface.
 - **Out-of-process (MCP-style) `[POST-V1]`:** also supported for heavier or already-existing external tools/servers.
@@ -309,7 +317,7 @@ The build proceeds as a sequence of **vertical slices**. Each phase (a) compiles
 | **P3 · Context economy ⑤** | `TokenLedger` + `ContextWindow`(heat) + `ChurnTimeline` projections; pin/evict; auto-evict-cold + compact-at-threshold; optional token ceiling; economy rail drawer with **Ⓡ4** dataviz (gauges/sparklines); the **constructed-context assembler** primitive | Live manual + automated context control — and the context-construction substrate P5 reuses. |
 | **P4 · Signature Chat** | **Ⓡ2** motion engine (motion budget + reduced-motion); **① semantic zoom** (structural summaries); **Ⓡ3** tree-sitter (highlight, structural fold, symbol selection); **④ object-first verbs** | The "beyond chat-log" Chat experience. |
 | **P5 · Orchestrator + subagent runtime (L1)** | Subagent executor; `git2` **worktree isolation**; the constructed-context assembler (from P3) wired to subagent dispatch; **one subagent at a time**; available from Chat (delegate a discrete task) | Dispatch an isolated subagent for a unit of work and fold its result back. |
-| **P6 · Build front-half (L2a)** | Build mode as a stepped-pipeline shell; **continuous Chat→Build** switch; brainstorm → spec card ✓ → worktree+baseline → plan card ✓ (read-code + pre-flight); **phase/task/gate modeled as data** | Drive Build to an approved plan (execution stubbed / dry-run). |
+| **P6 · Build front-half (L2a)** | **Mode seam first** (open `ModeId` + `trait Mode` + `ModeRegistry`; refactor Chat behind it; §4.2) — *then* Build as the **first** `impl Mode`; Build mode as a stepped-pipeline shell; **continuous Chat→Build** switch; brainstorm → spec card ✓ → worktree+baseline → plan card ✓ (read-code + pre-flight); **phase/task/gate modeled as data** | Drive Build to an approved plan (execution stubbed / dry-run). |
 | **P7 · Build execution — happy path (L2b)** | Scheduler walks the task DAG **in dependency order, one task at a time**; per-task implementer→spec-review→quality-review→fix loop w/ **TDD**; self-gates + auto-retry; the 2-pane (Overview · Follow-stream) + rail execute surface | A plan with no blockers executes end-to-end autonomously; you watch it. |
 | **P8 · Blockers & notifications (L2c)** | Blocker detection/classification/escalation (esp. outward-facing actions), pause→resume; the 4 notification channels + persistent badge | A plan that hits ambiguity or an outward-facing action pauses, notifies, and resumes on your answer. |
 | **P9 · Finalize bookend** | Final broad whole-branch review; finalize surface (decisions log + changed-files/diff + merge / PR / request-changes / discard) + worktree cleanup + tests verify; collapsed summary card back in Chat | The **full autonomy contract**, brainstorm → finalize. |
