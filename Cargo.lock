@@ -2308,4 +2308,5 @@ dependencies = [
  "serde_json",
  "tui-textarea",
  "zoid-core",
+ "zoid-syntax",
 ]

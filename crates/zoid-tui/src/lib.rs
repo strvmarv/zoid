@@ -10,7 +10,9 @@ pub mod palette;
 pub mod route;
 pub mod render;
 pub mod economy_view;
+pub mod syntax_view;
 
 pub use render::render_shell;
 pub use state::{DrawerId, Focus, Mode, Overlay, ShellState};
 pub use economy_view::EconomyView;
+pub use syntax_view::{highlight_lines, syn_color};

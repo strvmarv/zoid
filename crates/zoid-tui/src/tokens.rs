@@ -48,6 +48,14 @@ pub mod color {
     pub const HEAT_HOT: Color = OK;
     pub const HEAT_WARM: Color = WARN;
     pub const HEAT_COLD: Color = DIM;
+
+    // Ⓡ3 tree-sitter syntax palette (spec §16 / docs/ux/README.md, verbatim).
+    pub const SYN_KEYWORD: Color = Color::Rgb(0xff, 0x7b, 0x72);
+    pub const SYN_FUNC: Color = Color::Rgb(0xd2, 0xa8, 0xff);
+    pub const SYN_TYPE: Color = Color::Rgb(0x7e, 0xe7, 0x87);
+    pub const SYN_STRING: Color = Color::Rgb(0xa5, 0xd6, 0xff);
+    pub const SYN_NUMBER: Color = Color::Rgb(0x79, 0xc0, 0xff);
+    pub const SYN_COMMENT: Color = Color::Rgb(0x8b, 0x94, 0x9e);
 }
 
 #[cfg(test)]
@@ -82,5 +90,16 @@ mod tests {
         assert_eq!(color::HEAT_HOT, color::OK);
         assert_eq!(color::HEAT_WARM, color::WARN);
         assert_eq!(color::HEAT_COLD, color::DIM);
+    }
+
+    #[test]
+    fn p4a_syntax_tokens_present() {
+        use ratatui::style::Color;
+        assert_eq!(color::SYN_KEYWORD, Color::Rgb(0xff, 0x7b, 0x72));
+        assert_eq!(color::SYN_FUNC, Color::Rgb(0xd2, 0xa8, 0xff));
+        assert_eq!(color::SYN_TYPE, Color::Rgb(0x7e, 0xe7, 0x87));
+        assert_eq!(color::SYN_STRING, Color::Rgb(0xa5, 0xd6, 0xff));
+        assert_eq!(color::SYN_NUMBER, Color::Rgb(0x79, 0xc0, 0xff));
+        assert_eq!(color::SYN_COMMENT, Color::Rgb(0x8b, 0x94, 0x9e));
     }
 }
