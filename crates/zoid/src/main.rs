@@ -75,6 +75,8 @@ struct App {
     streaming: bool,
     shell: zoid_tui::ShellState,
     ui_tx: mpsc::Sender<AgentUpdate>,
+    /// Monotonic clock start for motion timing (Ⓡ2).
+    started: std::time::Instant,
 }
 
 impl App {
@@ -99,6 +101,7 @@ async fn main() -> Result<()> {
     let mut shell = zoid_tui::ShellState::new();
     shell.branch = current_branch();
     shell.files = cwd_files(64);
+    shell.reduced_motion = std::env::var("ZOID_REDUCED_MOTION").map(|v| !v.is_empty()).unwrap_or(false);
 
     let (ui_tx, mut ui_rx) = mpsc::channel::<AgentUpdate>(256);
 
@@ -112,6 +115,7 @@ async fn main() -> Result<()> {
         streaming: false,
         shell,
         ui_tx,
+        started: std::time::Instant::now(),
     };
 
     enable_raw_mode()?;
@@ -135,6 +139,10 @@ async fn run<B: ratatui::backend::Backend>(
 ) -> Result<()> {
     let mut term_events = EventStream::new();
 
+    let tick_period = std::time::Duration::from_millis(1000 / zoid_tui::motion::MOTION_FPS);
+    let mut motion_tick = tokio::time::interval(tick_period);
+    motion_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     loop {
         terminal.draw(|f| {
             let msgs = conversation(&app.events);
@@ -146,9 +154,9 @@ async fn run<B: ratatui::backend::Backend>(
             // no row selection — the drawer is read-only/observability-only.
             let policy = zoid_core::assembler::ContextPolicy::default();
             let economy = zoid_tui::EconomyView::build(&window, &churn, &ledger, &policy, 0);
-            // TODO(p4b T3): caret_on will be driven by a wall-clock blink timer in the bin's
-            // event loop; steady `true` here matches current always-on caret behavior.
-            render_shell(f, &app.shell, &economy, &msgs, &app.textarea, app.streaming, true);
+            let elapsed = app.started.elapsed().as_millis() as u64;
+            let caret = zoid_tui::motion::caret_on(elapsed, 1000, app.shell.reduced_motion);
+            render_shell(f, &app.shell, &economy, &msgs, &app.textarea, app.streaming, caret);
         })?;
 
         tokio::select! {
@@ -177,6 +185,10 @@ async fn run<B: ratatui::backend::Backend>(
                     AgentUpdate::Appended(ev) => { app.events.push(ev); }
                     AgentUpdate::TurnComplete => { app.streaming = false; }
                 }
+            }
+            _ = motion_tick.tick(), if app.streaming => {
+                // Wake to redraw the blinking caret. The budget: this branch is
+                // disabled when nothing is animating, so an idle app never ticks.
             }
         }
     }
