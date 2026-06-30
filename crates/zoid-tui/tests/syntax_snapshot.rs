@@ -17,7 +17,7 @@ fn draw(w: u16, h: u16) -> String {
     terminal
         .draw(|f| f.render_widget(Paragraph::new(lines), f.area()))
         .unwrap();
-    terminal.backend().to_string()
+    format!("{:#?}", terminal.backend().buffer())
 }
 
 #[test]
