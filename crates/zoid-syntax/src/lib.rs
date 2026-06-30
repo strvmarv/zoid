@@ -3,6 +3,9 @@
 //! tree-sitter. No ratatui, no zoid-core. `zoid-tui` maps the data onto the
 //! §16 palette and renders it.
 
+pub mod highlight;
+pub use highlight::{highlight, HlKind, HlSpan};
+
 /// Languages with a bundled tree-sitter grammar (spec §16 grammar set:
 /// rust/toml/json/yaml/markdown). Everything else is `PlainText` and degrades
 /// gracefully (no highlight/symbols/fold).
