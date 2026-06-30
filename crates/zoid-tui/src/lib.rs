@@ -7,3 +7,4 @@ pub mod state;
 pub mod layout;
 pub mod command;
 pub mod palette;
+pub mod route;
