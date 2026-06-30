@@ -47,6 +47,23 @@ pub fn caret_on(elapsed_ms: u64, period_ms: u64, reduced_motion: bool) -> bool {
     (elapsed_ms % period_ms) < period_ms / 2
 }
 
+/// Number of lines to show at eased progress `t` of a fold/unfold reveal.
+pub fn reveal_count(total: usize, t: f32) -> usize {
+    let eased = ease_out_cubic(t);
+    ((total as f32) * eased).round() as usize
+}
+
+/// Pure reveal gate: `Some(cap)` while a zoom animation is mid-flight, `None`
+/// when no cap should apply (reduced-motion, zero duration, or finished — i.e.
+/// show the final frame). Keeps the animate-or-not decision out of the bin's
+/// impure draw closure so it is unit-testable (spec §13 determinism).
+pub fn zoom_reveal(total: usize, elapsed_ms: u64, anim_ms: u64, reduced_motion: bool) -> Option<usize> {
+    if reduced_motion || anim_ms == 0 || elapsed_ms >= anim_ms {
+        return None;
+    }
+    Some(reveal_count(total, elapsed_ms as f32 / anim_ms as f32))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,6 +102,35 @@ mod tests {
         assert_eq!(Anim { elapsed_ms: 0, duration_ms: 0 }.progress(false), 1.0);
         // past the end clamps
         assert_eq!(Anim { elapsed_ms: 999, duration_ms: 100 }.progress(false), 1.0);
+    }
+
+    #[test]
+    fn reveal_count_eases_from_zero_to_total() {
+        assert_eq!(reveal_count(10, 0.0), 0);
+        assert_eq!(reveal_count(10, 1.0), 10);
+        assert_eq!(reveal_count(10, -0.5), 0); // clamped
+        assert_eq!(reveal_count(10, 2.0), 10); // clamped
+        // monotonic non-decreasing
+        let mut prev = 0;
+        for i in 0..=10 {
+            let c = reveal_count(10, i as f32 / 10.0);
+            assert!(c >= prev);
+            prev = c;
+        }
+        assert_eq!(reveal_count(0, 0.5), 0); // empty stays empty
+    }
+
+    #[test]
+    fn zoom_reveal_gates_on_motion_and_completion() {
+        // mid-animation → a capped count; the reduced-motion and completion cases
+        // resolve to None (no cap = final frame). This is the determinism the inline
+        // draw-closure logic couldn't be tested for.
+        assert_eq!(zoom_reveal(10, 0, 160, false), Some(0));
+        assert_eq!(zoom_reveal(10, 80, 160, false), Some(reveal_count(10, 0.5)));
+        assert_eq!(zoom_reveal(10, 160, 160, false), None); // animation complete
+        assert_eq!(zoom_reveal(10, 200, 160, false), None); // past the end
+        assert_eq!(zoom_reveal(10, 80, 160, true), None); // reduced-motion → instant final frame
+        assert_eq!(zoom_reveal(10, 80, 0, false), None); // zero duration never divides
     }
 
     #[test]

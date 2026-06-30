@@ -26,6 +26,9 @@ use zoid_tui::layout::compute;
 use zoid_tui::render_shell;
 use zoid_tui::route::{palette_selected_command, route_key, route_mouse};
 
+/// Duration of the zoom fold/unfold line-reveal animation (Ⓡ2, T5).
+const ZOOM_ANIM_MS: u64 = 160;
+
 /// Resolve the session DB path: `$ZOID_DB` if set, else `./.zoid/session.db`.
 fn db_path() -> Result<PathBuf> {
     if let Ok(p) = std::env::var("ZOID_DB") {
@@ -78,6 +81,8 @@ struct App {
     ui_tx: mpsc::Sender<AgentUpdate>,
     /// Monotonic clock start for motion timing (Ⓡ2).
     started: std::time::Instant,
+    /// When the altitude last changed, for the fold/unfold reveal (Ⓡ2).
+    zoom_changed_at: Option<std::time::Instant>,
 }
 
 impl App {
@@ -117,6 +122,7 @@ async fn main() -> Result<()> {
         shell,
         ui_tx,
         started: std::time::Instant::now(),
+        zoom_changed_at: None,
     };
 
     enable_raw_mode()?;
@@ -131,6 +137,13 @@ async fn main() -> Result<()> {
     let _ = execute!(terminal.backend_mut(), DisableMouseCapture, LeaveAlternateScreen);
     let _ = terminal.show_cursor();
     result
+}
+
+/// Whether a zoom fold/unfold animation is still in flight (not yet past
+/// `ZOOM_ANIM_MS`, and not short-circuited by reduced-motion).
+fn zoom_animating(app: &App) -> bool {
+    matches!(app.zoom_changed_at, Some(t0) if t0.elapsed().as_millis() < ZOOM_ANIM_MS as u128)
+        && !app.shell.reduced_motion
 }
 
 async fn run<B: ratatui::backend::Backend>(
@@ -157,7 +170,27 @@ async fn run<B: ratatui::backend::Backend>(
             let economy = zoid_tui::EconomyView::build(&window, &churn, &ledger, &policy, 0);
             let elapsed = app.started.elapsed().as_millis() as u64;
             let caret = zoid_tui::motion::caret_on(elapsed, 1000, app.shell.reduced_motion);
-            let view = ChatView { zoom: app.shell.zoom, caret_on: caret, reveal: None };
+            // Measure total lines (which re-runs conversation_view — tree-sitter in
+            // Detail) ONLY while a zoom animation is actually in flight; on every
+            // ordinary frame `reveal` is None and we skip the second build entirely.
+            let reveal = match app.zoom_changed_at {
+                Some(t0) if zoom_animating(app) => {
+                    let total_lines = zoid_tui::chat::conversation_view(
+                        &msgs,
+                        &ChatView { zoom: app.shell.zoom, caret_on: caret, reveal: None },
+                        app.streaming,
+                    )
+                    .len();
+                    zoid_tui::motion::zoom_reveal(
+                        total_lines,
+                        t0.elapsed().as_millis() as u64,
+                        ZOOM_ANIM_MS,
+                        app.shell.reduced_motion,
+                    )
+                }
+                _ => None,
+            };
+            let view = ChatView { zoom: app.shell.zoom, caret_on: caret, reveal };
             render_shell(f, &app.shell, &economy, &msgs, &app.textarea, app.streaming, &view);
         })?;
 
@@ -188,9 +221,10 @@ async fn run<B: ratatui::backend::Backend>(
                     AgentUpdate::TurnComplete => { app.streaming = false; }
                 }
             }
-            _ = motion_tick.tick(), if app.streaming => {
-                // Wake to redraw the blinking caret. The budget: this branch is
-                // disabled when nothing is animating, so an idle app never ticks.
+            _ = motion_tick.tick(), if app.streaming || zoom_animating(app) => {
+                // Wake to redraw the blinking caret or the in-flight zoom reveal. The
+                // budget: this branch is disabled when nothing is animating, so an
+                // idle app never ticks.
             }
         }
     }
@@ -244,8 +278,14 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             let next = app.shell.conversation_scroll as i32 + d;
             app.shell.conversation_scroll = next.max(0) as u16;
         }
-        Action::ZoomIn => app.shell.zoom_in(),
-        Action::ZoomOut => app.shell.zoom_out(),
+        Action::ZoomIn => {
+            app.shell.zoom_in();
+            app.zoom_changed_at = Some(std::time::Instant::now());
+        }
+        Action::ZoomOut => {
+            app.shell.zoom_out();
+            app.zoom_changed_at = Some(std::time::Instant::now());
+        }
         Action::Newline => app.textarea.insert_newline(),
         Action::Edit(key) => { app.textarea.input(key); }
         Action::Submit => {
