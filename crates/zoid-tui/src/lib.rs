@@ -6,3 +6,4 @@ pub mod chat;
 pub mod state;
 pub mod layout;
 pub mod command;
+pub mod palette;
