@@ -304,13 +304,14 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             let text = app.textarea.lines().join("\n");
             if text.trim().is_empty() { return Ok(false); }
             app.textarea = TextArea::default();
+            app.shell.status_hint = None;
             app.record(EventKind::UserMessage { text }).await?;
             app.streaming = true;
             spawn_turn(app);
         }
-        // Object-first picker (P4d ④) — overlay/selection plumbing only. The
-        // verb pick's prompt-compose-and-queue behavior is P4d T4; until then
-        // Enter on a verb just closes the overlay.
+        // Object-first picker (P4d ④): pick an object, then a verb scoped to
+        // it. Picking a verb composes a prompt and queues it into the input
+        // (see the `VerbPick` arm below) — dispatch to a subagent is P5.
         Action::OpenObjects => {
             app.shell.overlay = zoid_tui::Overlay::Objects;
             app.shell.objects = Default::default();
@@ -337,8 +338,22 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             let n = objs.get(sel).map(|o| zoid_tui::objects::verbs_for(o.kind).len()).unwrap_or(0);
             app.shell.objects.verb_selected = zoid_tui::palette::nav(app.shell.objects.verb_selected, d, n);
         }
-        // TODO(P4d T4): compose the scoped prompt into the input + status_hint.
-        Action::VerbPick => app.shell.close_overlay(),
+        Action::VerbPick => {
+            let objs = zoid_tui::objects::selectable_objects(&conversation(&app.events));
+            let osel = zoid_tui::palette::nav(app.shell.objects.obj_selected, 0, objs.len());
+            if let Some(obj) = objs.get(osel) {
+                let verbs = zoid_tui::objects::verbs_for(obj.kind);
+                let vsel = zoid_tui::palette::nav(app.shell.objects.verb_selected, 0, verbs.len());
+                if let Some(verb) = verbs.get(vsel) {
+                    let prompt = zoid_tui::objects::verb_prompt(verb, obj);
+                    // Queue (P4d): seed the input; P5 will dispatch it to a subagent.
+                    app.textarea = TextArea::from(prompt.lines().map(String::from).collect::<Vec<_>>());
+                    app.shell.status_hint = Some("queued · runs as a subagent in P5".into());
+                    app.shell.focus = zoid_tui::Focus::Input;
+                }
+            }
+            app.shell.close_overlay();
+        }
         Action::Noop => {}
     }
     Ok(false)
