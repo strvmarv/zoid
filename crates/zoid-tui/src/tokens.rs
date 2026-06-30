@@ -28,6 +28,7 @@ pub mod glyph {
     pub const HEAT_SHADE: char = '░';  // ⑤ heat bar — empty cell (Ⓡ4)
     pub const SPARK: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█']; // churn sparkline ramp
     pub const PIN: char = '●';         // ⑤ pinned-item marker
+    pub const ELLIPSIS: char = '…';     // collapsed-body marker (① collapse-to-signatures)
 }
 
 /// Colors (visual-language table, spec §16 / docs/ux/README.md).
@@ -101,5 +102,10 @@ mod tests {
         assert_eq!(color::SYN_STRING, Color::Rgb(0xa5, 0xd6, 0xff));
         assert_eq!(color::SYN_NUMBER, Color::Rgb(0x79, 0xc0, 0xff));
         assert_eq!(color::SYN_COMMENT, Color::Rgb(0x8b, 0x94, 0x9e));
+    }
+
+    #[test]
+    fn p4c_collapse_token_present() {
+        assert_eq!(glyph::ELLIPSIS, '…');
     }
 }

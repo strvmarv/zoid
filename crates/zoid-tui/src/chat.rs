@@ -11,7 +11,7 @@ use ratatui::{
 use tui_textarea::TextArea;
 use zoid_core::projection::ChatMsg;
 use zoid_core::zoom::{digests, TurnDigest};
-use zoid_syntax::Language;
+use zoid_syntax::{fold_regions, FoldRegion, Language};
 
 /// Build the conversation lines (user/assistant turns + inline tool cards).
 /// Shared by `render_chat` and the modal `render_shell`.
@@ -139,9 +139,60 @@ fn detail_lines(msgs: &[ChatMsg]) -> Vec<Line<'static>> {
                 );
                 out.push(Line::from(vec![header]));
                 let lang = id_path.get(id.as_str()).map(|p| Language::from_path(p)).unwrap_or(Language::PlainText);
-                out.extend(highlight_lines(output, lang));
+                out.extend(collapse_to_signatures(output, lang));
             }
             other => out.extend(conversation_lines(std::slice::from_ref(other), false, true).into_iter().map(own_line)),
+        }
+    }
+    out
+}
+
+/// Collapse a code file to signatures: highlight every line, but replace each
+/// **leaf** fold body's interior lines with a single `…` marker. "Leaf" = a fold
+/// containing no other fold, so a container (`impl`/`mod`) keeps its method
+/// signatures while each method/struct/enum leaf body folds. Realizes spec Ⓡ3↔①
+/// "collapse to signatures"; uses P4a's `fold_regions` (function + type/impl bodies).
+pub(crate) fn collapse_to_signatures(source: &str, lang: Language) -> Vec<Line<'static>> {
+    let all = highlight_lines(source, lang); // one Line per source line
+    let folds = fold_regions(source, lang);
+    if folds.is_empty() {
+        return all;
+    }
+    // 0-based line index of a byte offset = count of '\n' before it.
+    let line_of = |byte: usize| {
+        source[..byte.min(source.len())].bytes().filter(|&b| b == b'\n').count()
+    };
+    let is_leaf = |f: &FoldRegion, i: usize| {
+        !folds
+            .iter()
+            .enumerate()
+            .any(|(j, g)| j != i && g.start >= f.start && g.end <= f.end)
+    };
+    let mut elided = vec![false; all.len()];
+    for (i, f) in folds.iter().enumerate() {
+        if is_leaf(f, i) {
+            // Keep the opening (signature) line and the closing line; elide between.
+            for ln in (line_of(f.start) + 1)..line_of(f.end) {
+                if ln < elided.len() {
+                    elided[ln] = true;
+                }
+            }
+        }
+    }
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut i = 0;
+    while i < all.len() {
+        if elided[i] {
+            out.push(Line::from(Span::styled(
+                format!("    {}", glyph::ELLIPSIS),
+                Style::new().fg(color::DIM),
+            )));
+            while i < all.len() && elided[i] {
+                i += 1;
+            }
+        } else {
+            out.push(all[i].clone());
+            i += 1;
         }
     }
     out
@@ -315,6 +366,19 @@ mod tests {
             .iter()
             .any(|l| l.spans.iter().any(|s| s.style.fg == Some(color::SYN_KEYWORD)));
         assert!(has_keyword_color, "Detail must highlight the Rust tool-result body");
+    }
+
+    #[test]
+    fn detail_collapses_function_bodies_to_signatures() {
+        use crate::tokens::glyph;
+        let lines = conversation_view(&seeded(), &view(Zoom::Detail), false);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect();
+        assert!(text.iter().any(|t| t.contains("fn parse")), "signature line is kept");
+        assert!(text.iter().any(|t| t.contains(glyph::ELLIPSIS)), "body collapses to …");
+        assert!(!text.iter().any(|t| t.contains("let n = 42")), "body interior is elided");
     }
 
     #[test]
