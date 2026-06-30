@@ -59,6 +59,9 @@ pub fn conversation(events: &[Event]) -> Vec<ChatMsg> {
                     id: id.clone(), name: name.clone(), output: output.clone(), is_error: *is_error,
                 });
             }
+            EventKind::Usage | EventKind::ContextMutation { .. } => {
+                // Economy bookkeeping; not part of the conversation projection.
+            }
         }
     }
     flush(&mut text, &mut calls, &mut out);
@@ -142,6 +145,23 @@ mod tests {
         assert_eq!(conv[2], ChatMsg::ToolResult {
             id: "call_1".into(), name: "shell".into(), output: "boom\n[exit 1]".into(), is_error: true,
         });
+    }
+
+    #[test]
+    fn conversation_ignores_usage_and_mutation() {
+        let evs = vec![
+            user(1, "hi"),
+            Event::new(Ulid::from(2u128), None, 0, EventKind::Usage),
+            Event::new(Ulid::from(3u128), None, 0, EventKind::ContextMutation {
+                item: "file:a".into(), op: crate::event::MutationOp::Evict,
+            }),
+            delta(4, "yo"),
+        ];
+        let msgs = conversation(&evs);
+        assert_eq!(msgs, vec![
+            ChatMsg::User("hi".into()),
+            ChatMsg::Assistant { text: "yo".into(), tool_calls: vec![] },
+        ]);
     }
 
     proptest! {
