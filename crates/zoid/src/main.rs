@@ -154,7 +154,9 @@ async fn run<B: ratatui::backend::Backend>(
                             .map(|s| Rect { x: 0, y: 0, width: s.width, height: s.height })
                             .unwrap_or_default();
                         let layout = compute(area, &app.shell);
-                        let _ = handle_action(app, route_mouse(&app.shell, &layout, me)).await?;
+                        if handle_action(app, route_mouse(&app.shell, &layout, me)).await? {
+                            return Ok(());
+                        }
                     }
                     Some(Ok(_)) => { /* resize: redraw next loop */ }
                     Some(Err(_)) | None => return Ok(()),
