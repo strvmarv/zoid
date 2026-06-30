@@ -72,7 +72,11 @@ fn walk(root: &Path, dir: &Path, query: &str, hits: &mut Vec<String>) {
         if skip(name) {
             continue;
         }
-        if path.is_dir() {
+        if path.is_symlink() {
+            // Never follow symlinks: a cycle (link back to an ancestor) would
+            // recurse unboundedly and overflow the stack before MAX_RESULTS.
+            continue;
+        } else if path.is_dir() {
             walk(root, &path, query, hits);
         } else if let Ok(contents) = std::fs::read_to_string(&path) {
             let rel = path.strip_prefix(root).unwrap_or(&path).display().to_string();
@@ -113,6 +117,21 @@ mod tests {
         std::fs::write(dir.path().join("target/x.txt"), "NEEDLE").unwrap();
         let out = Search.run(&json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }));
         assert!(out.text.contains("no matches"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_cycle_terminates() {
+        // A directory symlink pointing back to its parent forms a cycle. Search
+        // must terminate (we don't follow symlinks) rather than recurse forever.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "NEEDLE").unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::os::unix::fs::symlink(dir.path(), sub.join("loop")).unwrap();
+        let out = Search.run(&json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }));
+        assert!(!out.is_error, "{}", out.text);
+        assert!(out.text.contains("a.txt:1:"));
     }
 
     #[test]
