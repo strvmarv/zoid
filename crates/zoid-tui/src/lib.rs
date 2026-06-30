@@ -8,3 +8,7 @@ pub mod layout;
 pub mod command;
 pub mod palette;
 pub mod route;
+pub mod render;
+
+pub use render::render_shell;
+pub use state::{DrawerId, Focus, Mode, Overlay, ShellState};
