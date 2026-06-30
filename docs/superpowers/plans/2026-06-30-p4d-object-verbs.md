@@ -85,6 +85,22 @@ mod tests {
         let objs = selectable_objects(&msgs);
         assert!(objs.iter().all(|o| o.kind != ObjectKind::File));
     }
+
+    #[test]
+    fn rereading_a_file_does_not_duplicate_symbols() {
+        // read → (edit) → re-read of the same path: one File object, and symbols
+        // come once from the LATEST content (not first+latest stacked).
+        let msgs = vec![
+            ChatMsg::Assistant { text: String::new(), tool_calls: vec![call("c1", r#"{"path":"src/ast.rs"}"#)] },
+            ChatMsg::ToolResult { id: "c1".into(), name: "read_file".into(), output: "fn old() {}\n".into(), is_error: false },
+            ChatMsg::Assistant { text: String::new(), tool_calls: vec![call("c2", r#"{"path":"src/ast.rs"}"#)] },
+            ChatMsg::ToolResult { id: "c2".into(), name: "read_file".into(), output: "fn renamed() {}\n".into(), is_error: false },
+        ];
+        let objs = selectable_objects(&msgs);
+        assert_eq!(objs.iter().filter(|o| o.kind == ObjectKind::File).count(), 1, "one File per path");
+        let syms: Vec<&str> = objs.iter().filter(|o| o.kind == ObjectKind::Symbol).map(|o| o.target.as_str()).collect();
+        assert_eq!(syms, vec!["renamed"], "symbols come once, from the latest read");
+    }
 }
 ```
 
@@ -150,9 +166,12 @@ pub fn selectable_objects(msgs: &[ChatMsg]) -> Vec<Obj> {
     }
 
     let mut files: Vec<Obj> = Vec::new();
-    let mut syms: Vec<Obj> = Vec::new();
     let mut errors: Vec<Obj> = Vec::new();
     let mut seen_paths: Vec<String> = Vec::new();
+    // Latest tool-result body per path. Symbols are extracted from this AFTER the
+    // pass — emitting them inside the loop would duplicate (and mix stale + fresh)
+    // symbols whenever a file is read more than once (the read→edit→re-read cycle).
+    let mut latest_output: HashMap<String, String> = HashMap::new();
 
     for m in msgs {
         if let ChatMsg::ToolResult { id, name, output, is_error } = m {
@@ -175,15 +194,23 @@ pub fn selectable_objects(msgs: &[ChatMsg]) -> Vec<Obj> {
                         context: String::new(),
                     });
                 }
-                // symbols within the file content (latest result for the path).
-                for s in symbols(output, Language::from_path(path)) {
-                    syms.push(Obj {
-                        kind: ObjectKind::Symbol,
-                        label: format!("{}  ({path})", s.name),
-                        target: s.name,
-                        context: path.clone(),
-                    });
-                }
+                // newest content wins per path.
+                latest_output.insert(path.clone(), output.clone());
+            }
+        }
+    }
+
+    // Symbols once per unique path, in file (first-seen) order, from latest content.
+    let mut syms: Vec<Obj> = Vec::new();
+    for path in &seen_paths {
+        if let Some(output) = latest_output.get(path) {
+            for s in symbols(output, Language::from_path(path)) {
+                syms.push(Obj {
+                    kind: ObjectKind::Symbol,
+                    label: format!("{}  ({path})", s.name),
+                    target: s.name,
+                    context: path.clone(),
+                });
             }
         }
     }
@@ -197,7 +224,7 @@ In `crates/zoid-tui/src/lib.rs`: add `pub mod objects;` and `pub use objects::{s
 - [ ] **Step 4: Run to confirm pass**
 
 Run: `cargo test -p zoid-tui --lib objects`
-Expected: PASS (3 tests).
+Expected: PASS (4 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -296,9 +323,10 @@ git commit -m "feat(tui): scoped verb table + prompt composer (④)"
 **Files:**
 - Modify: `crates/zoid-tui/src/state.rs` (`Overlay::Objects`/`Verbs`, `ObjectState`)
 - Modify: `crates/zoid-tui/src/route.rs` (`Action` variants + routing)
+- Modify: `crates/zoid-tui/src/layout.rs` (reserve the centered overlay rect for `Objects`/`Verbs`)
 - Modify: `crates/zoid-tui/src/render.rs` (two overlays via a shared list helper)
 - Modify: `crates/zoid-tui/tests/shell_snapshot.rs` (object + verb overlay snapshots) and `examples/preview.rs`
-- Test: inline route tests + snapshots.
+- Test: inline route + layout tests + snapshots.
 
 **Interfaces:**
 - Consumes: `objects::{selectable_objects, verbs_for, Obj, ObjectKind}`, `palette::nav`.
@@ -335,12 +363,14 @@ fn verb_overlay_navigates_and_picks() {
     s.overlay = Overlay::Verbs;
     assert_eq!(route_key(&s, key(KeyCode::Down, KeyModifiers::NONE)), Action::VerbMove(1));
     assert_eq!(route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)), Action::VerbPick);
+    // Esc steps BACK to the object picker, not all the way out.
+    assert_eq!(route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)), Action::VerbBack);
 }
 ```
 
 - [ ] **Step 2: Run to confirm failure**
 
-Run: `cargo test -p zoid-tui --lib route::tests::object`
+Run: `cargo test -p zoid-tui --lib route::tests` (the `::object` prefix alone would skip `verb_overlay_navigates_and_picks` — run the whole `route::tests` module)
 Expected: FAIL — variants/actions undefined.
 
 - [ ] **Step 3: Implement state**
@@ -363,7 +393,7 @@ pub struct ObjectState {
 - [ ] **Step 4: Implement routing**
 
 In `crates/zoid-tui/src/route.rs`:
-- Add to `enum Action`: `OpenObjects, ObjectMove(i32), ObjectPick, VerbMove(i32), VerbPick,`.
+- Add to `enum Action`: `OpenObjects, ObjectMove(i32), ObjectPick, VerbMove(i32), VerbPick, VerbBack,`.
 - In `route_key`, extend the overlay-capture block at the top:
 
 ```rust
@@ -399,7 +429,7 @@ fn route_objects_key(key: KeyEvent) -> Action {
 
 fn route_verbs_key(key: KeyEvent) -> Action {
     match key.code {
-        KeyCode::Esc => Action::CloseOverlay,
+        KeyCode::Esc => Action::VerbBack, // step back to the object picker, not fully out
         KeyCode::Enter => Action::VerbPick,
         KeyCode::Up => Action::VerbMove(-1),
         KeyCode::Down => Action::VerbMove(1),
@@ -412,6 +442,44 @@ fn route_verbs_key(key: KeyEvent) -> Action {
 
 Run: `cargo test -p zoid-tui --lib route::tests::object`
 Expected: PASS.
+
+- [ ] **Step 4b: Reserve the overlay rect in `layout.rs` (without this the picker is invisible)**
+
+`layout::compute` only fills `layout.palette` when `state.overlay == Overlay::Palette`. The Step 5 render dispatch guards each new overlay with `if let Some(p) = layout.palette { … }`, so for `Objects`/`Verbs` that rect is `None` and **both render branches are dead code** — the picker draws nothing, and the Step 6 snapshots would silently bake a blank-overlay frame as the baseline. Widen the condition. In `crates/zoid-tui/src/layout.rs`, change:
+
+```rust
+    let palette = if state.overlay == Overlay::Palette {
+        Some(centered(area, 72, 18))
+    } else {
+        None
+    };
+```
+
+to:
+
+```rust
+    let palette = if matches!(state.overlay, Overlay::Palette | Overlay::Objects | Overlay::Verbs) {
+        Some(centered(area, 72, 18))
+    } else {
+        None
+    };
+```
+
+(The object/verb pickers reuse the same centered rect as the palette — same geometry, same hit area.) Add a test in `layout.rs` `mod tests` alongside `palette_rect_only_when_overlay_active`:
+
+```rust
+#[test]
+fn overlay_rect_present_for_object_and_verb_pickers() {
+    for ov in [Overlay::Objects, Overlay::Verbs] {
+        let mut s = ShellState::new();
+        s.overlay = ov;
+        assert!(compute(area(100, 24), &s).palette.is_some(), "{ov:?} needs a rect");
+    }
+}
+```
+
+Run: `cargo test -p zoid-tui --lib layout`
+Expected: PASS (the new test fails before the `matches!` change, passes after).
 
 - [ ] **Step 5: Implement render (shared list overlay)**
 
@@ -528,6 +596,25 @@ fn draw_overlay(overlay: zoid_tui::Overlay, w: u16, h: u16) -> String {
 
 > `normal_view()` and `empty_economy()` come from P4c/P3 in this test file. If P4c is not yet merged on this branch, build the `ChatView`/economy inline. Export `Overlay` from `zoid_tui` if not already (`pub use state::Overlay`) — it is re-exported in `lib.rs`.
 
+- [ ] **Step 6b: Add the preview scenes**
+
+The Files list promises `examples/preview.rs` scenes; wire them. `preview.rs`'s `scene(name)` returns `(ShellState, Vec<ChatMsg>, EconomyView)` and `main()` renders via `render_shell`, which draws overlays straight from `state.overlay` — so a scene only needs to set the overlay and seed a conversation. Add a `seeded_objects()` fixture to `preview.rs` (same shape as the snapshot one) and two arms to `scene()`:
+
+```rust
+        "objects" => {
+            s.overlay = Overlay::Objects;
+            return (s, seeded_objects(), empty_economy());
+        }
+        "verbs" => {
+            s.overlay = Overlay::Verbs;
+            return (s, seeded_objects(), empty_economy());
+        }
+```
+
+Update the module doc-comment scene list (line 7 of `preview.rs`) to include `objects, verbs`. (`Overlay` is already imported in `preview.rs`.)
+
+Run: `cargo run -p zoid-tui --example preview -- objects 100 24` and `-- verbs 140 24` — confirm the picker overlay actually draws (this is the manual proof that the Step 4b layout-rect fix worked end-to-end).
+
 - [ ] **Step 7: Accept snapshots and verify**
 
 Run: `cargo test -p zoid-tui --lib && INSTA_UPDATE=always cargo test -p zoid-tui --test shell_snapshot`
@@ -538,7 +625,7 @@ Expected: PASS.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add crates/zoid-tui/src/state.rs crates/zoid-tui/src/route.rs crates/zoid-tui/src/render.rs crates/zoid-tui/tests/shell_snapshot.rs crates/zoid-tui/examples/preview.rs crates/zoid-tui/tests/snapshots/
+git add crates/zoid-tui/src/state.rs crates/zoid-tui/src/route.rs crates/zoid-tui/src/layout.rs crates/zoid-tui/src/render.rs crates/zoid-tui/tests/shell_snapshot.rs crates/zoid-tui/examples/preview.rs crates/zoid-tui/tests/snapshots/
 git commit -m "feat(tui): object/verb picker overlays — ^O, nav, snapshots (④)"
 ```
 
@@ -547,25 +634,35 @@ git commit -m "feat(tui): object/verb picker overlays — ^O, nav, snapshots (�
 ### Task 4: Bin wiring — queue the verb (compose prompt into input; dispatch deferred to P5)
 
 **Files:**
+- Modify: `crates/zoid-tui/src/state.rs` (`status_hint` field on `ShellState`)
+- Modify: `crates/zoid-tui/src/render.rs` (status bar shows `state.status_hint` when set)
 - Modify: `crates/zoid/src/main.rs` (`handle_action` arms)
-- Test: manual (UI flow) + the pure tests already cover object/verb/prompt logic.
+- Test: inline state test; manual UI flow; the pure tests already cover object/verb/prompt logic.
 
 **Interfaces:**
 - Consumes: `zoid_tui::objects::{selectable_objects, verbs_for, verb_prompt}`, `zoid_tui::route::Action`.
-- Produces: choosing a verb places the composed prompt in the input box and shows a transient "queued · P5" hint. **No event recorded, no turn spawned.**
+- Produces: choosing a verb places the composed prompt in the input box and sets `ShellState.status_hint`, a transient "queued · P5" hint the status bar renders. **No event recorded, no turn spawned.**
 
 > Per the P4d decision, verbs are inert until P5. The most useful inert behavior ("copies prompt") is to seed the input box so the user can review/edit and send manually — P5 will instead dispatch it to a subagent automatically.
 
-- [ ] **Step 1: Add a status-hint field (if absent)**
+- [ ] **Step 1: Add `status_hint` to `ShellState` (not `App`)**
 
-If `App` has no transient status line, add one:
+The hint must live on `ShellState`, because `render_shell`/the status renderer only ever receive `&ShellState` (and `&ChatView`) — never `&App`. A field on the bin's `App` would be invisible to the pure renderer. In `crates/zoid-tui/src/state.rs`, add to `ShellState` (near `overlay`):
 
 ```rust
-    /// Transient one-line hint (e.g. "queued · runs as a subagent in P5").
-    status_hint: Option<String>,
+    /// Transient one-line hint shown in the status bar (e.g. the ④ "queued · P5"
+    /// notice). Cleared on the next submit/keypress by the bin.
+    pub status_hint: Option<String>,
 ```
 
-Initialize `status_hint: None,`. (If the bin already renders a hint/toast, reuse it instead — do not add a second.)
+Initialize `status_hint: None,` in `new()`. Add a test in `mod tests`:
+
+```rust
+#[test]
+fn new_has_no_status_hint() {
+    assert!(ShellState::new().status_hint.is_none());
+}
+```
 
 - [ ] **Step 2: Implement the action arms**
 
@@ -581,9 +678,16 @@ In `crates/zoid/src/main.rs` `handle_action`, add (near the palette arms):
             app.shell.objects.obj_selected = zoid_tui::palette::nav(app.shell.objects.obj_selected, d, n);
         }
         Action::ObjectPick => {
-            // Advance to the verb picker for the selected object.
-            app.shell.overlay = zoid_tui::Overlay::Verbs;
-            app.shell.objects.verb_selected = 0;
+            // Advance to the verb picker — but only if there's actually an object to
+            // act on (otherwise the verb picker would show "(no object)").
+            if !zoid_tui::objects::selectable_objects(&conversation(&app.events)).is_empty() {
+                app.shell.overlay = zoid_tui::Overlay::Verbs;
+                app.shell.objects.verb_selected = 0;
+            }
+        }
+        Action::VerbBack => {
+            // Step back to the object picker (keeps the object selection).
+            app.shell.overlay = zoid_tui::Overlay::Objects;
         }
         Action::VerbMove(d) => {
             let objs = zoid_tui::objects::selectable_objects(&conversation(&app.events));
@@ -601,7 +705,7 @@ In `crates/zoid/src/main.rs` `handle_action`, add (near the palette arms):
                     let prompt = zoid_tui::objects::verb_prompt(verb, obj);
                     // Queue (P4d): seed the input; P5 will dispatch to a subagent.
                     app.textarea = TextArea::from(prompt.lines().map(String::from).collect::<Vec<_>>());
-                    app.status_hint = Some("queued · runs as a subagent in P5".into());
+                    app.shell.status_hint = Some("queued · runs as a subagent in P5".into());
                     app.shell.focus = zoid_tui::Focus::Input;
                 }
             }
@@ -609,11 +713,13 @@ In `crates/zoid/src/main.rs` `handle_action`, add (near the palette arms):
         }
 ```
 
-> Use the bin's actual `conversation` import (it already calls `conversation(&app.events)` in the draw loop). `TextArea::from(Vec<String>)` is the tui-textarea constructor used elsewhere in the bin; match the existing construction style if different.
+> Use the bin's actual `conversation` import (it already calls `conversation(&app.events)` in the draw loop). For seeding the input, `tui_textarea::TextArea::from(lines: Vec<String>)` builds a multi-line textarea (the codebase otherwise only uses `TextArea::default()`, so there's no in-repo precedent to copy — `from` is the documented tui-textarea constructor); if the bin wraps `TextArea` differently, match that.
 
-- [ ] **Step 3: Surface the hint (if you added one)**
+- [ ] **Step 3: Render the hint from `ShellState`**
 
-If you added `status_hint`, render it in the status area or as a transient line, and clear it on the next `Submit`/keypress. (If the bin already has a toast/hint surface, route through that. Keep it one line, `color::DIM`.)
+In `crates/zoid-tui/src/render.rs`, in the status-bar render (the bottom status line that already reads `state`), show `state.status_hint` when `Some` — one line, `color::DIM` (e.g. append it after the mode/branch segment). Because it lives on `ShellState`, the renderer can read it directly; no `App` plumbing.
+
+In `crates/zoid/src/main.rs`, clear it once it has been seen: set `app.shell.status_hint = None` in the `Submit` path (and/or on the next non-verb keypress) so the hint is transient. Keep it minimal — clearing on Submit is enough for v1.
 
 - [ ] **Step 4: Build and verify**
 
@@ -626,7 +732,7 @@ Manual:
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/zoid/src/main.rs
+git add crates/zoid-tui/src/state.rs crates/zoid-tui/src/render.rs crates/zoid/src/main.rs
 git commit -m "feat(zoid): object-verb wiring — pick → compose scoped prompt into input (queued for P5) (④)"
 ```
 
@@ -643,6 +749,7 @@ git commit -m "feat(zoid): object-verb wiring — pick → compose scoped prompt
 ## Self-Review notes (author)
 
 - **Spec coverage (④):** select an object (file, error, **tree-sitter symbol**) → a menu of agent verbs scoped to it. Object model (T1, symbols via P4a), verb table + prompt (T2), two-step picker UI (T3), queue-on-pick (T4). Diff-hunk/test objects deferred (no diff drawer/test-detection yet) — documented in Global Constraints. Verb **dispatch** deferred to P5 per the 2026-06-30 decision; P4d ships the full selection + scoping UI and composes the exact prompt P5 will run.
+- **Known simplification:** all four `SymbolKind`s (`Function/Struct/Enum/Trait`) collapse to a single `ObjectKind::Symbol` with one verb set (`explain / find references / add test`). This is deliberate v1 YAGNI — `zoid-syntax` preserves the full `SymbolKind` (P4a), so a later pass can recover it to offer kind-specific verbs (e.g. "implement trait" vs "add test for fn") without a data change. The mild oddity ("add test `MyTrait`") is accepted for now.
 - **Type consistency:** `Obj`/`ObjectKind` (T1) flow into `verbs_for`/`verb_prompt` (T2), the overlays (T3), and the bin queue (T4) unchanged. `ObjectState { obj_selected, verb_selected }` (T3) is navigated with `palette::nav` (reused, DRY) in both routing and the bin. `Action::{OpenObjects, ObjectMove, ObjectPick, VerbMove, VerbPick}` (T3) map 1:1 to the bin arms (T4).
 - **Reuse:** overlays render through one `list_overlay` helper modeled on `render_palette`; navigation reuses `palette::nav`; the overlay-dismiss-on-click guard in `route_mouse` already covers the new overlays. No parallel palette fork.
 - **Independence / ordering:** P4d's *logic* depends only on P4a (`zoid-syntax` symbols), not on P4b/P4c. But its snapshot helper calls `render_shell` in whatever signature shape the branch is at, and references P4c's `normal_view()`/P3's `empty_economy()`. The intended execution order is P4a→P4b→P4c→P4d, so by the time P4d runs, `render_shell` takes `&ChatView` and `normal_view()` exists. **If P4d is pulled ahead of P4c**, match the current `render_shell` signature (e.g. P4b's trailing `caret_on: bool`) and inline the `ChatView`/economy constructors (noted in T3 Step 6).

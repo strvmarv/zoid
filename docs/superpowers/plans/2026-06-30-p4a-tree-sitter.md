@@ -396,16 +396,16 @@ git commit -m "feat(syntax): highlight() — capture-name to §16 bucket spans (
   - `struct Symbol { pub name: String, pub kind: SymbolKind, pub start: usize, pub end: usize }` (`Debug, Clone, PartialEq, Eq`).
   - `fn symbols(source: &str, lang: Language) -> Vec<Symbol>` — top-of-tree-down, in source order (by `start`).
   - `struct FoldRegion { pub start: usize, pub end: usize }` (`Debug, Clone, Copy, PartialEq, Eq`).
-  - `fn fold_regions(source: &str, lang: Language) -> Vec<FoldRegion>` — byte ranges of multi-line block bodies (collapse targets for ① zoom / diff folding).
+  - `fn fold_regions(source: &str, lang: Language) -> Vec<FoldRegion>` — byte ranges of multi-line function **and** type/impl/trait bodies (`block` + `field_declaration_list`/`enum_variant_list`/`declaration_list`); the collapse targets for ① zoom "collapse to signatures" / diff folding.
 
 > Grounded in `spikes/rust-spike/src/interop.rs`: `node.kind()`, `node.child_by_field_name("name")`, `node.byte_range()`, and `node.children(&mut node.walk())`.
 
 - [ ] **Step 1: Add the dev-dependency**
 
-In `crates/zoid-syntax/Cargo.toml`, under `[dev-dependencies]`:
+In `crates/zoid-syntax/Cargo.toml`, under `[dev-dependencies]` (use the workspace version — `proptest` is already pinned in the root `[workspace.dependencies]`, like `insta`/`ratatui` elsewhere):
 
 ```toml
-proptest = "1"
+proptest = { workspace = true }
 ```
 
 - [ ] **Step 2: Write the failing tests**
@@ -449,6 +449,39 @@ enum Dir { N, S }
             let body = &SRC[f.start..f.end];
             body.contains("p.x * p.x") && SRC[..f.start].contains("fn area")
         }));
+    }
+
+    #[test]
+    fn fold_region_covers_type_and_impl_bodies() {
+        // "Collapse to signatures" (① P4c) needs type/impl bodies to fold, not
+        // just fn bodies. Each of these has a multi-line body that must produce
+        // a fold region (field_declaration_list / enum_variant_list / declaration_list).
+        const TYPES: &str = "\
+struct Big {
+    x: i32,
+    y: i32,
+}
+
+enum Color {
+    Red,
+    Green,
+}
+
+impl Big {
+    fn sum(&self) -> i32 {
+        self.x + self.y
+    }
+}
+";
+        let folds = fold_regions(TYPES, Language::Rust);
+        let body = |needle: &str| {
+            folds
+                .iter()
+                .any(|f| TYPES[f.start..f.end].contains(needle))
+        };
+        assert!(body("x: i32"), "struct field body should fold");
+        assert!(body("Red"), "enum variant body should fold");
+        assert!(body("fn sum"), "impl body should fold");
     }
 
     #[test]
@@ -557,14 +590,28 @@ pub fn symbols(source: &str, lang: Language) -> Vec<Symbol> {
     out
 }
 
-/// Multi-line `block` bodies — the collapse targets for fold/zoom.
+/// True for the rust node kinds whose multi-line bodies are collapse targets
+/// for fold / code-aware zoom "collapse to signatures" (① P4c). Covers function
+/// bodies (`block`) AND type/impl/trait bodies — the Rust grammar names the
+/// latter `field_declaration_list` (struct), `enum_variant_list` (enum), and
+/// `declaration_list` (impl + trait). Without the type-body kinds, "collapse to
+/// signatures" would silently fold only fn bodies and leave every struct/enum/
+/// impl fully expanded.
+fn is_fold_body(node_kind: &str) -> bool {
+    matches!(
+        node_kind,
+        "block" | "field_declaration_list" | "enum_variant_list" | "declaration_list"
+    )
+}
+
+/// Multi-line collapsible bodies — the collapse targets for fold/zoom.
 pub fn fold_regions(source: &str, lang: Language) -> Vec<FoldRegion> {
     let Some(tree) = parse(source, lang) else {
         return Vec::new();
     };
     let mut out: Vec<FoldRegion> = Vec::new();
     walk(tree.root_node(), &mut |node| {
-        if node.kind() == "block" {
+        if is_fold_body(node.kind()) {
             let s = node.start_position().row;
             let e = node.end_position().row;
             if e > s {
@@ -605,7 +652,7 @@ git commit -m "feat(syntax): symbols() + fold_regions() (rust); proptest invaria
 **Interfaces:**
 - Consumes / Produces: extends `ts_language` and `highlights_query` to cover Toml/Json/Yaml/Markdown. No new public types.
 
-> **ABI risk + graceful degradation:** grammar crate versions must be ABI-compatible with `tree-sitter` 0.24. Use the versions below as a starting point; if `cargo build` reports an ABI/`LanguageFn` mismatch for one grammar, pin to the newest version whose changelog lists tree-sitter 0.24/0.25 support, or — if none resolves cleanly — **leave that arm returning the default (so the language stays `PlainText`-equivalent: parses to `None`, no highlight) and note it in the commit body.** The `PlainText` fallback means an omitted grammar is a graceful capability gap, not a build failure. Do **not** let one stubborn grammar block the task.
+> **ABI risk + graceful degradation:** the four grammar versions below and their exported item names are **unverified** — unlike rust+tree-sitter 0.24, which the spike proved, these were not built. Two things vary per grammar crate and MUST be confirmed against the real crate, not assumed: (1) the **version**'s ABI compatibility with `tree-sitter` 0.24, and (2) the **export shape** — some crates expose `LANGUAGE` (a `LanguageFn` const), others a `language()` fn; `tree-sitter-md` splits into block/inline; the highlights query const may be `HIGHLIGHTS_QUERY` *or* `HIGHLIGHT_QUERY` (or absent). **First build action per grammar: `cargo add <crate>` then `cargo doc -p <crate> --open` (or read docs.rs) to confirm the exact const/fn name before writing its arm.** If `cargo build` reports an ABI/`LanguageFn` mismatch, pin to the newest version whose changelog lists tree-sitter 0.24/0.25 support, or — if none resolves cleanly — **leave that arm returning the default (so the language stays `PlainText`-equivalent: parses to `None`, no highlight) and note it in the commit body.** The `PlainText` fallback means an omitted grammar is a graceful capability gap, not a build failure. Do **not** let one stubborn grammar block the task, and do **not** treat the `LANGUAGE`/`HIGHLIGHTS_QUERY` names in the steps below as known-good.
 
 - [ ] **Step 1: Add the grammar dependencies**
 
@@ -641,9 +688,19 @@ fn json_highlights_strings_and_numbers() {
     assert!(spans.iter().any(|s| s.kind == HlKind::Str));
     assert!(spans.iter().any(|s| s.kind == HlKind::Number));
 }
+
+#[test]
+fn toml_and_yaml_emit_some_highlight_spans() {
+    use crate::highlight::highlight;
+    // Don't over-assert capture kinds (grammar query names vary); just prove the
+    // wired query actually produces spans, so a misnamed HIGHLIGHTS_QUERY (which
+    // silently yields zero spans) is caught instead of passing as "no highlight".
+    assert!(!highlight("k = \"v\"\n", Language::Toml).is_empty(), "toml emits spans");
+    assert!(!highlight("k: \"v\"\n", Language::Yaml).is_empty(), "yaml emits spans");
+}
 ```
 
-> If, per the ABI note, a specific grammar cannot be resolved and you intentionally leave it `PlainText`-equivalent, weaken the corresponding assertion to document the gap (e.g. drop `Yaml` from the parse list) and explain in the commit body. JSON is the most stable; keep its highlight assertion.
+> If, per the ABI note, a specific grammar cannot be resolved and you intentionally leave it `PlainText`-equivalent, weaken the corresponding assertion to document the gap (e.g. drop `Yaml` from the parse list and from the span test) and explain in the commit body. JSON is the most stable; keep its highlight assertion. The Toml/Yaml span test guards against a misnamed query const silently producing no highlights — only weaken it for a grammar you deliberately left as `PlainText`.
 
 - [ ] **Step 3: Run to confirm failure**
 
@@ -911,7 +968,7 @@ fn lines_of(source: &str) -> Vec<&str> {
 }
 ```
 
-> **Implementer note:** the byte-offset bookkeeping above assumes spans never cross a line boundary. tree-sitter string/comment spans *can* be multi-line; if a snapshot shows a color bleeding past a line end, split multi-line `HlSpan`s at `\n` before rendering (add a small `split_at_newlines(spans, source)` pass) — but verify with the snapshot first; the common single-line case is covered. Keep `highlight_lines` the only place this logic lives (DRY).
+> **Implementer note:** multi-line spans are already handled correctly — `clamp(sp, cur, line_end)` caps every slice at `line_end`, `source[s.0..s.1]` never includes the `\n`, and the un-advanced `i` (the `if sp.end <= line_end { i += 1 }` guard) correctly resumes the same span on the next line. So a tree-sitter string/comment span crossing a line boundary does **not** bleed. No `split_at_newlines` pass is needed; do not add one. Keep `highlight_lines` the only place this per-line clamp logic lives (DRY).
 
 - [ ] **Step 8: Wire the module**
 
@@ -922,19 +979,35 @@ Expected: PASS (2 tests).
 
 - [ ] **Step 9: Add the preview scene**
 
-In `crates/zoid-tui/examples/preview.rs`, add a `syntax` scene that renders a highlighted Rust snippet. Follow the file's existing scene-dispatch pattern; the body:
+The `syntax` scene does **not** fit the existing `scene(name) -> (ShellState, Vec<ChatMsg>, EconomyView)` + `render_shell` path (it renders a `Paragraph` of highlighted lines, not the shell). The real `main()` builds one terminal and unconditionally calls `render_shell`; there is no per-scene `draw` branch to hook into. So add an **early-return branch at the top of `main()`**, before the `scene()`/`render_shell` block, that reuses the parsed `w`/`h` and the ruler print.
+
+First, update the module doc-comment scene list (line 7):
 
 ```rust
-// scene: "syntax" — Ⓡ3 highlight demonstration
-let sample = "\
-fn main() {\n    let name = \"zoid\";\n    let n = 42; // answer\n    greet(name, n);\n}\n";
-let lines = zoid_tui::highlight_lines(sample, zoid_syntax::Language::Rust);
-terminal.draw(|f| {
-    f.render_widget(ratatui::widgets::Paragraph::new(lines), f.area());
-}).unwrap();
+//! scene ∈ { chat, files, palette, cmdline, build, economy, syntax }  (default: chat)
 ```
 
-Add `zoid-syntax = { path = "../zoid-syntax" }` to `crates/zoid-tui/Cargo.toml` `[dev-dependencies]` as well if the example cannot see it through the main dependency (examples use dev + normal deps; the Step 1 normal dep covers it — only add to dev-deps if the build complains).
+Then, in `crates/zoid-tui/examples/preview.rs`, insert this block in `main()` immediately after `let h: u16 = ...;` (i.e. before `let (state, msgs, economy) = scene(name);`):
+
+```rust
+    // scene: "syntax" — Ⓡ3 highlight demonstration (not a shell frame).
+    if name == "syntax" {
+        let sample = "fn main() {\n    let name = \"zoid\";\n    let n = 42; // answer\n    greet(name, n);\n}\n";
+        let lines = zoid_tui::highlight_lines(sample, zoid_syntax::Language::Rust);
+        let backend = TestBackend::new(w, h);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| f.render_widget(ratatui::widgets::Paragraph::new(lines), f.area()))
+            .unwrap();
+        let tens: String = (0..w).map(|c| if c % 10 == 0 { '|' } else { ' ' }).collect();
+        println!("scene={name}  size={w}x{h}");
+        println!("{tens}");
+        print!("{}", terminal.backend());
+        return;
+    }
+```
+
+The example sees `zoid-syntax` through `zoid-tui`'s normal dependency on it (Task 1 adds `zoid-syntax` as a normal dep of `zoid-tui`, and examples compile against normal deps), and `zoid_tui::highlight_lines` is re-exported in Step 8 — no `[dev-dependencies]` entry is needed. Only add `zoid-syntax = { path = "../zoid-syntax" }` under `[dev-dependencies]` if the build actually complains that `zoid_syntax` is unresolved in the example.
 
 - [ ] **Step 10: Write the snapshot tests**
 

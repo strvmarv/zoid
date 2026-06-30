@@ -315,7 +315,7 @@ git commit -m "feat(tui): Zoom altitude on ShellState + zoom_in/zoom_out (①)"
 - Test: inline unit test + snapshots.
 
 **Interfaces:**
-- Consumes: `zoid_core::zoom::{digests, TurnDigest}`, `zoid_core::projection::ChatMsg`, `zoid_tui::highlight_lines` + `zoid_syntax::Language` (P4a), `state::Zoom`.
+- Consumes: `zoid_core::zoom::{digests, TurnDigest}`, `zoid_core::projection::ChatMsg`, `zoid_syntax::{Language, fold_regions}` (P4a) + the highlight helper imported internally as `crate::syntax_view::highlight_lines` (same fn, re-exported as `zoid_tui::highlight_lines` for external callers — `chat.rs` lives inside `zoid-tui`, so it uses the crate-relative path), `state::Zoom`.
 - Produces:
   - `struct ChatView { pub zoom: Zoom, pub caret_on: bool, pub reveal: Option<usize> }` (per-frame view-model the bin assembles; `reveal` caps the number of conversation lines shown — `None` = all; used by the Task 5 transition).
   - `fn conversation_view(msgs: &[ChatMsg], view: &ChatView, streaming: bool) -> Vec<Line<'static>>` — dispatches on `view.zoom`.
@@ -332,13 +332,30 @@ In `crates/zoid-tui/src/chat.rs` (test module — add one if absent):
 mod tests {
     use super::*;
     use crate::state::Zoom;
-    use zoid_core::projection::ChatMsg;
+    use zoid_core::projection::{ChatMsg, ToolCallRef};
 
+    // The Assistant carries a tool_call whose id matches the ToolResult and whose
+    // args name a `.rs` path — so `detail_lines` resolves id→path→Language::Rust
+    // and actually highlights (without this, id_path is empty and Detail silently
+    // falls back to PlainText, the exact gap that made the old fixture useless).
+    // The body is multi-line so collapse-to-signatures (Task 3b) has something to fold.
     fn seeded() -> Vec<ChatMsg> {
         vec![
             ChatMsg::User("fix the parser bug".into()),
-            ChatMsg::Assistant { text: "on it".into(), tool_calls: vec![] },
-            ChatMsg::ToolResult { id: String::new(), name: "read_file".into(), output: "fn parse() {}\n".into(), is_error: false },
+            ChatMsg::Assistant {
+                text: "on it".into(),
+                tool_calls: vec![ToolCallRef {
+                    id: "c1".into(),
+                    name: "read_file".into(),
+                    args: r#"{"path":"src/parser.rs"}"#.into(),
+                }],
+            },
+            ChatMsg::ToolResult {
+                id: "c1".into(),
+                name: "read_file".into(),
+                output: "fn parse(s: &str) -> u32 {\n    let n = 42;\n    n\n}\n".into(),
+                is_error: false,
+            },
             ChatMsg::User("thanks".into()),
         ]
     }
@@ -352,6 +369,19 @@ mod tests {
         let lines = conversation_view(&seeded(), &view(Zoom::Summary), false);
         // two turns → two digest lines
         assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn detail_highlights_file_tool_results() {
+        use crate::tokens::color;
+        let lines = conversation_view(&seeded(), &view(Zoom::Detail), false);
+        // A keyword (`fn`/`let`) must carry the syntax keyword color — proves the
+        // id→path→Rust resolution fired and highlighting actually ran, rather than
+        // silently falling back to PlainText (which colors everything TXT).
+        let has_keyword_color = lines
+            .iter()
+            .any(|l| l.spans.iter().any(|s| s.style.fg == Some(color::SYN_KEYWORD)));
+        assert!(has_keyword_color, "Detail must highlight the Rust tool-result body");
     }
 
     #[test]
@@ -400,7 +430,7 @@ pub struct ChatView {
 
 /// Build the conversation lines at the requested altitude, capped to
 /// `view.reveal` lines when set.
-pub fn conversation_view<'a>(msgs: &'a [ChatMsg], view: &ChatView, streaming: bool) -> Vec<Line<'static>> {
+pub fn conversation_view(msgs: &[ChatMsg], view: &ChatView, streaming: bool) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = match view.zoom {
         Zoom::Summary => digest_lines(&digests(msgs)),
         Zoom::Normal => conversation_lines(msgs, streaming, view.caret_on)
@@ -421,7 +451,10 @@ fn digest_lines(ds: &[TurnDigest]) -> Vec<Line<'static>> {
         .map(|d| {
             let mut spans = vec![
                 Span::styled(format!("{} ", glyph::USER_TURN), Style::new().fg(color::CHAT_ACCENT)),
-                Span::styled(format!("{:<40} ", d.headline), Style::new().fg(color::TXT)),
+                // `.40` precision truncates to 40 chars; width 40 pads short ones —
+                // a HEADLINE_MAX(60) headline can't blow past the column and misalign
+                // the `~ Nt · Nf` field in the 140-col snapshot.
+                Span::styled(format!("{:<40.40} ", d.headline), Style::new().fg(color::TXT)),
                 Span::styled(format!("~ {}t · {}f", d.tools, d.files), Style::new().fg(color::DIM)),
             ];
             if d.has_error {
@@ -523,7 +556,7 @@ and the Chat conversation render:
 
 - [ ] **Step 5: Update callers**
 
-In `crates/zoid-tui/tests/shell_snapshot.rs`, replace the trailing `, true` (P4b's caret bool) in each `render_shell(...)` with `, &normal_view()`, and add a helper:
+In `crates/zoid-tui/tests/shell_snapshot.rs`, replace the trailing `, true` (P4b's caret bool) with `, &normal_view()` at **both** `render_shell(...)` call sites — there are two: (1) the `draw_econ` helper used by most tests, and (2) the standalone inline call inside the `economy_drawer_selection_highlights_only_when_rail_focused` test (not routed through any helper). Missing the second site breaks the build. Add a helper:
 
 ```rust
 use zoid_tui::chat::ChatView;
@@ -538,9 +571,31 @@ In `crates/zoid-tui/examples/preview.rs`, likewise pass `&ChatView { zoom: Zoom:
 
 - [ ] **Step 6: Add Summary & Detail snapshots**
 
-In `crates/zoid-tui/tests/shell_snapshot.rs`, add a draw helper that takes a zoom and seeded conversation, then four snapshots:
+In `crates/zoid-tui/tests/shell_snapshot.rs`, add a draw helper plus a Detail-bearing fixture, then four snapshots. The P3 `seeded()` in this file has **no** `ToolResult`, so Detail rendered against it would be a plain conversation — the snapshot would silently bake a frame that proves nothing. Add `seeded_detail()` with a matched tool-call/result pair (id + `.rs` path) so the Detail snapshots actually show highlighted, collapsed code:
 
 ```rust
+use zoid_core::projection::ToolCallRef;
+
+fn seeded_detail() -> Vec<ChatMsg> {
+    vec![
+        ChatMsg::User("show me parse".into()),
+        ChatMsg::Assistant {
+            text: "reading it".into(),
+            tool_calls: vec![ToolCallRef {
+                id: "c1".into(),
+                name: "read_file".into(),
+                args: r#"{"path":"src/parser.rs"}"#.into(),
+            }],
+        },
+        ChatMsg::ToolResult {
+            id: "c1".into(),
+            name: "read_file".into(),
+            output: "fn parse(s: &str) -> u32 {\n    let n = 42;\n    n\n}\n".into(),
+            is_error: false,
+        },
+    ]
+}
+
 fn draw_zoom(zoom: Zoom, w: u16, h: u16) -> String {
     let s = ShellState::new();
     let view = ChatView { zoom, caret_on: true, reveal: None };
@@ -548,7 +603,7 @@ fn draw_zoom(zoom: Zoom, w: u16, h: u16) -> String {
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|f| render_shell(f, &s, &empty_economy(), &seeded(), &input, false, &view))
+        .draw(|f| render_shell(f, &s, &empty_economy(), &seeded_detail(), &input, false, &view))
         .unwrap();
     terminal.backend().to_string()
 }
@@ -559,7 +614,7 @@ fn draw_zoom(zoom: Zoom, w: u16, h: u16) -> String {
 #[test] fn zoom_detail_wide_frame() { insta::assert_snapshot!(draw_zoom(Zoom::Detail, 140, 24)); }
 ```
 
-(`empty_economy()` and `seeded()` already exist in this test file from P3.)
+(`empty_economy()` already exists in this test file from P3; `ChatMsg` is already imported.) The snapshot is text-only (`to_string()` drops color), so it proves the Detail *structure* (header + collapsed body via Task 3b); the highlight *colors* are proven by the `detail_highlights_file_tool_results` unit test in Task 3 Step 1.
 
 - [ ] **Step 7: Accept snapshots and verify fidelity**
 
@@ -574,6 +629,145 @@ Expected: PASS.
 ```bash
 git add crates/zoid-tui/src/chat.rs crates/zoid-tui/src/render.rs crates/zoid-tui/tests/shell_snapshot.rs crates/zoid-tui/examples/preview.rs crates/zoid-tui/tests/snapshots/
 git commit -m "feat(tui): zoom altitude render — Summary digests, code-aware Detail; ChatView (①+Ⓡ3)"
+```
+
+---
+
+### Task 3b: Detail "collapse to signatures" — fold leaf bodies (Ⓡ3↔① compounding)
+
+Spec §6.4 Ⓡ3 names **"code-aware semantic zoom (collapse to signatures)"** as an explicit deliverable, and P4a hands the substrate (`fold_regions`, now covering function **and** type/impl/trait bodies) to P4c. Task 3 only full-highlights file bodies; this task collapses them so a long file shows its *structure* at Detail altitude, not 500 lines. It swaps one line in `detail_lines` and adds the collapse helper + a new ellipsis token.
+
+**Files:**
+- Modify: `crates/zoid-tui/src/tokens.rs` (add `glyph::ELLIPSIS` + test assertion)
+- Modify: `crates/zoid-tui/src/chat.rs` (`collapse_to_signatures` helper; `detail_lines` calls it)
+- Modify: `crates/zoid-tui/tests/snapshots/` (re-accept the two `zoom_detail` snapshots — bodies now collapse)
+- Test: inline unit test in `chat.rs`.
+
+**Interfaces:**
+- Consumes: `zoid_syntax::{fold_regions, FoldRegion, Language}` (P4a), `crate::syntax_view::highlight_lines`.
+- Produces: `pub(crate) fn collapse_to_signatures(source: &str, lang: Language) -> Vec<Line<'static>>`.
+
+- [ ] **Step 1: Add the ellipsis token**
+
+In `crates/zoid-tui/src/tokens.rs`, add to `mod glyph` (no existing token is an ellipsis — `COLLAPSED` is a `▸` disclosure triangle):
+
+```rust
+    pub const ELLIPSIS: char = '…';     // collapsed-body marker (① collapse-to-signatures)
+```
+
+And in the `tokens` test module (alongside the other `assert_eq!(glyph::…)` checks), add:
+
+```rust
+    assert_eq!(glyph::ELLIPSIS, '…');
+```
+
+> Also add a row to the `docs/ux/README.md` glyph table for `…` (collapsed body) to keep §16's authoritative table in sync.
+
+- [ ] **Step 2: Write the failing test**
+
+In `crates/zoid-tui/src/chat.rs` `mod tests` (the `seeded()` there has a multi-line `fn parse` body):
+
+```rust
+    #[test]
+    fn detail_collapses_function_bodies_to_signatures() {
+        use crate::tokens::glyph;
+        let lines = conversation_view(&seeded(), &view(Zoom::Detail), false);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect();
+        assert!(text.iter().any(|t| t.contains("fn parse")), "signature line is kept");
+        assert!(text.iter().any(|t| t.contains(glyph::ELLIPSIS)), "body collapses to …");
+        assert!(!text.iter().any(|t| t.contains("let n = 42")), "body interior is elided");
+    }
+```
+
+Run: `cargo test -p zoid-tui --lib chat::tests::detail_collapses_function_bodies_to_signatures`
+Expected: FAIL — `collapse_to_signatures` not yet wired (full body still rendered).
+
+- [ ] **Step 3: Implement `collapse_to_signatures` and wire it**
+
+In `crates/zoid-tui/src/chat.rs`, add `use zoid_syntax::{fold_regions, FoldRegion};` (next to the existing `Language`/`highlight_lines` imports) and the helper:
+
+```rust
+/// Collapse a code file to signatures: highlight every line, but replace each
+/// **leaf** fold body's interior lines with a single `…` marker. "Leaf" = a fold
+/// containing no other fold, so a container (`impl`/`mod`) keeps its method
+/// signatures while each method/struct/enum leaf body folds. Realizes spec Ⓡ3↔①
+/// "collapse to signatures"; uses P4a's `fold_regions` (function + type/impl bodies).
+pub(crate) fn collapse_to_signatures(source: &str, lang: Language) -> Vec<Line<'static>> {
+    let all = highlight_lines(source, lang); // one Line per source line
+    let folds = fold_regions(source, lang);
+    if folds.is_empty() {
+        return all;
+    }
+    // 0-based line index of a byte offset = count of '\n' before it.
+    let line_of = |byte: usize| {
+        source[..byte.min(source.len())].bytes().filter(|&b| b == b'\n').count()
+    };
+    let is_leaf = |f: &FoldRegion, i: usize| {
+        !folds
+            .iter()
+            .enumerate()
+            .any(|(j, g)| j != i && g.start >= f.start && g.end <= f.end)
+    };
+    let mut elided = vec![false; all.len()];
+    for (i, f) in folds.iter().enumerate() {
+        if is_leaf(f, i) {
+            // Keep the opening (signature) line and the closing line; elide between.
+            for ln in (line_of(f.start) + 1)..line_of(f.end) {
+                if ln < elided.len() {
+                    elided[ln] = true;
+                }
+            }
+        }
+    }
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut i = 0;
+    while i < all.len() {
+        if elided[i] {
+            out.push(Line::from(Span::styled(
+                format!("    {}", glyph::ELLIPSIS),
+                Style::new().fg(color::DIM),
+            )));
+            while i < all.len() && elided[i] {
+                i += 1;
+            }
+        } else {
+            out.push(all[i].clone());
+            i += 1;
+        }
+    }
+    out
+}
+```
+
+Then, in `detail_lines`, change the file-body render from full highlight to collapsed:
+
+```rust
+                let lang = id_path.get(id.as_str()).map(|p| Language::from_path(p)).unwrap_or(Language::PlainText);
+                out.extend(collapse_to_signatures(output, lang));
+```
+
+(was `out.extend(highlight_lines(output, lang));`). `detail_highlights_file_tool_results` (Task 3) still passes — the `fn parse` signature line keeps its keyword color; only the body interior is elided.
+
+Run: `cargo test -p zoid-tui --lib chat`
+Expected: PASS (highlight + collapse tests).
+
+- [ ] **Step 4: Re-accept the Detail snapshots**
+
+The `zoom_detail_frame`/`zoom_detail_wide_frame` snapshots now show the collapsed body. Re-accept and verify:
+
+Run: `INSTA_UPDATE=always cargo test -p zoid-tui --test shell_snapshot`
+Read the two `zoom_detail` `.snap` files: the `fn parse(...) {` signature and `}` remain; the two interior lines are replaced by one `    …`. Re-run without the env var:
+Run: `cargo test -p zoid-tui --test shell_snapshot`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/zoid-tui/src/tokens.rs crates/zoid-tui/src/chat.rs crates/zoid-tui/tests/snapshots/ docs/ux/README.md
+git commit -m "feat(tui): Detail collapse-to-signatures via leaf folds (Ⓡ3↔① spec deliverable)"
 ```
 
 ---
@@ -705,6 +899,7 @@ git commit -m "feat(tui): zoom routing — Ctrl-scroll + =/- keys → ZoomIn/Zoo
 - Consumes: `motion::{ease_out_cubic}`, `ShellState.reduced_motion`, `ChatView.reveal`.
 - Produces:
   - `fn reveal_count(total: usize, t: f32) -> usize` — eased line count for a fold/unfold; `t<=0 → 0`, `t>=1 → total`.
+  - `fn zoom_reveal(total: usize, elapsed_ms: u64, anim_ms: u64, reduced_motion: bool) -> Option<usize>` — the **pure** gate: `None` (no cap, final frame) when `reduced_motion`, `anim_ms == 0`, or `elapsed_ms >= anim_ms`; else `Some(reveal_count(total, elapsed/anim))`. Extracting this keeps the "should we animate / reduced-motion ⇒ instant" decision out of the impure draw closure so it is unit-testable (the determinism gap §13 warns about).
   - Zoom changes animate by revealing conversation lines top-down over `ZOOM_ANIM_MS`; reduced-motion shows all lines instantly.
 
 > A cell buffer cannot cross-fade, so the "fold/unfold animates" requirement (spec §6.2) is realized as a **progressive top-down line reveal** eased by `ease_out_cubic` — visible, cheap, and reusing the P4b tick loop. Reduced-motion resolves it to the final frame immediately (spec §13).
@@ -729,12 +924,25 @@ fn reveal_count_eases_from_zero_to_total() {
     }
     assert_eq!(reveal_count(0, 0.5), 0); // empty stays empty
 }
+
+#[test]
+fn zoom_reveal_gates_on_motion_and_completion() {
+    // mid-animation → a capped count; the reduced-motion and completion cases
+    // resolve to None (no cap = final frame). This is the determinism the inline
+    // draw-closure logic couldn't be tested for.
+    assert_eq!(zoom_reveal(10, 0, 160, false), Some(0));
+    assert_eq!(zoom_reveal(10, 80, 160, false), Some(reveal_count(10, 0.5)));
+    assert_eq!(zoom_reveal(10, 160, 160, false), None); // animation complete
+    assert_eq!(zoom_reveal(10, 200, 160, false), None); // past the end
+    assert_eq!(zoom_reveal(10, 80, 160, true), None);   // reduced-motion → instant final frame
+    assert_eq!(zoom_reveal(10, 80, 0, false), None);    // zero duration never divides
+}
 ```
 
 - [ ] **Step 2: Run to confirm failure**
 
-Run: `cargo test -p zoid-tui --lib motion::tests::reveal_count`
-Expected: FAIL — `reveal_count` undefined.
+Run: `cargo test -p zoid-tui --lib motion::tests`
+Expected: FAIL — `reveal_count`/`zoom_reveal` undefined.
 
 - [ ] **Step 3: Implement `reveal_count`**
 
@@ -746,9 +954,20 @@ pub fn reveal_count(total: usize, t: f32) -> usize {
     let eased = ease_out_cubic(t);
     ((total as f32) * eased).round() as usize
 }
+
+/// Pure reveal gate: `Some(cap)` while a zoom animation is mid-flight, `None`
+/// when no cap should apply (reduced-motion, zero duration, or finished — i.e.
+/// show the final frame). Keeps the animate-or-not decision out of the bin's
+/// impure draw closure so it is unit-testable (spec §13 determinism).
+pub fn zoom_reveal(total: usize, elapsed_ms: u64, anim_ms: u64, reduced_motion: bool) -> Option<usize> {
+    if reduced_motion || anim_ms == 0 || elapsed_ms >= anim_ms {
+        return None;
+    }
+    Some(reveal_count(total, elapsed_ms as f32 / anim_ms as f32))
+}
 ```
 
-Add `reveal_count` to the `lib.rs` re-export list: `pub use motion::{caret_on, ease_out_cubic, reveal_count, Anim, MOTION_FPS};`.
+Add both to the `lib.rs` re-export list: `pub use motion::{caret_on, ease_out_cubic, reveal_count, zoom_reveal, Anim, MOTION_FPS};`.
 
 - [ ] **Step 4: Drive the reveal from the bin clock**
 
@@ -771,25 +990,27 @@ Add a const near the top of `main.rs`: `const ZOOM_ANIM_MS: u64 = 160;`.
 In the draw closure, compute `reveal` from the zoom-change clock and the current altitude's line count:
 
 ```rust
-            let view_zoom = app.shell.zoom;
-            // Total lines at this altitude (build once to measure; reuse below).
-            let total_lines = zoid_tui::chat::conversation_view(
-                &msgs,
-                &zoid_tui::chat::ChatView { zoom: view_zoom, caret_on: caret, reveal: None },
-                app.streaming,
-            ).len();
-            let reveal = match (app.zoom_changed_at, app.shell.reduced_motion) {
-                (Some(t0), false) => {
-                    let e = t0.elapsed().as_millis() as u64;
-                    if e >= ZOOM_ANIM_MS {
-                        None // animation done
-                    } else {
-                        Some(zoid_tui::motion::reveal_count(total_lines, e as f32 / ZOOM_ANIM_MS as f32))
-                    }
+            // Measure total lines (which re-runs conversation_view — tree-sitter in
+            // Detail) ONLY while a zoom animation is actually in flight; on every
+            // ordinary frame `reveal` is None and we skip the second build entirely.
+            let reveal = match app.zoom_changed_at {
+                Some(t0) if zoom_animating(&app) => {
+                    let total_lines = zoid_tui::chat::conversation_view(
+                        &msgs,
+                        &zoid_tui::chat::ChatView { zoom: app.shell.zoom, caret_on: caret, reveal: None },
+                        app.streaming,
+                    )
+                    .len();
+                    zoid_tui::motion::zoom_reveal(
+                        total_lines,
+                        t0.elapsed().as_millis() as u64,
+                        ZOOM_ANIM_MS,
+                        app.shell.reduced_motion,
+                    )
                 }
                 _ => None,
             };
-            let view = zoid_tui::chat::ChatView { zoom: view_zoom, caret_on: caret, reveal };
+            let view = zoid_tui::chat::ChatView { zoom: app.shell.zoom, caret_on: caret, reveal };
             render_shell(f, &app.shell, &economy, &msgs, &app.textarea, app.streaming, &view);
 ```
 
@@ -835,12 +1056,13 @@ git commit -m "feat(zoid): animated zoom fold/unfold via reveal_count + motion t
 - [ ] `cargo run -p zoid-tui --example preview -- summary 100 24` / `-- detail 140 24` render the two non-Normal altitudes.
 - [ ] Zoom projection is pure (no ratatui in `zoid-core/src/zoom.rs`) and proptest-covered.
 - [ ] Summary & Detail snapshots exist at both 100 and 140.
-- [ ] Detail highlights file tool-results via `zoid-syntax` (Ⓡ3 compounds with ①).
-- [ ] Transition animation has **no** frame snapshots (spec §13); `reveal_count` is unit-tested and reduced-motion shows the final frame instantly.
+- [ ] Detail highlights file tool-results via `zoid-syntax` (Ⓡ3 compounds with ①) — proven by the `detail_highlights_file_tool_results` unit test (keyword carries `SYN_KEYWORD`), not just a color-blind text snapshot.
+- [ ] Detail **collapses leaf bodies to signatures** (T3b): `detail_collapses_function_bodies_to_signatures` asserts the signature is kept, the body interior elided, and the `…` marker present.
+- [ ] Transition animation has **no** frame snapshots (spec §13); `reveal_count` and the pure `zoom_reveal` gate are unit-tested and reduced-motion shows the final frame instantly.
 
 ## Self-Review notes (author)
 
-- **Spec coverage (①):** altitude control collapsing/expanding the transcript by meaning — `Zoom` enum + `zoom_in/out` (T2), structural digests (T1), altitude render (T3), `Ctrl-scroll`/keys (T4), animated fold/unfold (T5). **Structural** summaries per the 2026-06-30 decision (no LLM). Code-aware "collapse to signatures"/highlight is realized via `zoid-syntax` in Detail (T3) — the Ⓡ3↔① compounding the spec calls out.
+- **Spec coverage (①):** altitude control collapsing/expanding the transcript by meaning — `Zoom` enum + `zoom_in/out` (T2), structural digests (T1), altitude render (T3), Detail **collapse-to-signatures** (T3b), `Ctrl-scroll`/keys (T4), animated fold/unfold (T5). **Structural** summaries per the 2026-06-30 decision (no LLM). Code-aware highlight in Detail (T3) **and** "collapse to signatures" — leaf fold bodies elided to `…` (T3b, consuming P4a's broadened `fold_regions`) — together realize the spec §6.4 Ⓡ3↔① "code-aware semantic zoom (collapse to signatures)" deliverable. (Earlier drafts claimed this under T3 alone; it is genuinely delivered by T3b.)
 - **Type consistency:** `ChatView { zoom, caret_on, reveal }` (T3) is the single render param from T3 onward; it absorbs P4b's `caret_on` bool. `conversation_view` wraps `conversation_lines` (Normal) — never reimplements it (DRY). `digests`/`TurnDigest` (T1) consumed by `digest_lines` (T3). `Action::ZoomIn/ZoomOut` (T4) map to `ShellState::zoom_in/zoom_out` (T2). `reveal_count` (T5) feeds `ChatView.reveal` (T3).
-- **Dependencies:** consumes P4a (`highlight_lines`/`Language` for Detail) and P4b (`motion::{ease_out_cubic, reveal_count, caret_on}` + the tick loop). Sequencing P4a→P4b→P4c is required.
-- **§13 honored:** zoom *content* is snapshot-tested (Summary/Detail @100/@140); the *transition* is not — verified by `reveal_count` unit test + reduced-motion + manual/gif.
+- **Dependencies:** consumes P4a (`highlight_lines`/`Language`/`fold_regions` for Detail + collapse) and P4b (`motion::{ease_out_cubic, caret_on}` + the tick loop). `reveal_count` and the pure `zoom_reveal` gate are **defined by this plan** (T5, added into P4b's `motion.rs` and re-export), not consumed from P4b. Sequencing P4a→P4b→P4c is required.
+- **§13 honored:** zoom *content* is snapshot-tested (Summary/Detail @100/@140); the *transition* is not — verified by `reveal_count`/`zoom_reveal` unit tests (incl. reduced-motion ⇒ final frame) + manual/gif.
