@@ -1,0 +1,16 @@
+---
+source: crates/zoid-tui/tests/chat_snapshot.rs
+expression: "draw(&msgs, false)"
+---
+" zoid CHAT ⎇ main                                           "
+"› run the build                                             "
+"  ● shell(command: false) ⏎ peek                            "
+"  ⚠ shell → boom                                            "
+"zoid the command failed.                                    "
+"                                                            "
+"                                                            "
+"                                                            "
+"┌ message ─────────────────────────────────────────────────┐"
+"│                                                          │"
+"└──────────────────────────────────────────────────────────┘"
+" CHAT · ⇧Tab Build · ⏎ send · ^C quit                       "

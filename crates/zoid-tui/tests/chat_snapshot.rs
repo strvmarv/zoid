@@ -47,3 +47,17 @@ fn tool_call_and_result_frame() {
     ];
     insta::assert_snapshot!(draw(&msgs, false));
 }
+
+#[test]
+fn tool_error_result_frame() {
+    let msgs = vec![
+        ChatMsg::User("run the build".into()),
+        ChatMsg::Assistant {
+            text: "".into(),
+            tool_calls: vec![ToolCallRef { id: "".into(), name: "shell".into(), args: r#"{"command":"false"}"#.into() }],
+        },
+        ChatMsg::ToolResult { id: "".into(), name: "shell".into(), output: "boom\n[exit 1]".into(), is_error: true },
+        ChatMsg::Assistant { text: "the command failed.".into(), tool_calls: vec![] },
+    ];
+    insta::assert_snapshot!(draw(&msgs, false));
+}
