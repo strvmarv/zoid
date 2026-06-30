@@ -45,7 +45,10 @@ impl Tool for Shell {
                     }
                     text.push_str(&stderr);
                 }
-                text.push_str(&format!("\n[exit {code}]"));
+                if !text.is_empty() && !text.ends_with('\n') {
+                    text.push('\n');
+                }
+                text.push_str(&format!("[exit {code}]"));
                 ToolOutput { text, is_error: code != 0 }
             }
             Err(e) => ToolOutput::err(format!("shell({command}): {e}")),
@@ -64,6 +67,14 @@ mod tests {
         assert!(!out.is_error, "{}", out.text);
         assert!(out.text.contains("hello-zoid"));
         assert!(out.text.contains("[exit 0]"));
+    }
+
+    #[test]
+    fn captures_stderr() {
+        let out = Shell.run(&json!({ "command": "echo oops 1>&2; exit 1" }));
+        assert!(out.is_error);
+        assert!(out.text.contains("oops"), "stderr should be captured: {}", out.text);
+        assert!(out.text.contains("[exit 1]"));
     }
 
     #[test]
