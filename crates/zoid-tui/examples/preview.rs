@@ -4,7 +4,7 @@
 //!
 //!   cargo run -p zoid-tui --example preview -- [scene] [width] [height]
 //!
-//! scene ∈ { chat, files, palette, cmdline, build }  (default: chat)
+//! scene ∈ { chat, files, palette, cmdline, build, economy }  (default: chat)
 //! width/height default to 140×24 (wide enough to expose gutter bugs).
 
 use ratatui::{backend::TestBackend, Terminal};
@@ -12,6 +12,7 @@ use tui_textarea::TextArea;
 use zoid_core::projection::ChatMsg;
 use zoid_tui::render_shell;
 use zoid_tui::state::{DrawerId, Mode, Overlay, ShellState};
+use zoid_tui::EconomyView;
 
 fn seeded() -> Vec<ChatMsg> {
     vec![
@@ -23,7 +24,56 @@ fn seeded() -> Vec<ChatMsg> {
     ]
 }
 
-fn scene(name: &str) -> (ShellState, Vec<ChatMsg>) {
+fn empty_economy() -> EconomyView {
+    use zoid_core::assembler::ContextPolicy;
+    use zoid_core::context::ContextWindow;
+    use zoid_core::economy::{ChurnTimeline, TokenLedger};
+    EconomyView::build(
+        &ContextWindow::default(),
+        &ChurnTimeline::default(),
+        &TokenLedger::default(),
+        &ContextPolicy::default(),
+        0,
+    )
+}
+
+fn seeded_economy() -> EconomyView {
+    use zoid_core::assembler::ContextPolicy;
+    use zoid_core::context::{ContextItem, ContextWindow, Heat, ItemKind};
+    use zoid_core::economy::{ChurnPoint, ChurnTimeline, TokenLedger};
+    let it = |key: &str, label: &str, kind, tokens, heat, pinned| ContextItem {
+        key: key.into(),
+        label: label.into(),
+        kind,
+        tokens,
+        heat,
+        pinned,
+        evicted: false,
+    };
+    let w = ContextWindow {
+        items: vec![
+            it("tool:grep:c9", "grep", ItemKind::ToolResult, 6000, Heat::Hot, false),
+            it("file:schema.sql", "schema.sql", ItemKind::File, 5000, Heat::Cold, false),
+            it("file:users.rs", "users.rs", ItemKind::File, 4000, Heat::Hot, true),
+            it("msg:2", "ship it?", ItemKind::Message, 3000, Heat::Warm, false),
+        ],
+        total_tokens: 18000,
+    };
+    let churn = ChurnTimeline {
+        points: vec![
+            ChurnPoint { turn: 0, tokens: 10, resent_tokens: 0 },
+            ChurnPoint { turn: 1, tokens: 30, resent_tokens: 0 },
+            ChurnPoint { turn: 2, tokens: 12, resent_tokens: 0 },
+            ChurnPoint { turn: 3, tokens: 48, resent_tokens: 0 },
+            ChurnPoint { turn: 4, tokens: 12, resent_tokens: 0 },
+        ],
+    };
+    let ledger = TokenLedger { input: 142_000, output: 0, cached: 0, total: 142_000 };
+    let policy = ContextPolicy { token_ceiling: Some(200_000), ..Default::default() };
+    EconomyView::build(&w, &churn, &ledger, &policy, 0)
+}
+
+fn scene(name: &str) -> (ShellState, Vec<ChatMsg>, EconomyView) {
     let mut s = ShellState::new();
     s.files = vec!["Cargo.toml".into(), "src".into(), "README.md".into()];
     match name {
@@ -40,11 +90,14 @@ fn scene(name: &str) -> (ShellState, Vec<ChatMsg>) {
         }
         "build" => {
             s.set_mode(Mode::Build);
-            return (s, vec![]);
+            return (s, vec![], empty_economy());
+        }
+        "economy" => {
+            return (s, seeded(), seeded_economy());
         }
         _ => {} // "chat" / default
     }
-    (s, seeded())
+    (s, seeded(), empty_economy())
 }
 
 fn main() {
@@ -53,12 +106,12 @@ fn main() {
     let w: u16 = args.get(1).and_then(|a| a.parse().ok()).unwrap_or(140);
     let h: u16 = args.get(2).and_then(|a| a.parse().ok()).unwrap_or(24);
 
-    let (state, msgs) = scene(name);
+    let (state, msgs, economy) = scene(name);
     let input = TextArea::default();
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|f| render_shell(f, &state, &msgs, &input, false))
+        .draw(|f| render_shell(f, &state, &economy, &msgs, &input, false))
         .unwrap();
 
     // A ruler makes column drift obvious at a glance.
