@@ -118,9 +118,33 @@ fn economy_drawer_wide_frame() {
     insta::assert_snapshot!(draw_econ(&s, &seeded_economy(), &seeded(), 140, 24));
 }
 
+/// The selected row gets a `SEL_BG` background — invisible to text snapshots
+/// (`TestBackend::to_string()` captures glyphs, not styles), so assert on the
+/// buffer's cell styles directly: the highlight must appear when the rail is
+/// focused and be absent otherwise.
 #[test]
-fn economy_drawer_selected_frame() {
-    let mut s = ShellState::new();
-    s.focus = Focus::Rail;
-    insta::assert_snapshot!(draw_econ(&s, &seeded_economy(), &seeded(), 100, 24));
+fn economy_drawer_selection_highlights_only_when_rail_focused() {
+    use ratatui::{backend::TestBackend, Terminal};
+    use zoid_tui::tokens::color;
+
+    let count_sel_bg = |focus: Focus| -> usize {
+        let mut s = ShellState::new(); // economy open by default
+        s.focus = focus;
+        let input = TextArea::default();
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| render_shell(f, &s, &seeded_economy(), &seeded(), &input, false))
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .filter(|c| c.bg == color::SEL_BG)
+            .count()
+    };
+
+    assert_eq!(count_sel_bg(Focus::Input), 0, "no highlight when rail unfocused");
+    assert!(count_sel_bg(Focus::Rail) > 0, "selected row highlighted when rail focused");
 }
