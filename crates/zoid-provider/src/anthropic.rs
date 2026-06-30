@@ -13,8 +13,19 @@ pub fn request_body(req: &CompletionRequest) -> Value {
         .messages
         .iter()
         .map(|m| {
+            // NOTE: Anthropic is text-only this phase (P1b). This match exists
+            // only to stay exhaustive after `MsgRole` gained `Tool`; the
+            // Anthropic Messages API has NO "tool" role — tool results are a
+            // `user` message carrying a `tool_result` content block. We map
+            // `Tool` to a *valid* role ("user") rather than an invalid "tool"
+            // so no bogus wire output can leak; real Anthropic tool-calling
+            // (the proper `tool_result` mapping) is a deferred follow-up (P1b.1).
+            let role = match m.role {
+                MsgRole::User | MsgRole::Tool => "user",
+                MsgRole::Assistant => "assistant",
+            };
             json!({
-                "role": match m.role { MsgRole::User => "user", MsgRole::Assistant => "assistant", MsgRole::Tool => "tool" },
+                "role": role,
                 "content": m.content,
             })
         })
