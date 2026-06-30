@@ -5,6 +5,7 @@
 pub mod edit;
 pub mod read;
 pub mod search;
+pub mod shell;
 pub mod write;
 
 use serde_json::Value;
@@ -41,6 +42,7 @@ pub fn registry() -> Vec<Box<dyn Tool>> {
         Box::new(write::WriteFile),
         Box::new(edit::EditFile),
         Box::new(search::Search),
+        Box::new(shell::Shell),
     ]
 }
 
@@ -78,6 +80,7 @@ mod tests {
         assert!(names.contains(&"write_file"));
         assert!(names.contains(&"edit_file"));
         assert!(names.contains(&"search"));
+        assert!(names.contains(&"shell"));
     }
 
     #[test]
