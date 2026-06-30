@@ -59,10 +59,10 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
     // Drawer header rects: one row per drawer, stacked from the rail top (1-col inset).
     let mut drawer_headers = Vec::new();
     if let Some(rr) = rail {
-        let inner = Rect { x: rr.x + 1, y: rr.y, width: rr.width.saturating_sub(2), height: rr.height };
+        let inner = Rect { x: rr.x.saturating_add(1), y: rr.y, width: rr.width.saturating_sub(2), height: rr.height };
         let mut y = inner.y;
         for d in &state.drawers {
-            if y >= inner.y + inner.height {
+            if y >= inner.y.saturating_add(inner.height) {
                 break;
             }
             drawer_headers.push((d.id, Rect { x: inner.x, y, width: inner.width, height: 1 }));
@@ -91,8 +91,8 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
     let w = w.min(area.width);
     let h = h.min(area.height);
-    let x = area.x + (area.width.saturating_sub(w)) / 2;
-    let y = area.y + (area.height.saturating_sub(h)) / 3;
+    let x = area.x.saturating_add((area.width.saturating_sub(w)) / 2);
+    let y = area.y.saturating_add((area.height.saturating_sub(h)) / 3);
     Rect { x, y, width: w, height: h }
 }
 
@@ -142,5 +142,25 @@ mod tests {
         let p = l.palette.unwrap();
         assert!(in_rect(p, p.x + 1, p.y + 1)); // sane non-empty rect
         assert!(p.width <= 100 && p.height <= 24);
+    }
+
+    #[test]
+    fn in_rect_half_open_boundaries() {
+        let r = Rect { x: 5, y: 10, width: 20, height: 8 };
+        assert!(in_rect(r, 5, 10));   // top-left corner: inside
+        assert!(in_rect(r, 24, 17));  // bottom-right interior corner: inside
+        assert!(!in_rect(r, 25, 17)); // right edge: exclusive
+        assert!(!in_rect(r, 24, 18)); // bottom edge: exclusive
+        assert!(!in_rect(r, 4, 10));  // left of rect: outside
+        assert!(!in_rect(r, 5, 9));   // above rect: outside
+    }
+
+    #[test]
+    fn rail_hidden_by_user_toggle() {
+        let mut s = ShellState::new();
+        s.rail_visible = false;
+        let l = compute(area(100, 24), &s);
+        assert!(l.rail.is_none());
+        assert!(l.drawer_headers.is_empty());
     }
 }
