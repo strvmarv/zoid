@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 ratatui = { workspace = true }
+serde_json = { workspace = true }
 zoid-core = { path = "../zoid-core" }
 tui-textarea = { workspace = true }
 

@@ -1,11 +1,12 @@
 ---
 source: crates/zoid-tui/tests/chat_snapshot.rs
-assertion_line: 38
-expression: terminal.backend().to_string()
+expression: "draw(&msgs, true)"
 ---
 " zoid CHAT ⎇ main                                           "
 "› hi                                                        "
 "zoid thinking▌                                              "
+"                                                            "
+"                                                            "
 "                                                            "
 "                                                            "
 "                                                            "

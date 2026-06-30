@@ -2146,6 +2146,7 @@ version = "0.0.0"
 dependencies = [
  "insta",
  "ratatui",
+ "serde_json",
  "tui-textarea",
  "zoid-core",
 ]

@@ -1,7 +1,7 @@
 use tempfile::tempdir;
 use ulid::Ulid;
 use zoid_core::event::{Event, EventKind};
-use zoid_core::projection::{transcript, Role, Turn};
+use zoid_core::projection::{conversation, ChatMsg};
 use zoid_core::store::EventStore;
 
 #[test]
@@ -20,17 +20,17 @@ fn session_persists_and_replays_across_reopen() {
         store.append(&e2).unwrap();
     } // store dropped — connection closed.
 
-    // Second session: reopen, load, fold. Same events, same transcript.
+    // Second session: reopen, load, fold. Same events, same conversation.
     let store = EventStore::open(path).unwrap();
     let events = store.load_all().unwrap();
     assert_eq!(events, vec![e1, e2]);
 
-    let turns = transcript(&events);
+    let msgs = conversation(&events);
     assert_eq!(
-        turns,
+        msgs,
         vec![
-            Turn { role: Role::User, text: "hello".into() },
-            Turn { role: Role::Assistant, text: "hi there".into() },
+            ChatMsg::User("hello".into()),
+            ChatMsg::Assistant { text: "hi there".into(), tool_calls: vec![] },
         ]
     );
 }

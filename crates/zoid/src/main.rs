@@ -17,7 +17,7 @@ use ulid::Ulid;
 use zoid::agent::{run_agent_turn, AgentUpdate};
 use zoid::input::{classify, KeyAction};
 use zoid_core::event::{Event, EventKind};
-use zoid_core::projection::transcript;
+use zoid_core::projection::conversation;
 use zoid_core::session::SessionHandle;
 use zoid_provider::{default_model, default_provider};
 use zoid_provider::Provider;
@@ -103,8 +103,8 @@ async fn run<B: ratatui::backend::Backend>(
     let (ui_tx, mut ui_rx) = mpsc::channel::<AgentUpdate>(256);
 
     loop {
-        let turns = transcript(&app.events);
-        terminal.draw(|f| render_chat(f, &turns, &app.textarea, app.streaming))?;
+        let msgs = conversation(&app.events);
+        terminal.draw(|f| render_chat(f, &msgs, &app.textarea, app.streaming))?;
 
         tokio::select! {
             maybe_term = term_events.next() => {
