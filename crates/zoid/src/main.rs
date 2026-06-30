@@ -1,5 +1,3 @@
-mod input;
-
 use anyhow::{Context, Result};
 use crossterm::{
     event::{Event as CEvent, EventStream},
@@ -16,7 +14,7 @@ use tokio::sync::mpsc;
 use tui_textarea::TextArea;
 use ulid::Ulid;
 
-use input::{classify, KeyAction};
+use zoid::input::{classify, KeyAction};
 use zoid_core::event::{Event, EventKind};
 use zoid_core::projection::{transcript, Role};
 use zoid_core::session::SessionHandle;

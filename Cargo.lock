@@ -2088,14 +2088,18 @@ name = "zoid"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "crossterm",
  "futures-util",
  "ratatui",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tui-textarea",
  "ulid",
  "zoid-core",
  "zoid-provider",
+ "zoid-tools",
  "zoid-tui",
 ]
 

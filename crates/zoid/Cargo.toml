@@ -3,6 +3,10 @@ name = "zoid"
 version = "0.0.0"
 edition.workspace = true
 
+[lib]
+name = "zoid"
+path = "src/lib.rs"
+
 [[bin]]
 name = "zoid"
 path = "src/main.rs"
@@ -10,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 zoid-core = { path = "../zoid-core" }
 zoid-provider = { path = "../zoid-provider" }
+zoid-tools = { path = "../zoid-tools" }
 zoid-tui = { path = "../zoid-tui" }
 anyhow = { workspace = true }
 ratatui = { workspace = true }
@@ -18,3 +23,8 @@ tokio = { workspace = true }
 tui-textarea = { workspace = true }
 ulid = { workspace = true }
 futures-util = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+async-trait = { workspace = true }
