@@ -22,7 +22,7 @@ pub fn request_body(req: &CompletionRequest) -> Value {
     }
     for m in &req.messages {
         messages.push(json!({
-            "role": match m.role { MsgRole::User => "user", MsgRole::Assistant => "assistant" },
+            "role": match m.role { MsgRole::User => "user", MsgRole::Assistant => "assistant", MsgRole::Tool => "tool" },
             "content": m.content,
         }));
     }
@@ -147,10 +147,11 @@ mod tests {
             model: "glm-5.2:cloud".into(),
             system: Some("be terse".into()),
             messages: vec![
-                Message { role: MsgRole::User, content: "hi".into() },
-                Message { role: MsgRole::Assistant, content: "hello".into() },
+                Message::user("hi"),
+                Message::assistant("hello"),
             ],
             max_tokens: 1024,
+            tools: vec![],
         };
         let body = request_body(&req);
         assert_eq!(body, json!({
@@ -171,8 +172,9 @@ mod tests {
     fn body_without_system_has_no_system_message() {
         let req = CompletionRequest {
             model: "m".into(), system: None,
-            messages: vec![Message { role: MsgRole::User, content: "x".into() }],
+            messages: vec![Message::user("x")],
             max_tokens: 8,
+            tools: vec![],
         };
         assert_eq!(request_body(&req)["messages"], json!([{ "role": "user", "content": "x" }]));
     }

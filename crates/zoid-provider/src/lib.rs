@@ -7,6 +7,7 @@ pub mod anthropic;
 pub mod ollama;
 
 use anyhow::Result;
+use serde_json::Value;
 use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
@@ -15,12 +16,29 @@ use tokio::sync::mpsc;
 pub enum MsgRole {
     User,
     Assistant,
+    Tool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Message {
     pub role: MsgRole,
     pub content: String,
+    /// Populated only on assistant messages that requested tools.
+    pub tool_calls: Vec<ToolCall>,
+    /// Populated only on `MsgRole::Tool` messages: the tool whose result this is.
+    pub tool_name: Option<String>,
+}
+
+impl Message {
+    pub fn user(content: impl Into<String>) -> Self {
+        Self { role: MsgRole::User, content: content.into(), tool_calls: Vec::new(), tool_name: None }
+    }
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self { role: MsgRole::Assistant, content: content.into(), tool_calls: Vec::new(), tool_name: None }
+    }
+    pub fn tool(name: impl Into<String>, content: impl Into<String>) -> Self {
+        Self { role: MsgRole::Tool, content: content.into(), tool_calls: Vec::new(), tool_name: Some(name.into()) }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -29,20 +47,40 @@ pub struct Usage {
     pub output_tokens: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A tool the model may call (OpenAI/Ollama function shape). `parameters` is a
+/// JSON Schema object describing the tool's arguments.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolSpec {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+}
+
+/// A tool invocation requested by the model. `id` is empty for providers (Ollama
+/// native) that don't issue call ids; `args` is the parsed arguments object.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub args: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum ProviderEvent {
     TextDelta(String),
+    ToolCall(ToolCall),
     Usage(Usage),
     Done,
     Error(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CompletionRequest {
     pub model: String,
     pub system: Option<String>,
     pub messages: Vec<Message>,
     pub max_tokens: u32,
+    pub tools: Vec<ToolSpec>,
 }
 
 #[async_trait]
@@ -141,8 +179,9 @@ mod tests {
         let req = CompletionRequest {
             model: "fake".into(),
             system: None,
-            messages: vec![Message { role: MsgRole::User, content: "hi".into() }],
+            messages: vec![Message::user("hi")],
             max_tokens: 64,
+            tools: vec![],
         };
         let (tx, mut rx) = mpsc::channel(16);
         provider.stream(&req, tx).await.unwrap();
@@ -152,5 +191,52 @@ mod tests {
             got.push(ev);
         }
         assert_eq!(got, script);
+    }
+}
+
+#[cfg(test)]
+mod tool_types_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn message_constructors_set_role_and_fields() {
+        let u = Message::user("hi");
+        assert_eq!(u.role, MsgRole::User);
+        assert_eq!(u.content, "hi");
+        assert!(u.tool_calls.is_empty());
+        assert_eq!(u.tool_name, None);
+
+        let t = Message::tool("read_file", "file contents");
+        assert_eq!(t.role, MsgRole::Tool);
+        assert_eq!(t.content, "file contents");
+        assert_eq!(t.tool_name.as_deref(), Some("read_file"));
+    }
+
+    #[test]
+    fn request_carries_tools_and_event_carries_tool_call() {
+        let spec = ToolSpec {
+            name: "read_file".into(),
+            description: "read a file".into(),
+            parameters: json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+        };
+        let req = CompletionRequest {
+            model: "m".into(),
+            system: None,
+            messages: vec![Message::user("x")],
+            max_tokens: 8,
+            tools: vec![spec.clone()],
+        };
+        assert_eq!(req.tools, vec![spec]);
+
+        let ev = ProviderEvent::ToolCall(ToolCall {
+            id: "".into(),
+            name: "read_file".into(),
+            args: json!({"path": "a.txt"}),
+        });
+        assert_eq!(
+            ev,
+            ProviderEvent::ToolCall(ToolCall { id: "".into(), name: "read_file".into(), args: json!({"path": "a.txt"}) })
+        );
     }
 }
