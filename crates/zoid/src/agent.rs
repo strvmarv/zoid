@@ -117,6 +117,7 @@ async fn run_turn_inner(
             let _ = ptx.send(ProviderEvent::Done).await;
         });
 
+        let mut turn_usage = zoid_core::event::TokenStat::default();
         let mut pending: Vec<ToolCall> = Vec::new();
         while let Some(pe) = prx.recv().await {
             match pe {
@@ -138,7 +139,10 @@ async fn run_turn_inner(
                     .await?;
                     pending.push(tc);
                 }
-                ProviderEvent::Usage(_) => { /* token ledger lands in P3 */ }
+                ProviderEvent::Usage(u) => {
+                    turn_usage.input += u.input_tokens;
+                    turn_usage.output += u.output_tokens;
+                }
                 ProviderEvent::Error(msg) => {
                     emit(
                         &session,
@@ -155,6 +159,11 @@ async fn run_turn_inner(
             }
         }
         let _ = stream_task.await;
+
+        // Record the sub-turn's token usage so the economy ledger is live.
+        if turn_usage != zoid_core::event::TokenStat::default() {
+            emit_with_tokens(&session, &mut events, ui, EventKind::Usage, Some(turn_usage), now).await?;
+        }
 
         if pending.is_empty() {
             break 'turn; // model answered without tools — turn complete
@@ -213,7 +222,21 @@ async fn emit(
     kind: EventKind,
     now: fn() -> i64,
 ) -> Result<()> {
-    let ev = Event::new(Ulid::new(), None, now(), kind);
+    emit_with_tokens(session, events, ui, kind, None, now).await
+}
+
+/// Persist one event (optionally carrying token usage) and announce it to the
+/// UI, keeping the local log in sync.
+async fn emit_with_tokens(
+    session: &SessionHandle,
+    events: &mut Vec<Event>,
+    ui: &mpsc::Sender<AgentUpdate>,
+    kind: EventKind,
+    tokens: Option<zoid_core::event::TokenStat>,
+    now: fn() -> i64,
+) -> Result<()> {
+    let mut ev = Event::new(Ulid::new(), None, now(), kind);
+    ev.tokens = tokens;
     session.append(ev.clone()).await?;
     events.push(ev.clone());
     let _ = ui.send(AgentUpdate::Appended(ev)).await;

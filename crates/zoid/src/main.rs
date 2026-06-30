@@ -138,7 +138,15 @@ async fn run<B: ratatui::backend::Backend>(
     loop {
         terminal.draw(|f| {
             let msgs = conversation(&app.events);
-            render_shell(f, &app.shell, &msgs, &app.textarea, app.streaming);
+            let window = zoid_core::context::context_window(&app.events);
+            let churn = zoid_core::economy::churn_timeline(&app.events);
+            let ledger = zoid_core::economy::token_ledger(&app.events);
+            // T10 (manual control: shell.policy / shell.economy_selected) is DEFERRED post-P3.
+            // Until then the policy is the default (auto-evict-cold ON, no ceiling) and there is
+            // no row selection — the drawer is read-only/observability-only.
+            let policy = zoid_core::assembler::ContextPolicy::default();
+            let economy = zoid_tui::EconomyView::build(&window, &churn, &ledger, &policy, 0);
+            render_shell(f, &app.shell, &economy, &msgs, &app.textarea, app.streaming);
         })?;
 
         tokio::select! {
