@@ -4,7 +4,7 @@
 //!
 //!   cargo run -p zoid-tui --example preview -- [scene] [width] [height]
 //!
-//! scene ∈ { chat, files, palette, cmdline, build, economy, syntax }  (default: chat)
+//! scene ∈ { chat, files, palette, cmdline, build, economy, syntax, summary, detail }  (default: chat)
 //! width/height default to 140×24 (wide enough to expose gutter bugs).
 
 use ratatui::{backend::TestBackend, Terminal};
@@ -96,6 +96,12 @@ fn scene(name: &str) -> (ShellState, Vec<ChatMsg>, EconomyView) {
         "economy" => {
             return (s, seeded(), seeded_economy());
         }
+        "summary" => {
+            s.zoom = Zoom::Summary;
+        }
+        "detail" => {
+            s.zoom = Zoom::Detail;
+        }
         _ => {} // "chat" / default
     }
     (s, seeded(), empty_economy())
@@ -127,7 +133,7 @@ fn main() {
     let input = TextArea::default();
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
-    let view = ChatView { zoom: Zoom::Normal, caret_on: true, reveal: None };
+    let view = ChatView { zoom: state.zoom, caret_on: true, reveal: None };
     terminal
         .draw(|f| render_shell(f, &state, &economy, &msgs, &input, false, &view))
         .unwrap();

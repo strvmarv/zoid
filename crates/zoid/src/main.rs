@@ -174,21 +174,26 @@ async fn run<B: ratatui::backend::Backend>(
             // Detail) ONLY while a zoom animation is actually in flight; on every
             // ordinary frame `reveal` is None and we skip the second build entirely.
             let reveal = match app.zoom_changed_at {
-                Some(t0) if zoom_animating(app) => {
-                    let total_lines = zoid_tui::chat::conversation_view(
-                        &msgs,
-                        &ChatView { zoom: app.shell.zoom, caret_on: caret, reveal: None },
-                        app.streaming,
-                    )
-                    .len();
-                    zoid_tui::motion::zoom_reveal(
-                        total_lines,
-                        t0.elapsed().as_millis() as u64,
-                        ZOOM_ANIM_MS,
-                        app.shell.reduced_motion,
-                    )
+                Some(t0) => {
+                    let elapsed_ms = t0.elapsed().as_millis() as u64;
+                    if elapsed_ms < ZOOM_ANIM_MS && !app.shell.reduced_motion {
+                        let total_lines = zoid_tui::chat::conversation_view(
+                            &msgs,
+                            &ChatView { zoom: app.shell.zoom, caret_on: caret, reveal: None },
+                            app.streaming,
+                        )
+                        .len();
+                        zoid_tui::motion::zoom_reveal(
+                            total_lines,
+                            elapsed_ms,
+                            ZOOM_ANIM_MS,
+                            app.shell.reduced_motion,
+                        )
+                    } else {
+                        None
+                    }
                 }
-                _ => None,
+                None => None,
             };
             let view = ChatView { zoom: app.shell.zoom, caret_on: caret, reveal };
             render_shell(f, &app.shell, &economy, &msgs, &app.textarea, app.streaming, &view);
@@ -279,12 +284,18 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             app.shell.conversation_scroll = next.max(0) as u16;
         }
         Action::ZoomIn => {
+            let before = app.shell.zoom;
             app.shell.zoom_in();
-            app.zoom_changed_at = Some(std::time::Instant::now());
+            if app.shell.zoom != before {
+                app.zoom_changed_at = Some(std::time::Instant::now());
+            }
         }
         Action::ZoomOut => {
+            let before = app.shell.zoom;
             app.shell.zoom_out();
-            app.zoom_changed_at = Some(std::time::Instant::now());
+            if app.shell.zoom != before {
+                app.zoom_changed_at = Some(std::time::Instant::now());
+            }
         }
         Action::Newline => app.textarea.insert_newline(),
         Action::Edit(key) => { app.textarea.input(key); }
