@@ -1,6 +1,7 @@
 //! zoid-core — the event-sourced spine: an append-only log, a SQLite store,
 //! and pure projections over the log.
 
+pub mod assembler;
 pub mod context;
 pub mod economy;
 pub mod event;
