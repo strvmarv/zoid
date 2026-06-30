@@ -73,6 +73,8 @@ impl App {
                     Role::Assistant => MsgRole::Assistant,
                 },
                 content: t.text,
+                tool_calls: Vec::new(),
+                tool_name: None,
             })
             .collect();
         CompletionRequest {
@@ -80,6 +82,7 @@ impl App {
             system: Some(SYSTEM_PROMPT.to_string()),
             messages,
             max_tokens: 4096,
+            tools: vec![],
         }
     }
 }
@@ -173,6 +176,7 @@ async fn run<B: ratatui::backend::Backend>(
                         app.streaming = false;
                     }
                     ProviderEvent::Done => { app.streaming = false; }
+                    ProviderEvent::ToolCall(_) => { /* agent loop wires this up in P1b */ }
                 }
             }
         }

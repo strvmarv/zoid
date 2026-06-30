@@ -1,0 +1,84 @@
+//! zoid-tools — the curated, cwd-scoped tool set the agent loop can call.
+//! Tools run in the process working directory (Chat is safe by human presence,
+//! spec §9); no path-jailing here.
+
+pub mod read;
+pub mod write;
+
+use serde_json::Value;
+use zoid_provider::ToolSpec;
+
+/// The outcome of running a tool. `text` is fed back to the model as the tool
+/// result; `is_error` marks failures (still returned to the model, not panicked).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolOutput {
+    pub text: String,
+    pub is_error: bool,
+}
+
+impl ToolOutput {
+    pub fn ok(text: impl Into<String>) -> Self {
+        Self { text: text.into(), is_error: false }
+    }
+    pub fn err(text: impl Into<String>) -> Self {
+        Self { text: text.into(), is_error: true }
+    }
+}
+
+/// A callable tool. `spec()` is sent to the provider; `run()` executes it.
+pub trait Tool: Send + Sync {
+    fn name(&self) -> &str;
+    fn spec(&self) -> ToolSpec;
+    fn run(&self, args: &Value) -> ToolOutput;
+}
+
+/// The compiled-in tool set (spec §9: fixed curated set in v1).
+pub fn registry() -> Vec<Box<dyn Tool>> {
+    vec![
+        Box::new(read::ReadFile),
+        Box::new(write::WriteFile),
+    ]
+}
+
+/// Dispatch a tool call by name. Unknown tools return an error `ToolOutput`
+/// (the model sees it and can recover) rather than panicking.
+pub fn run_tool(tools: &[Box<dyn Tool>], name: &str, args: &Value) -> ToolOutput {
+    match tools.iter().find(|t| t.name() == name) {
+        Some(t) => t.run(args),
+        None => ToolOutput::err(format!("unknown tool: {name}")),
+    }
+}
+
+/// Helper for tools: pull a required string argument.
+pub(crate) fn str_arg(args: &Value, key: &str) -> Result<String, ToolOutput> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| ToolOutput::err(format!("missing or non-string argument: {key}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn registry_has_unique_named_tools() {
+        let reg = registry();
+        let mut names: Vec<&str> = reg.iter().map(|t| t.name()).collect();
+        let count = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), count, "tool names must be unique");
+        assert!(names.contains(&"read_file"));
+        assert!(names.contains(&"write_file"));
+    }
+
+    #[test]
+    fn unknown_tool_is_error_not_panic() {
+        let reg = registry();
+        let out = run_tool(&reg, "nope", &json!({}));
+        assert!(out.is_error);
+        assert!(out.text.contains("unknown tool"));
+    }
+}
