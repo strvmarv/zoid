@@ -17,6 +17,14 @@ pub struct TokenStat {
     pub cached: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MutationOp {
+    Pin,
+    Unpin,
+    Evict,
+    Restore,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
     UserMessage { text: String },
@@ -27,6 +35,13 @@ pub enum EventKind {
     ToolCall { id: String, name: String, args: String },
     /// The result of running a `ToolCall`. `output` is the tool's text output.
     ToolResult { id: String, name: String, output: String, is_error: bool },
+    /// A turn's token usage. The numbers live in `Event.tokens`; this variant
+    /// is the carrier so the economy projections can sum real counts. Ignored
+    /// by the conversation projection.
+    Usage,
+    /// A manual or automatic change to the context window, targeting a
+    /// `ContextItem` by its stable `key`.
+    ContextMutation { item: String, op: MutationOp },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,6 +115,23 @@ mod tests {
             let json = serde_json::to_string(&ev).unwrap();
             let back: Event = serde_json::from_str(&json).unwrap();
             assert_eq!(ev, back);
+        }
+    }
+
+    #[test]
+    fn usage_and_mutation_round_trip() {
+        let id = Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
+        let usage = Event {
+            id, parent: None, branch: BranchId::default(), ts: 5,
+            kind: EventKind::Usage,
+            tokens: Some(TokenStat { input: 100, output: 40, cached: 10 }),
+        };
+        let mutation = Event::new(id, None, 6, EventKind::ContextMutation {
+            item: "file:src/a.rs".into(), op: MutationOp::Pin,
+        });
+        for ev in [usage, mutation] {
+            let json = serde_json::to_string(&ev).unwrap();
+            assert_eq!(ev, serde_json::from_str::<Event>(&json).unwrap());
         }
     }
 }

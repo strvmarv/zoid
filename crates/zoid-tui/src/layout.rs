@@ -11,6 +11,18 @@ pub const RAIL_WIDTH: u16 = 30;
 pub const RAIL_MIN_TOTAL: u16 = 80;
 /// Conversation column measure cap (spec §6.1: ~80–100 cols, ergonomics).
 pub const MAX_MEASURE: u16 = 100;
+/// Default drawer body height in rows (P3).
+pub const DRAWER_BODY_ROWS: u16 = 4;
+/// The economy ⑤ drawer needs more rows (items + churn + ledger + toggle).
+pub const ECONOMY_BODY_ROWS: u16 = 6;
+
+/// Body height for a drawer kind.
+pub fn drawer_body_rows(id: DrawerId) -> u16 {
+    match id {
+        DrawerId::Economy => ECONOMY_BODY_ROWS,
+        _ => DRAWER_BODY_ROWS,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellLayout {
@@ -19,6 +31,7 @@ pub struct ShellLayout {
     pub conversation: Rect,
     pub rail: Option<Rect>,
     pub drawer_headers: Vec<(DrawerId, Rect)>,
+    pub drawer_bodies: Vec<(DrawerId, Rect)>,
     pub input: Rect,
     pub status: Rect,
     pub palette: Option<Rect>,
@@ -60,6 +73,7 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
 
     // Drawer header rects: one row per drawer, stacked from the rail top (1-col inset).
     let mut drawer_headers = Vec::new();
+    let mut drawer_bodies = Vec::new();
     if let Some(rr) = rail {
         let inner = Rect { x: rr.x.saturating_add(1), y: rr.y, width: rr.width.saturating_sub(2), height: rr.height };
         let mut y = inner.y;
@@ -68,8 +82,13 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
                 break;
             }
             drawer_headers.push((d.id, Rect { x: inner.x, y, width: inner.width, height: 1 }));
-            // header(1) + body when open (P2: a fixed 4-row body budget), + 1 spacer.
-            let body_rows = if d.open { 4 } else { 0 };
+            let body_rows = if d.open { drawer_body_rows(d.id) } else { 0 };
+            if d.open {
+                drawer_bodies.push((
+                    d.id,
+                    Rect { x: inner.x.saturating_add(1), y: y.saturating_add(1), width: inner.width.saturating_sub(1), height: body_rows },
+                ));
+            }
             y = y.saturating_add(1 + body_rows + 1);
         }
     }
@@ -86,7 +105,7 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
         None
     };
 
-    ShellLayout { title, body, conversation, rail, drawer_headers, input, status, palette, cmdline }
+    ShellLayout { title, body, conversation, rail, drawer_headers, drawer_bodies, input, status, palette, cmdline }
 }
 
 /// A rect `w×h` (clamped to `area`) centered horizontally, near the top third.
@@ -113,6 +132,7 @@ mod tests {
         let l = compute(area(60, 12), &s);
         assert!(l.rail.is_none());
         assert!(l.drawer_headers.is_empty());
+        assert!(l.drawer_bodies.is_empty());
         // conversation spans the full body width when there's no rail/gutter.
         assert_eq!(l.conversation.width, 60);
     }
@@ -164,5 +184,31 @@ mod tests {
         let l = compute(area(100, 24), &s);
         assert!(l.rail.is_none());
         assert!(l.drawer_headers.is_empty());
+    }
+
+    #[test]
+    fn open_drawer_gets_a_body_rect_sized_by_kind() {
+        let mut s = ShellState::new(); // Economy open by default
+        s.toggle_drawer(DrawerId::Files); // Files now open too
+        let l = compute(area(100, 30), &s);
+        let econ = l.drawer_bodies.iter().find(|(id, _)| *id == DrawerId::Economy).unwrap().1;
+        let files = l.drawer_bodies.iter().find(|(id, _)| *id == DrawerId::Files).unwrap().1;
+        assert_eq!(econ.height, ECONOMY_BODY_ROWS);
+        assert_eq!(files.height, DRAWER_BODY_ROWS);
+        // closed drawers have no body
+        assert!(l.drawer_bodies.iter().all(|(id, _)| *id != DrawerId::Branch));
+        // body sits directly under its header
+        let econ_hdr = l.drawer_headers.iter().find(|(id, _)| *id == DrawerId::Economy).unwrap().1;
+        assert_eq!(econ.y, econ_hdr.y + 1);
+    }
+
+    #[test]
+    fn headers_stack_below_taller_economy_body() {
+        let s = ShellState::new(); // only Economy open (6-row body)
+        let l = compute(area(100, 30), &s);
+        let econ_hdr = l.drawer_headers[0].1;
+        let files_hdr = l.drawer_headers[1].1;
+        // header(1) + ECONOMY_BODY_ROWS + 1 spacer
+        assert_eq!(files_hdr.y, econ_hdr.y + 1 + ECONOMY_BODY_ROWS + 1);
     }
 }

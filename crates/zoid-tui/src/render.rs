@@ -5,9 +5,10 @@
 //! rects mouse hit-testing uses.
 
 use crate::chat::conversation_lines;
+use crate::economy_view::EconomyView;
 use crate::layout::{compute, ShellLayout};
 use crate::palette::{all_items, nav, selectable_matches, PaletteItem};
-use crate::state::{DrawerId, Mode, Overlay, ShellState};
+use crate::state::{DrawerId, Focus, Mode, Overlay, ShellState};
 use crate::tokens::{color, glyph};
 use ratatui::{
     layout::Rect,
@@ -22,6 +23,7 @@ use zoid_core::projection::ChatMsg;
 pub fn render_shell(
     frame: &mut Frame,
     state: &ShellState,
+    economy: &EconomyView,
     msgs: &[ChatMsg],
     input: &TextArea<'_>,
     streaming: bool,
@@ -39,7 +41,7 @@ pub fn render_shell(
     }
 
     if let Some(rail) = layout.rail {
-        render_rail(frame, state, &layout, rail);
+        render_rail(frame, state, economy, &layout, rail);
     }
 
     render_input(frame, input, layout.input);
@@ -107,7 +109,7 @@ fn render_status(frame: &mut Frame, state: &ShellState, area: Rect) {
     frame.render_widget(Paragraph::new(status), area);
 }
 
-fn render_rail(frame: &mut Frame, state: &ShellState, layout: &ShellLayout, rail: Rect) {
+fn render_rail(frame: &mut Frame, state: &ShellState, economy: &EconomyView, layout: &ShellLayout, rail: Rect) {
     // Rail header.
     let head = Line::from(vec![
         Span::styled("chat rail", Style::new().fg(color::CHAT_ACCENT)),
@@ -123,10 +125,49 @@ fn render_rail(frame: &mut Frame, state: &ShellState, layout: &ShellLayout, rail
         ]);
         frame.render_widget(Paragraph::new(hdr), *hr);
         if d.open {
-            let body_rect = Rect { x: hr.x + 2, y: hr.y + 1, width: hr.width.saturating_sub(2), height: 4 };
-            frame.render_widget(Paragraph::new(drawer_body(*id, state)), body_rect);
+            let body = layout.drawer_bodies.iter().find(|(bid, _)| bid == id).map(|(_, r)| *r);
+            if let Some(rect) = body {
+                if d.id == DrawerId::Economy {
+                    render_economy_body(frame, economy, rect, state.focus == Focus::Rail);
+                } else {
+                    frame.render_widget(Paragraph::new(drawer_body(d.id, state)), rect);
+                }
+            }
         }
     }
+}
+
+fn render_economy_body(frame: &mut Frame, econ: &EconomyView, area: Rect, rail_focused: bool) {
+    use crate::economy_view::{heat_bar, heat_color};
+    let mut lines: Vec<Line> = Vec::new();
+    let max_rows = area.height.saturating_sub(2) as usize; // leave room for churn + footer
+    for (i, r) in econ.rows.iter().take(max_rows).enumerate() {
+        let marker = if r.pinned { glyph::PIN } else { ' ' };
+        let sel = rail_focused && i == econ.selected;
+        let base = if sel { Style::new().bg(color::SEL_BG) } else { Style::new() };
+        let mut spans = vec![
+            Span::styled(format!("{marker} {:<10} {:>4} ", r.label, r.tokens), base.fg(color::TXT)),
+            Span::styled(heat_bar(r.heat), base.fg(heat_color(r.heat))),
+        ];
+        if r.cold {
+            spans.push(Span::styled(" cold", base.fg(color::HEAT_COLD)));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines.push(Line::from(vec![
+        Span::styled("churn ", Style::new().fg(color::DIM)),
+        Span::styled(econ.churn.clone(), Style::new().fg(color::CHAT_ACCENT)),
+    ]));
+    let check = if econ.auto_evict_cold { "[x]" } else { "[ ]" };
+    let left = format!("{check} evict cold");
+    let ledger_color = if econ.over_ceiling { color::WARN } else { color::DIM };
+    let pad = (area.width as usize)
+        .saturating_sub(left.chars().count() + econ.ledger.chars().count());
+    lines.push(Line::from(vec![
+        Span::styled(left, Style::new().fg(color::DIM)),
+        Span::styled(format!("{}{}", " ".repeat(pad), econ.ledger), Style::new().fg(ledger_color)),
+    ]));
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn drawer_body(id: DrawerId, state: &ShellState) -> Vec<Line<'static>> {

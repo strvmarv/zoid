@@ -20,11 +20,13 @@ The **visual source of truth** for zoid's TUI. Referenced by the design spec (`d
 
 ## Visual language (authoritative — mirror in the Rust design-tokens module)
 
-**Glyphs:** `●` edit · `✓` pass/done · `◐` running · `☐` pending · `⠿` streaming · `⎇` branch · `⚠` conflict/overlap · `▸`/`▾` collapsed/expanded · `⛔` blocker · `▲` spike · `›` user turn · `▌` caret.
+**Glyphs:** `●` edit · `✓` pass/done · `◐` running · `☐` pending · `⠿` streaming · `⎇` branch · `⚠` conflict/overlap · `▸`/`▾` collapsed/expanded · `⛔` blocker · `▲` spike · `›` user turn · `▌` caret · `█`/`░` heat bar (Ⓡ4) · `▁▂▃▄▅▆▇█` sparkline ramp (Ⓡ4) · `●` pinned item.
 
 **Mode accent colors:** Chat = blue (`#58a6ff`/`#79c0ff`) · Build = amber (`#e3b341`). (Finalize is Build's last step; it uses a green success accent `#5ddf9c` within Build.)
 
 **Status:** ok `#3fb950` · warn `#d29922` · error/del `#f85149` · branch/accent `#bc8cff` · dim `#6e7681`.
+
+**Heat (⑤a):** hot = ok green `#3fb950` · warm `#d29922` · cold = dim `#6e7681`.
 
 **Syntax (tree-sitter Ⓡ3):** keyword `#ff7b72` · fn `#d2a8ff` · type `#7ee787` · string `#a5d6ff` · number `#79c0ff` · comment `#8b949e`.
 

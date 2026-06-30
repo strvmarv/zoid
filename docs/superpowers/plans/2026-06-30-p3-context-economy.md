@@ -1380,11 +1380,12 @@ git commit -m "feat(layout): data-driven drawer-body rects; economy drawer talle
   `pub fn render_shell(frame, state: &ShellState, economy: &EconomyView, msgs, input, streaming)`.
 - The economy drawer body renders from `economy`; other drawers keep `drawer_body(id, state)`.
 
-**Layout of the economy body (mirrors `docs/ux/chat-mode.html`):**
+**Layout of the economy body (mirrors `docs/ux/chat-mode.html` — items span kinds, tokens-desc):**
 ```
-● users.rs      4k   ██
-  ctx.rs        3k   █░
-  schema.sql    5k   ░░ cold
+  grep          6k   ██        (ToolResult)
+  schema.sql    5k   ░░ cold   (File)
+● users.rs      4k   ██        (File, pinned)
+  ship it?      3k   █░        (Message)
 churn ▁▂▁▃▁
 [x] evict cold              142k/200k
 ```
@@ -1425,16 +1426,19 @@ fn draw_econ(state: &ShellState, econ: &EconomyView, msgs: &[ChatMsg], w: u16, h
 
 fn seeded_economy() -> EconomyView {
     use zoid_core::context::{ContextItem, Heat, ItemKind};
-    let it = |label: &str, tokens, heat, pinned| ContextItem {
-        key: format!("file:{label}"), label: label.into(), kind: ItemKind::File, tokens, heat, pinned, evicted: false,
+    let it = |key: &str, label: &str, kind, tokens, heat, pinned| ContextItem {
+        key: key.into(), label: label.into(), kind, tokens, heat, pinned, evicted: false,
     };
+    // Items span kinds (ToolResult / File / Message), not files-only — mirrors
+    // docs/ux/chat-mode.html and what context_window() actually produces in P3.
     let w = ContextWindow {
         items: vec![
-            it("schema.sql", 5000, Heat::Cold, false),
-            it("users.rs", 4000, Heat::Hot, true),
-            it("ctx.rs", 3000, Heat::Warm, false),
+            it("tool:grep:c9", "grep", ItemKind::ToolResult, 6000, Heat::Hot, false),
+            it("file:schema.sql", "schema.sql", ItemKind::File, 5000, Heat::Cold, false),
+            it("file:users.rs", "users.rs", ItemKind::File, 4000, Heat::Hot, true),
+            it("msg:2", "ship it?", ItemKind::Message, 3000, Heat::Warm, false),
         ],
-        total_tokens: 12000,
+        total_tokens: 18000,
     };
     let churn = ChurnTimeline { points: vec![
         zoid_core::economy::ChurnPoint { turn: 0, tokens: 10, resent_tokens: 0 },
@@ -1562,6 +1566,8 @@ git commit -m "feat(tui): render ⑤ economy drawer (items/heat/churn/ledger) + 
 ---
 
 ### Task 10: Manual control — selection, pin/evict keys, palette, commands
+
+> **DEFERRED post-P3 (user decision, 2026-06-30).** P3 ships *automated* context management + *observability* only; the explicit user-command surface (economy-row selection, pin/evict keybinds, `:evict-cold`, `:set ceiling`, palette wiring, `ShellState.policy`/`economy_selected`) lands in a later phase. The underlying machinery is already merged (the `ContextMutation` event in T2, the pin/evict fold in T5, the assembler honoring pins in T6) — only the user-facing triggers are deferred. This task is retained here as the spec for that future phase; **it is NOT executed in the P3 loop (T8 → T9 → T11).**
 
 **Files:**
 - Modify: `crates/zoid-tui/src/state.rs` (selection + policy)
@@ -1861,7 +1867,11 @@ In `crates/zoid/src/main.rs`, build the view each frame and pass it:
             let window = zoid_core::context::context_window(&app.events);
             let churn = zoid_core::economy::churn_timeline(&app.events);
             let ledger = zoid_core::economy::token_ledger(&app.events);
-            let economy = zoid_tui::EconomyView::build(&window, &churn, &ledger, &app.shell.policy, app.shell.economy_selected);
+            // T10 (manual control: shell.policy / shell.economy_selected) is DEFERRED post-P3.
+            // Until then the policy is the default (auto-evict-cold ON, no ceiling) and there is
+            // no row selection — the drawer is read-only/observability-only.
+            let policy = zoid_core::assembler::ContextPolicy::default();
+            let economy = zoid_tui::EconomyView::build(&window, &churn, &ledger, &policy, 0);
             render_shell(f, &app.shell, &economy, &msgs, &app.textarea, app.streaming);
         })?;
 ```

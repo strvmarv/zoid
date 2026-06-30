@@ -24,6 +24,10 @@ pub mod glyph {
     pub const EVICT: char = '✕';        // palette: evict cold
     pub const SETTINGS: char = '◆';     // palette: settings/quit
     pub const RECIPE: char = '▷';       // palette: run recipe (post-v1)
+    pub const HEAT_FULL: char = '█';   // ⑤ heat bar — hot cell (Ⓡ4)
+    pub const HEAT_SHADE: char = '░';  // ⑤ heat bar — empty cell (Ⓡ4)
+    pub const SPARK: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█']; // churn sparkline ramp
+    pub const PIN: char = '●';         // ⑤ pinned-item marker
 }
 
 /// Colors (visual-language table, spec §16 / docs/ux/README.md).
@@ -40,6 +44,10 @@ pub mod color {
     pub const SEL_BG: Color = Color::Rgb(0x16, 0x33, 0x5c);
     pub const CHAT_BG: Color = Color::Rgb(0x0d, 0x2a, 0x4d);
     pub const BUILD_BG: Color = Color::Rgb(0x3d, 0x2a, 0x0a);
+    // ⑤ context heat — reuse the status palette so the visual language stays uniform.
+    pub const HEAT_HOT: Color = OK;
+    pub const HEAT_WARM: Color = WARN;
+    pub const HEAT_COLD: Color = DIM;
 }
 
 #[cfg(test)]
@@ -62,5 +70,17 @@ mod tests {
         assert_eq!(color::SEL_BG, Color::Rgb(0x16, 0x33, 0x5c));
         assert_eq!(color::CHAT_BG, Color::Rgb(0x0d, 0x2a, 0x4d));
         assert_eq!(color::BUILD_BG, Color::Rgb(0x3d, 0x2a, 0x0a));
+    }
+
+    #[test]
+    fn p3_economy_tokens_present() {
+        assert_eq!(glyph::HEAT_FULL, '█');
+        assert_eq!(glyph::HEAT_SHADE, '░');
+        assert_eq!(glyph::SPARK, ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█']);
+        assert_eq!(glyph::PIN, '●');
+        // Heat colors reuse the status palette (spec §16: uniform language).
+        assert_eq!(color::HEAT_HOT, color::OK);
+        assert_eq!(color::HEAT_WARM, color::WARN);
+        assert_eq!(color::HEAT_COLD, color::DIM);
     }
 }
