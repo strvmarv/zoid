@@ -96,6 +96,49 @@ impl ShellState {
     pub fn drawer_mut(&mut self, id: DrawerId) -> Option<&mut Drawer> {
         self.drawers.iter_mut().find(|d| d.id == id)
     }
+
+    /// The focus ring (forward only; `⇧Tab` is mode-switch, not focus-prev — spec §6.2).
+    /// Rail participates only when visible.
+    pub fn focus_next(&mut self) {
+        let ring: &[Focus] = if self.rail_visible {
+            &[Focus::Conversation, Focus::Input, Focus::Rail]
+        } else {
+            &[Focus::Conversation, Focus::Input]
+        };
+        let i = ring.iter().position(|f| *f == self.focus).unwrap_or(0);
+        self.focus = ring[(i + 1) % ring.len()];
+    }
+
+    pub fn toggle_mode(&mut self) {
+        self.mode = match self.mode {
+            Mode::Chat => Mode::Build,
+            Mode::Build => Mode::Chat,
+        };
+    }
+
+    pub fn set_mode(&mut self, mode: Mode) {
+        self.mode = mode;
+    }
+
+    pub fn toggle_drawer(&mut self, id: DrawerId) {
+        if let Some(d) = self.drawer_mut(id) {
+            d.open = !d.open;
+        }
+    }
+
+    /// Force a drawer open and reveal the rail (used by palette/command actions).
+    pub fn open_drawer(&mut self, id: DrawerId) {
+        self.rail_visible = true;
+        if let Some(d) = self.drawer_mut(id) {
+            d.open = true;
+        }
+    }
+
+    pub fn close_overlay(&mut self) {
+        self.overlay = Overlay::None;
+        self.palette = PaletteState::default();
+        self.cmdline = CmdlineState::default();
+    }
 }
 
 impl Default for ShellState {
@@ -130,5 +173,59 @@ mod tests {
         assert!(s.drawer_mut(DrawerId::Files).is_some());
         s.drawers.clear();
         assert!(s.drawer(DrawerId::Files).is_none());
+    }
+
+    #[test]
+    fn focus_next_cycles_and_wraps() {
+        let mut s = ShellState::new();
+        s.focus = Focus::Conversation;
+        s.focus_next();
+        assert_eq!(s.focus, Focus::Input);
+        s.focus_next();
+        assert_eq!(s.focus, Focus::Rail);
+        s.focus_next();
+        assert_eq!(s.focus, Focus::Conversation); // wraps
+    }
+
+    #[test]
+    fn focus_next_skips_rail_when_hidden() {
+        let mut s = ShellState::new();
+        s.rail_visible = false;
+        s.focus = Focus::Input;
+        s.focus_next();
+        assert_eq!(s.focus, Focus::Conversation); // Rail not in the ring
+    }
+
+    #[test]
+    fn toggle_mode_flips_chat_build() {
+        let mut s = ShellState::new();
+        s.toggle_mode();
+        assert_eq!(s.mode, Mode::Build);
+        s.toggle_mode();
+        assert_eq!(s.mode, Mode::Chat);
+    }
+
+    #[test]
+    fn toggle_drawer_flips_open_and_opens_rail() {
+        let mut s = ShellState::new();
+        s.toggle_drawer(DrawerId::Files);
+        assert!(s.drawer(DrawerId::Files).unwrap().open);
+        // open_drawer forces open (idempotent) and ensures the rail is visible.
+        s.rail_visible = false;
+        s.open_drawer(DrawerId::Branch);
+        assert!(s.rail_visible);
+        assert!(s.drawer(DrawerId::Branch).unwrap().open);
+    }
+
+    #[test]
+    fn close_overlay_resets_palette_query() {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Palette;
+        s.palette.query = "comp".into();
+        s.palette.selected = 3;
+        s.close_overlay();
+        assert_eq!(s.overlay, Overlay::None);
+        assert_eq!(s.palette, PaletteState::default());
+        assert_eq!(s.cmdline, CmdlineState::default());
     }
 }
