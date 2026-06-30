@@ -95,7 +95,7 @@ fn render_status(frame: &mut Frame, state: &ShellState, area: Rect) {
         Mode::Chat => Line::from(vec![
             Span::styled(" CHAT ", Style::new().fg(color::CHAT_ACCENT).bg(color::CHAT_BG)),
             Span::styled(
-                format!(" {} main · ^P palette · {}Tab → Build · ^C quit", glyph::BRANCH, glyph::SHIFT),
+                format!(" {} {} · ^P palette · {}Tab → Build · ^C quit", glyph::BRANCH, state.branch, glyph::SHIFT),
                 Style::new().fg(color::DIM),
             ),
         ]),
@@ -176,15 +176,12 @@ fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
 
 fn palette_row_line(it: &PaletteItem, selected: bool) -> Line<'static> {
     let enabled = it.command.is_some();
-    let base = if enabled { color::TXT } else { color::DIM };
-    let mut style = Style::new().fg(base);
-    if selected {
-        style = style.bg(color::SEL_BG);
-    }
+    let fg = if enabled { color::TXT } else { color::DIM };
+    let bg = |s: Style| if selected { s.bg(color::SEL_BG) } else { s };
     Line::from(vec![
-        Span::styled(format!(" {} {}", it.icon, it.label), style),
-        Span::styled(format!("  {}", it.hint), Style::new().fg(color::DIM)),
-        Span::styled(format!("  {}", it.keybind), Style::new().fg(color::DIM)),
+        Span::styled(format!(" {} {}", it.icon, it.label), bg(Style::new().fg(fg))),
+        Span::styled(format!("  {}", it.hint), bg(Style::new().fg(color::DIM))),
+        Span::styled(format!("  {}", it.keybind), bg(Style::new().fg(color::DIM))),
     ])
 }
 
