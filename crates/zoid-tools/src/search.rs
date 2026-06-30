@@ -82,7 +82,7 @@ fn walk(root: &Path, dir: &Path, query: &str, hits: &mut Vec<String>) {
             let rel = path.strip_prefix(root).unwrap_or(&path).display().to_string();
             for (i, line) in contents.lines().enumerate() {
                 if line.contains(query) {
-                    hits.push(format!("{rel}:{}: {}", i + 1, line.trim()));
+                    hits.push(format!("{rel}:{}: {}", i + 1, line.trim_end()));
                     if hits.len() >= MAX_RESULTS {
                         return;
                     }

@@ -6,7 +6,6 @@ edition.workspace = true
 [dependencies]
 zoid-provider = { path = "../zoid-provider" }
 serde_json = { workspace = true }
-anyhow = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
