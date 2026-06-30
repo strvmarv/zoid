@@ -65,12 +65,19 @@ pub(crate) fn tool_path(args_json: &str) -> Option<String> {
 
 pub fn churn_timeline(events: &[Event]) -> ChurnTimeline {
     let mut points: Vec<ChurnPoint> = Vec::new();
+    // `seen_paths`: paths referenced in any COMPLETED (prior) turn.
+    // `turn_paths`: paths referenced in the CURRENT turn only.
+    // A path is "re-sent" only if it appears in `seen_paths`, i.e. a prior turn.
+    // Same-turn duplicates must never bump `resent_tokens`.
     let mut seen_paths: HashSet<String> = HashSet::new();
+    let mut turn_paths: HashSet<String> = HashSet::new();
     let mut cur: Option<ChurnPoint> = None;
 
     for e in events {
         match &e.kind {
             EventKind::UserMessage { .. } => {
+                // Close the current turn: graduate its paths into the cross-turn set.
+                seen_paths.extend(turn_paths.drain());
                 if let Some(p) = cur.take() {
                     points.push(p);
                 }
@@ -81,7 +88,9 @@ pub fn churn_timeline(events: &[Event]) -> ChurnTimeline {
                     if seen_paths.contains(&path) {
                         p.resent_tokens += estimate_tokens(&path).max(1);
                     }
-                    seen_paths.insert(path);
+                    // Track in turn_paths, not seen_paths, so same-turn duplicates
+                    // are visible here but don't affect the prior-turn membership test.
+                    turn_paths.insert(path);
                 }
             }
             _ => {}
@@ -90,6 +99,8 @@ pub fn churn_timeline(events: &[Event]) -> ChurnTimeline {
             p.tokens += t.input + t.output;
         }
     }
+    // Close the last turn.
+    seen_paths.extend(turn_paths.drain());
     if let Some(p) = cur.take() {
         points.push(p);
     }
@@ -181,12 +192,68 @@ mod tests {
         assert_eq!(t.points[0].resent_tokens, 0);  // first sight of a.rs
         assert_eq!(t.points[1].turn, 1);
         assert_eq!(t.points[1].tokens, 170);       // 140+30
-        // a.rs re-sent: estimate_tokens of its path-based cost is > 0
-        assert!(t.points[1].resent_tokens > 0);
+        // "src/a.rs" is 8 chars → ceil(8/4) = 2 tokens re-sent
+        assert_eq!(t.points[1].resent_tokens, 2);
+    }
+
+    fn toolcall_nopath(id: &str) -> Event {
+        Event::new(Ulid::new(), None, 0, EventKind::ToolCall {
+            id: id.into(), name: "list_files".into(),
+            args: r#"{"command":"ls"}"#.into(),
+        })
     }
 
     #[test]
     fn churn_empty_when_no_turns() {
         assert_eq!(churn_timeline(&[]), ChurnTimeline::default());
+    }
+
+    #[test]
+    fn churn_ignores_events_before_first_user_message() {
+        // Events arriving before any UserMessage have no active turn; they must
+        // be silently dropped (no panic, no phantom point).
+        let evs = vec![
+            toolcall_read("c0", "x.rs"),
+            usage(10, 5, 0),
+            umsg("turn 1"),
+            usage(20, 5, 0),
+        ];
+        let t = churn_timeline(&evs);
+        assert_eq!(t.points.len(), 1);
+        assert_eq!(t.points[0].tokens, 25); // only the turn-1 usage counts
+    }
+
+    #[test]
+    fn churn_no_path_key_causes_no_resent_bump() {
+        // A ToolCall whose args contain no recognised path key must not panic
+        // and must not affect resent_tokens.
+        let evs = vec![
+            umsg("turn 1"),
+            toolcall_nopath("c1"),
+            usage(50, 10, 0),
+        ];
+        let t = churn_timeline(&evs);
+        assert_eq!(t.points.len(), 1);
+        assert_eq!(t.points[0].resent_tokens, 0);
+    }
+
+    #[test]
+    fn churn_same_turn_duplicate_does_not_count_as_resent() {
+        // Reading the same path TWICE in ONE turn must not count as re-sent.
+        // Reading it again in a LATER turn must count.
+        let evs = vec![
+            umsg("turn 1"),
+            toolcall_read("c1", "dup.rs"),
+            toolcall_read("c2", "dup.rs"), // same turn → NOT resent
+            usage(100, 20, 0),
+            umsg("turn 2"),
+            toolcall_read("c3", "dup.rs"), // prior turn → IS resent
+            usage(80, 15, 0),
+        ];
+        let t = churn_timeline(&evs);
+        assert_eq!(t.points.len(), 2);
+        assert_eq!(t.points[0].resent_tokens, 0); // same-turn dup not counted
+        // "dup.rs" is 6 chars → ceil(6/4) = 2 tokens
+        assert_eq!(t.points[1].resent_tokens, 2);
     }
 }
