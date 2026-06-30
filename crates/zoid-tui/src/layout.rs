@@ -47,13 +47,15 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
     let conv_w = avail.min(MAX_MEASURE);
     let gutter_w = avail.saturating_sub(conv_w);
 
+    // Conversation flush-left; the measure-cap slack falls in a gutter *between*
+    // the stream and the rail, not to the left of the stream.
     let cols = Layout::horizontal([
-        Constraint::Length(gutter_w),
         Constraint::Length(conv_w),
+        Constraint::Length(gutter_w),
         Constraint::Length(rail_w),
     ])
     .split(body);
-    let conversation = cols[1];
+    let conversation = cols[0];
     let rail = if show_rail { Some(cols[2]) } else { None };
 
     // Drawer header rects: one row per drawer, stacked from the rail top (1-col inset).

@@ -25,6 +25,16 @@ fn chat_with_rail_frame() {
     insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
 }
 
+/// Wide frame: at >130 cols the measure-cap slack appears as a gutter. It must
+/// sit *between* the stream and the rail (stream flush-left), never to the left
+/// of the stream. The 100-col frames collapse this gutter to zero, so only a
+/// wide snapshot guards the ordering.
+#[test]
+fn chat_wide_gutter_frame() {
+    let s = ShellState::new();
+    insta::assert_snapshot!(draw(&s, &seeded(), 140, 24));
+}
+
 #[test]
 fn files_drawer_open_frame() {
     let mut s = ShellState::new();
