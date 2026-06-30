@@ -43,6 +43,11 @@ pub fn estimate_tokens(s: &str) -> u64 {
 pub struct ChurnPoint {
     pub turn: usize,
     pub tokens: u64,
+    /// Cross-turn re-sent cost. NOTE (P3): populated but not yet rendered — the
+    /// EconomyView sparkline maps only `tokens`; a later churn view surfaces this.
+    /// It currently sizes the re-sent file's *path string* (churn sees `ToolCall`
+    /// args, not the paired result body), so treat it as a re-send *signal*, not
+    /// an accurate wasted-token count, until the metric is reworked at that time.
     pub resent_tokens: u64,
 }
 
