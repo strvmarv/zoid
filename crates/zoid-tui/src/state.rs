@@ -2,6 +2,8 @@
 //! drawer stack. Terminal-free and unit-tested (spec §13). Rendering, layout,
 //! and routing all read from this; the `zoid` bin owns the side effects.
 
+use crate::tokens::glyph;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Chat,
@@ -70,7 +72,7 @@ impl ShellState {
     /// (economy ⑤ open as in the mockup; files/branch/palette collapsed).
     pub fn new() -> Self {
         let drawers = vec![
-            Drawer { id: DrawerId::Economy, title: "⑤ context · tokens".into(), keybind: "^5".into(), open: true },
+            Drawer { id: DrawerId::Economy, title: format!("{} context · tokens", glyph::CONTEXT), keybind: "^5".into(), open: true },
             Drawer { id: DrawerId::Files,   title: "files".into(),             keybind: "^F".into(), open: false },
             Drawer { id: DrawerId::Branch,  title: "branch".into(),            keybind: "^B".into(), open: false },
             Drawer { id: DrawerId::Palette, title: "palette".into(),           keybind: "^P".into(), open: false },

@@ -33,7 +33,7 @@ pub fn render_shell(
     match state.mode {
         Mode::Chat => {
             let body = conversation_lines(msgs, streaming);
-            frame.render_widget(Paragraph::new(body), layout.conversation);
+            frame.render_widget(Paragraph::new(body).scroll((state.conversation_scroll, 0)), layout.conversation);
         }
         Mode::Build => render_build_placeholder(frame, layout.conversation),
     }
@@ -162,11 +162,11 @@ fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
 
     // Render the full grouped list; highlight the selected *selectable* row.
     let mut lines: Vec<Line> = Vec::new();
-    let mut last_group = "";
+    let mut last_group = String::new();
     for (i, it) in items.iter().enumerate() {
         if it.group != last_group {
             lines.push(Line::styled(it.group.to_uppercase(), Style::new().fg(color::CHAT_ACCENT)));
-            last_group = it.group;
+            last_group = it.group.clone();
         }
         let is_sel = matches.get(sel) == Some(&i);
         lines.push(palette_row_line(it, is_sel));

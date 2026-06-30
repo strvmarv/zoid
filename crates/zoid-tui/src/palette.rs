@@ -9,7 +9,7 @@ use crate::tokens::glyph;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaletteItem {
-    pub group: &'static str,
+    pub group: String,
     pub icon: char,
     pub label: &'static str,
     pub hint: &'static str,
@@ -26,20 +26,20 @@ pub fn all_items(mode: Mode) -> Vec<PaletteItem> {
         Mode::Build => ("Switch to Chat", Command::SwitchMode(Mode::Chat)),
     };
     vec![
-        PaletteItem { group: "mode", icon: '⇢', label: mode_label, hint: "continue this conversation into the loop", keybind: "⇧Tab", command: Some(mode_cmd) },
+        PaletteItem { group: "mode".to_string(), icon: glyph::MODE_SWITCH, label: mode_label, hint: "continue this conversation into the loop", keybind: "⇧Tab", command: Some(mode_cmd) },
         // branch group — post-v1, disabled/dimmed
-        PaletteItem { group: "branch ⎇ · post-v1", icon: glyph::BRANCH, label: "Fork from here", hint: "new branch at this turn", keybind: ":fork", command: None },
-        PaletteItem { group: "branch ⎇ · post-v1", icon: '⤺', label: "Undo last turn", hint: "move head back", keybind: "u", command: None },
+        PaletteItem { group: format!("branch {} · post-v1", glyph::BRANCH), icon: glyph::BRANCH, label: "Fork from here", hint: "new branch at this turn", keybind: ":fork", command: None },
+        PaletteItem { group: format!("branch {} · post-v1", glyph::BRANCH), icon: glyph::UNDO, label: "Undo last turn", hint: "move head back", keybind: "u", command: None },
         // navigate
-        PaletteItem { group: "navigate", icon: '▤', label: "Open files drawer", hint: "browse the working tree", keybind: "^F", command: Some(Command::OpenDrawer(DrawerId::Files)) },
-        PaletteItem { group: "navigate", icon: glyph::BRANCH, label: "Open branch drawer", hint: "current branch", keybind: "^B", command: Some(Command::OpenDrawer(DrawerId::Branch)) },
+        PaletteItem { group: "navigate".to_string(), icon: glyph::OPEN, label: "Open files drawer", hint: "browse the working tree", keybind: "^F", command: Some(Command::OpenDrawer(DrawerId::Files)) },
+        PaletteItem { group: "navigate".to_string(), icon: glyph::BRANCH, label: "Open branch drawer", hint: "current branch", keybind: "^B", command: Some(Command::OpenDrawer(DrawerId::Branch)) },
         // context ⑤ — placeholder (real actions land P3), disabled for now
-        PaletteItem { group: "context ⑤ · P3", icon: '●', label: "Pin file to context", hint: "lands in P3", keybind: "", command: None },
-        PaletteItem { group: "context ⑤ · P3", icon: '✕', label: "Evict cold items", hint: "lands in P3", keybind: "", command: None },
+        PaletteItem { group: format!("context {} · P3", glyph::CONTEXT), icon: glyph::EDIT, label: "Pin file to context", hint: "lands in P3", keybind: "", command: None },
+        PaletteItem { group: format!("context {} · P3", glyph::CONTEXT), icon: glyph::EVICT, label: "Evict cold items", hint: "lands in P3", keybind: "", command: None },
         // settings
-        PaletteItem { group: "settings", icon: '◆', label: "Quit zoid", hint: "exit", keybind: "^C", command: Some(Command::Quit) },
+        PaletteItem { group: "settings".to_string(), icon: glyph::SETTINGS, label: "Quit zoid", hint: "exit", keybind: "^C", command: Some(Command::Quit) },
         // recipes — post-v1
-        PaletteItem { group: "recipes · post-v1", icon: '▷', label: "Run recipe…", hint: "post-v1", keybind: "", command: None },
+        PaletteItem { group: "recipes · post-v1".to_string(), icon: glyph::RECIPE, label: "Run recipe…", hint: "post-v1", keybind: "", command: None },
     ]
 }
 

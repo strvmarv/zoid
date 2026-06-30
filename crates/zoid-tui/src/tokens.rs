@@ -17,6 +17,13 @@ pub mod glyph {
     pub const WARNING: char = '⚠';
     pub const COLLAPSED: char = '▸';
     pub const EXPANDED: char = '▾';
+    pub const CONTEXT: char = '⑤';      // context-economy ⑤ motif
+    pub const MODE_SWITCH: char = '⇢';  // palette: switch mode
+    pub const UNDO: char = '⤺';         // palette: undo (post-v1)
+    pub const OPEN: char = '▤';         // palette: open file
+    pub const EVICT: char = '✕';        // palette: evict cold
+    pub const SETTINGS: char = '◆';     // palette: settings/quit
+    pub const RECIPE: char = '▷';       // palette: run recipe (post-v1)
 }
 
 /// Colors (visual-language table, spec §16 / docs/ux/README.md).

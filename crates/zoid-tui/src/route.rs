@@ -7,7 +7,7 @@
 use crate::command::{parse_command, Command};
 use crate::layout::{in_rect, ShellLayout};
 use crate::palette::{all_items, nav, selectable_matches};
-use crate::state::{DrawerId, Focus, Overlay, ShellState};
+use crate::state::{DrawerId, Focus, Mode, Overlay, ShellState};
 use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -69,6 +69,11 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
         KeyCode::BackTab => return Action::SwitchMode,
         KeyCode::Tab => return Action::FocusNext,
         _ => {}
+    }
+
+    // Esc returns to Chat from the Build surface (spec §6.2).
+    if state.mode == Mode::Build && key.code == KeyCode::Esc {
+        return Action::SwitchMode;
     }
 
     // 3. Focus-contextual.
@@ -284,5 +289,22 @@ mod tests {
             palette_selected_command(&s),
             Some(Command::SwitchMode(Mode::Build)),
         );
+    }
+
+    #[test]
+    fn esc_exits_build_mode() {
+        use crate::state::Mode;
+        let mut s = ShellState::new();
+        s.mode = Mode::Build;
+        // Esc in Build mode → SwitchMode (back to Chat).
+        assert_eq!(route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)), Action::SwitchMode);
+    }
+
+    #[test]
+    fn esc_in_chat_conversation_focus_returns_to_input() {
+        let mut s = ShellState::new(); // mode = Chat
+        s.focus = Focus::Conversation;
+        // Esc in Chat mode with Conversation focus → FocusRegion(Input) (unchanged).
+        assert_eq!(route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)), Action::FocusRegion(Focus::Input));
     }
 }
