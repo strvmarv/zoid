@@ -53,32 +53,51 @@ struct Acc {
     last_turn: usize,
 }
 
+fn upsert(
+    order: &mut Vec<String>,
+    acc: &mut HashMap<String, Acc>,
+    key: String,
+    label: String,
+    kind: ItemKind,
+    tokens: u64,
+    turn: usize,
+) {
+    let e = acc.entry(key.clone()).or_insert_with(|| {
+        order.push(key.clone());
+        Acc { key, label, kind, tokens: 0, refs: 0, last_turn: turn }
+    });
+    e.tokens = tokens; // latest content wins
+    e.refs += 1;
+    e.last_turn = turn;
+}
+
+/// Flush any accumulated ModelDelta text as a single assistant Message item.
+fn flush_delta(
+    delta_text: &mut Option<String>,
+    order: &mut Vec<String>,
+    acc: &mut HashMap<String, Acc>,
+    msg_seq: &mut usize,
+    turn: usize,
+) {
+    if let Some(text) = delta_text.take() {
+        let key = format!("msg:{msg_seq}");
+        *msg_seq += 1;
+        upsert(order, acc, key, truncate(&text, 40), ItemKind::Message, estimate_tokens(&text), turn);
+    }
+}
+
 pub fn context_window(events: &[Event]) -> ContextWindow {
     let mut order: Vec<String> = Vec::new(); // first-seen order of keys
     let mut acc: HashMap<String, Acc> = HashMap::new();
     let mut call_path: HashMap<String, String> = HashMap::new(); // tool id → path
     let mut turn: usize = 0;
     let mut msg_seq: usize = 0;
-
-    let upsert = |order: &mut Vec<String>,
-                  acc: &mut HashMap<String, Acc>,
-                  key: String,
-                  label: String,
-                  kind: ItemKind,
-                  tokens: u64,
-                  turn: usize| {
-        let e = acc.entry(key.clone()).or_insert_with(|| {
-            order.push(key.clone());
-            Acc { key, label, kind, tokens: 0, refs: 0, last_turn: turn }
-        });
-        e.tokens = tokens; // latest content wins
-        e.refs += 1;
-        e.last_turn = turn;
-    };
+    let mut delta_text: Option<String> = None; // accumulates consecutive ModelDelta runs
 
     for e in events {
         match &e.kind {
             EventKind::UserMessage { text } => {
+                flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn);
                 turn += 1;
                 let key = format!("msg:{msg_seq}");
                 msg_seq += 1;
@@ -93,6 +112,7 @@ pub fn context_window(events: &[Event]) -> ContextWindow {
                 );
             }
             EventKind::AssistantMessage { text } => {
+                flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn);
                 let key = format!("msg:{msg_seq}");
                 msg_seq += 1;
                 upsert(
@@ -105,25 +125,28 @@ pub fn context_window(events: &[Event]) -> ContextWindow {
                     turn,
                 );
             }
+            EventKind::ModelDelta { text } => {
+                // Accumulate into the current assistant turn; flushed at boundaries.
+                delta_text.get_or_insert_with(String::new).push_str(text);
+            }
             EventKind::ToolCall { id, args, .. } => {
                 if let Some(path) = tool_path(args) {
+                    // Record which path this call targets so the paired ToolResult
+                    // can upsert a File item. The ToolResult upsert is the sole
+                    // place refs is incremented (one ref per read, not two).
                     call_path.insert(id.clone(), path.clone());
-                    // a call targeting a known file counts as a reference (drives heat)
-                    let key = format!("file:{path}");
-                    if let Some(a) = acc.get_mut(&key) {
-                        a.refs += 1;
-                        a.last_turn = turn;
-                    }
                 }
             }
             EventKind::ToolResult { id, name, output, .. } => {
+                flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn);
                 if let Some(path) = call_path.get(id) {
                     let key = format!("file:{path}");
+                    let path = path.clone();
                     upsert(
                         &mut order,
                         &mut acc,
                         key,
-                        path.clone(),
+                        path,
                         ItemKind::File,
                         estimate_tokens(output),
                         turn,
@@ -144,6 +167,8 @@ pub fn context_window(events: &[Event]) -> ContextWindow {
             _ => {}
         }
     }
+    // Flush any trailing assistant delta after the last event.
+    flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn);
 
     let last_turn_global = turn;
     let mut items: Vec<ContextItem> = order
@@ -290,6 +315,52 @@ mod tests {
         assert_eq!(hot[0].heat, Heat::Hot);
     }
 
+    /// FIX 1: Each ToolResult upsert is the only refs increment.
+    /// Two reads → refs=2 → Warm (not Hot). Under the old double-count it
+    /// would be refs=3 → Hot, so this test discriminates the fix.
+    #[test]
+    fn two_reads_then_idle_is_warm_not_hot() {
+        // Two reads of the same file in turn 1.
+        let mut evs = vec![u("go")];
+        evs.push(call("c0", "read_file", "warm.rs"));
+        evs.push(result("c0", "read_file", "fn x() {}"));
+        evs.push(call("c1", "read_file", "warm.rs"));
+        evs.push(result("c1", "read_file", "fn x() {}"));
+        // 4 idle user-message turns push recency well past COLD_RECENCY_TURNS=3.
+        for i in 0..4 {
+            evs.push(u(&format!("idle {i}")));
+        }
+        let w = context_window(&evs);
+        let item = w.items.iter().find(|i| i.key == "file:warm.rs").unwrap();
+        // refs==2 → Warm; recency==4 > COLD_RECENCY_TURNS → not Hot by recency.
+        assert_eq!(item.heat, Heat::Warm, "two reads should yield Warm, not Hot (refs=2)");
+    }
+
+    /// FIX 2: A run of ModelDelta events collapses into exactly one Message item.
+    #[test]
+    fn model_delta_run_becomes_one_message_item() {
+        let evs = vec![
+            u("q"),
+            ev(EventKind::ModelDelta { text: "hel".into() }),
+            ev(EventKind::ModelDelta { text: "lo".into() }),
+            // Non-file ToolResult acts as a boundary that flushes the delta.
+            ev(EventKind::ToolResult {
+                id: "x".into(),
+                name: "shell".into(),
+                output: "ok".into(),
+                is_error: false,
+            }),
+        ];
+        let w = context_window(&evs);
+        let messages: Vec<_> = w.items.iter().filter(|i| i.kind == ItemKind::Message).collect();
+        // Exactly 2 Message items: user "q" and assistant "hello".
+        assert_eq!(messages.len(), 2, "expected user msg + one collapsed assistant msg");
+        let assistant = messages.iter().find(|i| i.label.contains("hello")).unwrap_or_else(|| {
+            panic!("no Message item with label containing 'hello'; items: {messages:?}")
+        });
+        assert_eq!(assistant.kind, ItemKind::Message);
+    }
+
     use proptest::prelude::*;
 
     proptest! {
@@ -302,9 +373,12 @@ mod tests {
             }
             let w = context_window(&evs);
             prop_assert_eq!(w.total_tokens, w.items.iter().map(|i| i.tokens).sum::<u64>());
-            // sorted desc
+            // sorted desc by tokens, tiebroken asc by key
             for pair in w.items.windows(2) {
-                prop_assert!(pair[0].tokens >= pair[1].tokens);
+                prop_assert!(
+                    pair[0].tokens > pair[1].tokens
+                        || (pair[0].tokens == pair[1].tokens && pair[0].key <= pair[1].key)
+                );
             }
         }
     }
