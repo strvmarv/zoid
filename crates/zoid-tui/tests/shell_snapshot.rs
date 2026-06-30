@@ -2,7 +2,7 @@ use ratatui::{backend::TestBackend, Terminal};
 use tui_textarea::TextArea;
 use zoid_core::projection::ChatMsg;
 use zoid_tui::render_shell;
-use zoid_tui::state::{DrawerId, Mode, Overlay, ShellState};
+use zoid_tui::state::{DrawerId, Focus, Mode, Overlay, ShellState};
 use zoid_tui::EconomyView;
 use zoid_core::context::ContextWindow;
 use zoid_core::economy::{ChurnTimeline, TokenLedger};
@@ -116,4 +116,11 @@ fn economy_drawer_frame() {
 fn economy_drawer_wide_frame() {
     let s = ShellState::new();
     insta::assert_snapshot!(draw_econ(&s, &seeded_economy(), &seeded(), 140, 24));
+}
+
+#[test]
+fn economy_drawer_selected_frame() {
+    let mut s = ShellState::new();
+    s.focus = Focus::Rail;
+    insta::assert_snapshot!(draw_econ(&s, &seeded_economy(), &seeded(), 100, 24));
 }

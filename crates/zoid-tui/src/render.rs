@@ -159,10 +159,13 @@ fn render_economy_body(frame: &mut Frame, econ: &EconomyView, area: Rect, rail_f
         Span::styled(econ.churn.clone(), Style::new().fg(color::CHAT_ACCENT)),
     ]));
     let check = if econ.auto_evict_cold { "[x]" } else { "[ ]" };
+    let left = format!("{check} evict cold");
     let ledger_color = if econ.over_ceiling { color::WARN } else { color::DIM };
+    let pad = (area.width as usize)
+        .saturating_sub(left.chars().count() + econ.ledger.chars().count());
     lines.push(Line::from(vec![
-        Span::styled(format!("{check} evict cold  "), Style::new().fg(color::DIM)),
-        Span::styled(econ.ledger.clone(), Style::new().fg(ledger_color)),
+        Span::styled(left, Style::new().fg(color::DIM)),
+        Span::styled(format!("{}{}", " ".repeat(pad), econ.ledger), Style::new().fg(ledger_color)),
     ]));
     frame.render_widget(Paragraph::new(lines), area);
 }
