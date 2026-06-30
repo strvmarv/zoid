@@ -78,22 +78,16 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
             (KeyCode::Enter, _) => Action::Submit,
             _ => Action::Edit(key),
         },
-        Focus::Conversation | Focus::Rail => match key.code {
+        Focus::Conversation => match key.code {
             KeyCode::Char(':') => Action::OpenCommandLine,
-            KeyCode::Char('j') | KeyCode::Down => {
-                if state.focus == Focus::Rail {
-                    Action::Noop // rail item nav lands with economy content (P3)
-                } else {
-                    Action::ScrollConversation(1)
-                }
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if state.focus == Focus::Rail {
-                    Action::Noop
-                } else {
-                    Action::ScrollConversation(-1)
-                }
-            }
+            KeyCode::Char('j') | KeyCode::Down => Action::ScrollConversation(1),
+            KeyCode::Char('k') | KeyCode::Up => Action::ScrollConversation(-1),
+            KeyCode::Esc => Action::FocusRegion(Focus::Input),
+            _ => Action::Noop,
+        },
+        Focus::Rail => match key.code {
+            // Rail j/k item-nav lands with economy content in P3 — Noop for now.
+            KeyCode::Char(':') => Action::OpenCommandLine,
             KeyCode::Esc => Action::FocusRegion(Focus::Input),
             _ => Action::Noop,
         },
@@ -139,21 +133,25 @@ pub fn hit_test(layout: &ShellLayout, col: u16, row: u16) -> Target {
 }
 
 pub fn route_mouse(state: &ShellState, layout: &ShellLayout, m: MouseEvent) -> Action {
-    match m.kind {
-        MouseEventKind::ScrollDown => return Action::ScrollConversation(1),
-        MouseEventKind::ScrollUp => return Action::ScrollConversation(-1),
-        MouseEventKind::Down(MouseButton::Left) => {}
-        _ => return Action::Noop,
-    }
-    // While an overlay is up, a click outside it dismisses (scrim behavior).
+    // Dismiss modal overlays on any click or scroll.
     if state.overlay != Overlay::None {
-        return Action::CloseOverlay;
+        return match m.kind {
+            MouseEventKind::Down(MouseButton::Left)
+            | MouseEventKind::ScrollDown
+            | MouseEventKind::ScrollUp => Action::CloseOverlay,
+            _ => Action::Noop,
+        };
     }
-    match hit_test(layout, m.column, m.row) {
-        Target::DrawerHeader(id) => Action::ToggleDrawer(id),
-        Target::Input => Action::FocusRegion(Focus::Input),
-        Target::Conversation => Action::FocusRegion(Focus::Conversation),
-        Target::None => Action::Noop,
+    match m.kind {
+        MouseEventKind::ScrollDown => Action::ScrollConversation(1),
+        MouseEventKind::ScrollUp => Action::ScrollConversation(-1),
+        MouseEventKind::Down(MouseButton::Left) => match hit_test(layout, m.column, m.row) {
+            Target::DrawerHeader(id) => Action::ToggleDrawer(id),
+            Target::Input => Action::FocusRegion(Focus::Input),
+            Target::Conversation => Action::FocusRegion(Focus::Conversation),
+            Target::None => Action::Noop,
+        },
+        _ => Action::Noop,
     }
 }
 
@@ -211,11 +209,14 @@ mod tests {
     fn overlay_captures_keys_first() {
         let mut s = ShellState::new();
         s.overlay = Overlay::Palette;
-        // ^C no longer quits while palette is up — it's a non-char combo → Noop
+        // ^C no longer quits while palette is up — the CONTROL guard rejects it from the char arm → Noop
         assert_eq!(route_key(&s, key(KeyCode::Char('c'), KeyModifiers::CONTROL)), Action::Noop);
         assert_eq!(route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)), Action::CloseOverlay);
         assert_eq!(route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)), Action::PaletteRun);
         assert_eq!(route_key(&s, key(KeyCode::Char('x'), KeyModifiers::NONE)), Action::PaletteChar('x'));
+        // Same guard applies to CommandLine overlay.
+        s.overlay = Overlay::CommandLine;
+        assert_eq!(route_key(&s, key(KeyCode::Char('c'), KeyModifiers::CONTROL)), Action::Noop);
     }
 
     #[test]
@@ -233,7 +234,7 @@ mod tests {
     fn hit_test_drawer_header_and_panes() {
         let s = ShellState::new();
         let l = compute(Rect { x: 0, y: 0, width: 100, height: 24 }, &s);
-        let (id, r) = l.drawer_headers[1]; // files
+        let (id, r) = *l.drawer_headers.iter().find(|(id, _)| *id == DrawerId::Files).unwrap();
         assert_eq!(hit_test(&l, r.x, r.y), Target::DrawerHeader(id));
         assert_eq!(hit_test(&l, l.input.x, l.input.y), Target::Input);
         assert_eq!(hit_test(&l, l.conversation.x, l.conversation.y), Target::Conversation);
@@ -243,7 +244,7 @@ mod tests {
     fn mouse_click_toggles_drawer_and_focuses() {
         let s = ShellState::new();
         let l = compute(Rect { x: 0, y: 0, width: 100, height: 24 }, &s);
-        let (id, r) = l.drawer_headers[1];
+        let (id, r) = *l.drawer_headers.iter().find(|(id, _)| *id == DrawerId::Files).unwrap();
         let click = |c, row| MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: c, row, modifiers: KeyModifiers::NONE };
         assert_eq!(route_mouse(&s, &l, click(r.x, r.y)), Action::ToggleDrawer(id));
         assert_eq!(route_mouse(&s, &l, click(l.input.x, l.input.y)), Action::FocusRegion(Focus::Input));
@@ -256,5 +257,32 @@ mod tests {
         let l = compute(Rect { x: 0, y: 0, width: 100, height: 24 }, &s);
         let click = MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 0, row: 23, modifiers: KeyModifiers::NONE };
         assert_eq!(route_mouse(&s, &l, click), Action::CloseOverlay);
+    }
+
+    #[test]
+    fn route_mouse_scroll_moves_conversation() {
+        let s = ShellState::new();
+        let l = compute(Rect { x: 0, y: 0, width: 100, height: 24 }, &s);
+        let scroll_down = MouseEvent { kind: MouseEventKind::ScrollDown, column: 10, row: 10, modifiers: KeyModifiers::NONE };
+        let scroll_up = MouseEvent { kind: MouseEventKind::ScrollUp, column: 10, row: 10, modifiers: KeyModifiers::NONE };
+        // No overlay: scroll drives conversation.
+        assert_eq!(route_mouse(&s, &l, scroll_down), Action::ScrollConversation(1));
+        assert_eq!(route_mouse(&s, &l, scroll_up), Action::ScrollConversation(-1));
+        // With overlay up: scroll dismisses instead of leaking through to the conversation.
+        let mut s2 = ShellState::new();
+        s2.overlay = Overlay::Palette;
+        assert_eq!(route_mouse(&s2, &l, scroll_down), Action::CloseOverlay);
+    }
+
+    #[test]
+    fn palette_selected_command_resolves_highlighted_row() {
+        use crate::state::Mode;
+        let mut s = ShellState::new(); // mode = Chat
+        s.palette.query = "build".into();
+        s.palette.selected = 0;
+        assert_eq!(
+            palette_selected_command(&s),
+            Some(Command::SwitchMode(Mode::Build)),
+        );
     }
 }
