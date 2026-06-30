@@ -48,8 +48,16 @@ const CAPTURES: &[(&str, HlKind)] = &[
 fn highlights_query(lang: Language) -> Option<&'static str> {
     match lang {
         Language::Rust => Some(tree_sitter_rust::HIGHLIGHTS_QUERY),
-        // toml/json/yaml/markdown queries are added in Task 4.
-        _ => None,
+        Language::Json => Some(tree_sitter_json::HIGHLIGHTS_QUERY),
+        Language::Toml => Some(tree_sitter_toml_ng::HIGHLIGHTS_QUERY),
+        Language::Yaml => Some(tree_sitter_yaml::HIGHLIGHTS_QUERY),
+        // tree-sitter-md's block grammar exports its highlights query as
+        // HIGHLIGHT_QUERY_BLOCK (singular "HIGHLIGHT", not "HIGHLIGHTS"), and
+        // its captures (@text.title, @punctuation.special, @text.literal, ...)
+        // don't map cleanly onto the six §16 buckets here. Markdown
+        // parse/symbols/fold still work via `ts_language`; highlight is
+        // best-effort/empty for P4a per the task brief.
+        Language::Markdown | Language::PlainText => None,
     }
 }
 
@@ -151,5 +159,18 @@ mod tests {
             highlight("anything at all", Language::PlainText),
             Vec::new()
         );
+    }
+
+    #[test]
+    fn markdown_parses_but_highlight_gracefully_degrades_to_empty() {
+        // Markdown's grammar is wired (parse/symbols/fold work), but its
+        // block highlights query captures (@text.title, @text.literal, ...)
+        // don't map onto the six §16 buckets, so `highlights_query` returns
+        // `None` for Markdown by design (see `highlights_query` comment).
+        // This is the same "no panic, empty spans" contract as `PlainText`,
+        // just reached via a different path (config() returning None because
+        // the query is absent rather than because the grammar is absent).
+        assert!(crate::parse("# Title\n", Language::Markdown).is_some());
+        assert_eq!(highlight("# Title\n", Language::Markdown), Vec::new());
     }
 }

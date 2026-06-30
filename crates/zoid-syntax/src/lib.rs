@@ -38,12 +38,18 @@ impl Language {
     }
 }
 
-/// The tree-sitter grammar for a language, or `None` for `PlainText` and any
-/// grammar not yet wired in (Task 4 adds toml/json/yaml/markdown).
+/// The tree-sitter grammar for a language, or `None` for `PlainText`.
 pub(crate) fn ts_language(lang: Language) -> Option<tree_sitter::Language> {
     match lang {
         Language::Rust => Some(tree_sitter_rust::LANGUAGE.into()),
-        _ => None,
+        Language::Json => Some(tree_sitter_json::LANGUAGE.into()),
+        Language::Toml => Some(tree_sitter_toml_ng::LANGUAGE.into()),
+        Language::Yaml => Some(tree_sitter_yaml::LANGUAGE.into()),
+        // tree-sitter-md exposes a block-level LANGUAGE (and a separate
+        // INLINE_LANGUAGE for inline content); block-level parse/symbols/fold
+        // is acceptable for P4a per the task brief.
+        Language::Markdown => Some(tree_sitter_md::LANGUAGE.into()),
+        Language::PlainText => None,
     }
 }
 
@@ -80,5 +86,38 @@ mod tests {
     #[test]
     fn plaintext_does_not_parse() {
         assert!(parse("anything", Language::PlainText).is_none());
+    }
+
+    #[test]
+    fn bundled_grammars_parse_their_languages() {
+        // Each bundled grammar must parse a trivial doc to a non-error root.
+        assert!(parse("{\"k\": 1}\n", Language::Json).is_some());
+        assert!(parse("k = 1\n", Language::Toml).is_some());
+        assert!(parse("k: 1\n", Language::Yaml).is_some());
+        assert!(parse("# Title\n", Language::Markdown).is_some());
+    }
+
+    #[test]
+    fn json_highlights_strings_and_numbers() {
+        use crate::highlight::{highlight, HlKind};
+        let spans = highlight("{\"name\": 42}\n", Language::Json);
+        assert!(spans.iter().any(|s| s.kind == HlKind::Str));
+        assert!(spans.iter().any(|s| s.kind == HlKind::Number));
+    }
+
+    #[test]
+    fn toml_and_yaml_emit_some_highlight_spans() {
+        use crate::highlight::highlight;
+        // Don't over-assert capture kinds (grammar query names vary); just prove the
+        // wired query actually produces spans, so a misnamed HIGHLIGHTS_QUERY (which
+        // silently yields zero spans) is caught instead of passing as "no highlight".
+        assert!(
+            !highlight("k = \"v\"\n", Language::Toml).is_empty(),
+            "toml emits spans"
+        );
+        assert!(
+            !highlight("k: \"v\"\n", Language::Yaml).is_empty(),
+            "yaml emits spans"
+        );
     }
 }
