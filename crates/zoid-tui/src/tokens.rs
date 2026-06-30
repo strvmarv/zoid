@@ -15,6 +15,8 @@ pub mod glyph {
     pub const SHIFT: char = '⇧';
     pub const RETURN: char = '⏎';
     pub const WARNING: char = '⚠';
+    pub const COLLAPSED: char = '▸';
+    pub const EXPANDED: char = '▾';
 }
 
 /// Colors (visual-language table, spec §16 / docs/ux/README.md).
@@ -28,6 +30,9 @@ pub mod color {
     pub const BRANCH: Color = Color::Rgb(0xbc, 0x8c, 0xff);
     pub const DIM: Color = Color::Rgb(0x6e, 0x76, 0x81);
     pub const TXT: Color = Color::Rgb(0xc9, 0xd1, 0xd9);
+    pub const SEL_BG: Color = Color::Rgb(0x16, 0x33, 0x5c);
+    pub const CHAT_BG: Color = Color::Rgb(0x0d, 0x2a, 0x4d);
+    pub const BUILD_BG: Color = Color::Rgb(0x3d, 0x2a, 0x0a);
 }
 
 #[cfg(test)]
@@ -41,5 +46,14 @@ mod tests {
         assert_eq!(glyph::USER_TURN, '›');
         assert_eq!(color::CHAT_ACCENT, Color::Rgb(0x58, 0xa6, 0xff));
         assert_eq!(color::OK, Color::Rgb(0x3f, 0xb9, 0x50));
+    }
+
+    #[test]
+    fn p2_tokens_present() {
+        assert_eq!(glyph::COLLAPSED, '▸');
+        assert_eq!(glyph::EXPANDED, '▾');
+        assert_eq!(color::SEL_BG, Color::Rgb(0x16, 0x33, 0x5c));
+        assert_eq!(color::CHAT_BG, Color::Rgb(0x0d, 0x2a, 0x4d));
+        assert_eq!(color::BUILD_BG, Color::Rgb(0x3d, 0x2a, 0x0a));
     }
 }
