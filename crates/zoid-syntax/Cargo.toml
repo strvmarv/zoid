@@ -9,4 +9,4 @@ tree-sitter-highlight = "0.24"
 tree-sitter-rust = "0.23"
 
 [dev-dependencies]
-# (none yet; proptest added in Task 3)
+proptest = { workspace = true }

@@ -2240,6 +2240,7 @@ dependencies = [
 name = "zoid-syntax"
 version = "0.0.0"
 dependencies = [
+ "proptest",
  "tree-sitter",
  "tree-sitter-highlight",
  "tree-sitter-rust",

@@ -6,6 +6,9 @@
 pub mod highlight;
 pub use highlight::{highlight, HlKind, HlSpan};
 
+pub mod symbols;
+pub use symbols::{fold_regions, symbols, FoldRegion, Symbol, SymbolKind};
+
 /// Languages with a bundled tree-sitter grammar (spec §16 grammar set:
 /// rust/toml/json/yaml/markdown). Everything else is `PlainText` and degrades
 /// gracefully (no highlight/symbols/fold).
