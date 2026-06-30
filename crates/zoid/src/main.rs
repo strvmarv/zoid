@@ -244,6 +244,8 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             let next = app.shell.conversation_scroll as i32 + d;
             app.shell.conversation_scroll = next.max(0) as u16;
         }
+        Action::ZoomIn => app.shell.zoom_in(),
+        Action::ZoomOut => app.shell.zoom_out(),
         Action::Newline => app.textarea.insert_newline(),
         Action::Edit(key) => { app.textarea.input(key); }
         Action::Submit => {

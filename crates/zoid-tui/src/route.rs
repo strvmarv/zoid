@@ -32,6 +32,8 @@ pub enum Action {
     /// Run the command line buffer (parsed into a `Command`).
     RunCommand(Command),
     ScrollConversation(i32),
+    ZoomIn,
+    ZoomOut,
     Submit,
     Newline,
     Edit(KeyEvent),
@@ -84,6 +86,8 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
             _ => Action::Edit(key),
         },
         Focus::Conversation => match key.code {
+            KeyCode::Char('=') | KeyCode::Char('+') => Action::ZoomIn,
+            KeyCode::Char('-') | KeyCode::Char('_') => Action::ZoomOut,
             KeyCode::Char(':') => Action::OpenCommandLine,
             KeyCode::Char('j') | KeyCode::Down => Action::ScrollConversation(1),
             KeyCode::Char('k') | KeyCode::Up => Action::ScrollConversation(-1),
@@ -148,6 +152,8 @@ pub fn route_mouse(state: &ShellState, layout: &ShellLayout, m: MouseEvent) -> A
         };
     }
     match m.kind {
+        MouseEventKind::ScrollUp if m.modifiers.contains(KeyModifiers::CONTROL) => Action::ZoomIn,
+        MouseEventKind::ScrollDown if m.modifiers.contains(KeyModifiers::CONTROL) => Action::ZoomOut,
         MouseEventKind::ScrollDown => Action::ScrollConversation(1),
         MouseEventKind::ScrollUp => Action::ScrollConversation(-1),
         MouseEventKind::Down(MouseButton::Left) => match hit_test(layout, m.column, m.row) {
@@ -306,5 +312,26 @@ mod tests {
         s.focus = Focus::Conversation;
         // Esc in Chat mode with Conversation focus → FocusRegion(Input) (unchanged).
         assert_eq!(route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)), Action::FocusRegion(Focus::Input));
+    }
+
+    #[test]
+    fn zoom_keys_route_in_conversation_focus() {
+        let mut s = ShellState::new();
+        s.focus = Focus::Conversation;
+        assert_eq!(route_key(&s, key(KeyCode::Char('='), KeyModifiers::NONE)), Action::ZoomIn);
+        assert_eq!(route_key(&s, key(KeyCode::Char('+'), KeyModifiers::NONE)), Action::ZoomIn);
+        assert_eq!(route_key(&s, key(KeyCode::Char('-'), KeyModifiers::NONE)), Action::ZoomOut);
+    }
+
+    #[test]
+    fn ctrl_scroll_zooms_plain_scroll_scrolls() {
+        let s = ShellState::new();
+        let l = compute(Rect { x: 0, y: 0, width: 100, height: 24 }, &s);
+        let ev = |kind, mods| MouseEvent { kind, column: 10, row: 10, modifiers: mods };
+        // ctrl + scroll → zoom
+        assert_eq!(route_mouse(&s, &l, ev(MouseEventKind::ScrollUp, KeyModifiers::CONTROL)), Action::ZoomIn);
+        assert_eq!(route_mouse(&s, &l, ev(MouseEventKind::ScrollDown, KeyModifiers::CONTROL)), Action::ZoomOut);
+        // plain scroll → conversation scroll (unchanged)
+        assert_eq!(route_mouse(&s, &l, ev(MouseEventKind::ScrollDown, KeyModifiers::NONE)), Action::ScrollConversation(1));
     }
 }
