@@ -37,6 +37,13 @@ pub enum Action {
     Submit,
     Newline,
     Edit(KeyEvent),
+    OpenObjects,
+    ObjectMove(i32),
+    ObjectPick,
+    VerbMove(i32),
+    VerbPick,
+    /// From the verb picker, step back to the object picker (not fully out).
+    VerbBack,
     Noop,
 }
 
@@ -57,6 +64,8 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
     match state.overlay {
         Overlay::Palette => return route_palette_key(key),
         Overlay::CommandLine => return route_cmdline_key(state, key),
+        Overlay::Objects => return route_objects_key(key),
+        Overlay::Verbs => return route_verbs_key(key),
         Overlay::None => {}
     }
 
@@ -66,6 +75,9 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
     }
     if ctrl(&key, 'p') {
         return Action::OpenPalette;
+    }
+    if ctrl(&key, 'o') {
+        return Action::OpenObjects;
     }
     match key.code {
         KeyCode::BackTab => return Action::SwitchMode,
@@ -121,6 +133,26 @@ fn route_cmdline_key(state: &ShellState, key: KeyEvent) -> Action {
         KeyCode::Enter => Action::RunCommand(parse_command(&state.cmdline.buffer)),
         KeyCode::Backspace => Action::CmdlineBackspace,
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => Action::CmdlineChar(c),
+        _ => Action::Noop,
+    }
+}
+
+fn route_objects_key(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => Action::CloseOverlay,
+        KeyCode::Enter => Action::ObjectPick,
+        KeyCode::Up => Action::ObjectMove(-1),
+        KeyCode::Down => Action::ObjectMove(1),
+        _ => Action::Noop,
+    }
+}
+
+fn route_verbs_key(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => Action::VerbBack, // step back to the object picker, not fully out
+        KeyCode::Enter => Action::VerbPick,
+        KeyCode::Up => Action::VerbMove(-1),
+        KeyCode::Down => Action::VerbMove(1),
         _ => Action::Noop,
     }
 }
@@ -321,6 +353,32 @@ mod tests {
         assert_eq!(route_key(&s, key(KeyCode::Char('='), KeyModifiers::NONE)), Action::ZoomIn);
         assert_eq!(route_key(&s, key(KeyCode::Char('+'), KeyModifiers::NONE)), Action::ZoomIn);
         assert_eq!(route_key(&s, key(KeyCode::Char('-'), KeyModifiers::NONE)), Action::ZoomOut);
+    }
+
+    #[test]
+    fn ctrl_o_opens_object_overlay() {
+        let s = ShellState::new();
+        assert_eq!(route_key(&s, key(KeyCode::Char('o'), KeyModifiers::CONTROL)), Action::OpenObjects);
+    }
+
+    #[test]
+    fn object_overlay_navigates_and_picks() {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Objects;
+        assert_eq!(route_key(&s, key(KeyCode::Down, KeyModifiers::NONE)), Action::ObjectMove(1));
+        assert_eq!(route_key(&s, key(KeyCode::Up, KeyModifiers::NONE)), Action::ObjectMove(-1));
+        assert_eq!(route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)), Action::ObjectPick);
+        assert_eq!(route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)), Action::CloseOverlay);
+    }
+
+    #[test]
+    fn verb_overlay_navigates_and_picks() {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Verbs;
+        assert_eq!(route_key(&s, key(KeyCode::Down, KeyModifiers::NONE)), Action::VerbMove(1));
+        assert_eq!(route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)), Action::VerbPick);
+        // Esc steps BACK to the object picker, not all the way out.
+        assert_eq!(route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)), Action::VerbBack);
     }
 
     #[test]

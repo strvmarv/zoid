@@ -308,6 +308,37 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             app.streaming = true;
             spawn_turn(app);
         }
+        // Object-first picker (P4d ④) — overlay/selection plumbing only. The
+        // verb pick's prompt-compose-and-queue behavior is P4d T4; until then
+        // Enter on a verb just closes the overlay.
+        Action::OpenObjects => {
+            app.shell.overlay = zoid_tui::Overlay::Objects;
+            app.shell.objects = Default::default();
+        }
+        Action::ObjectMove(d) => {
+            let n = zoid_tui::objects::selectable_objects(&conversation(&app.events)).len();
+            app.shell.objects.obj_selected = zoid_tui::palette::nav(app.shell.objects.obj_selected, d, n);
+        }
+        Action::ObjectPick => {
+            // Advance to the verb picker — but only if there's an object to act
+            // on (otherwise the verb picker would show "(no object)").
+            if !zoid_tui::objects::selectable_objects(&conversation(&app.events)).is_empty() {
+                app.shell.overlay = zoid_tui::Overlay::Verbs;
+                app.shell.objects.verb_selected = 0;
+            }
+        }
+        Action::VerbBack => {
+            // Step back to the object picker (keeps the object selection).
+            app.shell.overlay = zoid_tui::Overlay::Objects;
+        }
+        Action::VerbMove(d) => {
+            let objs = zoid_tui::objects::selectable_objects(&conversation(&app.events));
+            let sel = zoid_tui::palette::nav(app.shell.objects.obj_selected, 0, objs.len());
+            let n = objs.get(sel).map(|o| zoid_tui::objects::verbs_for(o.kind).len()).unwrap_or(0);
+            app.shell.objects.verb_selected = zoid_tui::palette::nav(app.shell.objects.verb_selected, d, n);
+        }
+        // TODO(P4d T4): compose the scoped prompt into the input + status_hint.
+        Action::VerbPick => app.shell.close_overlay(),
         Action::Noop => {}
     }
     Ok(false)

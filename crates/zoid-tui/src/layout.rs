@@ -94,7 +94,7 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
     }
 
     // Overlays (rendered on top; rects only — content in Task 8).
-    let palette = if state.overlay == Overlay::Palette {
+    let palette = if matches!(state.overlay, Overlay::Palette | Overlay::Objects | Overlay::Verbs) {
         Some(centered(area, 72, 18))
     } else {
         None
@@ -164,6 +164,15 @@ mod tests {
         let p = l.palette.unwrap();
         assert!(in_rect(p, p.x + 1, p.y + 1)); // sane non-empty rect
         assert!(p.width <= 100 && p.height <= 24);
+    }
+
+    #[test]
+    fn overlay_rect_present_for_object_and_verb_pickers() {
+        for ov in [Overlay::Objects, Overlay::Verbs] {
+            let mut s = ShellState::new();
+            s.overlay = ov;
+            assert!(compute(area(100, 24), &s).palette.is_some(), "{ov:?} needs a rect");
+        }
     }
 
     #[test]

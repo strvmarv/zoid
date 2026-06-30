@@ -32,6 +32,8 @@ pub enum Overlay {
     None,
     Palette,
     CommandLine,
+    Objects,
+    Verbs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +63,14 @@ pub struct CmdlineState {
     pub buffer: String,
 }
 
+/// Object-first picker state (spec ④): which object/verb row is highlighted
+/// across the two-step Objects → Verbs overlay.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ObjectState {
+    pub obj_selected: usize,
+    pub verb_selected: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellState {
     pub mode: Mode,
@@ -70,6 +80,7 @@ pub struct ShellState {
     pub rail_visible: bool,
     pub palette: PaletteState,
     pub cmdline: CmdlineState,
+    pub objects: ObjectState,
     pub conversation_scroll: u16,
     /// cwd entries shown in the Files drawer (populated by the bin; pure for tests).
     pub files: Vec<String>,
@@ -80,6 +91,10 @@ pub struct ShellState {
     pub reduced_motion: bool,
     /// Conversation altitude (spec ① semantic zoom).
     pub zoom: Zoom,
+    /// Transient one-line hint shown in the status bar (e.g. the ④ "queued · P5"
+    /// notice). Lives on `ShellState` (not `App`) so the pure renderer can read
+    /// it directly. Setting/clearing it on a verb pick is bin wiring (P4d T4).
+    pub status_hint: Option<String>,
 }
 
 impl ShellState {
@@ -100,11 +115,13 @@ impl ShellState {
             rail_visible: true,
             palette: PaletteState::default(),
             cmdline: CmdlineState::default(),
+            objects: ObjectState::default(),
             conversation_scroll: 0,
             files: Vec::new(),
             branch: "main".into(),
             reduced_motion: false,
             zoom: Zoom::Normal,
+            status_hint: None,
         }
     }
 
@@ -157,6 +174,7 @@ impl ShellState {
         self.overlay = Overlay::None;
         self.palette = PaletteState::default();
         self.cmdline = CmdlineState::default();
+        self.objects = ObjectState::default();
     }
 
     /// Increase detail (Summary → Normal → Detail), saturating.
@@ -268,6 +286,22 @@ mod tests {
         assert_eq!(s.overlay, Overlay::None);
         assert_eq!(s.palette, PaletteState::default());
         assert_eq!(s.cmdline, CmdlineState::default());
+    }
+
+    #[test]
+    fn close_overlay_resets_object_state() {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Verbs;
+        s.objects.obj_selected = 2;
+        s.objects.verb_selected = 1;
+        s.close_overlay();
+        assert_eq!(s.overlay, Overlay::None);
+        assert_eq!(s.objects, ObjectState::default());
+    }
+
+    #[test]
+    fn new_has_no_status_hint() {
+        assert!(ShellState::new().status_hint.is_none());
     }
 
     #[test]

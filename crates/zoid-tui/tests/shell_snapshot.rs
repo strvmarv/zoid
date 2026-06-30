@@ -215,3 +215,52 @@ fn zoom_detail_frame() {
 fn zoom_detail_wide_frame() {
     insta::assert_snapshot!(draw_zoom(Zoom::Detail, 140, 24));
 }
+
+// Object/verb picker overlays (P4d Task 3). Seed a file read + an error so the
+// object picker has all three kinds (File/Symbol/Error) to list, and the verb
+// picker has a real scoped verb set for the first (selected) object.
+fn seeded_objects() -> Vec<ChatMsg> {
+    vec![
+        ChatMsg::Assistant {
+            text: String::new(),
+            tool_calls: vec![ToolCallRef { id: "c1".into(), name: "read_file".into(), args: r#"{"path":"src/ast.rs"}"#.into() }],
+        },
+        ChatMsg::ToolResult { id: "c1".into(), name: "read_file".into(), output: "fn parse() {}\nstruct Ast {}\n".into(), is_error: false },
+        ChatMsg::ToolResult { id: "c2".into(), name: "shell".into(), output: "FAILED\n".into(), is_error: true },
+    ]
+}
+
+/// Buffer-Debug snapshot (style + glyphs), per the snapshot standard used by
+/// `draw_zoom` above — `to_string()` alone would hide the `SEL_BG` selection
+/// highlight on the picker's selected row.
+fn draw_overlay(overlay: Overlay, w: u16, h: u16) -> String {
+    let mut s = ShellState::new();
+    s.overlay = overlay;
+    let input = TextArea::default();
+    let backend = TestBackend::new(w, h);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|f| render_shell(f, &s, &empty_economy(), &seeded_objects(), &input, false, &normal_view()))
+        .unwrap();
+    format!("{:#?}", terminal.backend().buffer())
+}
+
+#[test]
+fn object_overlay_frame() {
+    insta::assert_snapshot!(draw_overlay(Overlay::Objects, 100, 24));
+}
+
+#[test]
+fn object_overlay_wide_frame() {
+    insta::assert_snapshot!(draw_overlay(Overlay::Objects, 140, 24));
+}
+
+#[test]
+fn verb_overlay_frame() {
+    insta::assert_snapshot!(draw_overlay(Overlay::Verbs, 100, 24));
+}
+
+#[test]
+fn verb_overlay_wide_frame() {
+    insta::assert_snapshot!(draw_overlay(Overlay::Verbs, 140, 24));
+}
