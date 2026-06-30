@@ -14,6 +14,9 @@ use zoid_core::session::SessionHandle;
 use zoid_provider::{CompletionRequest, Message, Provider, ProviderEvent, ToolCall, ToolSpec};
 use zoid_tools::Tool;
 
+/// Warning glyph used in agent-generated error messages; avoids a TUI-layer dep.
+const WARN_GLYPH: char = '⚠';
+
 /// System prompt for Chat-mode turns.
 pub const SYSTEM_PROMPT: &str =
     "You are zoid, a terminal coding assistant. Be concise and precise. \
@@ -71,13 +74,33 @@ pub fn build_request(events: &[Event], model: &str, tools: &[Box<dyn Tool>]) -> 
 /// Run one user-message-to-completion agent turn. `seed_events` is the current
 /// log snapshot (including the just-appended user message). Every event this
 /// produces is persisted via `session` and announced via `ui`.
+///
+/// `TurnComplete` is sent on EVERY exit path — including session/IO errors —
+/// so the UI never gets stuck in the `streaming` state.
 pub async fn run_agent_turn(
+    provider: Arc<dyn Provider>,
+    tools: Arc<Vec<Box<dyn Tool>>>,
+    session: SessionHandle,
+    events: Vec<Event>,
+    model: String,
+    ui: mpsc::Sender<AgentUpdate>,
+    now: fn() -> i64,
+) -> Result<()> {
+    let result = run_turn_inner(provider, tools, session, events, model, &ui, now).await;
+    // Best-effort: if the receiver is already gone we still return the inner result.
+    let _ = ui.send(AgentUpdate::TurnComplete).await;
+    result
+}
+
+/// Inner loop — separated so `run_agent_turn` can send `TurnComplete` regardless
+/// of whether this returns `Ok` or `Err`.
+async fn run_turn_inner(
     provider: Arc<dyn Provider>,
     tools: Arc<Vec<Box<dyn Tool>>>,
     session: SessionHandle,
     mut events: Vec<Event>,
     model: String,
-    ui: mpsc::Sender<AgentUpdate>,
+    ui: &mpsc::Sender<AgentUpdate>,
     now: fn() -> i64,
 ) -> Result<()> {
     let mut iterations: u32 = 0;
@@ -98,14 +121,18 @@ pub async fn run_agent_turn(
         while let Some(pe) = prx.recv().await {
             match pe {
                 ProviderEvent::TextDelta(s) => {
-                    emit(&session, &mut events, &ui, EventKind::ModelDelta { text: s }, now).await?;
+                    emit(&session, &mut events, ui, EventKind::ModelDelta { text: s }, now).await?;
                 }
                 ProviderEvent::ToolCall(tc) => {
                     emit(
                         &session,
                         &mut events,
-                        &ui,
-                        EventKind::ToolCall { id: tc.id.clone(), name: tc.name.clone(), args: tc.args.to_string() },
+                        ui,
+                        EventKind::ToolCall {
+                            id: tc.id.clone(),
+                            name: tc.name.clone(),
+                            args: tc.args.to_string(),
+                        },
                         now,
                     )
                     .await?;
@@ -116,10 +143,8 @@ pub async fn run_agent_turn(
                     emit(
                         &session,
                         &mut events,
-                        &ui,
-                        EventKind::AssistantMessage {
-                            text: format!("{} {msg}", zoid_tui::tokens::glyph::WARNING),
-                        },
+                        ui,
+                        EventKind::AssistantMessage { text: format!("{WARN_GLYPH} {msg}") },
                         now,
                     )
                     .await?;
@@ -140,9 +165,9 @@ pub async fn run_agent_turn(
             emit(
                 &session,
                 &mut events,
-                &ui,
+                ui,
                 EventKind::AssistantMessage {
-                    text: format!("{} tool-iteration limit reached", zoid_tui::tokens::glyph::WARNING),
+                    text: format!("{WARN_GLYPH} tool-iteration limit reached"),
                 },
                 now,
             )
@@ -163,8 +188,13 @@ pub async fn run_agent_turn(
             emit(
                 &session,
                 &mut events,
-                &ui,
-                EventKind::ToolResult { id: tc.id, name: tc.name, output: out.text, is_error: out.is_error },
+                ui,
+                EventKind::ToolResult {
+                    id: tc.id,
+                    name: tc.name,
+                    output: out.text,
+                    is_error: out.is_error,
+                },
                 now,
             )
             .await?;
@@ -172,7 +202,6 @@ pub async fn run_agent_turn(
         // loop: re-request with the tool results now in context
     }
 
-    let _ = ui.send(AgentUpdate::TurnComplete).await;
     Ok(())
 }
 
