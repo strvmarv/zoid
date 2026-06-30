@@ -212,6 +212,29 @@ mod tests {
         });
     }
 
+    #[test]
+    fn tool_result_preserves_id_and_error_through_fold() {
+        // Tasks 7-9 rely on `id` and `is_error` surviving the fold (id correlates
+        // calls→results; is_error flags failures back to the model and the UI).
+        let events = vec![
+            user(1, "go"),
+            Event::new(Ulid::from(2u128), None, 0, EventKind::ToolCall {
+                id: "call_1".into(), name: "shell".into(), args: r#"{"command":"false"}"#.into(),
+            }),
+            Event::new(Ulid::from(3u128), None, 0, EventKind::ToolResult {
+                id: "call_1".into(), name: "shell".into(), output: "boom\n[exit 1]".into(), is_error: true,
+            }),
+        ];
+        let conv = conversation(&events);
+        assert_eq!(conv[1], ChatMsg::Assistant {
+            text: "".into(),
+            tool_calls: vec![ToolCallRef { id: "call_1".into(), name: "shell".into(), args: r#"{"command":"false"}"#.into() }],
+        });
+        assert_eq!(conv[2], ChatMsg::ToolResult {
+            id: "call_1".into(), name: "shell".into(), output: "boom\n[exit 1]".into(), is_error: true,
+        });
+    }
+
     proptest! {
         #[test]
         fn transcript_is_deterministic(texts in proptest::collection::vec("[a-z ]{0,12}", 0..20)) {
