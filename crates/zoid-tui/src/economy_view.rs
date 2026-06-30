@@ -114,6 +114,7 @@ impl EconomyView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tokens::{color, glyph};
     use zoid_core::context::{ContextItem, ContextWindow, Heat, ItemKind};
     use zoid_core::economy::{ChurnPoint, ChurnTimeline, TokenLedger};
     use zoid_core::assembler::ContextPolicy;
@@ -122,6 +123,8 @@ mod tests {
     fn human_tokens_scales() {
         assert_eq!(human_tokens(0), "0");
         assert_eq!(human_tokens(123), "123");
+        assert_eq!(human_tokens(999), "999");
+        assert_eq!(human_tokens(1000), "1k");
         assert_eq!(human_tokens(4000), "4k");
         assert_eq!(human_tokens(4500), "4k");        // floor to k
         assert_eq!(human_tokens(1_200_000), "1.2M");
@@ -129,18 +132,26 @@ mod tests {
 
     #[test]
     fn heat_bar_glyphs() {
-        assert_eq!(heat_bar(Heat::Hot), "██");
-        assert_eq!(heat_bar(Heat::Warm), "█░");
-        assert_eq!(heat_bar(Heat::Cold), "░░");
+        assert_eq!(heat_bar(Heat::Hot), format!("{0}{0}", glyph::HEAT_FULL));
+        assert_eq!(heat_bar(Heat::Warm), format!("{}{}", glyph::HEAT_FULL, glyph::HEAT_SHADE));
+        assert_eq!(heat_bar(Heat::Cold), format!("{0}{0}", glyph::HEAT_SHADE));
+    }
+
+    #[test]
+    fn heat_color_tokens() {
+        assert_eq!(heat_color(Heat::Hot), color::HEAT_HOT);
+        assert_eq!(heat_color(Heat::Warm), color::HEAT_WARM);
+        assert_eq!(heat_color(Heat::Cold), color::HEAT_COLD);
     }
 
     #[test]
     fn sparkline_maps_range() {
         assert_eq!(sparkline(&[]), "");
-        assert_eq!(sparkline(&[0, 0]), "▁▁");
+        assert_eq!(sparkline(&[0, 0]), format!("{0}{0}", glyph::SPARK[0]));
         let s = sparkline(&[1, 4, 8]);
         assert_eq!(s.chars().count(), 3);
-        assert_eq!(s.chars().last().unwrap(), '█'); // max maps to top of ramp
+        assert_eq!(s.chars().next().unwrap(), glyph::SPARK[0]); // min (1 with max 8) → idx 0
+        assert_eq!(s.chars().last().unwrap(), *glyph::SPARK.last().unwrap()); // max maps to top of ramp
     }
 
     #[test]
