@@ -22,6 +22,11 @@ pub enum EventKind {
     UserMessage { text: String },
     AssistantMessage { text: String },
     ModelDelta { text: String },
+    /// A tool the model asked to call. `args` is the raw JSON arguments (stored
+    /// as a string so `EventKind` keeps `Eq`).
+    ToolCall { id: String, name: String, args: String },
+    /// The result of running a `ToolCall`. `output` is the tool's text output.
+    ToolResult { id: String, name: String, output: String, is_error: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,5 +85,21 @@ mod tests {
         let back: Event = serde_json::from_str(&json).unwrap();
         assert_eq!(ev, back);
         assert!(matches!(back.kind, EventKind::ModelDelta { .. }));
+    }
+
+    #[test]
+    fn tool_events_round_trip() {
+        let id = Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
+        let call = Event::new(id, None, 1, EventKind::ToolCall {
+            id: "c1".into(), name: "read_file".into(), args: r#"{"path":"a"}"#.into(),
+        });
+        let res = Event::new(id, None, 2, EventKind::ToolResult {
+            id: "c1".into(), name: "read_file".into(), output: "data".into(), is_error: false,
+        });
+        for ev in [call, res] {
+            let json = serde_json::to_string(&ev).unwrap();
+            let back: Event = serde_json::from_str(&json).unwrap();
+            assert_eq!(ev, back);
+        }
     }
 }
