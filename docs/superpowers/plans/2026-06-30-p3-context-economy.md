@@ -1380,11 +1380,12 @@ git commit -m "feat(layout): data-driven drawer-body rects; economy drawer talle
   `pub fn render_shell(frame, state: &ShellState, economy: &EconomyView, msgs, input, streaming)`.
 - The economy drawer body renders from `economy`; other drawers keep `drawer_body(id, state)`.
 
-**Layout of the economy body (mirrors `docs/ux/chat-mode.html`):**
+**Layout of the economy body (mirrors `docs/ux/chat-mode.html` — items span kinds, tokens-desc):**
 ```
-● users.rs      4k   ██
-  ctx.rs        3k   █░
-  schema.sql    5k   ░░ cold
+  grep          6k   ██        (ToolResult)
+  schema.sql    5k   ░░ cold   (File)
+● users.rs      4k   ██        (File, pinned)
+  ship it?      3k   █░        (Message)
 churn ▁▂▁▃▁
 [x] evict cold              142k/200k
 ```
@@ -1425,16 +1426,19 @@ fn draw_econ(state: &ShellState, econ: &EconomyView, msgs: &[ChatMsg], w: u16, h
 
 fn seeded_economy() -> EconomyView {
     use zoid_core::context::{ContextItem, Heat, ItemKind};
-    let it = |label: &str, tokens, heat, pinned| ContextItem {
-        key: format!("file:{label}"), label: label.into(), kind: ItemKind::File, tokens, heat, pinned, evicted: false,
+    let it = |key: &str, label: &str, kind, tokens, heat, pinned| ContextItem {
+        key: key.into(), label: label.into(), kind, tokens, heat, pinned, evicted: false,
     };
+    // Items span kinds (ToolResult / File / Message), not files-only — mirrors
+    // docs/ux/chat-mode.html and what context_window() actually produces in P3.
     let w = ContextWindow {
         items: vec![
-            it("schema.sql", 5000, Heat::Cold, false),
-            it("users.rs", 4000, Heat::Hot, true),
-            it("ctx.rs", 3000, Heat::Warm, false),
+            it("tool:grep:c9", "grep", ItemKind::ToolResult, 6000, Heat::Hot, false),
+            it("file:schema.sql", "schema.sql", ItemKind::File, 5000, Heat::Cold, false),
+            it("file:users.rs", "users.rs", ItemKind::File, 4000, Heat::Hot, true),
+            it("msg:2", "ship it?", ItemKind::Message, 3000, Heat::Warm, false),
         ],
-        total_tokens: 12000,
+        total_tokens: 18000,
     };
     let churn = ChurnTimeline { points: vec![
         zoid_core::economy::ChurnPoint { turn: 0, tokens: 10, resent_tokens: 0 },
