@@ -9,6 +9,7 @@ pub mod shell;
 pub mod write;
 
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 use zoid_provider::ToolSpec;
 
 /// The outcome of running a tool. `text` is fed back to the model as the tool
@@ -32,7 +33,7 @@ impl ToolOutput {
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn spec(&self) -> ToolSpec;
-    fn run(&self, args: &Value) -> ToolOutput;
+    fn run(&self, args: &Value, cwd: &Path) -> ToolOutput;
 }
 
 /// The compiled-in tool set (spec §9: fixed curated set in v1).
@@ -48,9 +49,9 @@ pub fn registry() -> Vec<Box<dyn Tool>> {
 
 /// Dispatch a tool call by name. Unknown tools return an error `ToolOutput`
 /// (the model sees it and can recover) rather than panicking.
-pub fn run_tool(tools: &[Box<dyn Tool>], name: &str, args: &Value) -> ToolOutput {
+pub fn run_tool(tools: &[Box<dyn Tool>], name: &str, args: &Value, cwd: &Path) -> ToolOutput {
     match tools.iter().find(|t| t.name() == name) {
-        Some(t) => t.run(args),
+        Some(t) => t.run(args, cwd),
         None => ToolOutput::err(format!("unknown tool: {name}")),
     }
 }
@@ -61,6 +62,14 @@ pub(crate) fn str_arg(args: &Value, key: &str) -> Result<String, ToolOutput> {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .ok_or_else(|| ToolOutput::err(format!("missing or non-string argument: {key}")))
+}
+
+/// Resolve a tool's path argument against the run's working directory.
+/// Relative paths join `cwd`; absolute paths pass through. For subagent
+/// relocation, NOT a security jail (spec §9: no path-jailing).
+pub(crate) fn resolve(cwd: &Path, path: &str) -> PathBuf {
+    let p = Path::new(path);
+    if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) }
 }
 
 #[cfg(test)]
@@ -86,8 +95,24 @@ mod tests {
     #[test]
     fn unknown_tool_is_error_not_panic() {
         let reg = registry();
-        let out = run_tool(&reg, "nope", &json!({}));
+        let out = run_tool(&reg, "nope", &json!({}), std::path::Path::new("."));
         assert!(out.is_error);
         assert!(out.text.contains("unknown tool"));
+    }
+
+    #[test]
+    fn resolve_joins_relative_and_passes_absolute() {
+        use std::path::Path;
+        assert_eq!(resolve(Path::new("/work"), "src/a.rs"), Path::new("/work/src/a.rs"));
+        assert_eq!(resolve(Path::new("/work"), "/etc/hosts"), Path::new("/etc/hosts"));
+    }
+
+    #[test]
+    fn read_tool_resolves_relative_to_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("note.txt"), "in cwd").unwrap();
+        let out = crate::read::ReadFile.run(&serde_json::json!({ "path": "note.txt" }), dir.path());
+        assert!(!out.is_error, "{}", out.text);
+        assert_eq!(out.text, "in cwd");
     }
 }

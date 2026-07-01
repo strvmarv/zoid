@@ -202,7 +202,7 @@ async fn run_turn_inner(
             let name = tc.name.clone();
             let args = tc.args.clone();
             let out = tokio::task::spawn_blocking(move || {
-                zoid_tools::run_tool(&tools_for_exec, &name, &args)
+                zoid_tools::run_tool(&tools_for_exec, &name, &args, std::path::Path::new("."))
             })
             .await?;
             emit(

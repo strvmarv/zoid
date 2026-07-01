@@ -28,14 +28,14 @@ impl Tool for Search {
             }),
         }
     }
-    fn run(&self, args: &Value) -> ToolOutput {
+    fn run(&self, args: &Value, cwd: &Path) -> ToolOutput {
         let query = match str_arg(args, "query") { Ok(q) => q, Err(e) => return e };
         if query.is_empty() {
             return ToolOutput::err("search: empty query");
         }
-        let root = args.get("path").and_then(|v| v.as_str()).unwrap_or(".").to_string();
+        let root = crate::resolve(cwd, args.get("path").and_then(|v| v.as_str()).unwrap_or("."));
         let mut hits: Vec<String> = Vec::new();
-        walk(Path::new(&root), Path::new(&root), &query, &mut hits);
+        walk(&root, &root, &query, &mut hits);
         if hits.is_empty() {
             ToolOutput::ok(format!("no matches for {query:?}"))
         } else {
@@ -104,7 +104,7 @@ mod tests {
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         std::fs::write(dir.path().join("sub/b.txt"), "nothing\nalso NEEDLE").unwrap();
 
-        let out = Search.run(&json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }));
+        let out = Search.run(&json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }), std::path::Path::new("."));
         assert!(!out.is_error, "{}", out.text);
         assert!(out.text.contains("a.txt:2:"));
         assert!(out.text.contains("sub/b.txt:2:") || out.text.contains("sub\\b.txt:2:"));
@@ -115,7 +115,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("target")).unwrap();
         std::fs::write(dir.path().join("target/x.txt"), "NEEDLE").unwrap();
-        let out = Search.run(&json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }));
+        let out = Search.run(&json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }), std::path::Path::new("."));
         assert!(out.text.contains("no matches"));
     }
 
@@ -129,7 +129,7 @@ mod tests {
         let sub = dir.path().join("sub");
         std::fs::create_dir(&sub).unwrap();
         std::os::unix::fs::symlink(dir.path(), sub.join("loop")).unwrap();
-        let out = Search.run(&json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }));
+        let out = Search.run(&json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }), std::path::Path::new("."));
         assert!(!out.is_error, "{}", out.text);
         assert!(out.text.contains("a.txt:1:"));
     }
@@ -138,7 +138,7 @@ mod tests {
     fn no_match_reports_cleanly() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.txt"), "abc").unwrap();
-        let out = Search.run(&json!({ "query": "zzz", "path": dir.path().to_str().unwrap() }));
+        let out = Search.run(&json!({ "query": "zzz", "path": dir.path().to_str().unwrap() }), std::path::Path::new("."));
         assert!(!out.is_error);
         assert!(out.text.contains("no matches"));
     }

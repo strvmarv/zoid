@@ -1,5 +1,6 @@
 use crate::{str_arg, Tool, ToolOutput};
 use serde_json::{json, Value};
+use std::path::Path;
 use zoid_provider::ToolSpec;
 
 /// Write (create or overwrite) a UTF-8 text file relative to the working dir.
@@ -23,7 +24,7 @@ impl Tool for WriteFile {
             }),
         }
     }
-    fn run(&self, args: &Value) -> ToolOutput {
+    fn run(&self, args: &Value, cwd: &Path) -> ToolOutput {
         let path = match str_arg(args, "path") {
             Ok(p) => p,
             Err(e) => return e,
@@ -32,7 +33,7 @@ impl Tool for WriteFile {
             Ok(c) => c,
             Err(e) => return e,
         };
-        match std::fs::write(&path, content.as_bytes()) {
+        match std::fs::write(crate::resolve(cwd, &path), content.as_bytes()) {
             Ok(()) => ToolOutput::ok(format!("wrote {} bytes to {path}", content.len())),
             Err(e) => ToolOutput::err(format!("write_file({path}): {e}")),
         }
@@ -48,7 +49,7 @@ mod tests {
     fn writes_then_reads_back() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.txt");
-        let out = WriteFile.run(&json!({ "path": path.to_str().unwrap(), "content": "abc" }));
+        let out = WriteFile.run(&json!({ "path": path.to_str().unwrap(), "content": "abc" }), std::path::Path::new("."));
         assert!(!out.is_error, "{}", out.text);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "abc");
     }
@@ -57,7 +58,7 @@ mod tests {
     fn missing_content_is_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("x.txt");
-        let out = WriteFile.run(&json!({ "path": path.to_str().unwrap() }));
+        let out = WriteFile.run(&json!({ "path": path.to_str().unwrap() }), std::path::Path::new("."));
         assert!(out.is_error);
         assert!(out.text.contains("content"));
     }

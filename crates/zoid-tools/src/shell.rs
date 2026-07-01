@@ -1,5 +1,6 @@
 use crate::{str_arg, Tool, ToolOutput};
 use serde_json::{json, Value};
+use std::path::Path;
 use std::process::Command;
 use zoid_provider::ToolSpec;
 
@@ -22,13 +23,13 @@ impl Tool for Shell {
             }),
         }
     }
-    fn run(&self, args: &Value) -> ToolOutput {
+    fn run(&self, args: &Value, cwd: &Path) -> ToolOutput {
         let command = match str_arg(args, "command") { Ok(c) => c, Err(e) => return e };
 
         let output = if cfg!(windows) {
-            Command::new("cmd").arg("/C").arg(&command).output()
+            Command::new("cmd").arg("/C").arg(&command).current_dir(cwd).output()
         } else {
-            Command::new("sh").arg("-c").arg(&command).output()
+            Command::new("sh").arg("-c").arg(&command).current_dir(cwd).output()
         };
         match output {
             Ok(o) => {
@@ -63,7 +64,7 @@ mod tests {
 
     #[test]
     fn runs_command_captures_stdout_and_exit() {
-        let out = Shell.run(&json!({ "command": "echo hello-zoid" }));
+        let out = Shell.run(&json!({ "command": "echo hello-zoid" }), std::path::Path::new("."));
         assert!(!out.is_error, "{}", out.text);
         assert!(out.text.contains("hello-zoid"));
         assert!(out.text.contains("[exit 0]"));
@@ -71,7 +72,7 @@ mod tests {
 
     #[test]
     fn captures_stderr() {
-        let out = Shell.run(&json!({ "command": "echo oops 1>&2; exit 1" }));
+        let out = Shell.run(&json!({ "command": "echo oops 1>&2; exit 1" }), std::path::Path::new("."));
         assert!(out.is_error);
         assert!(out.text.contains("oops"), "stderr should be captured: {}", out.text);
         assert!(out.text.contains("[exit 1]"));
@@ -79,14 +80,14 @@ mod tests {
 
     #[test]
     fn nonzero_exit_is_error() {
-        let out = Shell.run(&json!({ "command": "exit 3" }));
+        let out = Shell.run(&json!({ "command": "exit 3" }), std::path::Path::new("."));
         assert!(out.is_error);
         assert!(out.text.contains("[exit 3]"));
     }
 
     #[test]
     fn missing_command_is_error() {
-        let out = Shell.run(&json!({}));
+        let out = Shell.run(&json!({}), std::path::Path::new("."));
         assert!(out.is_error);
         assert!(out.text.contains("command"));
     }

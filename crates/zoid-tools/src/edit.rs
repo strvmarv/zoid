@@ -1,5 +1,6 @@
 use crate::{str_arg, Tool, ToolOutput};
 use serde_json::{json, Value};
+use std::path::Path;
 use zoid_provider::ToolSpec;
 
 /// Replace the unique occurrence of `old` with `new` in a file. Errors if `old`
@@ -25,12 +26,13 @@ impl Tool for EditFile {
             }),
         }
     }
-    fn run(&self, args: &Value) -> ToolOutput {
+    fn run(&self, args: &Value, cwd: &Path) -> ToolOutput {
         let path = match str_arg(args, "path") { Ok(p) => p, Err(e) => return e };
         let old = match str_arg(args, "old") { Ok(o) => o, Err(e) => return e };
         let new = match str_arg(args, "new") { Ok(n) => n, Err(e) => return e };
 
-        let contents = match std::fs::read_to_string(&path) {
+        let full = crate::resolve(cwd, &path);
+        let contents = match std::fs::read_to_string(&full) {
             Ok(c) => c,
             Err(e) => return ToolOutput::err(format!("edit_file({path}): {e}")),
         };
@@ -42,7 +44,7 @@ impl Tool for EditFile {
             return ToolOutput::err(format!("edit_file({path}): `old` is ambiguous ({count} matches)"));
         }
         let updated = contents.replacen(&old, &new, 1);
-        match std::fs::write(&path, updated.as_bytes()) {
+        match std::fs::write(&full, updated.as_bytes()) {
             Ok(()) => ToolOutput::ok(format!("edited {path}")),
             Err(e) => ToolOutput::err(format!("edit_file({path}): {e}")),
         }
@@ -64,7 +66,7 @@ mod tests {
     #[test]
     fn replaces_unique_occurrence() {
         let (_d, path) = seed("alpha beta gamma");
-        let out = EditFile.run(&json!({ "path": path, "old": "beta", "new": "BETA" }));
+        let out = EditFile.run(&json!({ "path": path, "old": "beta", "new": "BETA" }), std::path::Path::new("."));
         assert!(!out.is_error, "{}", out.text);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "alpha BETA gamma");
     }
@@ -72,7 +74,7 @@ mod tests {
     #[test]
     fn ambiguous_match_is_error() {
         let (_d, path) = seed("x x");
-        let out = EditFile.run(&json!({ "path": path, "old": "x", "new": "y" }));
+        let out = EditFile.run(&json!({ "path": path, "old": "x", "new": "y" }), std::path::Path::new("."));
         assert!(out.is_error);
         assert!(out.text.contains("ambiguous"));
     }
@@ -80,7 +82,7 @@ mod tests {
     #[test]
     fn absent_match_is_error() {
         let (_d, path) = seed("hello");
-        let out = EditFile.run(&json!({ "path": path, "old": "zzz", "new": "y" }));
+        let out = EditFile.run(&json!({ "path": path, "old": "zzz", "new": "y" }), std::path::Path::new("."));
         assert!(out.is_error);
         assert!(out.text.contains("not found"));
     }
