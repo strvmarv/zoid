@@ -25,6 +25,17 @@ pub enum Zoom {
     Detail,
 }
 
+impl Zoom {
+    /// Short altitude name for the status-bar indicator.
+    pub fn label(self) -> &'static str {
+        match self {
+            Zoom::Summary => "summary",
+            Zoom::Normal => "normal",
+            Zoom::Detail => "detail",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Overlay {
     None,

@@ -55,7 +55,7 @@ pub fn render_shell(
     }
 
     render_input(frame, input, layout.input);
-    render_status(frame, state, layout.status);
+    render_status(frame, state, view, layout.status);
 
     // Overlays last, over a cleared region.
     if state.overlay == Overlay::Palette {
@@ -110,12 +110,15 @@ fn render_input(frame: &mut Frame, input: &TextArea<'_>, area: Rect) {
     frame.render_widget(input, inner);
 }
 
-fn render_status(frame: &mut Frame, state: &ShellState, area: Rect) {
+fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: Rect) {
     let mut spans = match state.mode {
         Mode::Chat => vec![
             Span::styled(" CHAT ", Style::new().fg(color::CHAT_ACCENT).bg(color::CHAT_BG)),
             Span::styled(
-                format!(" {} {} · ^P palette · {}Tab → Build · ^C quit", glyph::BRANCH, state.branch, glyph::SHIFT),
+                format!(
+                    " {} {} · zoom {} · ^P palette · {}Tab → Build · ^C quit",
+                    glyph::BRANCH, state.branch, view.zoom.label(), glyph::SHIFT
+                ),
                 Style::new().fg(color::DIM),
             ),
         ],
