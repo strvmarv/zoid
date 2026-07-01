@@ -150,7 +150,9 @@ async fn main() -> Result<()> {
     // flags when supported; otherwise the Alt+⏎ fallback stands.
     let kbd_enhanced = supports_keyboard_enhancement().unwrap_or(false);
     if kbd_enhanced {
-        execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES))?;
+        // Best-effort: a failed push just means ⇧⏎ falls back to Alt+⏎ — it must
+        // not skip the terminal restore below, so don't propagate with `?`.
+        let _ = execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
     }
     let mut terminal = Terminal::new(CrosstermBackend::new(out))?;
 
