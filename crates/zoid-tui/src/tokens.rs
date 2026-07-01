@@ -30,6 +30,8 @@ pub mod glyph {
     pub const PIN: char = '●';         // ⑤ pinned-item marker
     pub const ELLIPSIS: char = '…';     // collapsed-body marker (① collapse-to-signatures)
     pub const IDLE: char = '●';        // title-bar activity — waiting for the user (§2.2)
+    pub const BULLET: char = '•';      // markdown unordered-list marker (§3.5)
+    pub const QUOTE_BAR: char = '│';   // markdown blockquote bar (§3.5)
 }
 
 /// Colors (visual-language table, spec §16 / docs/ux/README.md).
@@ -58,6 +60,11 @@ pub mod color {
     pub const SYN_STRING: Color = Color::Rgb(0xa5, 0xd6, 0xff);
     pub const SYN_NUMBER: Color = Color::Rgb(0x79, 0xc0, 0xff);
     pub const SYN_COMMENT: Color = Color::Rgb(0x8b, 0x94, 0x9e);
+
+    // Markdown message rendering (spec §3.5) — reuse the existing palette so the
+    // visual language stays uniform: inline/fenced `code` = string hue, links = accent.
+    pub const MD_CODE: Color = SYN_STRING;
+    pub const MD_LINK: Color = CHAT_ACCENT;
 }
 
 #[cfg(test)]
@@ -114,5 +121,13 @@ mod tests {
     fn chat_polish_activity_token_present() {
         assert_eq!(glyph::IDLE, '●'); // title-bar idle activity indicator (§2.2)
         assert_eq!(glyph::STREAM, '⠿'); // running indicator reuses the stream glyph
+    }
+
+    #[test]
+    fn markdown_tokens_present() {
+        assert_eq!(glyph::BULLET, '•');
+        assert_eq!(glyph::QUOTE_BAR, '│');
+        assert_eq!(color::MD_CODE, color::SYN_STRING); // inline/`code` reuses the string hue
+        assert_eq!(color::MD_LINK, color::CHAT_ACCENT); // links use the Chat accent
     }
 }

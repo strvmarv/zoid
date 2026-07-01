@@ -4,6 +4,7 @@
 pub mod tokens;
 pub(crate) mod text;
 pub mod chat;
+pub mod markdown;
 pub mod state;
 pub mod layout;
 pub mod command;
