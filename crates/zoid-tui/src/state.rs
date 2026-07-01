@@ -90,8 +90,6 @@ pub struct ShellState {
     pub cmdline: CmdlineState,
     pub objects: ObjectState,
     pub conversation_scroll: u16,
-    /// cwd entries shown in the Files drawer (populated by the bin; pure for tests).
-    pub files: Vec<String>,
     /// Current branch label for the Branch drawer (P2: read from `.git/HEAD`).
     pub branch: String,
     /// Repo directory name shown in the repo drawer header line.
@@ -157,7 +155,6 @@ impl ShellState {
             cmdline: CmdlineState::default(),
             objects: ObjectState::default(),
             conversation_scroll: 0,
-            files: Vec::new(),
             branch: "main".into(),
             repo_name: String::new(),
             worktree: "(none)".into(),

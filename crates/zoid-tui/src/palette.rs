@@ -35,8 +35,9 @@ pub fn all_items(mode: Mode) -> Vec<PaletteItem> {
         PaletteItem { group: format!("branch {} · post-v1", glyph::BRANCH), icon: glyph::BRANCH, label: "Fork from here", hint: "new branch at this turn", keybind: ":fork", command: None },
         PaletteItem { group: format!("branch {} · post-v1", glyph::BRANCH), icon: glyph::UNDO, label: "Undo last turn", hint: "move head back", keybind: "u", command: None },
         // navigate
-        PaletteItem { group: "navigate".to_string(), icon: glyph::OPEN, label: "Open files drawer", hint: "browse the working tree", keybind: "^F", command: Some(Command::OpenDrawer(DrawerId::Repo)) },
-        PaletteItem { group: "navigate".to_string(), icon: glyph::BRANCH, label: "Open branch drawer", hint: "current branch", keybind: "^B", command: Some(Command::OpenDrawer(DrawerId::Session)) },
+        PaletteItem { group: "navigate".to_string(), icon: glyph::COLLAPSED, label: "Toggle repo drawer", hint: "repo · branch · changes", keybind: "", command: Some(Command::OpenDrawer(DrawerId::Repo)) },
+        PaletteItem { group: "navigate".to_string(), icon: glyph::COLLAPSED, label: "Toggle session drawer", hint: "name · model · cost · cwd", keybind: "", command: Some(Command::OpenDrawer(DrawerId::Session)) },
+        PaletteItem { group: "navigate".to_string(), icon: glyph::CONTEXT, label: "Toggle context ⑤ drawer", hint: "tokens · heat · churn", keybind: "", command: Some(Command::OpenDrawer(DrawerId::Context)) },
         // context ⑤ — placeholder (real actions land P3), disabled for now
         PaletteItem { group: format!("context {} · P3", glyph::CONTEXT), icon: glyph::EDIT, label: "Pin file to context", hint: "lands in P3", keybind: "", command: None },
         PaletteItem { group: format!("context {} · P3", glyph::CONTEXT), icon: glyph::EVICT, label: "Evict cold items", hint: "lands in P3", keybind: "", command: None },
@@ -108,7 +109,7 @@ mod tests {
 
     #[test]
     fn substring_outranks_subsequence() {
-        let sub = fuzzy_score("Open files drawer", "files").unwrap();
+        let sub = fuzzy_score("Toggle repo drawer", "repo").unwrap();
         let seq = fuzzy_score("Switch to Build", "sib").unwrap();
         assert!(sub > seq);
     }
@@ -141,6 +142,18 @@ mod tests {
         assert_eq!(nav(2, 1, 3), 2);
         assert_eq!(nav(1, 1, 3), 2);
         assert_eq!(nav(0, 1, 0), 0);
+    }
+
+    #[test]
+    fn navigate_group_targets_new_drawers() {
+        let items = all_items(Mode::Chat);
+        let nav: Vec<&Command> = items.iter()
+            .filter(|i| i.group == "navigate")
+            .filter_map(|i| i.command.as_ref())
+            .collect();
+        assert!(nav.contains(&&Command::OpenDrawer(DrawerId::Repo)));
+        assert!(nav.contains(&&Command::OpenDrawer(DrawerId::Session)));
+        assert!(nav.contains(&&Command::OpenDrawer(DrawerId::Context)));
     }
 
     #[test]

@@ -18,15 +18,16 @@ pub enum Command {
 }
 
 /// Parse a command-line string. Accepts an optional leading `:` and surrounding
-/// whitespace. `:build`/`:chat`, `:q`/`:quit`, `:files`/`:branch`.
+/// whitespace. `:build`/`:chat`, `:q`/`:quit`, `:repo`/`:session`/`:context`.
 pub fn parse_command(raw: &str) -> Command {
     let t = raw.trim().trim_start_matches(':').trim();
     match t {
         "build" => Command::SwitchMode(Mode::Build),
         "chat" => Command::SwitchMode(Mode::Chat),
         "q" | "quit" => Command::Quit,
-        "files" => Command::OpenDrawer(DrawerId::Repo),
-        "branch" => Command::OpenDrawer(DrawerId::Session),
+        "repo" => Command::OpenDrawer(DrawerId::Repo),
+        "session" => Command::OpenDrawer(DrawerId::Session),
+        "context" => Command::OpenDrawer(DrawerId::Context),
         "new" => Command::NewSession,
         "rename" => Command::RenameSession(String::new()),
         s if s.starts_with("rename ") => Command::RenameSession(s["rename ".len()..].trim().to_string()),
@@ -43,8 +44,13 @@ mod tests {
         assert_eq!(parse_command(":build"), Command::SwitchMode(Mode::Build));
         assert_eq!(parse_command("chat"), Command::SwitchMode(Mode::Chat));
         assert_eq!(parse_command("  :q "), Command::Quit);
-        assert_eq!(parse_command(":files"), Command::OpenDrawer(DrawerId::Repo));
-        assert_eq!(parse_command(":branch"), Command::OpenDrawer(DrawerId::Session));
+    }
+
+    #[test]
+    fn parses_drawer_toggle_commands() {
+        assert_eq!(parse_command(":repo"), Command::OpenDrawer(DrawerId::Repo));
+        assert_eq!(parse_command(":session"), Command::OpenDrawer(DrawerId::Session));
+        assert_eq!(parse_command(":context"), Command::OpenDrawer(DrawerId::Context));
     }
 
     #[test]

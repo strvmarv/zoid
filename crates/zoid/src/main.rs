@@ -195,20 +195,6 @@ fn git_status() -> (usize, usize, usize) {
     (a1 + a2, r1 + r2, f1 + f2)
 }
 
-/// Up to N entries of the cwd for the Files drawer (names only, sorted).
-fn cwd_files(limit: usize) -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(".")
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|n| !n.starts_with('.'))
-        .collect();
-    names.sort();
-    names.truncate(limit);
-    names
-}
-
 struct App {
     session: SessionHandle,
     session_id: Ulid,
@@ -286,7 +272,6 @@ async fn main() -> Result<()> {
 
     let mut shell = zoid_tui::ShellState::new();
     shell.branch = current_branch();
-    shell.files = cwd_files(64);
     shell.reduced_motion = std::env::var("ZOID_REDUCED_MOTION").map(|v| !v.is_empty()).unwrap_or(false);
     shell.repo_name = Path::new(&root).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| root.clone());
     let (boot_added, boot_removed, boot_files) = git_status();
