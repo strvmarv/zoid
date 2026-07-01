@@ -3,3 +3,4 @@
 
 pub mod agent;
 pub mod subagent;
+pub mod worktree;

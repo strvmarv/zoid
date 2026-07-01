@@ -23,6 +23,7 @@ tui-textarea = "0.7"
 proptest = "1"
 insta = "1"
 tempfile = "3"
+git2 = "0.19"
 
 [profile.release]
 opt-level = "z"

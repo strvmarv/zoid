@@ -27,6 +27,7 @@ serde_json = { workspace = true }
 # Only for the local UTC offset behind the message-row HH:MM stamps; std can't
 # read the system timezone. `clock` pulls the platform tz lookup; nothing else.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+git2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
