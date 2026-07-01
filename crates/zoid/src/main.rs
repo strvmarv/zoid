@@ -514,7 +514,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::Newline => app.textarea.insert_newline(),
         Action::Edit(key) => { app.textarea.input(key); }
         Action::Submit => {
-            if app.streaming { return Ok(false); }
+            if app.streaming || app.delegating { return Ok(false); }
             let text = app.textarea.lines().join("\n");
             if text.trim().is_empty() { return Ok(false); }
             let first = !app.events.iter().any(|e| matches!(e.kind, EventKind::UserMessage { .. }));
@@ -869,5 +869,65 @@ mod tests {
         assert_eq!(s.list_session_rows().unwrap().len(), 1);
         // Second run is a no-op (new DB already exists → nothing re-imported).
         assert!(!import_legacy_if_present(&newdb, &legacy, sid, "imported", "/repo", 500).unwrap());
+    }
+
+    /// Build a minimal `App` for exercising `handle_action` without a real
+    /// terminal/provider/network — a temp-file session DB and an offline
+    /// `FakeProvider` that never produces events.
+    async fn test_app() -> App {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("test.db");
+        // Leak the tempdir so the DB file outlives this fn (test process exits
+        // anyway; avoids a dangling path from an early drop).
+        std::mem::forget(dir);
+        let session = SessionHandle::spawn(db.to_str().unwrap()).unwrap();
+        let session_id = Ulid::new();
+        session.new_session(session_id, "test".into(), "/repo".into(), 0).await.unwrap();
+        let (ui_tx, _ui_rx) = mpsc::channel::<AgentUpdate>(8);
+        App {
+            session,
+            session_id,
+            events: Vec::new(),
+            provider: Arc::new(zoid_provider::FakeProvider::new(Vec::new())),
+            tools: Arc::new(Vec::new()),
+            model: "test-model".into(),
+            textarea: make_input(TextArea::default()),
+            streaming: false,
+            shell: zoid_tui::ShellState::new(),
+            ui_tx,
+            started: std::time::Instant::now(),
+            last_git_refresh: std::time::Instant::now(),
+            zoom_changed_at: None,
+            tz_offset_secs: 0,
+            session_started_ms: 0,
+            session_ids: Vec::new(),
+            delegating: false,
+        }
+    }
+
+    /// Regression for the busy-guard bug: `Action::Submit` must be a no-op
+    /// while a delegation is in flight (`app.delegating`), symmetric with
+    /// `start_delegation`'s `app.streaming || app.delegating` check. Before the
+    /// fix, `Submit` only checked `app.streaming`, so a chat turn could be
+    /// submitted while a subagent delegation was running — both turns would
+    /// then race to send `AgentUpdate::TurnComplete` on the same `ui_tx`,
+    /// letting the subagent's completion clear `app.streaming` mid-chat-turn.
+    #[tokio::test]
+    async fn submit_is_noop_while_delegating() {
+        let mut app = test_app().await;
+        app.delegating = true;
+        app.textarea = make_input(TextArea::from(vec!["hello".to_string()]));
+
+        let quit = handle_action(&mut app, zoid_tui::route::Action::Submit).await.unwrap();
+
+        assert!(!quit, "Submit must not signal quit");
+        assert!(app.delegating, "delegating flag must be untouched by a blocked Submit");
+        assert!(!app.streaming, "streaming must stay false — no turn was spawned");
+        assert!(
+            app.events.is_empty(),
+            "no UserMessage should be recorded while delegating"
+        );
+        // The textarea must be left alone (not cleared) since nothing was submitted.
+        assert_eq!(app.textarea.lines(), &["hello".to_string()]);
     }
 }
