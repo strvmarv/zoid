@@ -13,6 +13,7 @@ use crossterm::{
 use futures_util::StreamExt;
 use ratatui::{layout::Rect, prelude::CrosstermBackend, Terminal};
 use std::io::stdout;
+#[allow(unused_imports)]
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -35,14 +36,26 @@ use zoid_tui::route::{palette_selected_command, route_key, route_mouse};
 /// Duration of the zoom fold/unfold line-reveal animation (Ⓡ2, T5).
 const ZOOM_ANIM_MS: u64 = 160;
 
-/// Resolve the session DB path: `$ZOID_DB` if set, else `./.zoid/session.db`.
-fn db_path() -> Result<PathBuf> {
-    if let Ok(p) = std::env::var("ZOID_DB") {
-        return Ok(PathBuf::from(p));
+/// Pure DB-path resolver (env injected for testing). Precedence:
+/// `$ZOID_DB` > `$XDG_DATA_HOME/zoid/zoid.db` > `$HOME/.local/share/zoid/zoid.db`.
+fn resolve_db_path(env: impl Fn(&str) -> Option<String>) -> PathBuf {
+    if let Some(p) = env("ZOID_DB") {
+        return PathBuf::from(p);
     }
-    let dir = Path::new(".zoid");
-    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    Ok(dir.join("session.db"))
+    let base = env("XDG_DATA_HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env("HOME").unwrap_or_default()).join(".local/share"));
+    base.join("zoid").join("zoid.db")
+}
+
+/// Resolve the DB path from the real environment and ensure its parent exists.
+fn db_path() -> Result<PathBuf> {
+    let path = resolve_db_path(|k| std::env::var(k).ok());
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    Ok(path)
 }
 
 /// Wall-clock millis since the epoch — supplied by the binary (core stays clock-free).
@@ -438,5 +451,27 @@ mod tests {
         // make_input turns it off.
         let plain = make_input(TextArea::from(vec!["hello".to_string()]));
         assert!(!has_underline(&plain), "make_input must disable the cursor-line underline");
+    }
+
+    fn env_of<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |k| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string())
+    }
+
+    #[test]
+    fn zoid_db_overrides_everything() {
+        let p = resolve_db_path(env_of(&[("ZOID_DB", "/tmp/x.db"), ("HOME", "/home/u")]));
+        assert_eq!(p, PathBuf::from("/tmp/x.db"));
+    }
+
+    #[test]
+    fn xdg_data_home_wins_over_home() {
+        let p = resolve_db_path(env_of(&[("XDG_DATA_HOME", "/xdg"), ("HOME", "/home/u")]));
+        assert_eq!(p, PathBuf::from("/xdg/zoid/zoid.db"));
+    }
+
+    #[test]
+    fn falls_back_to_home_local_share() {
+        let p = resolve_db_path(env_of(&[("HOME", "/home/u")]));
+        assert_eq!(p, PathBuf::from("/home/u/.local/share/zoid/zoid.db"));
     }
 }
