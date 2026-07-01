@@ -123,10 +123,9 @@ fn long_turn_wraps_instead_of_clipping() {
 }
 
 #[test]
-fn files_drawer_open_frame() {
+fn session_drawer_open_frame() {
     let mut s = ShellState::new();
-    s.files = vec!["Cargo.toml".into(), "src".into(), "README.md".into()];
-    s.toggle_drawer(DrawerId::Files);
+    s.toggle_drawer(DrawerId::Session);
     insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
 }
 

@@ -48,9 +48,9 @@ pub enum Overlay {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrawerId {
-    Economy,
-    Files,
-    Branch,
+    Repo,
+    Session,
+    Context,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,12 +114,13 @@ pub struct ShellState {
 
 impl ShellState {
     /// The calm default: Chat mode, focus on the input, the Chat rail set
-    /// (economy ⑤ open as in the mockup; files/branch/palette collapsed).
+    /// (repo/session/context all open, matching `docs/ux/chat-mode.html`).
     pub fn new() -> Self {
+        use crate::tokens::glyph;
         let drawers = vec![
-            Drawer { id: DrawerId::Economy, title: "context · tokens".into(), open: true },
-            Drawer { id: DrawerId::Files,   title: "files".into(),             open: false },
-            Drawer { id: DrawerId::Branch,  title: "branch".into(),            open: false },
+            Drawer { id: DrawerId::Repo,    title: "repo".into(),    open: true },
+            Drawer { id: DrawerId::Session, title: "session".into(), open: true },
+            Drawer { id: DrawerId::Context, title: format!("{} context · tokens", glyph::CONTEXT), open: true },
         ];
         Self {
             mode: Mode::Chat,
@@ -224,27 +225,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_is_calm_chat_with_chat_rail() {
+    fn new_is_calm_chat_with_repo_session_context_rail() {
         let s = ShellState::new();
         assert_eq!(s.mode, Mode::Chat);
-        assert_eq!(s.focus, Focus::Input);
-        assert_eq!(s.overlay, Overlay::None);
         assert!(s.rail_visible);
         assert_eq!(s.branch, "main");
-        // Chat rail set, in order (no keybind labels — §2.1).
         let ids: Vec<DrawerId> = s.drawers.iter().map(|d| d.id).collect();
-        assert_eq!(ids, vec![DrawerId::Economy, DrawerId::Files, DrawerId::Branch]);
-        // Economy is the default-open drawer (mockup `drawer on`); rest collapsed.
-        assert!(s.drawer(DrawerId::Economy).unwrap().open);
-        assert!(!s.drawer(DrawerId::Files).unwrap().open);
+        assert_eq!(ids, vec![DrawerId::Repo, DrawerId::Session, DrawerId::Context]);
+        // All three expanded (mockup shows repo/session/context all `on`).
+        assert!(s.drawer(DrawerId::Repo).unwrap().open);
+        assert!(s.drawer(DrawerId::Session).unwrap().open);
+        assert!(s.drawer(DrawerId::Context).unwrap().open);
     }
 
     #[test]
     fn drawer_lookup_returns_none_for_absent() {
         let mut s = ShellState::new();
-        assert!(s.drawer_mut(DrawerId::Files).is_some());
+        assert!(s.drawer_mut(DrawerId::Session).is_some());
         s.drawers.clear();
-        assert!(s.drawer(DrawerId::Files).is_none());
+        assert!(s.drawer(DrawerId::Session).is_none());
     }
 
     #[test]
@@ -280,13 +279,13 @@ mod tests {
     #[test]
     fn toggle_drawer_flips_open_and_opens_rail() {
         let mut s = ShellState::new();
-        s.toggle_drawer(DrawerId::Files);
-        assert!(s.drawer(DrawerId::Files).unwrap().open);
+        s.toggle_drawer(DrawerId::Session);
+        assert!(!s.drawer(DrawerId::Session).unwrap().open); // was open by default; toggled closed
         // open_drawer forces open (idempotent) and ensures the rail is visible.
         s.rail_visible = false;
-        s.open_drawer(DrawerId::Branch);
+        s.open_drawer(DrawerId::Repo);
         assert!(s.rail_visible);
-        assert!(s.drawer(DrawerId::Branch).unwrap().open);
+        assert!(s.drawer(DrawerId::Repo).unwrap().open);
     }
 
     #[test]

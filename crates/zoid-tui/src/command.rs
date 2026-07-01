@@ -25,8 +25,8 @@ pub fn parse_command(raw: &str) -> Command {
         "build" => Command::SwitchMode(Mode::Build),
         "chat" => Command::SwitchMode(Mode::Chat),
         "q" | "quit" => Command::Quit,
-        "files" => Command::OpenDrawer(DrawerId::Files),
-        "branch" => Command::OpenDrawer(DrawerId::Branch),
+        "files" => Command::OpenDrawer(DrawerId::Repo),
+        "branch" => Command::OpenDrawer(DrawerId::Session),
         "new" => Command::NewSession,
         "rename" => Command::RenameSession(String::new()),
         s if s.starts_with("rename ") => Command::RenameSession(s["rename ".len()..].trim().to_string()),
@@ -43,8 +43,8 @@ mod tests {
         assert_eq!(parse_command(":build"), Command::SwitchMode(Mode::Build));
         assert_eq!(parse_command("chat"), Command::SwitchMode(Mode::Chat));
         assert_eq!(parse_command("  :q "), Command::Quit);
-        assert_eq!(parse_command(":files"), Command::OpenDrawer(DrawerId::Files));
-        assert_eq!(parse_command(":branch"), Command::OpenDrawer(DrawerId::Branch));
+        assert_eq!(parse_command(":files"), Command::OpenDrawer(DrawerId::Repo));
+        assert_eq!(parse_command(":branch"), Command::OpenDrawer(DrawerId::Session));
     }
 
     #[test]

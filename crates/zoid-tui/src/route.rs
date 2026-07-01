@@ -308,7 +308,7 @@ mod tests {
     fn hit_test_drawer_header_and_panes() {
         let s = ShellState::new();
         let l = compute(Rect { x: 0, y: 0, width: 100, height: 24 }, &s);
-        let (id, r) = *l.drawer_headers.iter().find(|(id, _)| *id == DrawerId::Files).unwrap();
+        let (id, r) = *l.drawer_headers.iter().find(|(id, _)| *id == DrawerId::Session).unwrap();
         assert_eq!(hit_test(&l, r.x, r.y), Target::DrawerHeader(id));
         assert_eq!(hit_test(&l, l.input.x, l.input.y), Target::Input);
         assert_eq!(hit_test(&l, l.conversation.x, l.conversation.y), Target::Conversation);
@@ -318,7 +318,7 @@ mod tests {
     fn mouse_click_toggles_drawer_and_focuses() {
         let s = ShellState::new();
         let l = compute(Rect { x: 0, y: 0, width: 100, height: 24 }, &s);
-        let (id, r) = *l.drawer_headers.iter().find(|(id, _)| *id == DrawerId::Files).unwrap();
+        let (id, r) = *l.drawer_headers.iter().find(|(id, _)| *id == DrawerId::Session).unwrap();
         let click = |c, row| MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: c, row, modifiers: KeyModifiers::NONE };
         assert_eq!(route_mouse(&s, &l, click(r.x, r.y)), Action::ToggleDrawer(id));
         assert_eq!(route_mouse(&s, &l, click(l.input.x, l.input.y)), Action::FocusRegion(Focus::Input));

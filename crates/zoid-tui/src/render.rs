@@ -156,7 +156,7 @@ fn render_rail(frame: &mut Frame, state: &ShellState, economy: &EconomyView, lay
         if d.open {
             let body = layout.drawer_bodies.iter().find(|(bid, _)| bid == id).map(|(_, r)| *r);
             if let Some(rect) = body {
-                if d.id == DrawerId::Economy {
+                if d.id == DrawerId::Context {
                     render_economy_body(frame, economy, rect, state.focus == Focus::Rail);
                 } else {
                     frame.render_widget(Paragraph::new(drawer_body(d.id, state)), rect);
@@ -217,20 +217,11 @@ fn render_economy_body(frame: &mut Frame, econ: &EconomyView, area: Rect, rail_f
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn drawer_body(id: DrawerId, state: &ShellState) -> Vec<Line<'static>> {
+fn drawer_body(id: DrawerId, _state: &ShellState) -> Vec<Line<'static>> {
     match id {
-        DrawerId::Files => {
-            if state.files.is_empty() {
-                vec![Line::styled("(empty)", Style::new().fg(color::DIM))]
-            } else {
-                state.files.iter().take(4).map(|f| Line::styled(f.clone(), Style::new().fg(color::TXT))).collect()
-            }
-        }
-        DrawerId::Branch => vec![
-            Line::from(vec![Span::styled(format!("{} {}", glyph::BRANCH, state.branch), Style::new().fg(color::BRANCH))]),
-            Line::styled("full branch ops · P5", Style::new().fg(color::DIM)),
-        ],
-        DrawerId::Economy => vec![Line::styled("context economy · P3", Style::new().fg(color::DIM))],
+        DrawerId::Repo => vec![Line::styled("repo · Task 12", Style::new().fg(color::DIM))],
+        DrawerId::Session => vec![Line::styled("session · Task 13", Style::new().fg(color::DIM))],
+        DrawerId::Context => vec![Line::styled("context economy", Style::new().fg(color::DIM))],
     }
 }
 

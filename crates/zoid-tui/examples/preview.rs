@@ -91,10 +91,9 @@ fn seeded_economy() -> EconomyView {
 
 fn scene(name: &str) -> (ShellState, Vec<ChatMsg>, EconomyView) {
     let mut s = ShellState::new();
-    s.files = vec!["Cargo.toml".into(), "src".into(), "README.md".into()];
     match name {
         "files" => {
-            s.toggle_drawer(DrawerId::Files);
+            s.toggle_drawer(DrawerId::Session);
         }
         "palette" => {
             s.overlay = Overlay::Palette;

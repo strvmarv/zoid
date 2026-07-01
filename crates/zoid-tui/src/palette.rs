@@ -35,8 +35,8 @@ pub fn all_items(mode: Mode) -> Vec<PaletteItem> {
         PaletteItem { group: format!("branch {} · post-v1", glyph::BRANCH), icon: glyph::BRANCH, label: "Fork from here", hint: "new branch at this turn", keybind: ":fork", command: None },
         PaletteItem { group: format!("branch {} · post-v1", glyph::BRANCH), icon: glyph::UNDO, label: "Undo last turn", hint: "move head back", keybind: "u", command: None },
         // navigate
-        PaletteItem { group: "navigate".to_string(), icon: glyph::OPEN, label: "Open files drawer", hint: "browse the working tree", keybind: "^F", command: Some(Command::OpenDrawer(DrawerId::Files)) },
-        PaletteItem { group: "navigate".to_string(), icon: glyph::BRANCH, label: "Open branch drawer", hint: "current branch", keybind: "^B", command: Some(Command::OpenDrawer(DrawerId::Branch)) },
+        PaletteItem { group: "navigate".to_string(), icon: glyph::OPEN, label: "Open files drawer", hint: "browse the working tree", keybind: "^F", command: Some(Command::OpenDrawer(DrawerId::Repo)) },
+        PaletteItem { group: "navigate".to_string(), icon: glyph::BRANCH, label: "Open branch drawer", hint: "current branch", keybind: "^B", command: Some(Command::OpenDrawer(DrawerId::Session)) },
         // context ⑤ — placeholder (real actions land P3), disabled for now
         PaletteItem { group: format!("context {} · P3", glyph::CONTEXT), icon: glyph::EDIT, label: "Pin file to context", hint: "lands in P3", keybind: "", command: None },
         PaletteItem { group: format!("context {} · P3", glyph::CONTEXT), icon: glyph::EVICT, label: "Evict cold items", hint: "lands in P3", keybind: "", command: None },

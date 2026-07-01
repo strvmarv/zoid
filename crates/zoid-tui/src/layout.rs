@@ -13,10 +13,12 @@ pub const RAIL_WIDTH: u16 = 45;
 pub const RAIL_MIN_TOTAL: u16 = 95;
 /// Conversation column measure cap (spec §6.1: ~80–100 cols, ergonomics).
 pub const MAX_MEASURE: u16 = 100;
-/// Default drawer body height in rows (P3).
-pub const DRAWER_BODY_ROWS: u16 = 4;
-/// The economy ⑤ drawer needs more rows (items + churn + ledger + toggle).
-pub const ECONOMY_BODY_ROWS: u16 = 6;
+/// Repo drawer body rows: name+branch · worktree · changes.
+pub const REPO_BODY_ROWS: u16 = 3;
+/// Session drawer body rows: name · model·provider · dur·tok · ctx · cwd.
+pub const SESSION_BODY_ROWS: u16 = 5;
+/// Context ⑤ drawer body rows: items + churn + ledger/toggle (unchanged economy body).
+pub const CONTEXT_BODY_ROWS: u16 = 6;
 /// Message-box max content rows before it stops growing and scrolls internally
 /// (spec §2.2). Not a §16 token — a numeric layout constant, like RAIL_WIDTH.
 pub const MAX_INPUT_ROWS: u16 = 8;
@@ -30,8 +32,9 @@ pub fn input_height(lines: u16) -> u16 {
 /// Body height for a drawer kind.
 pub fn drawer_body_rows(id: DrawerId) -> u16 {
     match id {
-        DrawerId::Economy => ECONOMY_BODY_ROWS,
-        _ => DRAWER_BODY_ROWS,
+        DrawerId::Repo => REPO_BODY_ROWS,
+        DrawerId::Session => SESSION_BODY_ROWS,
+        DrawerId::Context => CONTEXT_BODY_ROWS,
     }
 }
 
@@ -82,11 +85,17 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
     let conversation = cols[0];
     let rail = if show_rail { Some(cols[2]) } else { None };
 
-    // Drawer header rects: one row per drawer, stacked from the rail top (1-col inset).
+    // Drawer header rects: one row per drawer, stacked below the rail's "chat
+    // rail" label row (1-col inset, 1-row offset). Without the +1 the first
+    // drawer header shares `rr.y` with that label and (since `render_rail`
+    // paints the label first) any leftover label glyphs past the header's own
+    // text bleed through — invisible while the first drawer's title was always
+    // long enough to fully overwrite it, but real once a shorter title (e.g.
+    // "repo") leads the stack.
     let mut drawer_headers = Vec::new();
     let mut drawer_bodies = Vec::new();
     if let Some(rr) = rail {
-        let inner = Rect { x: rr.x.saturating_add(1), y: rr.y, width: rr.width.saturating_sub(2), height: rr.height };
+        let inner = Rect { x: rr.x.saturating_add(1), y: rr.y.saturating_add(1), width: rr.width.saturating_sub(2), height: rr.height.saturating_sub(1) };
         let mut y = inner.y;
         for d in &state.drawers {
             if y >= inner.y.saturating_add(inner.height) {
@@ -158,7 +167,7 @@ mod tests {
         let l = compute(area(100, 24), &s);
         let rail = l.rail.expect("rail visible at 100 cols");
         assert_eq!(rail.width, RAIL_WIDTH);
-        assert_eq!(l.drawer_headers.len(), 3); // economy/files/branch
+        assert_eq!(l.drawer_headers.len(), 3); // repo/session/context
         // headers stack downward
         assert!(l.drawer_headers[1].1.y > l.drawer_headers[0].1.y);
     }
@@ -212,28 +221,28 @@ mod tests {
 
     #[test]
     fn open_drawer_gets_a_body_rect_sized_by_kind() {
-        let mut s = ShellState::new(); // Economy open by default
-        s.toggle_drawer(DrawerId::Files); // Files now open too
+        let mut s = ShellState::new(); // all three open by default
+        s.toggle_drawer(DrawerId::Repo); // Repo now closed
         let l = compute(area(100, 30), &s);
-        let econ = l.drawer_bodies.iter().find(|(id, _)| *id == DrawerId::Economy).unwrap().1;
-        let files = l.drawer_bodies.iter().find(|(id, _)| *id == DrawerId::Files).unwrap().1;
-        assert_eq!(econ.height, ECONOMY_BODY_ROWS);
-        assert_eq!(files.height, DRAWER_BODY_ROWS);
+        let context = l.drawer_bodies.iter().find(|(id, _)| *id == DrawerId::Context).unwrap().1;
+        let session = l.drawer_bodies.iter().find(|(id, _)| *id == DrawerId::Session).unwrap().1;
+        assert_eq!(context.height, CONTEXT_BODY_ROWS);
+        assert_eq!(session.height, SESSION_BODY_ROWS);
         // closed drawers have no body
-        assert!(l.drawer_bodies.iter().all(|(id, _)| *id != DrawerId::Branch));
+        assert!(l.drawer_bodies.iter().all(|(id, _)| *id != DrawerId::Repo));
         // body sits directly under its header
-        let econ_hdr = l.drawer_headers.iter().find(|(id, _)| *id == DrawerId::Economy).unwrap().1;
-        assert_eq!(econ.y, econ_hdr.y + 1);
+        let context_hdr = l.drawer_headers.iter().find(|(id, _)| *id == DrawerId::Context).unwrap().1;
+        assert_eq!(context.y, context_hdr.y + 1);
     }
 
     #[test]
     fn headers_stack_below_taller_economy_body() {
-        let s = ShellState::new(); // only Economy open (6-row body)
+        let s = ShellState::new(); // all three open by default; Repo is first
         let l = compute(area(100, 30), &s);
-        let econ_hdr = l.drawer_headers[0].1;
-        let files_hdr = l.drawer_headers[1].1;
-        // header(1) + ECONOMY_BODY_ROWS + 1 spacer
-        assert_eq!(files_hdr.y, econ_hdr.y + 1 + ECONOMY_BODY_ROWS + 1);
+        let repo_hdr = l.drawer_headers[0].1;
+        let session_hdr = l.drawer_headers[1].1;
+        // header(1) + REPO_BODY_ROWS + 1 spacer
+        assert_eq!(session_hdr.y, repo_hdr.y + 1 + REPO_BODY_ROWS + 1);
     }
 
     #[test]
