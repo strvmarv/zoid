@@ -8,6 +8,12 @@ pub enum Command {
     SwitchMode(Mode),
     Quit,
     OpenDrawer(DrawerId),
+    NewSession,
+    /// Rename the active session. Empty string = "prompt me" (the bin opens the
+    /// command line seeded with `rename `); non-empty = apply directly.
+    RenameSession(String),
+    /// Open the resume-session picker overlay (palette-only; no `:` form).
+    ResumeSessionPicker,
     Unknown(String),
 }
 
@@ -21,6 +27,9 @@ pub fn parse_command(raw: &str) -> Command {
         "q" | "quit" => Command::Quit,
         "files" => Command::OpenDrawer(DrawerId::Files),
         "branch" => Command::OpenDrawer(DrawerId::Branch),
+        "new" => Command::NewSession,
+        "rename" => Command::RenameSession(String::new()),
+        s if s.starts_with("rename ") => Command::RenameSession(s["rename ".len()..].trim().to_string()),
         other => Command::Unknown(other.to_string()),
     }
 }
@@ -41,5 +50,13 @@ mod tests {
     #[test]
     fn unknown_is_captured_verbatim() {
         assert_eq!(parse_command(":wat"), Command::Unknown("wat".into()));
+    }
+
+    #[test]
+    fn parses_session_commands() {
+        assert_eq!(parse_command(":new"), Command::NewSession);
+        assert_eq!(parse_command("new"), Command::NewSession);
+        assert_eq!(parse_command(":rename"), Command::RenameSession(String::new()));
+        assert_eq!(parse_command(":rename fix login"), Command::RenameSession("fix login".into()));
     }
 }
