@@ -80,8 +80,7 @@ fn import_legacy_if_present(
     if new_db.exists() || !legacy.exists() {
         return Ok(false);
     }
-    let old = zoid_core::store::EventStore::open(legacy.to_str().context("legacy path not UTF-8")?)?;
-    let events = old.load_all()?;
+    let events = zoid_core::store::load_legacy_events(legacy.to_str().context("legacy path not UTF-8")?)?;
     if let Some(dir) = new_db.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -427,7 +426,7 @@ async fn run<B: ratatui::backend::Backend>(
             }
             Some(update) = ui_rx.recv() => {
                 match update {
-                    AgentUpdate::Appended(ev) => { app.events.push(ev); }
+                    AgentUpdate::Appended(ev) => { app.events.push(*ev); }
                     AgentUpdate::TurnComplete => { app.streaming = false; }
                 }
             }
@@ -570,6 +569,11 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 zoid_tui::palette::nav(app.shell.session_selected, d, app.shell.sessions.len());
         }
         Action::SessionPick => {
+            if app.streaming {
+                app.shell.status_hint = Some("finish the current turn first".into());
+                app.shell.close_overlay();
+                return Ok(false);
+            }
             if let Some(&sid) = app.session_ids.get(app.shell.session_selected) {
                 app.session.touch_session(sid, now_ms()).await.ok();
                 app.session_id = sid;
@@ -595,6 +599,11 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
         Command::SwitchMode(m) => { app.shell.set_mode(m); Ok(false) }
         Command::OpenDrawer(id) => { app.shell.open_drawer(id); Ok(false) }
         Command::NewSession => {
+            if app.streaming {
+                app.shell.status_hint = Some("finish the current turn first".into());
+                app.shell.close_overlay();
+                return Ok(false);
+            }
             let id = Ulid::new();
             let ts = now_ms();
             let name = derive_session_name(None, ts, app.tz_offset_secs);
@@ -726,17 +735,42 @@ mod tests {
 
     #[test]
     fn imports_legacy_events_under_one_session_once() {
-        use zoid_core::event::{Event, EventKind};
+        use zoid_core::event::EventKind;
         use zoid_core::store::EventStore;
+        use rusqlite::{params, Connection};
         use ulid::Ulid;
         let dir = tempfile::tempdir().unwrap();
         let legacy = dir.path().join("legacy.db");
         let newdb = dir.path().join("new.db");
-        // Seed a legacy DB with two events (no meaningful session_id).
+        // Seed a legacy DB with the REAL pre-session_id 6-column schema (no
+        // `session_id` column) — this is what actually ships in the field.
         {
-            let s = EventStore::open(legacy.to_str().unwrap()).unwrap();
-            s.append(&Event::new(Ulid::from(1u128), None, 1, EventKind::UserMessage { text: "old q".into() })).unwrap();
-            s.append(&Event::new(Ulid::from(2u128), None, 2, EventKind::AssistantMessage { text: "old a".into() })).unwrap();
+            let conn = Connection::open(&legacy).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE events (
+                    id     TEXT PRIMARY KEY,
+                    parent TEXT,
+                    branch TEXT NOT NULL,
+                    ts     INTEGER NOT NULL,
+                    kind   TEXT NOT NULL,
+                    tokens TEXT
+                );",
+            )
+            .unwrap();
+            let id1 = Ulid::from(1u128);
+            let id2 = Ulid::from(2u128);
+            let kind1 = serde_json::to_string(&EventKind::UserMessage { text: "old q".into() }).unwrap();
+            let kind2 = serde_json::to_string(&EventKind::AssistantMessage { text: "old a".into() }).unwrap();
+            conn.execute(
+                "INSERT INTO events (id, parent, branch, ts, kind, tokens) VALUES (?1, NULL, ?2, ?3, ?4, NULL)",
+                params![id1.to_string(), "main", 1i64, kind1],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO events (id, parent, branch, ts, kind, tokens) VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
+                params![id2.to_string(), id1.to_string(), "main", 2i64, kind2],
+            )
+            .unwrap();
         }
         let sid = Ulid::from(42u128);
         // First run imports.

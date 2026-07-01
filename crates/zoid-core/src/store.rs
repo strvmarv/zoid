@@ -134,6 +134,41 @@ impl EventStore {
     }
 }
 
+/// Read events from a PRE-session_id legacy DB (6-column `events` schema, no
+/// `session_id`). Used once by the bin's one-time import. Returns events with
+/// the NIL session sentinel; the caller re-tags them with the target session.
+pub fn load_legacy_events(path: &str) -> Result<Vec<Event>> {
+    let conn = Connection::open(path)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, parent, branch, ts, kind, tokens FROM events ORDER BY id ASC",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut events = Vec::with_capacity(rows.len());
+    for (id, parent, branch, ts, kind, tokens) in rows {
+        events.push(Event {
+            id: id.parse()?,
+            parent: parent.map(|p| p.parse()).transpose()?,
+            branch: BranchId(branch),
+            session_id: Ulid::from(0u128),
+            ts,
+            kind: serde_json::from_str(&kind)?,
+            tokens: tokens.map(|t| serde_json::from_str(&t)).transpose()?,
+        });
+    }
+    Ok(events)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,5 +217,51 @@ mod tests {
             id, name: "renamed".into(), root_path: "/repo/a".into(),
             created_ts: 100, last_touched_ts: 200,
         }]);
+    }
+
+    #[test]
+    fn load_legacy_events_decodes_old_6_column_schema() {
+        use crate::event::EventKind;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE events (
+                id     TEXT PRIMARY KEY,
+                parent TEXT,
+                branch TEXT NOT NULL,
+                ts     INTEGER NOT NULL,
+                kind   TEXT NOT NULL,
+                tokens TEXT
+            );",
+        )
+        .unwrap();
+
+        let id1 = Ulid::from(1u128);
+        let id2 = Ulid::from(2u128);
+        let kind1 = serde_json::to_string(&EventKind::UserMessage { text: "old q".into() }).unwrap();
+        let kind2 = serde_json::to_string(&EventKind::AssistantMessage { text: "old a".into() }).unwrap();
+        conn.execute(
+            "INSERT INTO events (id, parent, branch, ts, kind, tokens) VALUES (?1, NULL, ?2, ?3, ?4, NULL)",
+            params![id1.to_string(), "main", 10i64, kind1],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO events (id, parent, branch, ts, kind, tokens) VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
+            params![id2.to_string(), id1.to_string(), "main", 20i64, kind2],
+        )
+        .unwrap();
+        drop(conn);
+
+        let events = load_legacy_events(path.to_str().unwrap()).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].id, id1);
+        assert_eq!(events[0].parent, None);
+        assert_eq!(events[0].session_id, Ulid::from(0u128));
+        assert_eq!(events[0].tokens, None);
+        assert!(matches!(&events[0].kind, EventKind::UserMessage { text } if text == "old q"));
+        assert_eq!(events[1].parent, Some(id1));
+        assert!(matches!(&events[1].kind, EventKind::AssistantMessage { text } if text == "old a"));
     }
 }

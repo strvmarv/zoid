@@ -29,7 +29,7 @@ pub const MAX_TOOL_ITERATIONS: u32 = 25;
 /// UI-facing updates emitted as the turn progresses.
 pub enum AgentUpdate {
     /// A new event was persisted; the UI should cache it and redraw.
-    Appended(Event),
+    Appended(Box<Event>),
     /// The turn is finished (model produced no further tool calls / cap / error).
     TurnComplete,
 }
@@ -77,6 +77,10 @@ pub fn build_request(events: &[Event], model: &str, tools: &[Box<dyn Tool>]) -> 
 ///
 /// `TurnComplete` is sent on EVERY exit path — including session/IO errors —
 /// so the UI never gets stuck in the `streaming` state.
+// These 8 params thread the full turn context (provider, tools, session, seed
+// events, model, ui channel, session_id, clock); a params struct would add
+// indirection without adding clarity.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_agent_turn(
     provider: Arc<dyn Provider>,
     tools: Arc<Vec<Box<dyn Tool>>>,
@@ -95,6 +99,8 @@ pub async fn run_agent_turn(
 
 /// Inner loop — separated so `run_agent_turn` can send `TurnComplete` regardless
 /// of whether this returns `Ok` or `Err`.
+// Same 8-arg turn context as `run_agent_turn` above; see that comment.
+#[allow(clippy::too_many_arguments)]
 async fn run_turn_inner(
     provider: Arc<dyn Provider>,
     tools: Arc<Vec<Box<dyn Tool>>>,
@@ -247,6 +253,6 @@ async fn emit_with_tokens(
     ev.tokens = tokens;
     session.append(ev.clone()).await?;
     events.push(ev.clone());
-    let _ = ui.send(AgentUpdate::Appended(ev)).await;
+    let _ = ui.send(AgentUpdate::Appended(Box::new(ev))).await;
     Ok(())
 }
