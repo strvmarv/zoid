@@ -59,7 +59,7 @@ zoid currently renders the mode name, branch, and hints in several places; this 
 - **Top title bar (minimal)** — shows the **app name** and a **live activity indicator** (`● idle` when waiting for you; `⠿`/`● running` while the agent streams or a tool runs). It does **not** carry the session name, model/provider, or context tokens — those all live in the **session rail widget** (§2.1, §7). *(current: the title bar also shows session name / model / `n/200k` tokens — move model+provider and tokens into the session widget and drop the session name from the bar.)*
 - **Bottom status bar** — mode chip (left) + a **minimal** hint string: `zoom <level> · ^P palette`. **Hidden:** `⇧Tab → Build` (Build is deferred, §2) and `^C quit` (quit is a palette action / `:q`, §4). *(current: `render.rs:116–123` shows branch, `⇧Tab → Build`, and `^C quit` — trim to zoom + palette.)*
 - **Quit** — removed from the status-bar hint; reachable via the palette (§4) and `:q`.
-- **Message box** — the input is a **bordered box titled `message`**; **⏎ submits**, **Alt+⏎ inserts a newline** (`route.rs:112`); no hint row is rendered. *(current: the box shows the tui-textarea default cursor-line **underline** — a known fix, §9.)*
+- **Message box** — the input is a **bordered box titled `message`** that **grows as you add lines and shrinks back to a single line on submit** (its height tracks the wrapped line count up to a cap, then the box scrolls internally). **⏎ submits**; **⇧⏎ (Shift+Enter) inserts a newline**, with **Alt+⏎ as a fallback** on terminals that can't distinguish Shift+Enter. Distinguishing ⇧⏎ from ⏎ requires enabling crossterm's **keyboard-enhancement flags** (Kitty keyboard protocol — `DISAMBIGUATE_ESCAPE_CODES`) at startup and popping them on exit; when the terminal doesn't support them, zoid falls back to Alt+⏎ gracefully. No hint row is rendered. *(current: newline is **Alt+⏎ only** (`route.rs:112`), the box is **fixed-height**, and it shows the tui-textarea default cursor-line **underline** — all known fixes, §9.)*
 
 ---
 
@@ -189,7 +189,7 @@ Chat is realized **completely before** the Build loop (core §9 gives the canoni
 
 **Cross-cutting (every phase):** TDD default; every new Chat screen ships its design-tokens + a `TestBackend`/`insta` snapshot bound to `docs/ux/` (core §8, §13).
 
-**Known fixes carried in this refinement** (fold into the relevant phase's work): remove the message-input **underline** (tui-textarea's default cursor-line style — set the cursor-line style to plain; `main.rs:122/309/353`); consolidate duplicate mode/branch chrome (§2.2); drop rail drawer keybind labels/glyphs (§2.1); render markdown + highlight fenced code in messages (§3.5).
+**Known fixes carried in this refinement** (fold into the relevant phase's work): remove the message-input **underline** (tui-textarea's default cursor-line style — set the cursor-line style to plain; `main.rs:122/309/353`); consolidate duplicate mode/branch chrome (§2.2); drop rail drawer keybind labels/glyphs (§2.1); render markdown + highlight fenced code in messages (§3.5); support **⇧⏎ (Shift+Enter) newline** via crossterm keyboard-enhancement flags (with Alt+⏎ as the fallback) and make the **message box grow/shrink** with its content (§2.2).
 
 ---
 
