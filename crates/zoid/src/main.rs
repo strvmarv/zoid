@@ -187,6 +187,7 @@ async fn run<B: ratatui::backend::Backend>(
     motion_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
+        app.shell.input_rows = app.textarea.lines().len().max(1) as u16;
         terminal.draw(|f| {
             let msgs = conversation(&app.events);
             let window = zoid_core::context::context_window(&app.events);

@@ -103,6 +103,9 @@ pub struct ShellState {
     /// notice). Lives on `ShellState` (not `App`) so the pure renderer can read
     /// it directly. Setting/clearing it on a verb pick is bin wiring (P4d T4).
     pub status_hint: Option<String>,
+    /// Wrapped line count of the message input, sampled by the bin each frame so
+    /// `layout::compute` can grow/shrink the box (spec §2.2). Default 1 (resting).
+    pub input_rows: u16,
 }
 
 impl ShellState {
@@ -129,6 +132,7 @@ impl ShellState {
             reduced_motion: false,
             zoom: Zoom::Normal,
             status_hint: None,
+            input_rows: 1,
         }
     }
 

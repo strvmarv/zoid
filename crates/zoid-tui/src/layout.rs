@@ -17,6 +17,15 @@ pub const MAX_MEASURE: u16 = 100;
 pub const DRAWER_BODY_ROWS: u16 = 4;
 /// The economy ⑤ drawer needs more rows (items + churn + ledger + toggle).
 pub const ECONOMY_BODY_ROWS: u16 = 6;
+/// Message-box max content rows before it stops growing and scrolls internally
+/// (spec §2.2). Not a §16 token — a numeric layout constant, like RAIL_WIDTH.
+pub const MAX_INPUT_ROWS: u16 = 8;
+
+/// Total input-box height (content + top/bottom borders) for a wrapped line
+/// count: grows with content, clamps at MAX_INPUT_ROWS, min one content row.
+pub fn input_height(lines: u16) -> u16 {
+    lines.clamp(1, MAX_INPUT_ROWS) + 2
+}
 
 /// Body height for a drawer kind.
 pub fn drawer_body_rows(id: DrawerId) -> u16 {
@@ -46,11 +55,11 @@ pub fn in_rect(r: Rect, col: u16, row: u16) -> bool {
 }
 
 pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
-    // Vertical: title(1) · body(min) · input(3) · status(1).
+    // Vertical: title(1) · body(min) · input(grows with content) · status(1).
     let rows = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
-        Constraint::Length(3),
+        Constraint::Length(input_height(state.input_rows)),
         Constraint::Length(1),
     ])
     .split(area);
@@ -225,5 +234,22 @@ mod tests {
         let files_hdr = l.drawer_headers[1].1;
         // header(1) + ECONOMY_BODY_ROWS + 1 spacer
         assert_eq!(files_hdr.y, econ_hdr.y + 1 + ECONOMY_BODY_ROWS + 1);
+    }
+
+    #[test]
+    fn input_height_grows_and_clamps() {
+        assert_eq!(input_height(1), 3, "one line → 3 rows (content + 2 borders); post-submit resting height");
+        assert_eq!(input_height(4), 6, "grows with content");
+        assert_eq!(input_height(MAX_INPUT_ROWS), MAX_INPUT_ROWS + 2, "at the cap");
+        assert_eq!(input_height(MAX_INPUT_ROWS + 5), MAX_INPUT_ROWS + 2, "clamps past the cap");
+        assert_eq!(input_height(0), 3, "min one content row");
+    }
+
+    #[test]
+    fn compute_input_area_tracks_input_rows() {
+        let mut s = ShellState::new();
+        s.input_rows = 4;
+        let l = compute(area(100, 30), &s);
+        assert_eq!(l.input.height, input_height(4));
     }
 }

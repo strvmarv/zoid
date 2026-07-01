@@ -329,3 +329,18 @@ fn verb_overlay_frame() {
 fn verb_overlay_wide_frame() {
     insta::assert_snapshot!(draw_overlay(Overlay::Verbs, 140, 24));
 }
+
+/// The message box grows with its content (spec §2.2). A 3-line input yields a
+/// 5-row box (3 content + 2 borders); Buffer-Debug captures the taller frame.
+#[test]
+fn growing_message_box_frame() {
+    let mut s = ShellState::new();
+    s.input_rows = 3;
+    let input = TextArea::from(vec!["line one".to_string(), "line two".to_string(), "line three".to_string()]);
+    let backend = TestBackend::new(100, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|f| render_shell(f, &s, &empty_economy(), &seeded(), &input, false, &normal_view()))
+        .unwrap();
+    insta::assert_snapshot!(format!("{:#?}", terminal.backend().buffer()));
+}
