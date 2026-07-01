@@ -81,9 +81,19 @@ async fn agent_loop_runs_tool_then_finishes() {
         complete
     });
 
-    run_agent_turn(provider.clone(), tools, session.clone(), seed, "fake".into(), tx, ulid::Ulid::new(), fixed_now)
-        .await
-        .unwrap();
+    run_agent_turn(
+        zoid::agent::chat_turn_config(),
+        provider.clone(),
+        tools,
+        session.clone(),
+        seed,
+        "fake".into(),
+        tx,
+        ulid::Ulid::new(),
+        fixed_now,
+    )
+    .await
+    .unwrap();
 
     let complete = drain.await.unwrap();
     assert!(complete, "loop must emit TurnComplete");
@@ -134,10 +144,20 @@ async fn agent_loop_returns_ok_and_emits_turn_complete_on_error_event() {
         complete
     });
 
-    // Must return Ok even though the provider sent an Error event.
-    let result =
-        run_agent_turn(provider, tools, session.clone(), seed, "fake".into(), tx, ulid::Ulid::new(), fixed_now).await;
-    assert!(result.is_ok(), "run_agent_turn must return Ok(()) on a provider Error event");
+    // Must return Ok (with the accumulated events) even though the provider sent an Error event.
+    let result = run_agent_turn(
+        zoid::agent::chat_turn_config(),
+        provider,
+        tools,
+        session.clone(),
+        seed,
+        "fake".into(),
+        tx,
+        ulid::Ulid::new(),
+        fixed_now,
+    )
+    .await;
+    assert!(result.is_ok(), "run_agent_turn must return Ok(events) on a provider Error event");
 
     let complete = drain.await.unwrap();
     assert!(complete, "TurnComplete must be emitted even on the error path");

@@ -657,7 +657,18 @@ fn spawn_turn(app: &App) {
     let ui = app.ui_tx.clone();
     let session_id = app.session_id;
     tokio::spawn(async move {
-        let _ = run_agent_turn(provider, tools, session, seed, model, ui, session_id, now_ms).await;
+        let _ = run_agent_turn(
+            zoid::agent::chat_turn_config(),
+            provider,
+            tools,
+            session,
+            seed,
+            model,
+            ui,
+            session_id,
+            now_ms,
+        )
+        .await;
     });
 }
 
