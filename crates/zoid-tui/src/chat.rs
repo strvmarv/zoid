@@ -28,11 +28,11 @@ pub fn conversation_lines<'a>(msgs: &'a [ChatMsg], streaming: bool, caret_on: bo
     for (i, m) in msgs.iter().enumerate() {
         match m {
             ChatMsg::User { text, ts } => {
-                lines.push(Line::from(vec![
+                let prefix = vec![
                     stamp(*ts),
                     Span::styled(format!("{} ", glyph::USER_TURN), Style::new().fg(color::CHAT_ACCENT)),
-                    Span::styled(text.clone(), Style::new().fg(color::TXT)),
-                ]));
+                ];
+                push_message(&mut lines, prefix, crate::markdown::render_markdown(text));
             }
             ChatMsg::Assistant { text, tool_calls, ts } => {
                 let mut shown = text.clone();
@@ -40,11 +40,11 @@ pub fn conversation_lines<'a>(msgs: &'a [ChatMsg], streaming: bool, caret_on: bo
                     shown.push(glyph::CARET);
                 }
                 if !shown.is_empty() || tool_calls.is_empty() {
-                    lines.push(Line::from(vec![
+                    let prefix = vec![
                         stamp(*ts),
                         Span::styled("zoid ".to_string(), Style::new().fg(color::DIM)),
-                        Span::styled(shown, Style::new().fg(color::TXT)),
-                    ]));
+                    ];
+                    push_message(&mut lines, prefix, crate::markdown::render_markdown(&shown));
                 }
                 for tc in tool_calls {
                     lines.push(Line::from(vec![
@@ -70,6 +70,28 @@ pub fn conversation_lines<'a>(msgs: &'a [ChatMsg], streaming: bool, caret_on: bo
         }
     }
     lines
+}
+
+/// Push a message (user/assistant) into `out`: the `prefix` (stamp + role) leads
+/// the first body line; continuation lines are indented under the text column so
+/// wrapped markdown/lists stay aligned. `body` comes from the markdown renderer.
+fn push_message<'a>(out: &mut Vec<Line<'a>>, prefix: Vec<Span<'static>>, body: Vec<Line<'static>>) {
+    use unicode_width::UnicodeWidthStr;
+    if body.is_empty() {
+        out.push(Line::from(prefix));
+        return;
+    }
+    let indent_w: usize = prefix.iter().map(|s| s.content.width()).sum();
+    let indent = " ".repeat(indent_w);
+    for (i, line) in body.into_iter().enumerate() {
+        let mut spans: Vec<Span<'static>> = if i == 0 {
+            prefix.clone()
+        } else {
+            vec![Span::styled(indent.clone(), Style::new())]
+        };
+        spans.extend(line.spans);
+        out.push(Line::from(spans));
+    }
 }
 
 /// Per-frame conversation view-model the bin assembles: altitude + caret blink
@@ -386,5 +408,26 @@ mod tests {
         v.reveal = Some(1);
         let lines = conversation_view(&seeded(), &v, false);
         assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn assistant_body_renders_markdown() {
+        use crate::tokens::color;
+        let msgs = vec![ChatMsg::Assistant {
+            text: "run **now**\n\n```rust\nfn x() {}\n```".into(),
+            tool_calls: vec![],
+            ts: 0,
+        }];
+        let lines = conversation_lines(&msgs, false, true, 0);
+        let spans: Vec<(String, Style)> = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| (s.content.to_string(), s.style)))
+            .collect();
+        // bold inline text survived markdown
+        assert!(spans.iter().any(|(t, st)| t == "now" && st.add_modifier.contains(ratatui::style::Modifier::BOLD)));
+        // the fenced rust block was syntax-highlighted
+        assert!(spans.iter().any(|(_, st)| st.fg == Some(color::SYN_KEYWORD)));
+        // the "zoid " role prefix still leads the first line
+        assert!(spans.iter().any(|(t, _)| t == "zoid "));
     }
 }

@@ -354,3 +354,28 @@ fn growing_message_box_frame() {
         .unwrap();
     insta::assert_snapshot!(format!("{:#?}", terminal.backend().buffer()));
 }
+
+/// Markdown message rendering (spec §3.5) — heading, bold, inline code, a list,
+/// and a fenced rust block. Buffer-Debug captures the styled spans + syntax hues.
+fn seeded_markdown() -> Vec<ChatMsg> {
+    vec![
+        ChatMsg::User { text: "how do I read a file?".into(), ts: 0 },
+        ChatMsg::Assistant {
+            text: "Use **read_file**. Steps:\n\n- open the path\n- return `String`\n\n```rust\nfn read(p: &str) -> String { String::new() }\n```".into(),
+            tool_calls: vec![],
+            ts: 0,
+        },
+    ]
+}
+
+#[test]
+fn markdown_message_frame() {
+    let s = ShellState::new();
+    let input = TextArea::default();
+    let backend = TestBackend::new(100, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|f| render_shell(f, &s, &empty_economy(), &seeded_markdown(), &input, false, &normal_view()))
+        .unwrap();
+    insta::assert_snapshot!(format!("{:#?}", terminal.backend().buffer()));
+}
