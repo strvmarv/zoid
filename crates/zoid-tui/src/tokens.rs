@@ -56,6 +56,10 @@ pub mod color {
     pub const HEAT_WARM: Color = WARN;
     pub const HEAT_COLD: Color = DIM;
 
+    // repo drawer changes line — reuses the status palette (§16: uniform language).
+    pub const ADDED: Color = OK;      // +added lines
+    pub const REMOVED: Color = ERROR; // -removed lines
+
     // Ⓡ3 tree-sitter syntax palette (spec §16 / docs/ux/README.md, verbatim).
     pub const SYN_KEYWORD: Color = Color::Rgb(0xff, 0x7b, 0x72);
     pub const SYN_FUNC: Color = Color::Rgb(0xd2, 0xa8, 0xff);
@@ -139,5 +143,11 @@ mod tests {
         assert_eq!(glyph::NEW, '+');
         assert_eq!(glyph::RESUME, '↺');
         assert_eq!(glyph::RENAME, '✎');
+    }
+
+    #[test]
+    fn repo_changes_colors_reuse_status_palette() {
+        assert_eq!(color::ADDED, color::OK);
+        assert_eq!(color::REMOVED, color::ERROR);
     }
 }

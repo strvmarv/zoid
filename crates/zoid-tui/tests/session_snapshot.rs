@@ -35,3 +35,14 @@ fn resume_session_overlay_frame() {
     ];
     insta::assert_snapshot!(draw(&s, &[], 100, 24));
 }
+
+#[test]
+fn repo_drawer_frame() {
+    let mut s = ShellState::new();
+    s.repo_name = "zoid".into();
+    s.branch = "main".into();
+    s.changes_added = 128;
+    s.changes_removed = 34;
+    s.changes_files = 7;
+    insta::assert_snapshot!(draw(&s, &[], 100, 24));
+}

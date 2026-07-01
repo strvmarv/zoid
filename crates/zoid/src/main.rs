@@ -148,6 +148,38 @@ fn current_branch() -> String {
         .unwrap_or_else(|| "main".into())
 }
 
+/// Parse `git diff --numstat` output → (added, removed, files). Binary files
+/// show `-` for both counts (counted as a file, zero lines). Pure.
+fn parse_numstat(out: &str) -> (usize, usize, usize) {
+    let mut added = 0usize;
+    let mut removed = 0usize;
+    let mut files = 0usize;
+    for line in out.lines().filter(|l| !l.trim().is_empty()) {
+        let mut cols = line.split('\t');
+        let a = cols.next().unwrap_or("-");
+        let r = cols.next().unwrap_or("-");
+        if cols.next().is_none() { continue; } // no path → malformed, skip
+        added += a.parse::<usize>().unwrap_or(0);
+        removed += r.parse::<usize>().unwrap_or(0);
+        files += 1;
+    }
+    (added, removed, files)
+}
+
+/// Working-tree change stats via `git diff --numstat` (unstaged) + `--cached`
+/// (staged). Best-effort — any failure yields zeros.
+fn git_status() -> (usize, usize, usize) {
+    let run = |args: &[&str]| -> String {
+        std::process::Command::new("git").args(args).output().ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default()
+    };
+    let (a1, r1, f1) = parse_numstat(&run(&["diff", "--numstat"]));
+    let (a2, r2, f2) = parse_numstat(&run(&["diff", "--numstat", "--cached"]));
+    (a1 + a2, r1 + r2, f1 + f2)
+}
+
 /// Up to N entries of the cwd for the Files drawer (names only, sorted).
 fn cwd_files(limit: usize) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(".")
@@ -175,6 +207,10 @@ struct App {
     ui_tx: mpsc::Sender<AgentUpdate>,
     /// Monotonic clock start for motion timing (Ⓡ2).
     started: std::time::Instant,
+    /// Last time the repo drawer's git changes line was refreshed (cadence-gated
+    /// to ~1/sec so the event-driven run loop doesn't shell out to `git` on
+    /// every keystroke / streaming tick).
+    last_git_refresh: std::time::Instant,
     /// When the altitude last changed, for the fold/unfold reveal (Ⓡ2).
     zoom_changed_at: Option<std::time::Instant>,
     /// Local UTC offset (seconds) for message-row HH:MM stamps, sampled once.
@@ -232,6 +268,11 @@ async fn main() -> Result<()> {
     shell.branch = current_branch();
     shell.files = cwd_files(64);
     shell.reduced_motion = std::env::var("ZOID_REDUCED_MOTION").map(|v| !v.is_empty()).unwrap_or(false);
+    shell.repo_name = Path::new(&root).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| root.clone());
+    let (boot_added, boot_removed, boot_files) = git_status();
+    shell.changes_added = boot_added;
+    shell.changes_removed = boot_removed;
+    shell.changes_files = boot_files;
 
     let (ui_tx, mut ui_rx) = mpsc::channel::<AgentUpdate>(256);
 
@@ -247,6 +288,7 @@ async fn main() -> Result<()> {
         shell,
         ui_tx,
         started: std::time::Instant::now(),
+        last_git_refresh: std::time::Instant::now(),
         zoom_changed_at: None,
         tz_offset_secs,
         session_ids: Vec::new(),
@@ -297,6 +339,13 @@ async fn run<B: ratatui::backend::Backend>(
     motion_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
+        if app.last_git_refresh.elapsed() >= std::time::Duration::from_secs(1) {
+            let (a, r, f) = git_status();
+            app.shell.changes_added = a;
+            app.shell.changes_removed = r;
+            app.shell.changes_files = f;
+            app.last_git_refresh = std::time::Instant::now();
+        }
         app.shell.input_rows = app.textarea.lines().len().max(1) as u16;
         terminal.draw(|f| {
             let msgs = conversation(&app.events);
@@ -639,6 +688,15 @@ mod tests {
         // Empty / no message → timestamp fallback (HH:MM, deterministic at offset 0).
         assert_eq!(derive_session_name(None, 49_500_000, 0), "session 13:45");
         assert_eq!(derive_session_name(Some("   "), 0, 0), "session 00:00");
+    }
+
+    #[test]
+    fn parses_numstat_sums_and_counts_files() {
+        let out = "12\t3\tsrc/a.rs\n0\t5\tsrc/b.rs\n7\t0\tCargo.toml\n";
+        assert_eq!(parse_numstat(out), (19, 8, 3)); // added=12+0+7, removed=3+5+0, files=3
+        // Binary files show `-\t-\tpath`; count the file, add zero lines.
+        assert_eq!(parse_numstat("-\t-\tlogo.png\n"), (0, 0, 1));
+        assert_eq!(parse_numstat(""), (0, 0, 0));
     }
 
     #[test]

@@ -94,6 +94,15 @@ pub struct ShellState {
     pub files: Vec<String>,
     /// Current branch label for the Branch drawer (P2: read from `.git/HEAD`).
     pub branch: String,
+    /// Repo directory name shown in the repo drawer header line.
+    pub repo_name: String,
+    /// Worktree label for the repo drawer ("(none)" when not in a linked worktree).
+    pub worktree: String,
+    /// Working-tree changed-line counts (unstaged + staged) for the repo drawer's
+    /// changes line, refreshed on an `Instant` cadence by the bin.
+    pub changes_added: usize,
+    pub changes_removed: usize,
+    pub changes_files: usize,
     /// Reduced-motion accessibility setting (spec §13). When true, animations
     /// resolve to their final state instantly. Bin sets it from ZOID_REDUCED_MOTION.
     pub reduced_motion: bool,
@@ -134,6 +143,11 @@ impl ShellState {
             conversation_scroll: 0,
             files: Vec::new(),
             branch: "main".into(),
+            repo_name: String::new(),
+            worktree: "(none)".into(),
+            changes_added: 0,
+            changes_removed: 0,
+            changes_files: 0,
             reduced_motion: false,
             zoom: Zoom::Normal,
             status_hint: None,

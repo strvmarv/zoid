@@ -158,8 +158,10 @@ fn render_rail(frame: &mut Frame, state: &ShellState, economy: &EconomyView, lay
             if let Some(rect) = body {
                 if d.id == DrawerId::Context {
                     render_economy_body(frame, economy, rect, state.focus == Focus::Rail);
-                } else {
-                    frame.render_widget(Paragraph::new(drawer_body(d.id, state)), rect);
+                } else if d.id == DrawerId::Repo {
+                    render_repo_body(frame, state, rect);
+                } else if d.id == DrawerId::Session {
+                    render_session_body(frame, state, rect); // Task 13
                 }
             }
         }
@@ -217,12 +219,30 @@ fn render_economy_body(frame: &mut Frame, econ: &EconomyView, area: Rect, rail_f
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn drawer_body(id: DrawerId, _state: &ShellState) -> Vec<Line<'static>> {
-    match id {
-        DrawerId::Repo => vec![Line::styled("repo · Task 12", Style::new().fg(color::DIM))],
-        DrawerId::Session => vec![Line::styled("session · Task 13", Style::new().fg(color::DIM))],
-        DrawerId::Context => vec![Line::styled("context economy", Style::new().fg(color::DIM))],
-    }
+fn render_repo_body(frame: &mut Frame, state: &ShellState, area: Rect) {
+    let name = if state.repo_name.is_empty() { "repo" } else { &state.repo_name };
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(format!("{name}   "), Style::new().fg(color::TXT)),
+            Span::styled(format!("{} {}", glyph::BRANCH, state.branch), Style::new().fg(color::BRANCH)),
+        ]),
+        Line::from(vec![
+            Span::styled("worktree ", Style::new().fg(color::DIM)),
+            Span::styled(state.worktree.clone(), Style::new().fg(color::DIM)),
+        ]),
+        Line::from(vec![
+            Span::styled("changes ", Style::new().fg(color::DIM)),
+            Span::styled(format!("+{}", state.changes_added), Style::new().fg(color::ADDED)),
+            Span::styled(" ", Style::new()),
+            Span::styled(format!("-{}", state.changes_removed), Style::new().fg(color::REMOVED)),
+            Span::styled(format!(" · {} files", state.changes_files), Style::new().fg(color::DIM)),
+        ]),
+    ];
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn render_session_body(frame: &mut Frame, _state: &ShellState, area: Rect) {
+    frame.render_widget(Paragraph::new(vec![Line::styled("session · Task 13", Style::new().fg(color::DIM))]), area);
 }
 
 fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
