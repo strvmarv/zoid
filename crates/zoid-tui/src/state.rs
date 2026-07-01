@@ -43,6 +43,7 @@ pub enum Overlay {
     CommandLine,
     Objects,
     Verbs,
+    Sessions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +106,10 @@ pub struct ShellState {
     /// Line count of the message input, sampled by the bin each frame so
     /// `layout::compute` can grow/shrink the box (spec §2.2). Default 1 (resting).
     pub input_rows: u16,
+    /// Display rows for the resume-session picker (bin-formatted, most-recent-first).
+    pub sessions: Vec<String>,
+    /// Highlighted row in the resume-session picker.
+    pub session_selected: usize,
 }
 
 impl ShellState {
@@ -132,6 +137,8 @@ impl ShellState {
             zoom: Zoom::Normal,
             status_hint: None,
             input_rows: 1,
+            sessions: Vec::new(),
+            session_selected: 0,
         }
     }
 
@@ -185,6 +192,8 @@ impl ShellState {
         self.palette = PaletteState::default();
         self.cmdline = CmdlineState::default();
         self.objects = ObjectState::default();
+        self.sessions.clear();
+        self.session_selected = 0;
     }
 
     /// Increase detail (Summary → Normal → Detail), saturating.

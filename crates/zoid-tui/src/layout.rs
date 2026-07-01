@@ -109,7 +109,7 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
     // the rail (overlays draw last and would otherwise clip the rail's drawers).
     // `centered` clamps the width to its area, so the box shrinks to fit a narrow
     // stream rather than bleeding right into the rail.
-    let palette = if matches!(state.overlay, Overlay::Palette | Overlay::Objects | Overlay::Verbs) {
+    let palette = if matches!(state.overlay, Overlay::Palette | Overlay::Objects | Overlay::Verbs | Overlay::Sessions) {
         Some(centered(conversation, 72, 18))
     } else {
         None

@@ -132,6 +132,14 @@ fn derive_session_name(first_user_msg: Option<&str>, ts_ms: i64, tz_offset_secs:
     }
 }
 
+/// Compact "N ago" from two epoch-millis stamps (e.g. "12m ago", "3h ago").
+fn fmt_since(then_ms: i64, now_ms: i64) -> String {
+    let mins = (now_ms - then_ms).max(0) / 60_000;
+    if mins < 60 { format!("{mins}m ago") }
+    else if mins < 1440 { format!("{}h ago", mins / 60) }
+    else { format!("{}d ago", mins / 1440) }
+}
+
 /// Best-effort current branch from `.git/HEAD` (`ref: refs/heads/<name>`); "main" otherwise.
 fn current_branch() -> String {
     std::fs::read_to_string(".git/HEAD")
@@ -171,6 +179,9 @@ struct App {
     zoom_changed_at: Option<std::time::Instant>,
     /// Local UTC offset (seconds) for message-row HH:MM stamps, sampled once.
     tz_offset_secs: i32,
+    /// Session ids backing the resume-session picker rows (index-aligned with
+    /// `shell.sessions`), populated when `Command::ResumeSessionPicker` opens it.
+    session_ids: Vec<Ulid>,
 }
 
 impl App {
@@ -238,6 +249,7 @@ async fn main() -> Result<()> {
         started: std::time::Instant::now(),
         zoom_changed_at: None,
         tz_offset_secs,
+        session_ids: Vec::new(),
     };
 
     enable_raw_mode()?;
@@ -487,6 +499,19 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             }
             app.shell.close_overlay();
         }
+        Action::SessionMove(d) => {
+            app.shell.session_selected =
+                zoid_tui::palette::nav(app.shell.session_selected, d, app.shell.sessions.len());
+        }
+        Action::SessionPick => {
+            if let Some(&sid) = app.session_ids.get(app.shell.session_selected) {
+                app.session.touch_session(sid, now_ms()).await.ok();
+                app.session_id = sid;
+                app.events = app.session.snapshot_session(sid).await.unwrap_or_default();
+                app.shell.conversation_scroll = 0;
+            }
+            app.shell.close_overlay();
+        }
         Action::Noop => {}
     }
     Ok(false)
@@ -498,6 +523,44 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
         Command::Quit => Ok(true),
         Command::SwitchMode(m) => { app.shell.set_mode(m); Ok(false) }
         Command::OpenDrawer(id) => { app.shell.open_drawer(id); Ok(false) }
+        Command::NewSession => {
+            let id = Ulid::new();
+            let ts = now_ms();
+            let name = derive_session_name(None, ts, app.tz_offset_secs);
+            app.session.new_session(id, name, repo_root(), ts).await.ok();
+            app.session_id = id;
+            app.events.clear();
+            app.shell.conversation_scroll = 0;
+            Ok(false)
+        }
+        Command::RenameSession(name) => {
+            if name.is_empty() {
+                // Seed the command line so the user types the name.
+                app.shell.overlay = zoid_tui::Overlay::CommandLine;
+                app.shell.cmdline.buffer = "rename ".into();
+            } else {
+                app.session.rename_session(app.session_id, name).await.ok();
+            }
+            Ok(false)
+        }
+        Command::ResumeSessionPicker => {
+            let list = app.session.list_sessions(Some(repo_root())).await.unwrap_or_default();
+            app.session_ids = list.iter().map(|s| s.id).collect();
+            app.shell.sessions = list
+                .iter()
+                .map(|s| {
+                    format!(
+                        "{}  ·  {}  ·  {}",
+                        s.name,
+                        fmt_since(s.last_touched_ts, now_ms()),
+                        zoid_tui::economy_view::human_tokens(s.token_total)
+                    )
+                })
+                .collect();
+            app.shell.session_selected = 0;
+            app.shell.overlay = zoid_tui::Overlay::Sessions;
+            Ok(false)
+        }
         Command::Unknown(_) => Ok(false),
     }
 }

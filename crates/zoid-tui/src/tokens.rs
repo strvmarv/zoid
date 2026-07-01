@@ -32,6 +32,9 @@ pub mod glyph {
     pub const IDLE: char = '●';        // title-bar activity — waiting for the user (§2.2)
     pub const BULLET: char = '•';      // markdown unordered-list marker (§3.5)
     pub const QUOTE_BAR: char = '│';   // markdown blockquote bar (§3.5)
+    pub const NEW: char = '＋';        // palette: new session
+    pub const RESUME: char = '↺';      // palette: resume session
+    pub const RENAME: char = '✎';      // palette: rename session
 }
 
 /// Colors (visual-language table, spec §16 / docs/ux/README.md).
@@ -129,5 +132,12 @@ mod tests {
         assert_eq!(glyph::QUOTE_BAR, '│');
         assert_eq!(color::MD_CODE, color::SYN_STRING); // inline/`code` reuses the string hue
         assert_eq!(color::MD_LINK, color::CHAT_ACCENT); // links use the Chat accent
+    }
+
+    #[test]
+    fn session_group_tokens_present() {
+        assert_eq!(glyph::NEW, '＋');
+        assert_eq!(glyph::RESUME, '↺');
+        assert_eq!(glyph::RENAME, '✎');
     }
 }

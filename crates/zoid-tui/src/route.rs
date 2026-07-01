@@ -44,6 +44,8 @@ pub enum Action {
     VerbPick,
     /// From the verb picker, step back to the object picker (not fully out).
     VerbBack,
+    SessionMove(i32),
+    SessionPick,
     Noop,
 }
 
@@ -73,6 +75,7 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
         Overlay::CommandLine => return route_cmdline_key(state, key),
         Overlay::Objects => return route_objects_key(key),
         Overlay::Verbs => return route_verbs_key(key),
+        Overlay::Sessions => return route_sessions_key(key),
         Overlay::None => {}
     }
 
@@ -160,6 +163,16 @@ fn route_objects_key(key: KeyEvent) -> Action {
         KeyCode::Enter => Action::ObjectPick,
         KeyCode::Up => Action::ObjectMove(-1),
         KeyCode::Down => Action::ObjectMove(1),
+        _ => Action::Noop,
+    }
+}
+
+fn route_sessions_key(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => Action::CloseOverlay,
+        KeyCode::Enter => Action::SessionPick,
+        KeyCode::Up | KeyCode::Char('k') => Action::SessionMove(-1),
+        KeyCode::Down | KeyCode::Char('j') => Action::SessionMove(1),
         _ => Action::Noop,
     }
 }

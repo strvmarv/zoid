@@ -74,6 +74,10 @@ pub fn render_shell(
         if let Some(p) = layout.palette {
             render_verb_overlay(frame, msgs, state, p);
         }
+    } else if state.overlay == Overlay::Sessions {
+        if let Some(p) = layout.palette {
+            render_sessions_overlay(frame, state, p);
+        }
     }
 }
 
@@ -325,6 +329,12 @@ fn render_verb_overlay(frame: &mut Frame, msgs: &[ChatMsg], state: &ShellState, 
     };
     let sel = nav(state.objects.verb_selected, 0, rows.len());
     list_overlay(frame, area, title, &rows, sel);
+}
+
+fn render_sessions_overlay(frame: &mut Frame, state: &ShellState, area: Rect) {
+    let rows = if state.sessions.is_empty() { vec!["(no sessions for this repo)".to_string()] } else { state.sessions.clone() };
+    let sel = nav(state.session_selected, 0, rows.len());
+    list_overlay(frame, area, format!(" {} resume session ", glyph::RESUME), &rows, sel);
 }
 
 fn object_row(o: &crate::objects::Obj) -> String {

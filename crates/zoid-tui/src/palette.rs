@@ -26,6 +26,10 @@ pub fn all_items(mode: Mode) -> Vec<PaletteItem> {
         Mode::Build => ("Switch to Chat", Command::SwitchMode(Mode::Chat)),
     };
     vec![
+        // session — leads the palette (matches palette.html).
+        PaletteItem { group: "session".to_string(), icon: glyph::NEW, label: "New session", hint: "fresh thread + clean context budget", keybind: ":new", command: Some(Command::NewSession) },
+        PaletteItem { group: "session".to_string(), icon: glyph::RESUME, label: "Resume session…", hint: "this repo, most-recent first", keybind: "⏎", command: Some(Command::ResumeSessionPicker) },
+        PaletteItem { group: "session".to_string(), icon: glyph::RENAME, label: "Rename session…", hint: "rename the current thread", keybind: ":rename", command: Some(Command::RenameSession(String::new())) },
         PaletteItem { group: "mode".to_string(), icon: glyph::MODE_SWITCH, label: mode_label, hint: "continue this conversation into the loop", keybind: "⇧Tab", command: Some(mode_cmd) },
         // branch group — post-v1, disabled/dimmed
         PaletteItem { group: format!("branch {} · post-v1", glyph::BRANCH), icon: glyph::BRANCH, label: "Fork from here", hint: "new branch at this turn", keybind: ":fork", command: None },
@@ -137,5 +141,18 @@ mod tests {
         assert_eq!(nav(2, 1, 3), 2);
         assert_eq!(nav(1, 1, 3), 2);
         assert_eq!(nav(0, 1, 0), 0);
+    }
+
+    #[test]
+    fn session_group_is_first_and_selectable() {
+        let items = all_items(Mode::Chat);
+        // The session group leads the palette (matches palette.html).
+        assert_eq!(items[0].group, "session");
+        let labels: Vec<&str> = items.iter().filter(|i| i.group == "session").map(|i| i.label).collect();
+        assert_eq!(labels, vec!["New session", "Resume session…", "Rename session…"]);
+        // All three are selectable (have commands).
+        for l in ["New session", "Resume session…", "Rename session…"] {
+            assert!(selectable_matches(&items, l).iter().any(|&i| items[i].label == l));
+        }
     }
 }
