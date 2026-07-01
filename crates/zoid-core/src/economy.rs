@@ -58,7 +58,7 @@ pub struct ChurnTimeline {
 }
 
 /// Extract a file path from a tool call's JSON args, trying common keys.
-pub(crate) fn tool_path(args_json: &str) -> Option<String> {
+pub fn tool_path(args_json: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(args_json).ok()?;
     for key in ["path", "file_path", "file"] {
         if let Some(s) = v.get(key).and_then(|x| x.as_str()) {

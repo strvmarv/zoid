@@ -20,6 +20,11 @@ fn trim_headline(s: &str) -> String {
     let one_line = s.lines().next().unwrap_or("").trim();
     if one_line.chars().count() > HEADLINE_MAX {
         let head: String = one_line.chars().take(HEADLINE_MAX.saturating_sub(1)).collect();
+        // Raw '…' literal is intentional here, not a drift from zoid-tui's
+        // glyph::ELLIPSIS token: zoid-core cannot depend on zoid-tui (dep
+        // direction is core -> tui, never the reverse), so this crate can't
+        // reach the token table. Keep both sides in sync by hand if the
+        // glyph ever changes; don't "fix" only one of them.
         format!("{head}…")
     } else {
         one_line.to_string()

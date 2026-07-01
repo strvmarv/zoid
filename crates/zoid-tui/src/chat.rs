@@ -9,6 +9,7 @@ use ratatui::{
     Frame,
 };
 use tui_textarea::TextArea;
+use zoid_core::economy::tool_path;
 use zoid_core::projection::ChatMsg;
 use zoid_core::zoom::{digests, TurnDigest};
 use zoid_syntax::{fold_regions, FoldRegion, Language};
@@ -122,7 +123,7 @@ fn detail_lines(msgs: &[ChatMsg]) -> Vec<Line<'static>> {
     for m in msgs {
         if let ChatMsg::Assistant { tool_calls, .. } = m {
             for c in tool_calls {
-                if let Some(p) = path_arg(&c.args) {
+                if let Some(p) = tool_path(&c.args) {
                     id_path.insert(c.id.as_str(), p);
                 }
             }
@@ -196,18 +197,6 @@ pub(crate) fn collapse_to_signatures(source: &str, lang: Language) -> Vec<Line<'
         }
     }
     out
-}
-
-/// Extract a file path from a tool call's JSON args (mirrors core's tool_path,
-/// kept local so chat.rs stays render-side).
-fn path_arg(args_json: &str) -> Option<String> {
-    let v: serde_json::Value = serde_json::from_str(args_json).ok()?;
-    for key in ["path", "file_path", "file"] {
-        if let Some(s) = v.get(key).and_then(|x| x.as_str()) {
-            return Some(s.to_string());
-        }
-    }
-    None
 }
 
 /// Convert a borrowed Line into an owned ('static) one by cloning span content.
@@ -291,7 +280,7 @@ fn first_line(s: &str) -> String {
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() > max {
         let head: String = s.chars().take(max.saturating_sub(1)).collect();
-        format!("{head}…")
+        format!("{head}{}", glyph::ELLIPSIS)
     } else {
         s.to_string()
     }

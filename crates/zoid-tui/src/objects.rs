@@ -4,6 +4,7 @@
 //! table (Task 2) maps each to scoped agent verbs.
 
 use std::collections::HashMap;
+use zoid_core::economy::tool_path;
 use zoid_core::projection::ChatMsg;
 use zoid_syntax::{symbols, Language};
 
@@ -24,17 +25,6 @@ pub struct Obj {
     pub context: String,
 }
 
-/// Pull a file path out of a tool call's JSON args.
-fn path_arg(args_json: &str) -> Option<String> {
-    let v: serde_json::Value = serde_json::from_str(args_json).ok()?;
-    for key in ["path", "file_path", "file"] {
-        if let Some(s) = v.get(key).and_then(|x| x.as_str()) {
-            return Some(s.to_string());
-        }
-    }
-    None
-}
-
 /// Files, symbols, then errors — deterministic and de-duplicated by path.
 pub fn selectable_objects(msgs: &[ChatMsg]) -> Vec<Obj> {
     // id → path, from assistant tool calls.
@@ -42,7 +32,7 @@ pub fn selectable_objects(msgs: &[ChatMsg]) -> Vec<Obj> {
     for m in msgs {
         if let ChatMsg::Assistant { tool_calls, .. } = m {
             for c in tool_calls {
-                if let Some(p) = path_arg(&c.args) {
+                if let Some(p) = tool_path(&c.args) {
                     id_path.insert(c.id.as_str(), p);
                 }
             }
