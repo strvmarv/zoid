@@ -65,3 +65,28 @@ async fn delegated_result_folds_into_main_conversation() {
     // Subagent work events exist in the log but are NOT in the main conversation.
     assert!(!conv.iter().any(|m| matches!(m, ChatMsg::Assistant { text, .. } if text == "Added the function.")));
 }
+
+#[tokio::test]
+async fn delegation_spend_lands_in_the_session_ledger() {
+    use zoid_core::economy::token_ledger;
+    use zoid_provider::Usage;
+
+    let provider = Arc::new(FakeProvider::new(vec![
+        ProviderEvent::TextDelta("done".into()),
+        ProviderEvent::Usage(Usage { input_tokens: 320, output_tokens: 45 }),
+        ProviderEvent::Done,
+    ]));
+    let session = SessionHandle::spawn(":memory:").unwrap();
+    let (tx, mut rx) = mpsc::channel(64);
+    tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+    let sid = ulid::Ulid::new();
+    let _res = run_subagent("do the unit", &[], &AgentProfile::builtin(), provider,
+        std::path::PathBuf::from("."), "glm".into(), session.clone(), sid, tx, || 0).await.unwrap();
+
+    // The subagent's Usage is tagged with the active session → the session-scoped ledger reflects it.
+    let ledger = token_ledger(&session.snapshot_session(sid).await.unwrap());
+    assert_eq!(ledger.input, 320);
+    assert_eq!(ledger.output, 45);
+    assert_eq!(ledger.total, 365);
+}
