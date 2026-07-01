@@ -1,21 +1,22 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
+assertion_line: 143
 expression: "draw(&s, &[], 100, 24)"
 ---
 " zoid  BUILD  ⎇ main                                                                                "
-"                                                                       ▾ ⑤ context · tokens  ^5     "
-"  ◐ BUILD mode                                                          churn                       "
-"  The autonomous loop arrives in P6.                                    [x] evict cold            0 "
+"                                                        ▾ ⑤ context · tokens  ^5                    "
+"  ◐ BUILD mode                                           churn                                      "
+"  The autonomous loop arrives in P6.                     [x] evict cold                           0 "
 "  ⇧Tab / :chat → back to Chat                                                                       "
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
-"                                                                       ▸ files  ^F                  "
+"                                                        ▸ files  ^F                                 "
 "                                                                                                    "
-"                                                                       ▸ branch  ^B                 "
+"                                                        ▸ branch  ^B                                "
 "                                                                                                    "
-"                                                                       ▸ palette  ^P                "
+"                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "

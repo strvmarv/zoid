@@ -5,10 +5,12 @@
 use crate::state::{DrawerId, Overlay, ShellState};
 use ratatui::layout::{Constraint, Layout, Rect};
 
-/// Rail width in columns (mockup right column ≈ 30 cols; spec min ≈ 28).
-pub const RAIL_WIDTH: u16 = 30;
-/// Minimum total width before the rail is shown (stream ≥ ~50 + rail ≥ ~28 — spec §6.2).
-pub const RAIL_MIN_TOTAL: u16 = 80;
+/// Rail width in columns. Widened ~50% from the mockup's ≈30 so context labels,
+/// churn, and branch/file drawers have breathing room (spec min ≈ 28).
+pub const RAIL_WIDTH: u16 = 45;
+/// Minimum total width before the rail is shown: keep a usable stream (≥ ~50)
+/// alongside the wider rail, so the rail only appears once both fit (spec §6.2).
+pub const RAIL_MIN_TOTAL: u16 = 95;
 /// Conversation column measure cap (spec §6.1: ~80–100 cols, ergonomics).
 pub const MAX_MEASURE: u16 = 100;
 /// Default drawer body height in rows (P3).
@@ -93,9 +95,13 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
         }
     }
 
-    // Overlays (rendered on top; rects only — content in Task 8).
+    // Overlays (rendered on top; rects only — content in Task 8). Center within
+    // the conversation rect, not the whole terminal, so the picker never overlaps
+    // the rail (overlays draw last and would otherwise clip the rail's drawers).
+    // `centered` clamps the width to its area, so the box shrinks to fit a narrow
+    // stream rather than bleeding right into the rail.
     let palette = if matches!(state.overlay, Overlay::Palette | Overlay::Objects | Overlay::Verbs) {
-        Some(centered(area, 72, 18))
+        Some(centered(conversation, 72, 18))
     } else {
         None
     };
@@ -143,7 +149,7 @@ mod tests {
         let l = compute(area(100, 24), &s);
         let rail = l.rail.expect("rail visible at 100 cols");
         assert_eq!(rail.width, RAIL_WIDTH);
-        assert_eq!(l.drawer_headers.len(), 4); // economy/files/branch/palette
+        assert_eq!(l.drawer_headers.len(), 3); // economy/files/branch
         // headers stack downward
         assert!(l.drawer_headers[1].1.y > l.drawer_headers[0].1.y);
     }

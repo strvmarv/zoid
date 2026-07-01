@@ -41,7 +41,6 @@ pub enum DrawerId {
     Economy,
     Files,
     Branch,
-    Palette,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,7 +104,6 @@ impl ShellState {
             Drawer { id: DrawerId::Economy, title: format!("{} context · tokens", glyph::CONTEXT), keybind: "^5".into(), open: true },
             Drawer { id: DrawerId::Files,   title: "files".into(),             keybind: "^F".into(), open: false },
             Drawer { id: DrawerId::Branch,  title: "branch".into(),            keybind: "^B".into(), open: false },
-            Drawer { id: DrawerId::Palette, title: "palette".into(),           keybind: "^P".into(), open: false },
         ];
         Self {
             mode: Mode::Chat,
@@ -214,7 +212,7 @@ mod tests {
         assert_eq!(s.branch, "main");
         // Chat rail set, in order, with the canonical keybinds.
         let ids: Vec<DrawerId> = s.drawers.iter().map(|d| d.id).collect();
-        assert_eq!(ids, vec![DrawerId::Economy, DrawerId::Files, DrawerId::Branch, DrawerId::Palette]);
+        assert_eq!(ids, vec![DrawerId::Economy, DrawerId::Files, DrawerId::Branch]);
         // Economy is the default-open drawer (mockup `drawer on`); rest collapsed.
         assert!(s.drawer(DrawerId::Economy).unwrap().open);
         assert!(!s.drawer(DrawerId::Files).unwrap().open);

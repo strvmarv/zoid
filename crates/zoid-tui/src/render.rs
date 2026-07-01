@@ -225,7 +225,6 @@ fn drawer_body(id: DrawerId, state: &ShellState) -> Vec<Line<'static>> {
             Line::styled("full branch ops · P5", Style::new().fg(color::DIM)),
         ],
         DrawerId::Economy => vec![Line::styled("context economy · P3", Style::new().fg(color::DIM))],
-        DrawerId::Palette => vec![Line::styled("press ^P to open", Style::new().fg(color::DIM))],
     }
 }
 

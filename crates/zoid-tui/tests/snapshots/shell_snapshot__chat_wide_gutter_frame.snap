@@ -1,21 +1,22 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
+assertion_line: 80
 expression: "draw(&s, &seeded(), 140, 24)"
 ---
 " zoid  CHAT  ⎇ main                                                                                                                         "
-"› what's causing the 500?                                                                                      ▾ ⑤ context · tokens  ^5     "
-"zoid an unwrapped lookup in the handler.                                                                        churn                       "
-"                                                                                                                [x] evict cold            0 "
+"› what's causing the 500?                                                                       ▾ ⑤ context · tokens  ^5                    "
+"zoid an unwrapped lookup in the handler.                                                         churn                                      "
+"                                                                                                 [x] evict cold                           0 "
 "                                                                                                                                            "
 "                                                                                                                                            "
 "                                                                                                                                            "
 "                                                                                                                                            "
 "                                                                                                                                            "
-"                                                                                                               ▸ files  ^F                  "
+"                                                                                                ▸ files  ^F                                 "
 "                                                                                                                                            "
-"                                                                                                               ▸ branch  ^B                 "
+"                                                                                                ▸ branch  ^B                                "
 "                                                                                                                                            "
-"                                                                                                               ▸ palette  ^P                "
+"                                                                                                                                            "
 "                                                                                                                                            "
 "                                                                                                                                            "
 "                                                                                                                                            "
