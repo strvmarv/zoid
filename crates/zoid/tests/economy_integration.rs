@@ -22,7 +22,7 @@ async fn turn_usage_lands_in_ledger() {
     let seed = vec![Event::new(Ulid::new(), None, 0, EventKind::UserMessage { text: "hi".into() })];
     let (tx, mut rx) = mpsc::channel::<AgentUpdate>(64);
 
-    run_agent_turn(provider, Arc::new(zoid_tools::registry()), session.clone(), seed, "m".into(), tx, now).await.unwrap();
+    run_agent_turn(provider, Arc::new(zoid_tools::registry()), session.clone(), seed, "m".into(), tx, Ulid::new(), now).await.unwrap();
     while rx.recv().await.is_some() {}
 
     let events = session.snapshot().await.unwrap();

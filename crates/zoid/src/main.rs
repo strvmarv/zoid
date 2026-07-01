@@ -69,7 +69,6 @@ fn now_ms() -> i64 {
 /// exists and the new global DB does NOT yet exist, import the legacy events
 /// under a single generated `session_id` (with a `sessions` row). Idempotent:
 /// once the new DB exists we never import again. Returns whether an import ran.
-#[allow(dead_code)]
 fn import_legacy_if_present(
     new_db: &Path,
     legacy: &Path,
@@ -102,6 +101,37 @@ fn make_input(textarea: TextArea<'static>) -> TextArea<'static> {
     textarea
 }
 
+/// Canonical repo/cwd root as a string (best-effort absolute path).
+fn repo_root() -> String {
+    std::env::current_dir()
+        .ok()
+        .and_then(|p| p.canonicalize().ok().or(Some(p)))
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| ".".into())
+}
+
+/// Auto-derive a session name: the first user message truncated to 40 chars,
+/// else `session HH:MM` from the injected timestamp.
+fn derive_session_name(first_user_msg: Option<&str>, ts_ms: i64, tz_offset_secs: i32) -> String {
+    let trimmed = first_user_msg.map(str::trim).filter(|s| !s.is_empty());
+    match trimmed {
+        Some(msg) => {
+            let one_line = msg.lines().next().unwrap_or(msg);
+            if one_line.chars().count() > 40 {
+                let head: String = one_line.chars().take(39).collect();
+                format!("{head}\u{2026}")
+            } else {
+                one_line.to_string()
+            }
+        }
+        None => {
+            let secs = ts_ms.div_euclid(1000) + tz_offset_secs as i64;
+            let sod = secs.rem_euclid(86_400);
+            format!("session {:02}:{:02}", sod / 3600, (sod % 3600) / 60)
+        }
+    }
+}
+
 /// Best-effort current branch from `.git/HEAD` (`ref: refs/heads/<name>`); "main" otherwise.
 fn current_branch() -> String {
     std::fs::read_to_string(".git/HEAD")
@@ -126,6 +156,7 @@ fn cwd_files(limit: usize) -> Vec<String> {
 
 struct App {
     session: SessionHandle,
+    session_id: Ulid,
     events: Vec<Event>,
     provider: Arc<dyn Provider>,
     tools: Arc<Vec<Box<dyn Tool>>>,
@@ -146,7 +177,7 @@ impl App {
     /// Append an event both durably (session actor) and to the in-memory log
     /// the UI renders from.
     async fn record(&mut self, kind: EventKind) -> Result<()> {
-        let ev = Event::new(Ulid::new(), None, now_ms(), kind);
+        let ev = Event::new(Ulid::new(), None, now_ms(), kind).with_session(self.session_id);
         self.session.append(ev.clone()).await?;
         self.events.push(ev);
         Ok(())
@@ -156,8 +187,33 @@ impl App {
 #[tokio::main]
 async fn main() -> Result<()> {
     let path = db_path()?;
+    let root = repo_root();
+    // One-time legacy import (pre-release): ./.zoid/session.db → new global DB.
+    let legacy = Path::new(".zoid").join("session.db");
+    let tz_offset_secs = chrono::Local::now().offset().local_minus_utc();
+    let boot_ts = now_ms();
+    let _ = import_legacy_if_present(
+        &path,
+        &legacy,
+        Ulid::new(),
+        &derive_session_name(None, boot_ts, tz_offset_secs),
+        &root,
+        boot_ts,
+    );
+
     let session = SessionHandle::spawn(path.to_str().context("session DB path is not valid UTF-8")?)?;
-    let events = session.snapshot().await?;
+
+    // Auto-resume the most-recently-touched session for this repo, else create one.
+    let sessions = session.list_sessions(Some(root.clone())).await.unwrap_or_default();
+    let session_id = if let Some(s) = sessions.first() {
+        session.touch_session(s.id, boot_ts).await.ok();
+        s.id
+    } else {
+        let id = Ulid::new();
+        session.new_session(id, derive_session_name(None, boot_ts, tz_offset_secs), root.clone(), boot_ts).await?;
+        id
+    };
+    let events = session.snapshot_session(session_id).await?;
 
     let model = std::env::var("ZOID_MODEL").unwrap_or_else(|_| default_model().to_string());
 
@@ -170,6 +226,7 @@ async fn main() -> Result<()> {
 
     let mut app = App {
         session,
+        session_id,
         events,
         provider: default_provider(),
         tools: Arc::new(zoid_tools::registry()),
@@ -180,7 +237,7 @@ async fn main() -> Result<()> {
         ui_tx,
         started: std::time::Instant::now(),
         zoom_changed_at: None,
-        tz_offset_secs: chrono::Local::now().offset().local_minus_utc(),
+        tz_offset_secs,
     };
 
     enable_raw_mode()?;
@@ -374,9 +431,14 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             if app.streaming { return Ok(false); }
             let text = app.textarea.lines().join("\n");
             if text.trim().is_empty() { return Ok(false); }
+            let first = !app.events.iter().any(|e| matches!(e.kind, EventKind::UserMessage { .. }));
             app.textarea = make_input(TextArea::default());
             app.shell.status_hint = None;
-            app.record(EventKind::UserMessage { text }).await?;
+            app.record(EventKind::UserMessage { text: text.clone() }).await?;
+            if first {
+                let name = derive_session_name(Some(&text), now_ms(), app.tz_offset_secs);
+                app.session.rename_session(app.session_id, name).await.ok();
+            }
             app.streaming = true;
             spawn_turn(app);
         }
@@ -447,8 +509,9 @@ fn spawn_turn(app: &App) {
     let seed = app.events.clone();
     let model = app.model.clone();
     let ui = app.ui_tx.clone();
+    let session_id = app.session_id;
     tokio::spawn(async move {
-        let _ = run_agent_turn(provider, tools, session, seed, model, ui, now_ms).await;
+        let _ = run_agent_turn(provider, tools, session, seed, model, ui, session_id, now_ms).await;
     });
 }
 
@@ -501,6 +564,18 @@ mod tests {
     fn falls_back_to_home_local_share() {
         let p = resolve_db_path(env_of(&[("HOME", "/home/u")]));
         assert_eq!(p, PathBuf::from("/home/u/.local/share/zoid/zoid.db"));
+    }
+
+    #[test]
+    fn derives_name_from_first_message_else_timestamp() {
+        // Truncates a long first message to <= 40 display chars with an ellipsis.
+        let long = "fix the 500 error on GET /users/:id when the row is missing entirely";
+        let n = derive_session_name(Some(long), 0, 0);
+        assert!(n.chars().count() <= 40);
+        assert!(n.starts_with("fix the 500"));
+        // Empty / no message → timestamp fallback (HH:MM, deterministic at offset 0).
+        assert_eq!(derive_session_name(None, 49_500_000, 0), "session 13:45");
+        assert_eq!(derive_session_name(Some("   "), 0, 0), "session 00:00");
     }
 
     #[test]

@@ -84,9 +84,10 @@ pub async fn run_agent_turn(
     events: Vec<Event>,
     model: String,
     ui: mpsc::Sender<AgentUpdate>,
+    session_id: Ulid,
     now: fn() -> i64,
 ) -> Result<()> {
-    let result = run_turn_inner(provider, tools, session, events, model, &ui, now).await;
+    let result = run_turn_inner(provider, tools, session, events, model, &ui, session_id, now).await;
     // Best-effort: if the receiver is already gone we still return the inner result.
     let _ = ui.send(AgentUpdate::TurnComplete).await;
     result
@@ -101,6 +102,7 @@ async fn run_turn_inner(
     mut events: Vec<Event>,
     model: String,
     ui: &mpsc::Sender<AgentUpdate>,
+    session_id: Ulid,
     now: fn() -> i64,
 ) -> Result<()> {
     let mut iterations: u32 = 0;
@@ -122,7 +124,7 @@ async fn run_turn_inner(
         while let Some(pe) = prx.recv().await {
             match pe {
                 ProviderEvent::TextDelta(s) => {
-                    emit(&session, &mut events, ui, EventKind::ModelDelta { text: s }, now).await?;
+                    emit(&session, &mut events, ui, EventKind::ModelDelta { text: s }, session_id, now).await?;
                 }
                 ProviderEvent::ToolCall(tc) => {
                     emit(
@@ -134,6 +136,7 @@ async fn run_turn_inner(
                             name: tc.name.clone(),
                             args: tc.args.to_string(),
                         },
+                        session_id,
                         now,
                     )
                     .await?;
@@ -149,6 +152,7 @@ async fn run_turn_inner(
                         &mut events,
                         ui,
                         EventKind::AssistantMessage { text: format!("{WARN_GLYPH} {msg}") },
+                        session_id,
                         now,
                     )
                     .await?;
@@ -162,7 +166,7 @@ async fn run_turn_inner(
 
         // Record the sub-turn's token usage so the economy ledger is live.
         if turn_usage != zoid_core::event::TokenStat::default() {
-            emit_with_tokens(&session, &mut events, ui, EventKind::Usage, Some(turn_usage), now).await?;
+            emit_with_tokens(&session, &mut events, ui, EventKind::Usage, Some(turn_usage), session_id, now).await?;
         }
 
         if pending.is_empty() {
@@ -178,6 +182,7 @@ async fn run_turn_inner(
                 EventKind::AssistantMessage {
                     text: format!("{WARN_GLYPH} tool-iteration limit reached"),
                 },
+                session_id,
                 now,
             )
             .await?;
@@ -204,6 +209,7 @@ async fn run_turn_inner(
                     output: out.text,
                     is_error: out.is_error,
                 },
+                session_id,
                 now,
             )
             .await?;
@@ -220,9 +226,10 @@ async fn emit(
     events: &mut Vec<Event>,
     ui: &mpsc::Sender<AgentUpdate>,
     kind: EventKind,
+    session_id: Ulid,
     now: fn() -> i64,
 ) -> Result<()> {
-    emit_with_tokens(session, events, ui, kind, None, now).await
+    emit_with_tokens(session, events, ui, kind, None, session_id, now).await
 }
 
 /// Persist one event (optionally carrying token usage) and announce it to the
@@ -233,9 +240,10 @@ async fn emit_with_tokens(
     ui: &mpsc::Sender<AgentUpdate>,
     kind: EventKind,
     tokens: Option<zoid_core::event::TokenStat>,
+    session_id: Ulid,
     now: fn() -> i64,
 ) -> Result<()> {
-    let mut ev = Event::new(Ulid::new(), None, now(), kind);
+    let mut ev = Event::new(Ulid::new(), None, now(), kind).with_session(session_id);
     ev.tokens = tokens;
     session.append(ev.clone()).await?;
     events.push(ev.clone());

@@ -81,7 +81,7 @@ async fn agent_loop_runs_tool_then_finishes() {
         complete
     });
 
-    run_agent_turn(provider.clone(), tools, session.clone(), seed, "fake".into(), tx, fixed_now)
+    run_agent_turn(provider.clone(), tools, session.clone(), seed, "fake".into(), tx, ulid::Ulid::new(), fixed_now)
         .await
         .unwrap();
 
@@ -136,7 +136,7 @@ async fn agent_loop_returns_ok_and_emits_turn_complete_on_error_event() {
 
     // Must return Ok even though the provider sent an Error event.
     let result =
-        run_agent_turn(provider, tools, session.clone(), seed, "fake".into(), tx, fixed_now).await;
+        run_agent_turn(provider, tools, session.clone(), seed, "fake".into(), tx, ulid::Ulid::new(), fixed_now).await;
     assert!(result.is_ok(), "run_agent_turn must return Ok(()) on a provider Error event");
 
     let complete = drain.await.unwrap();
