@@ -139,11 +139,10 @@ impl ShellState {
     /// The calm default: Chat mode, focus on the input, the Chat rail set
     /// (repo/session/context all open, matching `docs/ux/chat-mode.html`).
     pub fn new() -> Self {
-        use crate::tokens::glyph;
         let drawers = vec![
             Drawer { id: DrawerId::Repo,    title: "repo".into(),    open: true },
             Drawer { id: DrawerId::Session, title: "session".into(), open: true },
-            Drawer { id: DrawerId::Context, title: format!("{} context · tokens", glyph::CONTEXT), open: true },
+            Drawer { id: DrawerId::Context, title: "context · tokens".into(), open: true },
         ];
         Self {
             mode: Mode::Chat,

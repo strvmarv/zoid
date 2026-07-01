@@ -190,7 +190,11 @@ fn route_verbs_key(key: KeyEvent) -> Action {
 /// Map a screen point to a main-surface target (overlays are keyboard-driven).
 pub fn hit_test(layout: &ShellLayout, col: u16, row: u16) -> Target {
     for (id, r) in &layout.drawer_headers {
-        if in_rect(*r, col, row) {
+        // `drawer_headers` now holds the whole box rect (spec: rounded bordered
+        // drawers). Only the box's top border row (which carries the title)
+        // toggles the drawer — otherwise clicking anywhere in an open drawer's
+        // body would collapse it.
+        if row == r.y && in_rect(*r, col, row) {
             return Target::DrawerHeader(*id);
         }
     }

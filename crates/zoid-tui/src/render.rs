@@ -14,7 +14,7 @@ use ratatui::{
     layout::Rect,
     style::{Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
     Frame,
 };
 use tui_textarea::TextArea;
@@ -50,8 +50,8 @@ pub fn render_shell(
         Mode::Build => render_build_placeholder(frame, layout.conversation),
     }
 
-    if let Some(rail) = layout.rail {
-        render_rail(frame, state, economy, &layout, rail);
+    if layout.rail.is_some() {
+        render_rail(frame, state, economy, &layout);
     }
 
     render_input(frame, input, layout.input);
@@ -108,6 +108,14 @@ fn render_build_placeholder(frame: &mut Frame, area: Rect) {
 }
 
 fn render_input(frame: &mut Frame, input: &TextArea<'_>, area: Rect) {
+    // Each rail drawer is now a bordered box tall enough that, at the rail's
+    // minimum supported height, the last (tallest) box can run a couple of
+    // rows past the rail's own bottom (ratatui rects aren't clipped to a
+    // parent container). `Clear` guarantees the input box always paints over
+    // a clean slate rather than leaving stray glyphs from an overlapping
+    // drawer bleeding through — TextArea only writes the cells its own
+    // content touches, not the whole area.
+    frame.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::new().fg(color::DIM))
@@ -139,30 +147,28 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn render_rail(frame: &mut Frame, state: &ShellState, economy: &EconomyView, layout: &ShellLayout, rail: Rect) {
-    // Rail header.
-    let head = Line::from(vec![
-        Span::styled("chat rail", Style::new().fg(color::CHAT_ACCENT)),
-    ]);
-    frame.render_widget(Paragraph::new(head), Rect { x: rail.x + 1, y: rail.y, width: rail.width.saturating_sub(2), height: 1 });
-
-    for (id, hr) in &layout.drawer_headers {
+fn render_rail(frame: &mut Frame, state: &ShellState, economy: &EconomyView, layout: &ShellLayout) {
+    // Each drawer is a rounded bordered box (spec `docs/ux/chat-mode.html`
+    // `.drawer{border:1px solid var(--line2);border-radius:8px}`): border +
+    // title are the Chat accent blue when open, dim when closed. No "chat
+    // rail" head label — the boxes start at the rail top.
+    for (id, boxr) in &layout.drawer_headers {
         let Some(d) = state.drawer(*id) else { continue };
         let chevron = if d.open { glyph::EXPANDED } else { glyph::COLLAPSED };
-        let hdr = Line::from(vec![
-            Span::styled(format!("{chevron} {}", d.title), Style::new().fg(if d.open { color::TXT } else { color::DIM })),
-        ]);
-        frame.render_widget(Paragraph::new(hdr), *hr);
+        let border = if d.open { color::CHAT_ACCENT } else { color::DIM };
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(border))
+            .title(Span::styled(format!(" {chevron} {} ", d.title), Style::new().fg(color::CHAT_ACCENT)));
+        let inner = block.inner(*boxr);
+        frame.render_widget(block, *boxr);
         if d.open {
-            let body = layout.drawer_bodies.iter().find(|(bid, _)| bid == id).map(|(_, r)| *r);
-            if let Some(rect) = body {
-                if d.id == DrawerId::Context {
-                    render_economy_body(frame, economy, rect, state.focus == Focus::Rail);
-                } else if d.id == DrawerId::Repo {
-                    render_repo_body(frame, state, rect);
-                } else if d.id == DrawerId::Session {
-                    render_session_body(frame, state, rect); // Task 13
-                }
+            let body_rect = layout.drawer_bodies.iter().find(|(bid, _)| bid == id).map(|(_, r)| *r).unwrap_or(inner);
+            match d.id {
+                DrawerId::Context => render_economy_body(frame, economy, body_rect, state.focus == Focus::Rail),
+                DrawerId::Repo => render_repo_body(frame, state, body_rect),
+                DrawerId::Session => render_session_body(frame, state, body_rect), // Task 13
             }
         }
     }

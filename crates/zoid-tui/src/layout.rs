@@ -85,31 +85,35 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
     let conversation = cols[0];
     let rail = if show_rail { Some(cols[2]) } else { None };
 
-    // Drawer header rects: one row per drawer, stacked below the rail's "chat
-    // rail" label row (1-col inset, 1-row offset). Without the +1 the first
-    // drawer header shares `rr.y` with that label and (since `render_rail`
-    // paints the label first) any leftover label glyphs past the header's own
-    // text bleed through — invisible while the first drawer's title was always
-    // long enough to fully overwrite it, but real once a shorter title (e.g.
-    // "repo") leads the stack.
+    // Drawer box rects: each drawer renders as a rounded bordered box (spec
+    // `docs/ux/chat-mode.html` `.drawer`), stacked from the rail top (1-col
+    // inset; no "chat rail" label — it was removed). `drawer_headers` holds
+    // the box's OUTER rect (top border carries the title); `drawer_bodies`
+    // holds the INNER content rect for open drawers.
     let mut drawer_headers = Vec::new();
     let mut drawer_bodies = Vec::new();
     if let Some(rr) = rail {
-        let inner = Rect { x: rr.x.saturating_add(1), y: rr.y.saturating_add(1), width: rr.width.saturating_sub(2), height: rr.height.saturating_sub(1) };
+        let inner = Rect { x: rr.x.saturating_add(1), y: rr.y, width: rr.width.saturating_sub(2), height: rr.height };
         let mut y = inner.y;
         for d in &state.drawers {
             if y >= inner.y.saturating_add(inner.height) {
                 break;
             }
-            drawer_headers.push((d.id, Rect { x: inner.x, y, width: inner.width, height: 1 }));
             let body_rows = if d.open { drawer_body_rows(d.id) } else { 0 };
+            let box_h = body_rows + 2; // top border (carries title) + body + bottom border
+            drawer_headers.push((d.id, Rect { x: inner.x, y, width: inner.width, height: box_h }));
             if d.open {
                 drawer_bodies.push((
                     d.id,
-                    Rect { x: inner.x.saturating_add(1), y: y.saturating_add(1), width: inner.width.saturating_sub(1), height: body_rows },
+                    Rect {
+                        x: inner.x.saturating_add(1),
+                        y: y.saturating_add(1),
+                        width: inner.width.saturating_sub(2),
+                        height: body_rows,
+                    },
                 ));
             }
-            y = y.saturating_add(1 + body_rows + 1);
+            y = y.saturating_add(box_h + 1); // 1-row gap between boxes (mock margin-bottom)
         }
     }
 
@@ -230,7 +234,7 @@ mod tests {
         assert_eq!(session.height, SESSION_BODY_ROWS);
         // closed drawers have no body
         assert!(l.drawer_bodies.iter().all(|(id, _)| *id != DrawerId::Repo));
-        // body sits directly under its header
+        // body sits directly under the box's top border (which carries the title)
         let context_hdr = l.drawer_headers.iter().find(|(id, _)| *id == DrawerId::Context).unwrap().1;
         assert_eq!(context.y, context_hdr.y + 1);
     }
@@ -241,8 +245,8 @@ mod tests {
         let l = compute(area(100, 30), &s);
         let repo_hdr = l.drawer_headers[0].1;
         let session_hdr = l.drawer_headers[1].1;
-        // header(1) + REPO_BODY_ROWS + 1 spacer
-        assert_eq!(session_hdr.y, repo_hdr.y + 1 + REPO_BODY_ROWS + 1);
+        // box_h(top border + REPO_BODY_ROWS + bottom border) + 1-row gap
+        assert_eq!(session_hdr.y, repo_hdr.y + (REPO_BODY_ROWS + 2) + 1);
     }
 
     #[test]

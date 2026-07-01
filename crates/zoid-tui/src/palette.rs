@@ -37,7 +37,7 @@ pub fn all_items(mode: Mode) -> Vec<PaletteItem> {
         // navigate
         PaletteItem { group: "navigate".to_string(), icon: glyph::COLLAPSED, label: "Toggle repo drawer", hint: "repo · branch · changes", keybind: "", command: Some(Command::OpenDrawer(DrawerId::Repo)) },
         PaletteItem { group: "navigate".to_string(), icon: glyph::COLLAPSED, label: "Toggle session drawer", hint: "name · model · cost · cwd", keybind: "", command: Some(Command::OpenDrawer(DrawerId::Session)) },
-        PaletteItem { group: "navigate".to_string(), icon: glyph::CONTEXT, label: "Toggle context ⑤ drawer", hint: "tokens · heat · churn", keybind: "", command: Some(Command::OpenDrawer(DrawerId::Context)) },
+        PaletteItem { group: "navigate".to_string(), icon: glyph::CONTEXT, label: "Toggle context drawer", hint: "tokens · heat · churn", keybind: "", command: Some(Command::OpenDrawer(DrawerId::Context)) },
         // context ⑤ — placeholder (real actions land P3), disabled for now
         PaletteItem { group: format!("context {} · P3", glyph::CONTEXT), icon: glyph::EDIT, label: "Pin file to context", hint: "lands in P3", keybind: "", command: None },
         PaletteItem { group: format!("context {} · P3", glyph::CONTEXT), icon: glyph::EVICT, label: "Evict cold items", hint: "lands in P3", keybind: "", command: None },
