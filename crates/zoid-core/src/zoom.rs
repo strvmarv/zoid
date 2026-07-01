@@ -39,7 +39,7 @@ pub fn digests(msgs: &[ChatMsg]) -> Vec<TurnDigest> {
 
     for m in msgs {
         match m {
-            ChatMsg::User(text) => {
+            ChatMsg::User { text, .. } => {
                 if let Some(d) = cur.take() {
                     out.push(d);
                 }
@@ -50,7 +50,7 @@ pub fn digests(msgs: &[ChatMsg]) -> Vec<TurnDigest> {
                     has_error: false,
                 });
             }
-            ChatMsg::Assistant { text, tool_calls } => {
+            ChatMsg::Assistant { text, tool_calls, .. } => {
                 let d = cur.get_or_insert_with(|| TurnDigest {
                     headline: trim_headline(text),
                     tools: 0,
@@ -93,17 +93,18 @@ mod tests {
     #[test]
     fn one_digest_per_turn_with_counts() {
         let msgs = vec![
-            ChatMsg::User("fix the parser bug".into()),
+            ChatMsg::User { text: "fix the parser bug".into(), ts: 0 },
             ChatMsg::Assistant {
                 text: "looking".into(),
                 tool_calls: vec![
                     call("read_file", r#"{"path":"src/ast.rs"}"#), // file
                     call("shell", r#"{"command":"cargo test"}"#),  // not a file
                 ],
+                ts: 0,
             },
-            ChatMsg::ToolResult { id: String::new(), name: "read_file".into(), output: "fn parse() {}".into(), is_error: false },
-            ChatMsg::ToolResult { id: String::new(), name: "shell".into(), output: "boom".into(), is_error: true },
-            ChatMsg::User("thanks".into()),
+            ChatMsg::ToolResult { id: String::new(), name: "read_file".into(), output: "fn parse() {}".into(), is_error: false, ts: 0 },
+            ChatMsg::ToolResult { id: String::new(), name: "shell".into(), output: "boom".into(), is_error: true, ts: 0 },
+            ChatMsg::User { text: "thanks".into(), ts: 0 },
         ];
         let d = digests(&msgs);
         assert_eq!(d.len(), 2);
@@ -118,7 +119,7 @@ mod tests {
 
     #[test]
     fn assistant_led_log_starts_a_turn() {
-        let msgs = vec![ChatMsg::Assistant { text: "hello there".into(), tool_calls: vec![] }];
+        let msgs = vec![ChatMsg::Assistant { text: "hello there".into(), tool_calls: vec![], ts: 0 }];
         let d = digests(&msgs);
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].headline, "hello there");
@@ -127,7 +128,7 @@ mod tests {
     #[test]
     fn long_headline_is_trimmed() {
         let long = "x".repeat(200);
-        let d = digests(&[ChatMsg::User(long)]);
+        let d = digests(&[ChatMsg::User { text: long, ts: 0 }]);
         assert!(d[0].headline.chars().count() <= 60);
     }
 
@@ -139,7 +140,7 @@ mod tests {
     proptest! {
         #[test]
         fn never_panics_and_one_digest_per_user(n in 0usize..30) {
-            let msgs: Vec<ChatMsg> = (0..n).map(|i| ChatMsg::User(format!("turn {i}"))).collect();
+            let msgs: Vec<ChatMsg> = (0..n).map(|i| ChatMsg::User { text: format!("turn {i}"), ts: 0 }).collect();
             prop_assert_eq!(digests(&msgs).len(), n);
         }
     }

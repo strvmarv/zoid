@@ -17,27 +17,31 @@ use zoid_syntax::{fold_regions, FoldRegion, Language};
 
 /// Build the conversation lines (user/assistant turns + inline tool cards).
 /// Shared by `render_chat` and the modal `render_shell`.
-pub fn conversation_lines<'a>(msgs: &'a [ChatMsg], streaming: bool, caret_on: bool) -> Vec<Line<'a>> {
+pub fn conversation_lines<'a>(msgs: &'a [ChatMsg], streaming: bool, caret_on: bool, tz_offset_secs: i32) -> Vec<Line<'a>> {
     let last = msgs.len().saturating_sub(1);
     if msgs.is_empty() {
         return vec![Line::styled("  (no messages yet)", Style::new().fg(color::DIM))];
     }
+    // Dim 24h `HH:MM ` stamp prefixing each user/assistant message row.
+    let stamp = |ts: i64| Span::styled(format!("{} ", crate::text::hhmm(ts, tz_offset_secs)), Style::new().fg(color::DIM));
     let mut lines: Vec<Line> = Vec::new();
     for (i, m) in msgs.iter().enumerate() {
         match m {
-            ChatMsg::User(text) => {
+            ChatMsg::User { text, ts } => {
                 lines.push(Line::from(vec![
+                    stamp(*ts),
                     Span::styled(format!("{} ", glyph::USER_TURN), Style::new().fg(color::CHAT_ACCENT)),
                     Span::styled(text.clone(), Style::new().fg(color::TXT)),
                 ]));
             }
-            ChatMsg::Assistant { text, tool_calls } => {
+            ChatMsg::Assistant { text, tool_calls, ts } => {
                 let mut shown = text.clone();
                 if streaming && caret_on && i == last && tool_calls.is_empty() {
                     shown.push(glyph::CARET);
                 }
                 if !shown.is_empty() || tool_calls.is_empty() {
                     lines.push(Line::from(vec![
+                        stamp(*ts),
                         Span::styled("zoid ".to_string(), Style::new().fg(color::DIM)),
                         Span::styled(shown, Style::new().fg(color::TXT)),
                     ]));
@@ -75,6 +79,9 @@ pub struct ChatView {
     pub zoom: Zoom,
     pub caret_on: bool,
     pub reveal: Option<usize>,
+    /// Local UTC offset in seconds, supplied by the bin, for the message-row
+    /// `HH:MM` stamps. Tests pass 0 (UTC) so snapshots stay reproducible.
+    pub tz_offset_secs: i32,
 }
 
 /// Build the conversation lines at the requested altitude, capped to
@@ -82,11 +89,11 @@ pub struct ChatView {
 pub fn conversation_view(msgs: &[ChatMsg], view: &ChatView, streaming: bool) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = match view.zoom {
         Zoom::Summary => digest_lines(&digests(msgs)),
-        Zoom::Normal => conversation_lines(msgs, streaming, view.caret_on)
+        Zoom::Normal => conversation_lines(msgs, streaming, view.caret_on, view.tz_offset_secs)
             .into_iter()
             .map(own_line)
             .collect(),
-        Zoom::Detail => detail_lines(msgs),
+        Zoom::Detail => detail_lines(msgs, view.tz_offset_secs),
     };
     if let Some(n) = view.reveal {
         lines.truncate(n);
@@ -117,7 +124,7 @@ fn digest_lines(ds: &[TurnDigest]) -> Vec<Line<'static>> {
 /// Detail altitude: the normal view, but file tool-results are rendered with
 /// syntax highlighting (Ⓡ3, P4a). The file's language is inferred from the
 /// originating tool call's path (correlated by id).
-fn detail_lines(msgs: &[ChatMsg]) -> Vec<Line<'static>> {
+fn detail_lines(msgs: &[ChatMsg], tz_offset_secs: i32) -> Vec<Line<'static>> {
     use std::collections::HashMap;
     // id → file path, from assistant tool calls.
     let mut id_path: HashMap<&str, String> = HashMap::new();
@@ -134,7 +141,7 @@ fn detail_lines(msgs: &[ChatMsg]) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
     for m in msgs {
         match m {
-            ChatMsg::ToolResult { id, name, output, is_error } if !*is_error => {
+            ChatMsg::ToolResult { id, name, output, is_error, .. } if !*is_error => {
                 let header = Span::styled(
                     format!("  {} {}", glyph::PASS, name),
                     Style::new().fg(color::DIM),
@@ -143,7 +150,7 @@ fn detail_lines(msgs: &[ChatMsg]) -> Vec<Line<'static>> {
                 let lang = id_path.get(id.as_str()).map(|p| Language::from_path(p)).unwrap_or(Language::PlainText);
                 out.extend(collapse_to_signatures(output, lang));
             }
-            other => out.extend(conversation_lines(std::slice::from_ref(other), false, true).into_iter().map(own_line)),
+            other => out.extend(conversation_lines(std::slice::from_ref(other), false, true, tz_offset_secs).into_iter().map(own_line)),
         }
     }
     out
@@ -230,8 +237,9 @@ pub fn render_chat(frame: &mut Frame, msgs: &[ChatMsg], input: &TextArea<'_>, st
     ]);
     frame.render_widget(Paragraph::new(title), chunks[0]);
 
-    // Conversation: user/assistant text turns + inline tool cards.
-    let body = conversation_lines(msgs, streaming, true);
+    // Conversation: user/assistant text turns + inline tool cards. This legacy
+    // standalone renderer (tests only) has no view-model, so stamps in UTC.
+    let body = conversation_lines(msgs, streaming, true, 0);
     frame.render_widget(Paragraph::new(body), chunks[1]);
 
     // Input box (bordered text area).
@@ -285,9 +293,9 @@ mod tests {
     #[test]
     fn caret_shows_only_when_streaming_and_caret_on() {
         use crate::tokens::glyph;
-        let msgs = vec![ChatMsg::Assistant { text: "hi".into(), tool_calls: vec![] }];
+        let msgs = vec![ChatMsg::Assistant { text: "hi".into(), tool_calls: vec![], ts: 0 }];
         let has_caret = |streaming, caret| {
-            conversation_lines(&msgs, streaming, caret)
+            conversation_lines(&msgs, streaming, caret, 0)
                 .iter()
                 .any(|l| l.spans.iter().any(|s| s.content.contains(glyph::CARET)))
         };
@@ -306,7 +314,7 @@ mod tests {
     // The body is multi-line so collapse-to-signatures (Task 3b) has something to fold.
     fn seeded() -> Vec<ChatMsg> {
         vec![
-            ChatMsg::User("fix the parser bug".into()),
+            ChatMsg::User { text: "fix the parser bug".into(), ts: 0 },
             ChatMsg::Assistant {
                 text: "on it".into(),
                 tool_calls: vec![ToolCallRef {
@@ -314,19 +322,21 @@ mod tests {
                     name: "read_file".into(),
                     args: r#"{"path":"src/parser.rs"}"#.into(),
                 }],
+                ts: 0,
             },
             ChatMsg::ToolResult {
                 id: "c1".into(),
                 name: "read_file".into(),
                 output: "fn parse(s: &str) -> u32 {\n    let n = 42;\n    n\n}\n".into(),
                 is_error: false,
+                ts: 0,
             },
-            ChatMsg::User("thanks".into()),
+            ChatMsg::User { text: "thanks".into(), ts: 0 },
         ]
     }
 
     fn view(zoom: Zoom) -> ChatView {
-        ChatView { zoom, caret_on: true, reveal: None }
+        ChatView { zoom, caret_on: true, reveal: None, tz_offset_secs: 0 }
     }
 
     #[test]
@@ -366,7 +376,7 @@ mod tests {
     fn normal_matches_conversation_lines() {
         let msgs = seeded();
         let normal = conversation_view(&msgs, &view(Zoom::Normal), false);
-        let baseline = conversation_lines(&msgs, false, true);
+        let baseline = conversation_lines(&msgs, false, true, 0);
         assert_eq!(normal.len(), baseline.len());
     }
 

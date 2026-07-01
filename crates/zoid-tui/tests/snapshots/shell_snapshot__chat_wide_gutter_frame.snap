@@ -4,8 +4,8 @@ assertion_line: 80
 expression: "draw(&s, &seeded(), 140, 24)"
 ---
 " zoid  CHAT  ⎇ main                                                                                                                         "
-"› what's causing the 500?                                                                       ▾ context · tokens  ^5                      "
-"zoid an unwrapped lookup in the handler.                                                         churn                                      "
+"00:00 › what's causing the 500?                                                                 ▾ context · tokens  ^5                      "
+"00:00 zoid an unwrapped lookup in the handler.                                                   churn                                      "
 "                                                                                                 [x] evict cold                           0 "
 "                                                                                                                                            "
 "                                                                                                                                            "

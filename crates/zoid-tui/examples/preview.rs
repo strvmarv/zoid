@@ -17,10 +17,11 @@ use zoid_tui::EconomyView;
 
 fn seeded() -> Vec<ChatMsg> {
     vec![
-        ChatMsg::User("what's causing the 500?".into()),
+        ChatMsg::User { text: "what's causing the 500?".into(), ts: 0 },
         ChatMsg::Assistant {
             text: "an unwrapped lookup in the handler.".into(),
             tool_calls: vec![],
+            ts: 0,
         },
     ]
 }
@@ -32,9 +33,10 @@ fn seeded_objects() -> Vec<ChatMsg> {
         ChatMsg::Assistant {
             text: String::new(),
             tool_calls: vec![ToolCallRef { id: "c1".into(), name: "read_file".into(), args: r#"{"path":"src/ast.rs"}"#.into() }],
+            ts: 0,
         },
-        ChatMsg::ToolResult { id: "c1".into(), name: "read_file".into(), output: "fn parse() {}\nstruct Ast {}\n".into(), is_error: false },
-        ChatMsg::ToolResult { id: "c2".into(), name: "shell".into(), output: "FAILED\n".into(), is_error: true },
+        ChatMsg::ToolResult { id: "c1".into(), name: "read_file".into(), output: "fn parse() {}\nstruct Ast {}\n".into(), is_error: false, ts: 0 },
+        ChatMsg::ToolResult { id: "c2".into(), name: "shell".into(), output: "FAILED\n".into(), is_error: true, ts: 0 },
     ]
 }
 
@@ -154,7 +156,7 @@ fn main() {
     let input = TextArea::default();
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
-    let view = ChatView { zoom: state.zoom, caret_on: true, reveal: None };
+    let view = ChatView { zoom: state.zoom, caret_on: true, reveal: None, tz_offset_secs: 0 };
     terminal
         .draw(|f| render_shell(f, &state, &economy, &msgs, &input, false, &view))
         .unwrap();

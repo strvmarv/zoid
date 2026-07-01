@@ -42,8 +42,8 @@ pub fn tool_specs(tools: &[Box<dyn Tool>]) -> Vec<ToolSpec> {
 /// Map a folded `ChatMsg` to a provider `Message`.
 fn map_msg(m: ChatMsg) -> Message {
     match m {
-        ChatMsg::User(text) => Message::user(text),
-        ChatMsg::Assistant { text, tool_calls } => Message {
+        ChatMsg::User { text, .. } => Message::user(text),
+        ChatMsg::Assistant { text, tool_calls, .. } => Message {
             role: zoid_provider::MsgRole::Assistant,
             content: text,
             tool_calls: tool_calls

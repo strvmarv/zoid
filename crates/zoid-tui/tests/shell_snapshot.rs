@@ -10,7 +10,7 @@ use zoid_core::economy::{ChurnTimeline, TokenLedger};
 use zoid_core::assembler::ContextPolicy;
 
 fn normal_view() -> ChatView {
-    ChatView { zoom: Zoom::Normal, caret_on: true, reveal: None }
+    ChatView { zoom: Zoom::Normal, caret_on: true, reveal: None, tz_offset_secs: 0 }
 }
 
 fn empty_economy() -> EconomyView {
@@ -31,8 +31,8 @@ fn draw_econ(state: &ShellState, econ: &EconomyView, msgs: &[ChatMsg], w: u16, h
 
 fn seeded() -> Vec<ChatMsg> {
     vec![
-        ChatMsg::User("what's causing the 500?".into()),
-        ChatMsg::Assistant { text: "an unwrapped lookup in the handler.".into(), tool_calls: vec![] },
+        ChatMsg::User { text: "what's causing the 500?".into(), ts: 0 },
+        ChatMsg::Assistant { text: "an unwrapped lookup in the handler.".into(), tool_calls: vec![], ts: 0 },
     ]
 }
 
@@ -89,7 +89,7 @@ fn long_turn_wraps_instead_of_clipping() {
     use ratatui::{backend::TestBackend, Terminal};
 
     let long = format!("HEADSENTINEL {} TAILSENTINEL", "wrap ".repeat(40));
-    let msgs = vec![ChatMsg::Assistant { text: long, tool_calls: vec![] }];
+    let msgs = vec![ChatMsg::Assistant { text: long, tool_calls: vec![], ts: 0 }];
 
     let s = ShellState::new();
     let input = TextArea::default();
@@ -225,7 +225,7 @@ use zoid_core::projection::ToolCallRef;
 
 fn seeded_detail() -> Vec<ChatMsg> {
     vec![
-        ChatMsg::User("show me parse".into()),
+        ChatMsg::User { text: "show me parse".into(), ts: 0 },
         ChatMsg::Assistant {
             text: "reading it".into(),
             tool_calls: vec![ToolCallRef {
@@ -233,12 +233,14 @@ fn seeded_detail() -> Vec<ChatMsg> {
                 name: "read_file".into(),
                 args: r#"{"path":"src/parser.rs"}"#.into(),
             }],
+            ts: 0,
         },
         ChatMsg::ToolResult {
             id: "c1".into(),
             name: "read_file".into(),
             output: "fn parse(s: &str) -> u32 {\n    let n = 42;\n    n\n}\n".into(),
             is_error: false,
+            ts: 0,
         },
     ]
 }
@@ -248,7 +250,7 @@ fn seeded_detail() -> Vec<ChatMsg> {
 /// payoff is actually captured by the snapshot, not just the glyphs.
 fn draw_zoom(zoom: Zoom, w: u16, h: u16) -> String {
     let s = ShellState::new();
-    let view = ChatView { zoom, caret_on: true, reveal: None };
+    let view = ChatView { zoom, caret_on: true, reveal: None, tz_offset_secs: 0 };
     let input = TextArea::default();
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -286,9 +288,10 @@ fn seeded_objects() -> Vec<ChatMsg> {
         ChatMsg::Assistant {
             text: String::new(),
             tool_calls: vec![ToolCallRef { id: "c1".into(), name: "read_file".into(), args: r#"{"path":"src/ast.rs"}"#.into() }],
+            ts: 0,
         },
-        ChatMsg::ToolResult { id: "c1".into(), name: "read_file".into(), output: "fn parse() {}\nstruct Ast {}\n".into(), is_error: false },
-        ChatMsg::ToolResult { id: "c2".into(), name: "shell".into(), output: "FAILED\n".into(), is_error: true },
+        ChatMsg::ToolResult { id: "c1".into(), name: "read_file".into(), output: "fn parse() {}\nstruct Ast {}\n".into(), is_error: false, ts: 0 },
+        ChatMsg::ToolResult { id: "c2".into(), name: "shell".into(), output: "FAILED\n".into(), is_error: true, ts: 0 },
     ]
 }
 

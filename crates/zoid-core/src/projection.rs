@@ -12,11 +12,15 @@ pub struct ToolCallRef {
 /// A conversation item: the tool-aware projection consumed by both the renderer
 /// and the provider request builder. An assistant item carries any tool calls it
 /// made in the same turn; tool results are their own items, in log order.
+///
+/// `ts` is the originating event's wall-clock stamp (epoch millis, supplied by
+/// the bin — the core stays clock-free). For a folded assistant turn it's the ts
+/// of the first event that contributed to the turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChatMsg {
-    User(String),
-    Assistant { text: String, tool_calls: Vec<ToolCallRef> },
-    ToolResult { id: String, name: String, output: String, is_error: bool },
+    User { text: String, ts: i64 },
+    Assistant { text: String, tool_calls: Vec<ToolCallRef>, ts: i64 },
+    ToolResult { id: String, name: String, output: String, is_error: bool, ts: i64 },
 }
 
 /// Fold the event log into ordered `ChatMsg` items. A run of `ModelDelta` plus
@@ -26,37 +30,48 @@ pub fn conversation(events: &[Event]) -> Vec<ChatMsg> {
     let mut out: Vec<ChatMsg> = Vec::new();
     let mut text: Option<String> = None;
     let mut calls: Vec<ToolCallRef> = Vec::new();
+    // ts of the first event that contributed to the in-progress assistant turn.
+    let mut turn_ts: Option<i64> = None;
 
-    fn flush(text: &mut Option<String>, calls: &mut Vec<ToolCallRef>, out: &mut Vec<ChatMsg>) {
+    fn flush(
+        text: &mut Option<String>,
+        calls: &mut Vec<ToolCallRef>,
+        turn_ts: &mut Option<i64>,
+        out: &mut Vec<ChatMsg>,
+    ) {
         if text.is_some() || !calls.is_empty() {
             out.push(ChatMsg::Assistant {
                 text: text.take().unwrap_or_default(),
                 tool_calls: std::mem::take(calls),
+                ts: turn_ts.take().unwrap_or(0),
             });
         }
+        *turn_ts = None;
     }
 
     for e in events {
         match &e.kind {
             EventKind::UserMessage { text: t } => {
-                flush(&mut text, &mut calls, &mut out);
-                out.push(ChatMsg::User(t.clone()));
+                flush(&mut text, &mut calls, &mut turn_ts, &mut out);
+                out.push(ChatMsg::User { text: t.clone(), ts: e.ts });
             }
             EventKind::AssistantMessage { text: t } => {
-                flush(&mut text, &mut calls, &mut out);
-                out.push(ChatMsg::Assistant { text: t.clone(), tool_calls: Vec::new() });
+                flush(&mut text, &mut calls, &mut turn_ts, &mut out);
+                out.push(ChatMsg::Assistant { text: t.clone(), tool_calls: Vec::new(), ts: e.ts });
             }
             EventKind::ModelDelta { text: t } => {
+                turn_ts.get_or_insert(e.ts);
                 text.get_or_insert_with(String::new).push_str(t);
             }
             EventKind::ToolCall { id, name, args } => {
+                turn_ts.get_or_insert(e.ts);
                 calls.push(ToolCallRef { id: id.clone(), name: name.clone(), args: args.clone() });
             }
             EventKind::ToolResult { id, name, output, is_error } => {
                 // The assistant turn that made the call(s) ends here.
-                flush(&mut text, &mut calls, &mut out);
+                flush(&mut text, &mut calls, &mut turn_ts, &mut out);
                 out.push(ChatMsg::ToolResult {
-                    id: id.clone(), name: name.clone(), output: output.clone(), is_error: *is_error,
+                    id: id.clone(), name: name.clone(), output: output.clone(), is_error: *is_error, ts: e.ts,
                 });
             }
             EventKind::Usage | EventKind::ContextMutation { .. } => {
@@ -64,7 +79,7 @@ pub fn conversation(events: &[Event]) -> Vec<ChatMsg> {
             }
         }
     }
-    flush(&mut text, &mut calls, &mut out);
+    flush(&mut text, &mut calls, &mut turn_ts, &mut out);
     out
 }
 
@@ -104,13 +119,14 @@ mod tests {
         ];
         let conv = conversation(&events);
         assert_eq!(conv, vec![
-            ChatMsg::User("read a".into()),
+            ChatMsg::User { text: "read a".into(), ts: 0 },
             ChatMsg::Assistant {
                 text: "let me look".into(),
                 tool_calls: vec![ToolCallRef { id: "".into(), name: "read_file".into(), args: r#"{"path":"a"}"#.into() }],
+                ts: 0,
             },
-            ChatMsg::ToolResult { id: "".into(), name: "read_file".into(), output: "data".into(), is_error: false },
-            ChatMsg::Assistant { text: "it says data".into(), tool_calls: vec![] },
+            ChatMsg::ToolResult { id: "".into(), name: "read_file".into(), output: "data".into(), is_error: false, ts: 0 },
+            ChatMsg::Assistant { text: "it says data".into(), tool_calls: vec![], ts: 0 },
         ]);
     }
 
@@ -121,6 +137,7 @@ mod tests {
         assert_eq!(conv[1], ChatMsg::Assistant {
             text: "".into(),
             tool_calls: vec![ToolCallRef { id: "".into(), name: "shell".into(), args: r#"{"command":"ls"}"#.into() }],
+            ts: 0,
         });
     }
 
@@ -141,9 +158,10 @@ mod tests {
         assert_eq!(conv[1], ChatMsg::Assistant {
             text: "".into(),
             tool_calls: vec![ToolCallRef { id: "call_1".into(), name: "shell".into(), args: r#"{"command":"false"}"#.into() }],
+            ts: 0,
         });
         assert_eq!(conv[2], ChatMsg::ToolResult {
-            id: "call_1".into(), name: "shell".into(), output: "boom\n[exit 1]".into(), is_error: true,
+            id: "call_1".into(), name: "shell".into(), output: "boom\n[exit 1]".into(), is_error: true, ts: 0,
         });
     }
 
@@ -159,9 +177,26 @@ mod tests {
         ];
         let msgs = conversation(&evs);
         assert_eq!(msgs, vec![
-            ChatMsg::User("hi".into()),
-            ChatMsg::Assistant { text: "yo".into(), tool_calls: vec![] },
+            ChatMsg::User { text: "hi".into(), ts: 0 },
+            ChatMsg::Assistant { text: "yo".into(), tool_calls: vec![], ts: 0 },
         ]);
+    }
+
+    #[test]
+    fn ts_propagates_and_folded_turn_uses_first_event() {
+        // User carries its own ts; a folded assistant turn (delta+call) carries
+        // the ts of the FIRST contributing event; the tool result its own.
+        let ev = |id: u128, ts: i64, kind| Event::new(Ulid::from(id), None, ts, kind);
+        let events = vec![
+            ev(1, 100, EventKind::UserMessage { text: "go".into() }),
+            ev(2, 200, EventKind::ModelDelta { text: "on it".into() }),
+            ev(3, 250, EventKind::ToolCall { id: "c".into(), name: "shell".into(), args: "{}".into() }),
+            ev(4, 300, EventKind::ToolResult { id: "c".into(), name: "shell".into(), output: "ok".into(), is_error: false }),
+        ];
+        let conv = conversation(&events);
+        assert!(matches!(conv[0], ChatMsg::User { ts: 100, .. }));
+        assert!(matches!(conv[1], ChatMsg::Assistant { ts: 200, .. }), "folded turn uses first event ts");
+        assert!(matches!(conv[2], ChatMsg::ToolResult { ts: 300, .. }));
     }
 
     proptest! {

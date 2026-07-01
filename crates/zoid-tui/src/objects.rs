@@ -48,7 +48,7 @@ pub fn selectable_objects(msgs: &[ChatMsg]) -> Vec<Obj> {
     let mut latest_output: HashMap<String, String> = HashMap::new();
 
     for m in msgs {
-        if let ChatMsg::ToolResult { id, name, output, is_error } = m {
+        if let ChatMsg::ToolResult { id, name, output, is_error, .. } = m {
             if *is_error {
                 errors.push(Obj {
                     kind: ObjectKind::Error,
@@ -122,11 +122,11 @@ mod tests {
 
     fn seeded() -> Vec<ChatMsg> {
         vec![
-            ChatMsg::User("read the ast".into()),
-            ChatMsg::Assistant { text: String::new(), tool_calls: vec![call("c1", r#"{"path":"src/ast.rs"}"#)] },
-            ChatMsg::ToolResult { id: "c1".into(), name: "read_file".into(), output: "fn parse() {}\nstruct Ast {}\n".into(), is_error: false },
-            ChatMsg::Assistant { text: String::new(), tool_calls: vec![ToolCallRef { id: "c2".into(), name: "shell".into(), args: r#"{"command":"cargo test"}"#.into() }] },
-            ChatMsg::ToolResult { id: "c2".into(), name: "shell".into(), output: "FAILED\n[exit 1]".into(), is_error: true },
+            ChatMsg::User { text: "read the ast".into(), ts: 0 },
+            ChatMsg::Assistant { text: String::new(), tool_calls: vec![call("c1", r#"{"path":"src/ast.rs"}"#)], ts: 0 },
+            ChatMsg::ToolResult { id: "c1".into(), name: "read_file".into(), output: "fn parse() {}\nstruct Ast {}\n".into(), is_error: false, ts: 0 },
+            ChatMsg::Assistant { text: String::new(), tool_calls: vec![ToolCallRef { id: "c2".into(), name: "shell".into(), args: r#"{"command":"cargo test"}"#.into() }], ts: 0 },
+            ChatMsg::ToolResult { id: "c2".into(), name: "shell".into(), output: "FAILED\n[exit 1]".into(), is_error: true, ts: 0 },
         ]
     }
 
@@ -150,8 +150,8 @@ mod tests {
     #[test]
     fn non_file_tool_results_make_no_file_object() {
         let msgs = vec![
-            ChatMsg::Assistant { text: String::new(), tool_calls: vec![ToolCallRef { id: "c1".into(), name: "shell".into(), args: r#"{"command":"ls"}"#.into() }] },
-            ChatMsg::ToolResult { id: "c1".into(), name: "shell".into(), output: "a\nb".into(), is_error: false },
+            ChatMsg::Assistant { text: String::new(), tool_calls: vec![ToolCallRef { id: "c1".into(), name: "shell".into(), args: r#"{"command":"ls"}"#.into() }], ts: 0 },
+            ChatMsg::ToolResult { id: "c1".into(), name: "shell".into(), output: "a\nb".into(), is_error: false, ts: 0 },
         ];
         let objs = selectable_objects(&msgs);
         assert!(objs.iter().all(|o| o.kind != ObjectKind::File));
@@ -188,10 +188,10 @@ mod tests {
         // read → (edit) → re-read of the same path: one File object, and symbols
         // come once from the LATEST content (not first+latest stacked).
         let msgs = vec![
-            ChatMsg::Assistant { text: String::new(), tool_calls: vec![call("c1", r#"{"path":"src/ast.rs"}"#)] },
-            ChatMsg::ToolResult { id: "c1".into(), name: "read_file".into(), output: "fn old() {}\n".into(), is_error: false },
-            ChatMsg::Assistant { text: String::new(), tool_calls: vec![call("c2", r#"{"path":"src/ast.rs"}"#)] },
-            ChatMsg::ToolResult { id: "c2".into(), name: "read_file".into(), output: "fn renamed() {}\n".into(), is_error: false },
+            ChatMsg::Assistant { text: String::new(), tool_calls: vec![call("c1", r#"{"path":"src/ast.rs"}"#)], ts: 0 },
+            ChatMsg::ToolResult { id: "c1".into(), name: "read_file".into(), output: "fn old() {}\n".into(), is_error: false, ts: 0 },
+            ChatMsg::Assistant { text: String::new(), tool_calls: vec![call("c2", r#"{"path":"src/ast.rs"}"#)], ts: 0 },
+            ChatMsg::ToolResult { id: "c2".into(), name: "read_file".into(), output: "fn renamed() {}\n".into(), is_error: false, ts: 0 },
         ];
         let objs = selectable_objects(&msgs);
         assert_eq!(objs.iter().filter(|o| o.kind == ObjectKind::File).count(), 1, "one File per path");

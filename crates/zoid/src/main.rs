@@ -83,6 +83,8 @@ struct App {
     started: std::time::Instant,
     /// When the altitude last changed, for the fold/unfold reveal (Ⓡ2).
     zoom_changed_at: Option<std::time::Instant>,
+    /// Local UTC offset (seconds) for message-row HH:MM stamps, sampled once.
+    tz_offset_secs: i32,
 }
 
 impl App {
@@ -123,6 +125,7 @@ async fn main() -> Result<()> {
         ui_tx,
         started: std::time::Instant::now(),
         zoom_changed_at: None,
+        tz_offset_secs: chrono::Local::now().offset().local_minus_utc(),
     };
 
     enable_raw_mode()?;
@@ -179,7 +182,7 @@ async fn run<B: ratatui::backend::Backend>(
                     if elapsed_ms < ZOOM_ANIM_MS && !app.shell.reduced_motion {
                         let total_lines = zoid_tui::chat::conversation_view(
                             &msgs,
-                            &ChatView { zoom: app.shell.zoom, caret_on: caret, reveal: None },
+                            &ChatView { zoom: app.shell.zoom, caret_on: caret, reveal: None, tz_offset_secs: app.tz_offset_secs },
                             app.streaming,
                         )
                         .len();
@@ -195,7 +198,7 @@ async fn run<B: ratatui::backend::Backend>(
                 }
                 None => None,
             };
-            let view = ChatView { zoom: app.shell.zoom, caret_on: caret, reveal };
+            let view = ChatView { zoom: app.shell.zoom, caret_on: caret, reveal, tz_offset_secs: app.tz_offset_secs };
             render_shell(f, &app.shell, &economy, &msgs, &app.textarea, app.streaming, &view);
         })?;
 

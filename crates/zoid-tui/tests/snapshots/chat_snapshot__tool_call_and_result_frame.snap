@@ -1,13 +1,14 @@
 ---
 source: crates/zoid-tui/tests/chat_snapshot.rs
+assertion_line: 49
 expression: "draw(&msgs, false)"
 ---
 " zoid CHAT ⎇ main                                           "
-"› read a.txt                                                "
-"zoid reading it                                             "
+"00:00 › read a.txt                                          "
+"00:00 zoid reading it                                       "
 "  ● read_file(path: a.txt) ⏎ peek                           "
 "  ✓ read_file → file body                                   "
-"zoid it contains the config.                                "
+"00:00 zoid it contains the config.                          "
 "                                                            "
 "                                                            "
 "┌ message ─────────────────────────────────────────────────┐"

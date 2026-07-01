@@ -34,6 +34,15 @@ pub(crate) fn truncate(s: &str, max: usize) -> String {
     out
 }
 
+/// Format an epoch-millis timestamp as 24-hour `HH:MM` (no date), shifted by
+/// `tz_offset_secs` (local UTC offset, supplied by the bin). Pure integer math —
+/// no timezone library, so snapshots stay reproducible by passing offset 0.
+pub(crate) fn hhmm(epoch_ms: i64, tz_offset_secs: i32) -> String {
+    let secs = epoch_ms.div_euclid(1000) + tz_offset_secs as i64;
+    let sod = secs.rem_euclid(86_400); // seconds-of-day, always in [0, 86400)
+    format!("{:02}:{:02}", sod / 3600, (sod % 3600) / 60)
+}
+
 /// Right-pad `s` with spaces to exactly `width` display columns. If `s` is
 /// already at least `width` wide it is returned unchanged (callers truncate
 /// first when a hard cap is needed).
@@ -93,6 +102,18 @@ mod tests {
         let two = truncate("😀xyz", 2);
         assert!(UnicodeWidthStr::width(two.as_str()) <= 2);
         assert_eq!(two, glyph::ELLIPSIS.to_string());
+    }
+
+    #[test]
+    fn hhmm_formats_24h_with_offset() {
+        // 1970-01-01 00:00:00 UTC
+        assert_eq!(hhmm(0, 0), "00:00");
+        // 13:45:00 UTC (49_500_000 ms) at offset 0
+        assert_eq!(hhmm(49_500_000, 0), "13:45");
+        // Same instant, +2h offset -> 15:45
+        assert_eq!(hhmm(49_500_000, 2 * 3600), "15:45");
+        // Negative offset wraps across midnight: 00:30 UTC, -1h -> 23:30
+        assert_eq!(hhmm(1_800_000, -3600), "23:30");
     }
 
     #[test]

@@ -1,10 +1,11 @@
 ---
 source: crates/zoid-tui/tests/chat_snapshot.rs
+assertion_line: 34
 expression: "draw(&msgs, true)"
 ---
 " zoid CHAT ⎇ main                                           "
-"› hi                                                        "
-"zoid thinking▌                                              "
+"00:00 › hi                                                  "
+"00:00 zoid thinking▌                                        "
 "                                                            "
 "                                                            "
 "                                                            "
