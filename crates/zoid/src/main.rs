@@ -13,7 +13,6 @@ use crossterm::{
 use futures_util::StreamExt;
 use ratatui::{layout::Rect, prelude::CrosstermBackend, Terminal};
 use std::io::stdout;
-#[allow(unused_imports)]
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -64,6 +63,35 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// One-time pre-release migration: if a legacy in-repo `./.zoid/session.db`
+/// exists and the new global DB does NOT yet exist, import the legacy events
+/// under a single generated `session_id` (with a `sessions` row). Idempotent:
+/// once the new DB exists we never import again. Returns whether an import ran.
+#[allow(dead_code)]
+fn import_legacy_if_present(
+    new_db: &Path,
+    legacy: &Path,
+    session_id: Ulid,
+    name: &str,
+    root_path: &str,
+    ts: i64,
+) -> Result<bool> {
+    if new_db.exists() || !legacy.exists() {
+        return Ok(false);
+    }
+    let old = zoid_core::store::EventStore::open(legacy.to_str().context("legacy path not UTF-8")?)?;
+    let events = old.load_all()?;
+    if let Some(dir) = new_db.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let store = zoid_core::store::EventStore::open(new_db.to_str().context("new db path not UTF-8")?)?;
+    store.insert_session(session_id, name, root_path, ts, ts)?;
+    for e in events {
+        store.append(&e.with_session(session_id))?;
+    }
+    Ok(true)
 }
 
 /// Build the message input with the tui-textarea cursor-line **underline**
@@ -473,5 +501,29 @@ mod tests {
     fn falls_back_to_home_local_share() {
         let p = resolve_db_path(env_of(&[("HOME", "/home/u")]));
         assert_eq!(p, PathBuf::from("/home/u/.local/share/zoid/zoid.db"));
+    }
+
+    #[test]
+    fn imports_legacy_events_under_one_session_once() {
+        use zoid_core::event::{Event, EventKind};
+        use zoid_core::store::EventStore;
+        use ulid::Ulid;
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("legacy.db");
+        let newdb = dir.path().join("new.db");
+        // Seed a legacy DB with two events (no meaningful session_id).
+        {
+            let s = EventStore::open(legacy.to_str().unwrap()).unwrap();
+            s.append(&Event::new(Ulid::from(1u128), None, 1, EventKind::UserMessage { text: "old q".into() })).unwrap();
+            s.append(&Event::new(Ulid::from(2u128), None, 2, EventKind::AssistantMessage { text: "old a".into() })).unwrap();
+        }
+        let sid = Ulid::from(42u128);
+        // First run imports.
+        assert!(import_legacy_if_present(&newdb, &legacy, sid, "imported", "/repo", 500).unwrap());
+        let s = EventStore::open(newdb.to_str().unwrap()).unwrap();
+        assert_eq!(s.load_session(sid).unwrap().len(), 2);
+        assert_eq!(s.list_session_rows().unwrap().len(), 1);
+        // Second run is a no-op (new DB already exists → nothing re-imported).
+        assert!(!import_legacy_if_present(&newdb, &legacy, sid, "imported", "/repo", 500).unwrap());
     }
 }
