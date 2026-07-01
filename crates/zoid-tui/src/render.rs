@@ -14,7 +14,7 @@ use ratatui::{
     layout::Rect,
     style::{Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame,
 };
 use tui_textarea::TextArea;
@@ -36,7 +36,16 @@ pub fn render_shell(
     match state.mode {
         Mode::Chat => {
             let body = conversation_view(msgs, view, streaming);
-            frame.render_widget(Paragraph::new(body).scroll((state.conversation_scroll, 0)), layout.conversation);
+            // `trim: false` so indentation survives on wrapped continuation rows —
+            // Detail altitude renders syntax-highlighted code whose leading space is
+            // meaningful. Without wrap, ratatui clips any turn wider than the column
+            // mid-word with no ellipsis. Scroll offset is row-based either way.
+            frame.render_widget(
+                Paragraph::new(body)
+                    .wrap(Wrap { trim: false })
+                    .scroll((state.conversation_scroll, 0)),
+                layout.conversation,
+            );
         }
         Mode::Build => render_build_placeholder(frame, layout.conversation),
     }

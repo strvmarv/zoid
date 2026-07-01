@@ -80,6 +80,38 @@ fn chat_wide_gutter_frame() {
     insta::assert_snapshot!(draw(&s, &seeded(), 140, 24));
 }
 
+/// A turn wider than the conversation column must WRAP, not clip. Without
+/// `Paragraph::wrap`, ratatui truncates the over-wide line mid-word at the right
+/// edge and the tail is lost. Assert the tail sentinel is present AND lands on a
+/// row below the head sentinel — proving it wrapped rather than merely fitting.
+#[test]
+fn long_turn_wraps_instead_of_clipping() {
+    use ratatui::{backend::TestBackend, Terminal};
+
+    let long = format!("HEADSENTINEL {} TAILSENTINEL", "wrap ".repeat(40));
+    let msgs = vec![ChatMsg::Assistant { text: long, tool_calls: vec![] }];
+
+    let s = ShellState::new();
+    let input = TextArea::default();
+    let backend = TestBackend::new(100, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|f| render_shell(f, &s, &empty_economy(), &msgs, &input, false, &normal_view()))
+        .unwrap();
+    let buf = terminal.backend().buffer().clone();
+
+    let row_of = |needle: &str| -> Option<u16> {
+        (0..buf.area.height).find(|&y| {
+            let row: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+            row.contains(needle)
+        })
+    };
+
+    let head = row_of("HEADSENTINEL").expect("head sentinel must render");
+    let tail = row_of("TAILSENTINEL").expect("tail sentinel must render (would be clipped without wrap)");
+    assert!(tail > head, "tail (row {tail}) must wrap below head (row {head})");
+}
+
 #[test]
 fn files_drawer_open_frame() {
     let mut s = ShellState::new();
