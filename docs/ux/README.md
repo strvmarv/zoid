@@ -1,6 +1,6 @@
 # zoid — UX reference (canonical mockups)
 
-The **visual source of truth** for zoid's TUI. Referenced by the design spec (`docs/superpowers/specs/2026-06-28-zoid-tui-coding-agent-design.md`) and by implementation-plan tasks. The built TUI must match these, enforced via snapshot tests (see "Fidelity pipeline").
+The **visual source of truth** for zoid's TUI. The visual-language contract and fidelity pipeline live in the **core-architecture** spec (`docs/superpowers/specs/2026-06-30-zoid-core-architecture.md` §13); per-mode layouts live in the **Chat** and **Build** mode specs (`2026-06-30-zoid-chat-mode-design.md`, `2026-06-30-zoid-build-mode-design.md`). *(These supersede the original combined `2026-06-28-zoid-tui-coding-agent-design.md`.)* The built TUI must match these mockups, enforced via snapshot tests (see "Fidelity pipeline").
 
 > Open any file in a browser — self-contained HTML, no server.
 
