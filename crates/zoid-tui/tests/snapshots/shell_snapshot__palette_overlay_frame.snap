@@ -4,7 +4,7 @@ assertion_line: 128
 expression: "draw(&s, &seeded(), 100, 24)"
 ---
 " zoid  CHAT  ⎇ main                                                                                 "
-"┌ › build ────────────────────────────────────────────┐ ▾ ⑤ context · tokens  ^5                    "
+"┌ › build ────────────────────────────────────────────┐ ▾ context · tokens  ^5                      "
 "│MODE                                                 │  churn                                      "
 "│ ⇢ Switch to Build  continue this conversation into t│  [x] evict cold                           0 "
 "│BRANCH ⎇ · POST-V1                                   │                                             "

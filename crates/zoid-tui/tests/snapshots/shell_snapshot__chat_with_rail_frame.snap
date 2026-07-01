@@ -4,7 +4,7 @@ assertion_line: 70
 expression: "draw(&s, &seeded(), 100, 24)"
 ---
 " zoid  CHAT  ⎇ main                                                                                 "
-"› what's causing the 500?                               ▾ ⑤ context · tokens  ^5                    "
+"› what's causing the 500?                               ▾ context · tokens  ^5                      "
 "zoid an unwrapped lookup in the handler.                 churn                                      "
 "                                                         [x] evict cold                           0 "
 "                                                                                                    "

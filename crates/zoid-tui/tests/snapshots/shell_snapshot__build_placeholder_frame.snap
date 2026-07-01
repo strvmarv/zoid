@@ -4,7 +4,7 @@ assertion_line: 143
 expression: "draw(&s, &[], 100, 24)"
 ---
 " zoid  BUILD  ⎇ main                                                                                "
-"                                                        ▾ ⑤ context · tokens  ^5                    "
+"                                                        ▾ context · tokens  ^5                      "
 "  ◐ BUILD mode                                           churn                                      "
 "  The autonomous loop arrives in P6.                     [x] evict cold                           0 "
 "  ⇧Tab / :chat → back to Chat                                                                       "

@@ -79,6 +79,14 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
     if ctrl(&key, 'o') {
         return Action::OpenObjects;
     }
+    // Zoom altitude from any focus (mirrors Ctrl+scroll) — a modifier is required
+    // because plain =/- are text the message box must keep receiving.
+    if ctrl(&key, '=') || ctrl(&key, '+') {
+        return Action::ZoomIn;
+    }
+    if ctrl(&key, '-') || ctrl(&key, '_') {
+        return Action::ZoomOut;
+    }
     match key.code {
         KeyCode::BackTab => return Action::SwitchMode,
         KeyCode::Tab => return Action::FocusNext,
@@ -353,6 +361,18 @@ mod tests {
         assert_eq!(route_key(&s, key(KeyCode::Char('='), KeyModifiers::NONE)), Action::ZoomIn);
         assert_eq!(route_key(&s, key(KeyCode::Char('+'), KeyModifiers::NONE)), Action::ZoomIn);
         assert_eq!(route_key(&s, key(KeyCode::Char('-'), KeyModifiers::NONE)), Action::ZoomOut);
+    }
+
+    #[test]
+    fn ctrl_zoom_routes_from_any_focus() {
+        let mut s = ShellState::new();
+        s.focus = Focus::Input; // typing in the message box, yet zoom still works
+        assert_eq!(route_key(&s, key(KeyCode::Char('='), KeyModifiers::CONTROL)), Action::ZoomIn);
+        assert_eq!(route_key(&s, key(KeyCode::Char('+'), KeyModifiers::CONTROL)), Action::ZoomIn);
+        assert_eq!(route_key(&s, key(KeyCode::Char('-'), KeyModifiers::CONTROL)), Action::ZoomOut);
+        assert_eq!(route_key(&s, key(KeyCode::Char('_'), KeyModifiers::CONTROL)), Action::ZoomOut);
+        // Plain =/- in the input are still text, not zoom.
+        assert_eq!(route_key(&s, key(KeyCode::Char('='), KeyModifiers::NONE)), Action::Edit(key(KeyCode::Char('='), KeyModifiers::NONE)));
     }
 
     #[test]

@@ -4,7 +4,7 @@ assertion_line: 155
 expression: "draw_econ(&s, &seeded_economy(), &seeded(), 140, 24)"
 ---
 " zoid  CHAT  ⎇ main                                                                                                                         "
-"› what's causing the 500?                                                                       ▾ ⑤ context · tokens  ^5                    "
+"› what's causing the 500?                                                                       ▾ context · tokens  ^5                      "
 "zoid an unwrapped lookup in the handler.                                                           grep                          6k ██      "
 "                                                                                                   schema.sql                    5k ░░ cold "
 "                                                                                                 ● users.rs                      4k ██      "
