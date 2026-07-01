@@ -578,7 +578,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 zoid_tui::palette::nav(app.shell.session_selected, d, app.shell.sessions.len());
         }
         Action::SessionPick => {
-            if app.streaming {
+            if app.streaming || app.delegating {
                 app.shell.status_hint = Some("finish the current turn first".into());
                 app.shell.close_overlay();
                 return Ok(false);
@@ -608,7 +608,7 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
         Command::SwitchMode(m) => { app.shell.set_mode(m); Ok(false) }
         Command::OpenDrawer(id) => { app.shell.open_drawer(id); Ok(false) }
         Command::NewSession => {
-            if app.streaming {
+            if app.streaming || app.delegating {
                 app.shell.status_hint = Some("finish the current turn first".into());
                 app.shell.close_overlay();
                 return Ok(false);
@@ -929,5 +929,57 @@ mod tests {
         );
         // The textarea must be left alone (not cleared) since nothing was submitted.
         assert_eq!(app.textarea.lines(), &["hello".to_string()]);
+    }
+
+    /// Regression for I-1: `Action::SessionPick` must be a no-op while a
+    /// delegation is in flight, symmetric with `Submit`/`start_delegation`'s
+    /// `app.streaming || app.delegating` guard. Before the fix, `SessionPick`
+    /// only checked `app.streaming`, so a mid-delegation session switch would
+    /// let the still-running subagent push session A's events into session
+    /// B's in-memory log via `AgentUpdate::Appended`.
+    #[tokio::test]
+    async fn session_pick_is_noop_while_delegating() {
+        let mut app = test_app().await;
+        let original_session_id = app.session_id;
+
+        // Seed a second session to switch to.
+        let other_id = Ulid::new();
+        app.session.new_session(other_id, "other".into(), "/repo".into(), 0).await.unwrap();
+        app.session_ids = vec![other_id];
+        app.shell.session_selected = 0;
+
+        app.delegating = true;
+        let quit = handle_action(&mut app, zoid_tui::route::Action::SessionPick).await.unwrap();
+
+        assert!(!quit, "SessionPick must not signal quit");
+        assert_eq!(app.session_id, original_session_id, "session_id must not switch while delegating");
+        assert!(app.events.is_empty(), "events must not be swapped in while delegating");
+        assert!(app.delegating, "delegating flag must be untouched by a blocked SessionPick");
+        assert_eq!(
+            app.shell.status_hint.as_deref(),
+            Some("finish the current turn first"),
+            "blocked SessionPick should surface the busy hint"
+        );
+    }
+
+    /// Regression for I-1: `Command::NewSession` must be a no-op while a
+    /// delegation is in flight, mirroring the `SessionPick`/`Submit` guard.
+    #[tokio::test]
+    async fn new_session_is_noop_while_delegating() {
+        let mut app = test_app().await;
+        let original_session_id = app.session_id;
+        app.delegating = true;
+
+        let quit = exec_command(&mut app, zoid_tui::command::Command::NewSession).await.unwrap();
+
+        assert!(!quit, "NewSession must not signal quit");
+        assert_eq!(app.session_id, original_session_id, "session_id must not change while delegating");
+        assert!(app.events.is_empty(), "events must not be cleared/reset while delegating");
+        assert!(app.delegating, "delegating flag must be untouched by a blocked NewSession");
+        assert_eq!(
+            app.shell.status_hint.as_deref(),
+            Some("finish the current turn first"),
+            "blocked NewSession should surface the busy hint"
+        );
     }
 }
