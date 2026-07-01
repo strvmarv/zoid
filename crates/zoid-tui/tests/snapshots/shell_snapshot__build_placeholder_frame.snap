@@ -2,7 +2,7 @@
 source: crates/zoid-tui/tests/shell_snapshot.rs
 expression: "draw(&s, &[], 100, 24)"
 ---
-" zoid  BUILD  ⎇ main                                                                                "
+" zoid ● idle                                                                                        "
 "                                                        ▾ context · tokens                          "
 "  ◐ BUILD mode                                           churn                                      "
 "  The autonomous loop arrives in P6.                     [x] evict cold                           0 "

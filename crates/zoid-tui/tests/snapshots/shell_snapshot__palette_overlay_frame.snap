@@ -2,7 +2,7 @@
 source: crates/zoid-tui/tests/shell_snapshot.rs
 expression: "draw(&s, &seeded(), 100, 24)"
 ---
-" zoid  CHAT  ⎇ main                                                                                 "
+" zoid ● idle                                                                                        "
 "┌ › build ────────────────────────────────────────────┐ ▾ context · tokens                          "
 "│MODE                                                 │  churn                                      "
 "│ ⇢ Switch to Build  continue this conversation into t│  [x] evict cold                           0 "
@@ -25,4 +25,4 @@ expression: "draw(&s, &seeded(), 100, 24)"
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"
 "│                                                                                                  │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" CHAT  ⎇ main · zoom normal · ^P palette · ⇧Tab → Build · ^C quit                                   "
+" CHAT  zoom normal · ^P palette                                                                     "

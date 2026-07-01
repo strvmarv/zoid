@@ -29,6 +29,7 @@ pub mod glyph {
     pub const SPARK: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█']; // churn sparkline ramp
     pub const PIN: char = '●';         // ⑤ pinned-item marker
     pub const ELLIPSIS: char = '…';     // collapsed-body marker (① collapse-to-signatures)
+    pub const IDLE: char = '●';        // title-bar activity — waiting for the user (§2.2)
 }
 
 /// Colors (visual-language table, spec §16 / docs/ux/README.md).
@@ -107,5 +108,11 @@ mod tests {
     #[test]
     fn p4c_collapse_token_present() {
         assert_eq!(glyph::ELLIPSIS, '…');
+    }
+
+    #[test]
+    fn chat_polish_activity_token_present() {
+        assert_eq!(glyph::IDLE, '●'); // title-bar idle activity indicator (§2.2)
+        assert_eq!(glyph::STREAM, '⠿'); // running indicator reuses the stream glyph
     }
 }

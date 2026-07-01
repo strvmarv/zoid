@@ -31,7 +31,7 @@ pub fn render_shell(
 ) {
     let layout = compute(frame.area(), state);
 
-    render_title(frame, state, layout.title);
+    render_title(frame, streaming, layout.title);
 
     match state.mode {
         Mode::Chat => {
@@ -77,15 +77,18 @@ pub fn render_shell(
     }
 }
 
-fn render_title(frame: &mut Frame, state: &ShellState, area: Rect) {
-    let (label, fg, bg) = match state.mode {
-        Mode::Chat => ("CHAT", color::CHAT_ACCENT, color::CHAT_BG),
-        Mode::Build => ("BUILD", color::BUILD_ACCENT, color::BUILD_BG),
+fn render_title(frame: &mut Frame, streaming: bool, area: Rect) {
+    // App name + a live activity indicator only (spec §2.2): idle when waiting
+    // for the user, running while the agent streams or a tool runs. The mode chip
+    // lives in the status bar; branch lives in the rail.
+    let (icon, label, fg) = if streaming {
+        (glyph::STREAM, "running", color::CHAT_ACCENT)
+    } else {
+        (glyph::IDLE, "idle", color::DIM)
     };
     let title = Line::from(vec![
         Span::styled(" zoid ", Style::new().fg(color::TXT).bold()),
-        Span::styled(format!(" {label} "), Style::new().fg(fg).bg(bg).bold()),
-        Span::styled(format!(" {} {}", glyph::BRANCH, state.branch), Style::new().fg(color::BRANCH)),
+        Span::styled(format!("{icon} {label}"), Style::new().fg(fg)),
     ]);
     frame.render_widget(Paragraph::new(title), area);
 }
@@ -115,10 +118,7 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
         Mode::Chat => vec![
             Span::styled(" CHAT ", Style::new().fg(color::CHAT_ACCENT).bg(color::CHAT_BG)),
             Span::styled(
-                format!(
-                    " {} {} · zoom {} · ^P palette · {}Tab → Build · ^C quit",
-                    glyph::BRANCH, state.branch, view.zoom.label(), glyph::SHIFT
-                ),
+                format!(" zoom {} · ^P palette", view.zoom.label()),
                 Style::new().fg(color::DIM),
             ),
         ],

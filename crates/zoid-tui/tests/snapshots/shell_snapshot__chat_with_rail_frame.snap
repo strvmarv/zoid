@@ -2,7 +2,7 @@
 source: crates/zoid-tui/tests/shell_snapshot.rs
 expression: "draw(&s, &seeded(), 100, 24)"
 ---
-" zoid  CHAT  ⎇ main                                                                                 "
+" zoid ● idle                                                                                        "
 "00:00 › what's causing the 500?                         ▾ context · tokens                          "
 "00:00 zoid an unwrapped lookup in the handler.           churn                                      "
 "                                                         [x] evict cold                           0 "
@@ -25,4 +25,4 @@ expression: "draw(&s, &seeded(), 100, 24)"
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"
 "│                                                                                                  │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" CHAT  ⎇ main · zoom normal · ^P palette · ⇧Tab → Build · ^C quit                                   "
+" CHAT  zoom normal · ^P palette                                                                     "

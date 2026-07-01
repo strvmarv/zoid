@@ -5,7 +5,7 @@ expression: "draw_overlay(Overlay::Verbs, 140, 24)"
 Buffer {
     area: Rect { x: 0, y: 0, width: 140, height: 24 },
     content: [
-        " zoid  CHAT  ⎇ main                                                                                                                         ",
+        " zoid ● idle                                                                                                                                ",
         "  ● read_fi┌ ▷ verbs · src/ast.rs ────────────────────────────────────────────────┐             ▾ context · tokens                          ",
         "  ✓ read_fi│ explain                                                              │              churn                                      ",
         "  ⚠ shell →│ summarize                                                            │              [x] evict cold                           0 ",
@@ -28,13 +28,12 @@ Buffer {
         "┌ message ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐",
         "│                                                                                                                                          │",
         "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘",
-        " CHAT  ⎇ main · zoom normal · ^P palette · ⇧Tab → Build · ^C quit                                                                           ",
+        " CHAT  zoom normal · ^P palette                                                                                                             ",
     ],
     styles: [
         x: 0, y: 0, fg: Rgb(201, 209, 217), bg: Reset, underline: Reset, modifier: BOLD,
-        x: 6, y: 0, fg: Rgb(88, 166, 255), bg: Rgb(13, 42, 77), underline: Reset, modifier: BOLD,
-        x: 12, y: 0, fg: Rgb(188, 140, 255), bg: Reset, underline: Reset, modifier: NONE,
-        x: 19, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 6, y: 0, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
+        x: 12, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 1, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
         x: 4, y: 1, fg: Rgb(201, 209, 217), bg: Reset, underline: Reset, modifier: BOLD,
         x: 11, y: 1, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
@@ -130,6 +129,6 @@ Buffer {
         x: 139, y: 21, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 23, fg: Rgb(88, 166, 255), bg: Rgb(13, 42, 77), underline: Reset, modifier: NONE,
         x: 6, y: 23, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 65, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 31, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
     ]
 }
