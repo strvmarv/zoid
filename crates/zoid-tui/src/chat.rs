@@ -277,14 +277,7 @@ fn first_line(s: &str) -> String {
     truncate(s.lines().next().unwrap_or(""), 40)
 }
 
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() > max {
-        let head: String = s.chars().take(max.saturating_sub(1)).collect();
-        format!("{head}{}", glyph::ELLIPSIS)
-    } else {
-        s.to_string()
-    }
-}
+use crate::text::truncate;
 
 #[cfg(test)]
 mod tests {
