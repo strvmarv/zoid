@@ -17,11 +17,23 @@ pub enum Focus {
     Rail,
 }
 
+/// Conversation altitude (spec ① semantic zoom). `Normal` is the default
+/// turn-by-turn view; `Summary` collapses each turn to a one-line digest;
+/// `Detail` expands tool output with code highlighting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Zoom {
+    Summary,
+    Normal,
+    Detail,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Overlay {
     None,
     Palette,
     CommandLine,
+    Objects,
+    Verbs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +63,14 @@ pub struct CmdlineState {
     pub buffer: String,
 }
 
+/// Object-first picker state (spec ④): which object/verb row is highlighted
+/// across the two-step Objects → Verbs overlay.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ObjectState {
+    pub obj_selected: usize,
+    pub verb_selected: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellState {
     pub mode: Mode,
@@ -60,11 +80,21 @@ pub struct ShellState {
     pub rail_visible: bool,
     pub palette: PaletteState,
     pub cmdline: CmdlineState,
+    pub objects: ObjectState,
     pub conversation_scroll: u16,
     /// cwd entries shown in the Files drawer (populated by the bin; pure for tests).
     pub files: Vec<String>,
     /// Current branch label for the Branch drawer (P2: read from `.git/HEAD`).
     pub branch: String,
+    /// Reduced-motion accessibility setting (spec §13). When true, animations
+    /// resolve to their final state instantly. Bin sets it from ZOID_REDUCED_MOTION.
+    pub reduced_motion: bool,
+    /// Conversation altitude (spec ① semantic zoom).
+    pub zoom: Zoom,
+    /// Transient one-line hint shown in the status bar (e.g. the ④ "queued · P5"
+    /// notice). Lives on `ShellState` (not `App`) so the pure renderer can read
+    /// it directly. Setting/clearing it on a verb pick is bin wiring (P4d T4).
+    pub status_hint: Option<String>,
 }
 
 impl ShellState {
@@ -85,9 +115,13 @@ impl ShellState {
             rail_visible: true,
             palette: PaletteState::default(),
             cmdline: CmdlineState::default(),
+            objects: ObjectState::default(),
             conversation_scroll: 0,
             files: Vec::new(),
             branch: "main".into(),
+            reduced_motion: false,
+            zoom: Zoom::Normal,
+            status_hint: None,
         }
     }
 
@@ -140,6 +174,23 @@ impl ShellState {
         self.overlay = Overlay::None;
         self.palette = PaletteState::default();
         self.cmdline = CmdlineState::default();
+        self.objects = ObjectState::default();
+    }
+
+    /// Increase detail (Summary → Normal → Detail), saturating.
+    pub fn zoom_in(&mut self) {
+        self.zoom = match self.zoom {
+            Zoom::Summary => Zoom::Normal,
+            Zoom::Normal | Zoom::Detail => Zoom::Detail,
+        };
+    }
+
+    /// Decrease detail (Detail → Normal → Summary), saturating.
+    pub fn zoom_out(&mut self) {
+        self.zoom = match self.zoom {
+            Zoom::Detail => Zoom::Normal,
+            Zoom::Normal | Zoom::Summary => Zoom::Summary,
+        };
     }
 }
 
@@ -220,6 +271,12 @@ mod tests {
     }
 
     #[test]
+    fn new_has_reduced_motion_off_by_default() {
+        let s = ShellState::new();
+        assert!(!s.reduced_motion); // motion on by default; bin flips it from env
+    }
+
+    #[test]
     fn close_overlay_resets_palette_query() {
         let mut s = ShellState::new();
         s.overlay = Overlay::Palette;
@@ -229,5 +286,41 @@ mod tests {
         assert_eq!(s.overlay, Overlay::None);
         assert_eq!(s.palette, PaletteState::default());
         assert_eq!(s.cmdline, CmdlineState::default());
+    }
+
+    #[test]
+    fn close_overlay_resets_object_state() {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Verbs;
+        s.objects.obj_selected = 2;
+        s.objects.verb_selected = 1;
+        s.close_overlay();
+        assert_eq!(s.overlay, Overlay::None);
+        assert_eq!(s.objects, ObjectState::default());
+    }
+
+    #[test]
+    fn new_has_no_status_hint() {
+        assert!(ShellState::new().status_hint.is_none());
+    }
+
+    #[test]
+    fn zoom_defaults_to_normal() {
+        assert_eq!(ShellState::new().zoom, Zoom::Normal);
+    }
+
+    #[test]
+    fn zoom_in_out_saturate_at_ends() {
+        let mut s = ShellState::new(); // Normal
+        s.zoom_out();
+        assert_eq!(s.zoom, Zoom::Summary);
+        s.zoom_out();
+        assert_eq!(s.zoom, Zoom::Summary); // saturates
+        s.zoom_in();
+        assert_eq!(s.zoom, Zoom::Normal);
+        s.zoom_in();
+        assert_eq!(s.zoom, Zoom::Detail);
+        s.zoom_in();
+        assert_eq!(s.zoom, Zoom::Detail); // saturates
     }
 }

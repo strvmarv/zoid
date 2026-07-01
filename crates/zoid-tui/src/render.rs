@@ -4,7 +4,7 @@
 //! from `tokens` (spec §16). Geometry comes from `layout::compute` — the same
 //! rects mouse hit-testing uses.
 
-use crate::chat::conversation_lines;
+use crate::chat::{conversation_view, ChatView};
 use crate::economy_view::EconomyView;
 use crate::layout::{compute, ShellLayout};
 use crate::palette::{all_items, nav, selectable_matches, PaletteItem};
@@ -27,6 +27,7 @@ pub fn render_shell(
     msgs: &[ChatMsg],
     input: &TextArea<'_>,
     streaming: bool,
+    view: &ChatView,
 ) {
     let layout = compute(frame.area(), state);
 
@@ -34,7 +35,7 @@ pub fn render_shell(
 
     match state.mode {
         Mode::Chat => {
-            let body = conversation_lines(msgs, streaming);
+            let body = conversation_view(msgs, view, streaming);
             frame.render_widget(Paragraph::new(body).scroll((state.conversation_scroll, 0)), layout.conversation);
         }
         Mode::Build => render_build_placeholder(frame, layout.conversation),
@@ -55,6 +56,14 @@ pub fn render_shell(
     } else if state.overlay == Overlay::CommandLine {
         if let Some(c) = layout.cmdline {
             render_cmdline(frame, state, c);
+        }
+    } else if state.overlay == Overlay::Objects {
+        if let Some(p) = layout.palette {
+            render_object_overlay(frame, msgs, state, p);
+        }
+    } else if state.overlay == Overlay::Verbs {
+        if let Some(p) = layout.palette {
+            render_verb_overlay(frame, msgs, state, p);
         }
     }
 }
@@ -93,20 +102,25 @@ fn render_input(frame: &mut Frame, input: &TextArea<'_>, area: Rect) {
 }
 
 fn render_status(frame: &mut Frame, state: &ShellState, area: Rect) {
-    let status = match state.mode {
-        Mode::Chat => Line::from(vec![
+    let mut spans = match state.mode {
+        Mode::Chat => vec![
             Span::styled(" CHAT ", Style::new().fg(color::CHAT_ACCENT).bg(color::CHAT_BG)),
             Span::styled(
                 format!(" {} {} · ^P palette · {}Tab → Build · ^C quit", glyph::BRANCH, state.branch, glyph::SHIFT),
                 Style::new().fg(color::DIM),
             ),
-        ]),
-        Mode::Build => Line::from(vec![
+        ],
+        Mode::Build => vec![
             Span::styled(" BUILD ", Style::new().fg(color::BUILD_ACCENT).bg(color::BUILD_BG)),
             Span::styled(" phase —/— · esc → Chat", Style::new().fg(color::DIM)),
-        ]),
+        ],
     };
-    frame.render_widget(Paragraph::new(status), area);
+    // Transient ④ hint (e.g. "queued · runs as a subagent in P5"), set by a
+    // verb pick (P4d T4). Pure-renderer-readable since it lives on ShellState.
+    if let Some(hint) = &state.status_hint {
+        spans.push(Span::styled(format!(" · {hint}"), Style::new().fg(color::DIM)));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn render_rail(frame: &mut Frame, state: &ShellState, economy: &EconomyView, layout: &ShellLayout, rail: Rect) {
@@ -234,4 +248,63 @@ fn render_cmdline(frame: &mut Frame, state: &ShellState, area: Rect) {
         Span::styled(glyph::CARET.to_string(), Style::new().fg(color::CHAT_ACCENT)),
     ]);
     frame.render_widget(Paragraph::new(line), area);
+}
+
+/// A bordered, titled, single-selection list — shared by the object and verb
+/// pickers (spec ④). Same chrome as the palette overlay.
+fn list_overlay(frame: &mut Frame, area: Rect, title: String, rows: &[String], selected: usize) {
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(color::CHAT_ACCENT))
+        .title(Span::styled(title, Style::new().fg(color::TXT)));
+    let inner = area.inner(ratatui::layout::Margin { horizontal: 1, vertical: 1 });
+    frame.render_widget(block, area);
+    let lines: Vec<Line> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let style = if i == selected {
+                Style::new().fg(color::TXT).bg(color::SEL_BG)
+            } else {
+                Style::new().fg(color::TXT)
+            };
+            Line::from(Span::styled(format!(" {r}"), style))
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn render_object_overlay(frame: &mut Frame, msgs: &[ChatMsg], state: &ShellState, area: Rect) {
+    use crate::objects::selectable_objects;
+    let objs = selectable_objects(msgs);
+    let sel = nav(state.objects.obj_selected, 0, objs.len());
+    let rows: Vec<String> = objs.iter().map(object_row).collect();
+    let rows = if rows.is_empty() { vec!["(no objects yet)".to_string()] } else { rows };
+    list_overlay(frame, area, format!(" {} select object ", glyph::OPEN), &rows, sel);
+}
+
+fn render_verb_overlay(frame: &mut Frame, msgs: &[ChatMsg], state: &ShellState, area: Rect) {
+    use crate::objects::{selectable_objects, verbs_for};
+    let objs = selectable_objects(msgs);
+    let sel_obj = nav(state.objects.obj_selected, 0, objs.len());
+    let (title, rows) = match objs.get(sel_obj) {
+        Some(o) => (
+            format!(" {} verbs · {} ", glyph::RECIPE, o.label),
+            verbs_for(o.kind).iter().map(|v| v.to_string()).collect::<Vec<_>>(),
+        ),
+        None => (" verbs ".to_string(), vec!["(no object)".to_string()]),
+    };
+    let sel = nav(state.objects.verb_selected, 0, rows.len());
+    list_overlay(frame, area, title, &rows, sel);
+}
+
+fn object_row(o: &crate::objects::Obj) -> String {
+    use crate::objects::ObjectKind;
+    let g = match o.kind {
+        ObjectKind::File => glyph::OPEN,
+        ObjectKind::Symbol => glyph::EDIT,
+        ObjectKind::Error => glyph::WARNING,
+    };
+    format!("{g} {}", o.label)
 }

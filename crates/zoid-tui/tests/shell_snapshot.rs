@@ -1,12 +1,17 @@
 use ratatui::{backend::TestBackend, Terminal};
 use tui_textarea::TextArea;
 use zoid_core::projection::ChatMsg;
+use zoid_tui::chat::ChatView;
 use zoid_tui::render_shell;
-use zoid_tui::state::{DrawerId, Focus, Mode, Overlay, ShellState};
+use zoid_tui::state::{DrawerId, Focus, Mode, Overlay, ShellState, Zoom};
 use zoid_tui::EconomyView;
 use zoid_core::context::ContextWindow;
 use zoid_core::economy::{ChurnTimeline, TokenLedger};
 use zoid_core::assembler::ContextPolicy;
+
+fn normal_view() -> ChatView {
+    ChatView { zoom: Zoom::Normal, caret_on: true, reveal: None }
+}
 
 fn empty_economy() -> EconomyView {
     EconomyView::build(&ContextWindow::default(), &ChurnTimeline::default(), &TokenLedger::default(), &ContextPolicy::default(), 0)
@@ -20,7 +25,7 @@ fn draw_econ(state: &ShellState, econ: &EconomyView, msgs: &[ChatMsg], w: u16, h
     let input = TextArea::default();
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| render_shell(f, state, econ, msgs, &input, false)).unwrap();
+    terminal.draw(|f| render_shell(f, state, econ, msgs, &input, false, &normal_view())).unwrap();
     terminal.backend().to_string()
 }
 
@@ -134,7 +139,7 @@ fn economy_drawer_selection_highlights_only_when_rail_focused() {
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| render_shell(f, &s, &seeded_economy(), &seeded(), &input, false))
+            .draw(|f| render_shell(f, &s, &seeded_economy(), &seeded(), &input, false, &normal_view()))
             .unwrap();
         terminal
             .backend()
@@ -147,4 +152,115 @@ fn economy_drawer_selection_highlights_only_when_rail_focused() {
 
     assert_eq!(count_sel_bg(Focus::Input), 0, "no highlight when rail unfocused");
     assert!(count_sel_bg(Focus::Rail) > 0, "selected row highlighted when rail focused");
+}
+
+// Zoom altitude render (P4c Task 3). The P3 `seeded()` above has no
+// `ToolResult`, so Detail rendered against it would be a plain conversation —
+// the snapshot would silently bake a frame that proves nothing. `seeded_detail()`
+// pairs a matched tool-call/result (id + `.rs` path) so the Detail snapshots
+// actually show highlighted code.
+use zoid_core::projection::ToolCallRef;
+
+fn seeded_detail() -> Vec<ChatMsg> {
+    vec![
+        ChatMsg::User("show me parse".into()),
+        ChatMsg::Assistant {
+            text: "reading it".into(),
+            tool_calls: vec![ToolCallRef {
+                id: "c1".into(),
+                name: "read_file".into(),
+                args: r#"{"path":"src/parser.rs"}"#.into(),
+            }],
+        },
+        ChatMsg::ToolResult {
+            id: "c1".into(),
+            name: "read_file".into(),
+            output: "fn parse(s: &str) -> u32 {\n    let n = 42;\n    n\n}\n".into(),
+            is_error: false,
+        },
+    ]
+}
+
+/// Snapshot the buffer's `Debug` form (not `to_string()`): it emits the
+/// `styles:` block with `fg: Rgb(...)` entries, so Detail's syntax-color
+/// payoff is actually captured by the snapshot, not just the glyphs.
+fn draw_zoom(zoom: Zoom, w: u16, h: u16) -> String {
+    let s = ShellState::new();
+    let view = ChatView { zoom, caret_on: true, reveal: None };
+    let input = TextArea::default();
+    let backend = TestBackend::new(w, h);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|f| render_shell(f, &s, &empty_economy(), &seeded_detail(), &input, false, &view))
+        .unwrap();
+    format!("{:#?}", terminal.backend().buffer())
+}
+
+#[test]
+fn zoom_summary_frame() {
+    insta::assert_snapshot!(draw_zoom(Zoom::Summary, 100, 24));
+}
+
+#[test]
+fn zoom_summary_wide_frame() {
+    insta::assert_snapshot!(draw_zoom(Zoom::Summary, 140, 24));
+}
+
+#[test]
+fn zoom_detail_frame() {
+    insta::assert_snapshot!(draw_zoom(Zoom::Detail, 100, 24));
+}
+
+#[test]
+fn zoom_detail_wide_frame() {
+    insta::assert_snapshot!(draw_zoom(Zoom::Detail, 140, 24));
+}
+
+// Object/verb picker overlays (P4d Task 3). Seed a file read + an error so the
+// object picker has all three kinds (File/Symbol/Error) to list, and the verb
+// picker has a real scoped verb set for the first (selected) object.
+fn seeded_objects() -> Vec<ChatMsg> {
+    vec![
+        ChatMsg::Assistant {
+            text: String::new(),
+            tool_calls: vec![ToolCallRef { id: "c1".into(), name: "read_file".into(), args: r#"{"path":"src/ast.rs"}"#.into() }],
+        },
+        ChatMsg::ToolResult { id: "c1".into(), name: "read_file".into(), output: "fn parse() {}\nstruct Ast {}\n".into(), is_error: false },
+        ChatMsg::ToolResult { id: "c2".into(), name: "shell".into(), output: "FAILED\n".into(), is_error: true },
+    ]
+}
+
+/// Buffer-Debug snapshot (style + glyphs), per the snapshot standard used by
+/// `draw_zoom` above — `to_string()` alone would hide the `SEL_BG` selection
+/// highlight on the picker's selected row.
+fn draw_overlay(overlay: Overlay, w: u16, h: u16) -> String {
+    let mut s = ShellState::new();
+    s.overlay = overlay;
+    let input = TextArea::default();
+    let backend = TestBackend::new(w, h);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|f| render_shell(f, &s, &empty_economy(), &seeded_objects(), &input, false, &normal_view()))
+        .unwrap();
+    format!("{:#?}", terminal.backend().buffer())
+}
+
+#[test]
+fn object_overlay_frame() {
+    insta::assert_snapshot!(draw_overlay(Overlay::Objects, 100, 24));
+}
+
+#[test]
+fn object_overlay_wide_frame() {
+    insta::assert_snapshot!(draw_overlay(Overlay::Objects, 140, 24));
+}
+
+#[test]
+fn verb_overlay_frame() {
+    insta::assert_snapshot!(draw_overlay(Overlay::Verbs, 100, 24));
+}
+
+#[test]
+fn verb_overlay_wide_frame() {
+    insta::assert_snapshot!(draw_overlay(Overlay::Verbs, 140, 24));
 }

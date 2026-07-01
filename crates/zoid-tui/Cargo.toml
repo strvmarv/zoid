@@ -7,6 +7,7 @@ edition.workspace = true
 ratatui = { workspace = true }
 serde_json = { workspace = true }
 zoid-core = { path = "../zoid-core" }
+zoid-syntax = { path = "../zoid-syntax" }
 tui-textarea = { workspace = true }
 
 [dev-dependencies]

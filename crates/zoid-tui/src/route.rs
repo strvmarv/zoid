@@ -32,9 +32,18 @@ pub enum Action {
     /// Run the command line buffer (parsed into a `Command`).
     RunCommand(Command),
     ScrollConversation(i32),
+    ZoomIn,
+    ZoomOut,
     Submit,
     Newline,
     Edit(KeyEvent),
+    OpenObjects,
+    ObjectMove(i32),
+    ObjectPick,
+    VerbMove(i32),
+    VerbPick,
+    /// From the verb picker, step back to the object picker (not fully out).
+    VerbBack,
     Noop,
 }
 
@@ -55,6 +64,8 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
     match state.overlay {
         Overlay::Palette => return route_palette_key(key),
         Overlay::CommandLine => return route_cmdline_key(state, key),
+        Overlay::Objects => return route_objects_key(key),
+        Overlay::Verbs => return route_verbs_key(key),
         Overlay::None => {}
     }
 
@@ -64,6 +75,9 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
     }
     if ctrl(&key, 'p') {
         return Action::OpenPalette;
+    }
+    if ctrl(&key, 'o') {
+        return Action::OpenObjects;
     }
     match key.code {
         KeyCode::BackTab => return Action::SwitchMode,
@@ -84,6 +98,8 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
             _ => Action::Edit(key),
         },
         Focus::Conversation => match key.code {
+            KeyCode::Char('=') | KeyCode::Char('+') => Action::ZoomIn,
+            KeyCode::Char('-') | KeyCode::Char('_') => Action::ZoomOut,
             KeyCode::Char(':') => Action::OpenCommandLine,
             KeyCode::Char('j') | KeyCode::Down => Action::ScrollConversation(1),
             KeyCode::Char('k') | KeyCode::Up => Action::ScrollConversation(-1),
@@ -121,6 +137,26 @@ fn route_cmdline_key(state: &ShellState, key: KeyEvent) -> Action {
     }
 }
 
+fn route_objects_key(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => Action::CloseOverlay,
+        KeyCode::Enter => Action::ObjectPick,
+        KeyCode::Up => Action::ObjectMove(-1),
+        KeyCode::Down => Action::ObjectMove(1),
+        _ => Action::Noop,
+    }
+}
+
+fn route_verbs_key(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => Action::VerbBack, // step back to the object picker, not fully out
+        KeyCode::Enter => Action::VerbPick,
+        KeyCode::Up => Action::VerbMove(-1),
+        KeyCode::Down => Action::VerbMove(1),
+        _ => Action::Noop,
+    }
+}
+
 /// Map a screen point to a main-surface target (overlays are keyboard-driven).
 pub fn hit_test(layout: &ShellLayout, col: u16, row: u16) -> Target {
     for (id, r) in &layout.drawer_headers {
@@ -148,6 +184,8 @@ pub fn route_mouse(state: &ShellState, layout: &ShellLayout, m: MouseEvent) -> A
         };
     }
     match m.kind {
+        MouseEventKind::ScrollUp if m.modifiers.contains(KeyModifiers::CONTROL) => Action::ZoomIn,
+        MouseEventKind::ScrollDown if m.modifiers.contains(KeyModifiers::CONTROL) => Action::ZoomOut,
         MouseEventKind::ScrollDown => Action::ScrollConversation(1),
         MouseEventKind::ScrollUp => Action::ScrollConversation(-1),
         MouseEventKind::Down(MouseButton::Left) => match hit_test(layout, m.column, m.row) {
@@ -306,5 +344,52 @@ mod tests {
         s.focus = Focus::Conversation;
         // Esc in Chat mode with Conversation focus → FocusRegion(Input) (unchanged).
         assert_eq!(route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)), Action::FocusRegion(Focus::Input));
+    }
+
+    #[test]
+    fn zoom_keys_route_in_conversation_focus() {
+        let mut s = ShellState::new();
+        s.focus = Focus::Conversation;
+        assert_eq!(route_key(&s, key(KeyCode::Char('='), KeyModifiers::NONE)), Action::ZoomIn);
+        assert_eq!(route_key(&s, key(KeyCode::Char('+'), KeyModifiers::NONE)), Action::ZoomIn);
+        assert_eq!(route_key(&s, key(KeyCode::Char('-'), KeyModifiers::NONE)), Action::ZoomOut);
+    }
+
+    #[test]
+    fn ctrl_o_opens_object_overlay() {
+        let s = ShellState::new();
+        assert_eq!(route_key(&s, key(KeyCode::Char('o'), KeyModifiers::CONTROL)), Action::OpenObjects);
+    }
+
+    #[test]
+    fn object_overlay_navigates_and_picks() {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Objects;
+        assert_eq!(route_key(&s, key(KeyCode::Down, KeyModifiers::NONE)), Action::ObjectMove(1));
+        assert_eq!(route_key(&s, key(KeyCode::Up, KeyModifiers::NONE)), Action::ObjectMove(-1));
+        assert_eq!(route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)), Action::ObjectPick);
+        assert_eq!(route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)), Action::CloseOverlay);
+    }
+
+    #[test]
+    fn verb_overlay_navigates_and_picks() {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Verbs;
+        assert_eq!(route_key(&s, key(KeyCode::Down, KeyModifiers::NONE)), Action::VerbMove(1));
+        assert_eq!(route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)), Action::VerbPick);
+        // Esc steps BACK to the object picker, not all the way out.
+        assert_eq!(route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)), Action::VerbBack);
+    }
+
+    #[test]
+    fn ctrl_scroll_zooms_plain_scroll_scrolls() {
+        let s = ShellState::new();
+        let l = compute(Rect { x: 0, y: 0, width: 100, height: 24 }, &s);
+        let ev = |kind, mods| MouseEvent { kind, column: 10, row: 10, modifiers: mods };
+        // ctrl + scroll → zoom
+        assert_eq!(route_mouse(&s, &l, ev(MouseEventKind::ScrollUp, KeyModifiers::CONTROL)), Action::ZoomIn);
+        assert_eq!(route_mouse(&s, &l, ev(MouseEventKind::ScrollDown, KeyModifiers::CONTROL)), Action::ZoomOut);
+        // plain scroll → conversation scroll (unchanged)
+        assert_eq!(route_mouse(&s, &l, ev(MouseEventKind::ScrollDown, KeyModifiers::NONE)), Action::ScrollConversation(1));
     }
 }

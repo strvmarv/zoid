@@ -21,9 +21,13 @@ use zoid_core::session::SessionHandle;
 use zoid_provider::{default_model, default_provider};
 use zoid_provider::Provider;
 use zoid_tools::Tool;
+use zoid_tui::chat::ChatView;
 use zoid_tui::layout::compute;
 use zoid_tui::render_shell;
 use zoid_tui::route::{palette_selected_command, route_key, route_mouse};
+
+/// Duration of the zoom fold/unfold line-reveal animation (Ⓡ2, T5).
+const ZOOM_ANIM_MS: u64 = 160;
 
 /// Resolve the session DB path: `$ZOID_DB` if set, else `./.zoid/session.db`.
 fn db_path() -> Result<PathBuf> {
@@ -75,6 +79,10 @@ struct App {
     streaming: bool,
     shell: zoid_tui::ShellState,
     ui_tx: mpsc::Sender<AgentUpdate>,
+    /// Monotonic clock start for motion timing (Ⓡ2).
+    started: std::time::Instant,
+    /// When the altitude last changed, for the fold/unfold reveal (Ⓡ2).
+    zoom_changed_at: Option<std::time::Instant>,
 }
 
 impl App {
@@ -99,6 +107,7 @@ async fn main() -> Result<()> {
     let mut shell = zoid_tui::ShellState::new();
     shell.branch = current_branch();
     shell.files = cwd_files(64);
+    shell.reduced_motion = std::env::var("ZOID_REDUCED_MOTION").map(|v| !v.is_empty()).unwrap_or(false);
 
     let (ui_tx, mut ui_rx) = mpsc::channel::<AgentUpdate>(256);
 
@@ -112,6 +121,8 @@ async fn main() -> Result<()> {
         streaming: false,
         shell,
         ui_tx,
+        started: std::time::Instant::now(),
+        zoom_changed_at: None,
     };
 
     enable_raw_mode()?;
@@ -128,12 +139,23 @@ async fn main() -> Result<()> {
     result
 }
 
+/// Whether a zoom fold/unfold animation is still in flight (not yet past
+/// `ZOOM_ANIM_MS`, and not short-circuited by reduced-motion).
+fn zoom_animating(app: &App) -> bool {
+    matches!(app.zoom_changed_at, Some(t0) if t0.elapsed().as_millis() < ZOOM_ANIM_MS as u128)
+        && !app.shell.reduced_motion
+}
+
 async fn run<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     ui_rx: &mut mpsc::Receiver<AgentUpdate>,
 ) -> Result<()> {
     let mut term_events = EventStream::new();
+
+    let tick_period = std::time::Duration::from_millis(1000 / zoid_tui::motion::MOTION_FPS);
+    let mut motion_tick = tokio::time::interval(tick_period);
+    motion_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
         terminal.draw(|f| {
@@ -146,7 +168,35 @@ async fn run<B: ratatui::backend::Backend>(
             // no row selection — the drawer is read-only/observability-only.
             let policy = zoid_core::assembler::ContextPolicy::default();
             let economy = zoid_tui::EconomyView::build(&window, &churn, &ledger, &policy, 0);
-            render_shell(f, &app.shell, &economy, &msgs, &app.textarea, app.streaming);
+            let elapsed = app.started.elapsed().as_millis() as u64;
+            let caret = zoid_tui::motion::caret_on(elapsed, 1000, app.shell.reduced_motion);
+            // Measure total lines (which re-runs conversation_view — tree-sitter in
+            // Detail) ONLY while a zoom animation is actually in flight; on every
+            // ordinary frame `reveal` is None and we skip the second build entirely.
+            let reveal = match app.zoom_changed_at {
+                Some(t0) => {
+                    let elapsed_ms = t0.elapsed().as_millis() as u64;
+                    if elapsed_ms < ZOOM_ANIM_MS && !app.shell.reduced_motion {
+                        let total_lines = zoid_tui::chat::conversation_view(
+                            &msgs,
+                            &ChatView { zoom: app.shell.zoom, caret_on: caret, reveal: None },
+                            app.streaming,
+                        )
+                        .len();
+                        zoid_tui::motion::zoom_reveal(
+                            total_lines,
+                            elapsed_ms,
+                            ZOOM_ANIM_MS,
+                            app.shell.reduced_motion,
+                        )
+                    } else {
+                        None
+                    }
+                }
+                None => None,
+            };
+            let view = ChatView { zoom: app.shell.zoom, caret_on: caret, reveal };
+            render_shell(f, &app.shell, &economy, &msgs, &app.textarea, app.streaming, &view);
         })?;
 
         tokio::select! {
@@ -175,6 +225,11 @@ async fn run<B: ratatui::backend::Backend>(
                     AgentUpdate::Appended(ev) => { app.events.push(ev); }
                     AgentUpdate::TurnComplete => { app.streaming = false; }
                 }
+            }
+            _ = motion_tick.tick(), if app.streaming || zoom_animating(app) => {
+                // Wake to redraw the blinking caret or the in-flight zoom reveal. The
+                // budget: this branch is disabled when nothing is animating, so an
+                // idle app never ticks.
             }
         }
     }
@@ -228,6 +283,20 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             let next = app.shell.conversation_scroll as i32 + d;
             app.shell.conversation_scroll = next.max(0) as u16;
         }
+        Action::ZoomIn => {
+            let before = app.shell.zoom;
+            app.shell.zoom_in();
+            if app.shell.zoom != before {
+                app.zoom_changed_at = Some(std::time::Instant::now());
+            }
+        }
+        Action::ZoomOut => {
+            let before = app.shell.zoom;
+            app.shell.zoom_out();
+            if app.shell.zoom != before {
+                app.zoom_changed_at = Some(std::time::Instant::now());
+            }
+        }
         Action::Newline => app.textarea.insert_newline(),
         Action::Edit(key) => { app.textarea.input(key); }
         Action::Submit => {
@@ -235,9 +304,55 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             let text = app.textarea.lines().join("\n");
             if text.trim().is_empty() { return Ok(false); }
             app.textarea = TextArea::default();
+            app.shell.status_hint = None;
             app.record(EventKind::UserMessage { text }).await?;
             app.streaming = true;
             spawn_turn(app);
+        }
+        // Object-first picker (P4d ④): pick an object, then a verb scoped to
+        // it. Picking a verb composes a prompt and queues it into the input
+        // (see the `VerbPick` arm below) — dispatch to a subagent is P5.
+        Action::OpenObjects => {
+            app.shell.overlay = zoid_tui::Overlay::Objects;
+            app.shell.objects = Default::default();
+        }
+        Action::ObjectMove(d) => {
+            let n = zoid_tui::objects::selectable_objects(&conversation(&app.events)).len();
+            app.shell.objects.obj_selected = zoid_tui::palette::nav(app.shell.objects.obj_selected, d, n);
+        }
+        Action::ObjectPick => {
+            // Advance to the verb picker — but only if there's an object to act
+            // on (otherwise the verb picker would show "(no object)").
+            if !zoid_tui::objects::selectable_objects(&conversation(&app.events)).is_empty() {
+                app.shell.overlay = zoid_tui::Overlay::Verbs;
+                app.shell.objects.verb_selected = 0;
+            }
+        }
+        Action::VerbBack => {
+            // Step back to the object picker (keeps the object selection).
+            app.shell.overlay = zoid_tui::Overlay::Objects;
+        }
+        Action::VerbMove(d) => {
+            let objs = zoid_tui::objects::selectable_objects(&conversation(&app.events));
+            let sel = zoid_tui::palette::nav(app.shell.objects.obj_selected, 0, objs.len());
+            let n = objs.get(sel).map(|o| zoid_tui::objects::verbs_for(o.kind).len()).unwrap_or(0);
+            app.shell.objects.verb_selected = zoid_tui::palette::nav(app.shell.objects.verb_selected, d, n);
+        }
+        Action::VerbPick => {
+            let objs = zoid_tui::objects::selectable_objects(&conversation(&app.events));
+            let osel = zoid_tui::palette::nav(app.shell.objects.obj_selected, 0, objs.len());
+            if let Some(obj) = objs.get(osel) {
+                let verbs = zoid_tui::objects::verbs_for(obj.kind);
+                let vsel = zoid_tui::palette::nav(app.shell.objects.verb_selected, 0, verbs.len());
+                if let Some(verb) = verbs.get(vsel) {
+                    let prompt = zoid_tui::objects::verb_prompt(verb, obj);
+                    // Queue (P4d): seed the input; P5 will dispatch it to a subagent.
+                    app.textarea = TextArea::from(prompt.lines().map(String::from).collect::<Vec<_>>());
+                    app.shell.status_hint = Some("queued · runs as a subagent in P5".into());
+                    app.shell.focus = zoid_tui::Focus::Input;
+                }
+            }
+            app.shell.close_overlay();
         }
         Action::Noop => {}
     }
