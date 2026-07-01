@@ -160,16 +160,38 @@ fn render_rail(frame: &mut Frame, state: &ShellState, economy: &EconomyView, lay
     }
 }
 
+/// Truncate `s` to at most `max` display columns, marking the cut with the §16
+/// ellipsis glyph (width 1). Char-based, so it never splits a multi-byte glyph.
+fn fit(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let mut out: String = s.chars().take(max - 1).collect();
+    out.push(glyph::ELLIPSIS);
+    out
+}
+
 fn render_economy_body(frame: &mut Frame, econ: &EconomyView, area: Rect, rail_focused: bool) {
     use crate::economy_view::{heat_bar, heat_color};
     let mut lines: Vec<Line> = Vec::new();
     let max_rows = area.height.saturating_sub(2) as usize; // leave room for churn + footer
+    // Labels are arbitrary-length ContextItem text. `{:<N}` only *pads* — it never
+    // caps — so a long label used to overflow, shove tokens/heat-bar off the rail,
+    // and clip at the terminal edge. Give the label a budget = rail width minus the
+    // fixed columns after it, so the whole row fits: marker(1) + space(1) + space(1)
+    // + tokens(4) + space(1) + heat_bar(2) + " cold"(5, reserved for all rows so the
+    // label column aligns whether or not a row is cold) = 15.
+    let label_budget = (area.width as usize).saturating_sub(15).max(3);
     for (i, r) in econ.rows.iter().take(max_rows).enumerate() {
         let marker = if r.pinned { glyph::PIN } else { ' ' };
         let sel = rail_focused && i == econ.selected;
         let base = if sel { Style::new().bg(color::SEL_BG) } else { Style::new() };
+        let label = fit(&r.label, label_budget);
         let mut spans = vec![
-            Span::styled(format!("{marker} {:<10} {:>4} ", r.label, r.tokens), base.fg(color::TXT)),
+            Span::styled(format!("{marker} {label:<label_budget$} {:>4} ", r.tokens), base.fg(color::TXT)),
             Span::styled(heat_bar(r.heat), base.fg(heat_color(r.heat))),
         ];
         if r.cold {
