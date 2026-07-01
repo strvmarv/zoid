@@ -9,6 +9,9 @@ serde_json = { workspace = true }
 zoid-core = { path = "../zoid-core" }
 zoid-syntax = { path = "../zoid-syntax" }
 tui-textarea = { workspace = true }
+# Match the version ratatui 0.29 uses so our width measurement agrees with its
+# own truncator — a mismatch would let a row we think fits get clipped.
+unicode-width = "0.2"
 
 [dev-dependencies]
 insta = { workspace = true }

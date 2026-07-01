@@ -14,7 +14,7 @@ use ratatui::{
     layout::Rect,
     style::{Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame,
 };
 use tui_textarea::TextArea;
@@ -36,7 +36,16 @@ pub fn render_shell(
     match state.mode {
         Mode::Chat => {
             let body = conversation_view(msgs, view, streaming);
-            frame.render_widget(Paragraph::new(body).scroll((state.conversation_scroll, 0)), layout.conversation);
+            // `trim: false` so indentation survives on wrapped continuation rows —
+            // Detail altitude renders syntax-highlighted code whose leading space is
+            // meaningful. Without wrap, ratatui clips any turn wider than the column
+            // mid-word with no ellipsis. Scroll offset is row-based either way.
+            frame.render_widget(
+                Paragraph::new(body)
+                    .wrap(Wrap { trim: false })
+                    .scroll((state.conversation_scroll, 0)),
+                layout.conversation,
+            );
         }
         Mode::Build => render_build_placeholder(frame, layout.conversation),
     }
@@ -153,14 +162,32 @@ fn render_rail(frame: &mut Frame, state: &ShellState, economy: &EconomyView, lay
 
 fn render_economy_body(frame: &mut Frame, econ: &EconomyView, area: Rect, rail_focused: bool) {
     use crate::economy_view::{heat_bar, heat_color};
+    use crate::text::{pad_to, truncate};
     let mut lines: Vec<Line> = Vec::new();
     let max_rows = area.height.saturating_sub(2) as usize; // leave room for churn + footer
-    for (i, r) in econ.rows.iter().take(max_rows).enumerate() {
+    let shown = econ.rows.iter().take(max_rows);
+    // Both the label and token columns are arbitrary-width strings, and Rust's
+    // `{:<N}`/`{:>N}` only *pad* to a minimum — they never cap. So a long label
+    // (or an unexpectedly wide token) used to overflow, shove the heat-bar off the
+    // rail, and clip at the terminal edge. Fit the label to a budget = rail width
+    // minus every fixed column after it, and derive the token column width from the
+    // rows actually shown (so it can't overflow no matter what `human_tokens`
+    // emits) rather than a hardcoded 4:
+    //   marker(1) + space(1) + space(1) + tokens(tok_w) + space(1) + heat_bar(2)
+    //   + " cold"(5, reserved for every row so the label column aligns whether or
+    //   not a row is cold).
+    // `.max(4)` keeps the historical 4-col token column when tokens are narrow;
+    // `.max(3)` guards a pathologically narrow rail (unreachable at today's fixed
+    // RAIL_WIDTH, but keeps the math sound if the rail ever grows responsive).
+    let tok_w = shown.clone().map(|r| r.tokens.chars().count()).max().unwrap_or(4).max(4);
+    let label_budget = (area.width as usize).saturating_sub(11 + tok_w).max(3);
+    for (i, r) in shown.enumerate() {
         let marker = if r.pinned { glyph::PIN } else { ' ' };
         let sel = rail_focused && i == econ.selected;
         let base = if sel { Style::new().bg(color::SEL_BG) } else { Style::new() };
+        let label = pad_to(&truncate(&r.label, label_budget), label_budget);
         let mut spans = vec![
-            Span::styled(format!("{marker} {:<10} {:>4} ", r.label, r.tokens), base.fg(color::TXT)),
+            Span::styled(format!("{marker} {label} {:>tok_w$} ", r.tokens), base.fg(color::TXT)),
             Span::styled(heat_bar(r.heat), base.fg(heat_color(r.heat))),
         ];
         if r.cold {

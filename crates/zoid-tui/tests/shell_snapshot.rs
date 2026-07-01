@@ -80,6 +80,38 @@ fn chat_wide_gutter_frame() {
     insta::assert_snapshot!(draw(&s, &seeded(), 140, 24));
 }
 
+/// A turn wider than the conversation column must WRAP, not clip. Without
+/// `Paragraph::wrap`, ratatui truncates the over-wide line mid-word at the right
+/// edge and the tail is lost. Assert the tail sentinel is present AND lands on a
+/// row below the head sentinel — proving it wrapped rather than merely fitting.
+#[test]
+fn long_turn_wraps_instead_of_clipping() {
+    use ratatui::{backend::TestBackend, Terminal};
+
+    let long = format!("HEADSENTINEL {} TAILSENTINEL", "wrap ".repeat(40));
+    let msgs = vec![ChatMsg::Assistant { text: long, tool_calls: vec![] }];
+
+    let s = ShellState::new();
+    let input = TextArea::default();
+    let backend = TestBackend::new(100, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|f| render_shell(f, &s, &empty_economy(), &msgs, &input, false, &normal_view()))
+        .unwrap();
+    let buf = terminal.backend().buffer().clone();
+
+    let row_of = |needle: &str| -> Option<u16> {
+        (0..buf.area.height).find(|&y| {
+            let row: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+            row.contains(needle)
+        })
+    };
+
+    let head = row_of("HEADSENTINEL").expect("head sentinel must render");
+    let tail = row_of("TAILSENTINEL").expect("tail sentinel must render (would be clipped without wrap)");
+    assert!(tail > head, "tail (row {tail}) must wrap below head (row {head})");
+}
+
 #[test]
 fn files_drawer_open_frame() {
     let mut s = ShellState::new();
@@ -152,6 +184,36 @@ fn economy_drawer_selection_highlights_only_when_rail_focused() {
 
     assert_eq!(count_sel_bg(Focus::Input), 0, "no highlight when rail unfocused");
     assert!(count_sel_bg(Focus::Rail) > 0, "selected row highlighted when rail focused");
+}
+
+/// A rail context label longer than its column must be truncated with the §16
+/// ellipsis, not left to overflow and shove the tokens/heat-bar off the rail.
+/// Assert the ellipsis is present, the label's tail is gone, and the token count
+/// still renders (it wasn't pushed off-screen).
+#[test]
+fn long_economy_label_truncates_with_ellipsis() {
+    use zoid_core::context::{ContextItem, Heat, ItemKind};
+    use zoid_tui::tokens::glyph;
+
+    let w = ContextWindow {
+        items: vec![ContextItem {
+            key: "msg:1".into(),
+            label: "AVeryLongContextLabelThatWouldOverflowTheRail".into(),
+            kind: ItemKind::Message,
+            tokens: 9000,
+            heat: Heat::Hot,
+            pinned: false,
+            evicted: false,
+        }],
+        total_tokens: 9000,
+    };
+    let econ = EconomyView::build(&w, &ChurnTimeline::default(), &TokenLedger::default(), &ContextPolicy::default(), 0);
+    let s = ShellState::new(); // economy drawer open by default
+    let out = draw_econ(&s, &econ, &seeded(), 100, 24);
+
+    assert!(out.contains(glyph::ELLIPSIS), "long label must be truncated with the ellipsis glyph");
+    assert!(!out.contains("OverflowTheRail"), "the truncated tail must not render");
+    assert!(out.contains("9k"), "the token count must still render (not pushed off the rail)");
 }
 
 // Zoom altitude render (P4c Task 3). The P3 `seeded()` above has no
