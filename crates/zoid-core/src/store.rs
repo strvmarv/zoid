@@ -1,4 +1,5 @@
 use crate::event::{BranchId, Event};
+use crate::sessions::SessionRow;
 use anyhow::Result;
 use rusqlite::{params, Connection};
 use ulid::Ulid;
@@ -22,7 +23,14 @@ impl EventStore {
                 kind       TEXT NOT NULL,
                 tokens     TEXT
             );
-            CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);",
+            CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
+            CREATE TABLE IF NOT EXISTS sessions (
+                id              TEXT PRIMARY KEY,
+                name            TEXT NOT NULL,
+                root_path       TEXT NOT NULL,
+                created_ts      INTEGER NOT NULL,
+                last_touched_ts INTEGER NOT NULL
+            );",
         )?;
         Ok(EventStore { conn })
     }
@@ -84,6 +92,46 @@ impl EventStore {
         let mut stmt = self.conn.prepare(&format!("{} WHERE session_id = ?1 ORDER BY id ASC", Self::SELECT_COLS))?;
         Self::decode_rows(&mut stmt, params![session_id.to_string()])
     }
+
+    pub fn insert_session(&self, id: Ulid, name: &str, root_path: &str, created_ts: i64, last_touched_ts: i64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO sessions (id, name, root_path, created_ts, last_touched_ts)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id.to_string(), name, root_path, created_ts, last_touched_ts],
+        )?;
+        Ok(())
+    }
+
+    pub fn rename_session(&self, id: Ulid, name: &str) -> Result<()> {
+        self.conn.execute("UPDATE sessions SET name = ?2 WHERE id = ?1", params![id.to_string(), name])?;
+        Ok(())
+    }
+
+    pub fn touch_session(&self, id: Ulid, last_touched_ts: i64) -> Result<()> {
+        self.conn.execute("UPDATE sessions SET last_touched_ts = ?2 WHERE id = ?1",
+            params![id.to_string(), last_touched_ts])?;
+        Ok(())
+    }
+
+    pub fn list_session_rows(&self) -> Result<Vec<SessionRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, root_path, created_ts, last_touched_ts FROM sessions ORDER BY id ASC")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (id, name, root_path, created_ts, last_touched_ts) = r?;
+            out.push(SessionRow { id: id.parse()?, name, root_path, created_ts, last_touched_ts });
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -119,5 +167,20 @@ mod tests {
         // … load_session partitions the log.
         assert_eq!(store.load_session(sa).unwrap(), vec![a]);
         assert_eq!(store.load_session(sb).unwrap(), vec![b]);
+    }
+
+    #[test]
+    fn sessions_crud_round_trips() {
+        use crate::sessions::SessionRow;
+        let store = EventStore::open(":memory:").unwrap();
+        let id = Ulid::from(1u128);
+        store.insert_session(id, "first", "/repo/a", 100, 100).unwrap();
+        store.touch_session(id, 200).unwrap();
+        store.rename_session(id, "renamed").unwrap();
+        let rows = store.list_session_rows().unwrap();
+        assert_eq!(rows, vec![SessionRow {
+            id, name: "renamed".into(), root_path: "/repo/a".into(),
+            created_ts: 100, last_touched_ts: 200,
+        }]);
     }
 }

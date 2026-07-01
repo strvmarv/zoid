@@ -7,6 +7,7 @@ pub mod economy;
 pub mod event;
 pub mod projection;
 pub mod session;
+pub mod sessions;
 pub mod store;
 pub mod zoom;
 
