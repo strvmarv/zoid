@@ -119,6 +119,22 @@ pub struct ShellState {
     pub sessions: Vec<String>,
     /// Highlighted row in the resume-session picker.
     pub session_selected: usize,
+    /// Session name shown in the session drawer header line.
+    pub session_name: String,
+    /// Active model id shown in the session drawer.
+    pub model: String,
+    /// Human provider label (e.g. "anthropic", "ollama") shown beside the model.
+    pub provider: String,
+    /// Compact elapsed-time-in-session label (e.g. "12m", "1h3m").
+    pub duration: String,
+    /// Total tokens spent in the active session (session drawer "tok" line).
+    pub session_tokens: u64,
+    /// Current context-window token usage (session drawer "ctx" line).
+    pub ctx_used: u64,
+    /// Context-window ceiling in tokens (session drawer "ctx" line denominator).
+    pub ctx_ceiling: u64,
+    /// Current working directory shown (truncated) in the session drawer.
+    pub cwd: String,
 }
 
 impl ShellState {
@@ -154,6 +170,14 @@ impl ShellState {
             input_rows: 1,
             sessions: Vec::new(),
             session_selected: 0,
+            session_name: String::new(),
+            model: String::new(),
+            provider: String::new(),
+            duration: "0m".into(),
+            session_tokens: 0,
+            ctx_used: 0,
+            ctx_ceiling: 0,
+            cwd: String::new(),
         }
     }
 

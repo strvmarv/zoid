@@ -140,6 +140,21 @@ fn fmt_since(then_ms: i64, now_ms: i64) -> String {
     else { format!("{}d ago", mins / 1440) }
 }
 
+/// Compact duration since `start_ms` (e.g. "12m", "1h3m").
+fn fmt_duration(start_ms: i64, now_ms: i64) -> String {
+    let mins = (now_ms - start_ms).max(0) / 60_000;
+    if mins < 60 { format!("{mins}m") } else { format!("{}h{}m", mins / 60, mins % 60) }
+}
+
+/// Human provider label from the same env used by `default_model` selection.
+fn provider_label() -> String {
+    if std::env::var("OLLAMA_API_KEY").map(|k| !k.is_empty()).unwrap_or(false) {
+        "ollama".into()
+    } else {
+        "anthropic".into()
+    }
+}
+
 /// Best-effort current branch from `.git/HEAD` (`ref: refs/heads/<name>`); "main" otherwise.
 fn current_branch() -> String {
     std::fs::read_to_string(".git/HEAD")
@@ -215,6 +230,10 @@ struct App {
     zoom_changed_at: Option<std::time::Instant>,
     /// Local UTC offset (seconds) for message-row HH:MM stamps, sampled once.
     tz_offset_secs: i32,
+    /// Epoch-millis the active session started (resumed session's `created_ts`,
+    /// or boot time for a freshly-created one) — feeds the session drawer's
+    /// live "dur" label.
+    session_started_ms: i64,
     /// Session ids backing the resume-session picker rows (index-aligned with
     /// `shell.sessions`), populated when `Command::ResumeSessionPicker` opens it.
     session_ids: Vec<Ulid>,
@@ -252,13 +271,14 @@ async fn main() -> Result<()> {
 
     // Auto-resume the most-recently-touched session for this repo, else create one.
     let sessions = session.list_sessions(Some(root.clone())).await.unwrap_or_default();
-    let session_id = if let Some(s) = sessions.first() {
+    let (session_id, session_name, session_started_ms) = if let Some(s) = sessions.first() {
         session.touch_session(s.id, boot_ts).await.ok();
-        s.id
+        (s.id, s.name.clone(), s.created_ts)
     } else {
         let id = Ulid::new();
-        session.new_session(id, derive_session_name(None, boot_ts, tz_offset_secs), root.clone(), boot_ts).await?;
-        id
+        let name = derive_session_name(None, boot_ts, tz_offset_secs);
+        session.new_session(id, name.clone(), root.clone(), boot_ts).await?;
+        (id, name, boot_ts)
     };
     let events = session.snapshot_session(session_id).await?;
 
@@ -273,6 +293,10 @@ async fn main() -> Result<()> {
     shell.changes_added = boot_added;
     shell.changes_removed = boot_removed;
     shell.changes_files = boot_files;
+    shell.session_name = session_name;
+    shell.model = model.clone();
+    shell.provider = provider_label();
+    shell.cwd = root.clone();
 
     let (ui_tx, mut ui_rx) = mpsc::channel::<AgentUpdate>(256);
 
@@ -291,6 +315,7 @@ async fn main() -> Result<()> {
         last_git_refresh: std::time::Instant::now(),
         zoom_changed_at: None,
         tz_offset_secs,
+        session_started_ms,
         session_ids: Vec::new(),
     };
 
@@ -346,6 +371,12 @@ async fn run<B: ratatui::backend::Backend>(
             app.shell.changes_files = f;
             app.last_git_refresh = std::time::Instant::now();
         }
+        let ledger = zoid_core::economy::token_ledger(&app.events);
+        let window = zoid_core::context::context_window(&app.events);
+        app.shell.session_tokens = ledger.total;
+        app.shell.ctx_used = window.total_tokens;
+        app.shell.ctx_ceiling = 200_000;
+        app.shell.duration = fmt_duration(app.session_started_ms, now_ms());
         app.shell.input_rows = app.textarea.lines().len().max(1) as u16;
         terminal.draw(|f| {
             let msgs = conversation(&app.events);
@@ -498,7 +529,8 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             app.record(EventKind::UserMessage { text: text.clone() }).await?;
             if first {
                 let name = derive_session_name(Some(&text), now_ms(), app.tz_offset_secs);
-                app.session.rename_session(app.session_id, name).await.ok();
+                app.session.rename_session(app.session_id, name.clone()).await.ok();
+                app.shell.session_name = name;
             }
             app.streaming = true;
             spawn_turn(app);
@@ -558,6 +590,11 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 app.session_id = sid;
                 app.events = app.session.snapshot_session(sid).await.unwrap_or_default();
                 app.shell.conversation_scroll = 0;
+                if let Some(info) = app.session.list_sessions(Some(repo_root())).await
+                        .unwrap_or_default().into_iter().find(|s| s.id == sid) {
+                    app.shell.session_name = info.name;
+                    app.session_started_ms = info.created_ts;
+                }
             }
             app.shell.close_overlay();
         }
@@ -576,8 +613,10 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             let id = Ulid::new();
             let ts = now_ms();
             let name = derive_session_name(None, ts, app.tz_offset_secs);
-            app.session.new_session(id, name, repo_root(), ts).await.ok();
+            app.session.new_session(id, name.clone(), repo_root(), ts).await.ok();
             app.session_id = id;
+            app.shell.session_name = name;
+            app.session_started_ms = ts;
             app.events.clear();
             app.shell.conversation_scroll = 0;
             Ok(false)
@@ -588,7 +627,8 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
                 app.shell.overlay = zoid_tui::Overlay::CommandLine;
                 app.shell.cmdline.buffer = "rename ".into();
             } else {
-                app.session.rename_session(app.session_id, name).await.ok();
+                app.session.rename_session(app.session_id, name.clone()).await.ok();
+                app.shell.session_name = name;
             }
             Ok(false)
         }

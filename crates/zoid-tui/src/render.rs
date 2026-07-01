@@ -241,8 +241,38 @@ fn render_repo_body(frame: &mut Frame, state: &ShellState, area: Rect) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn render_session_body(frame: &mut Frame, _state: &ShellState, area: Rect) {
-    frame.render_widget(Paragraph::new(vec![Line::styled("session · Task 13", Style::new().fg(color::DIM))]), area);
+fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
+    use crate::economy_view::human_tokens;
+    use crate::text::truncate;
+    let name = if state.session_name.is_empty() { "(unnamed)" } else { &state.session_name };
+    let ctx = if state.ctx_ceiling > 0 {
+        format!("{}/{}", human_tokens(state.ctx_used), human_tokens(state.ctx_ceiling))
+    } else {
+        human_tokens(state.ctx_used)
+    };
+    let mut lines = vec![
+        Line::from(Span::styled(truncate(name, area.width as usize), Style::new().fg(color::TXT))),
+        Line::from(vec![
+            Span::styled(state.model.clone(), Style::new().fg(color::CHAT_ACCENT)),
+            Span::styled(format!(" · {}", state.provider), Style::new().fg(color::DIM)),
+        ]),
+        Line::from(vec![
+            Span::styled("dur ", Style::new().fg(color::DIM)),
+            Span::styled(format!("{}   ", state.duration), Style::new().fg(color::TXT)),
+            Span::styled("tok ", Style::new().fg(color::DIM)),
+            Span::styled(human_tokens(state.session_tokens), Style::new().fg(color::TXT)),
+        ]),
+        Line::from(vec![
+            Span::styled("ctx ", Style::new().fg(color::DIM)),
+            Span::styled(ctx, Style::new().fg(color::TXT)),
+        ]),
+    ];
+    // cwd: truncate to the drawer width, never wrap (paths get long).
+    lines.push(Line::from(vec![
+        Span::styled("cwd ", Style::new().fg(color::DIM)),
+        Span::styled(truncate(&state.cwd, (area.width as usize).saturating_sub(4)), Style::new().fg(color::DIM)),
+    ]));
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
