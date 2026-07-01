@@ -72,6 +72,8 @@ pub mod color {
     // visual language stays uniform: inline/fenced `code` = string hue, links = accent.
     pub const MD_CODE: Color = SYN_STRING;
     pub const MD_LINK: Color = CHAT_ACCENT;
+
+    pub const DELEGATE_BG: Color = Color::Rgb(0x15, 0x10, 0x1f); // ▸ delegated card bg (chat-mode.html .chip)
 }
 
 #[cfg(test)]
@@ -149,5 +151,12 @@ mod tests {
     fn repo_changes_colors_reuse_status_palette() {
         assert_eq!(color::ADDED, color::OK);
         assert_eq!(color::REMOVED, color::ERROR);
+    }
+
+    #[test]
+    fn p5_delegate_token_present() {
+        use ratatui::style::Color;
+        // Card background from docs/ux/chat-mode.html `.chip` (#15101f).
+        assert_eq!(color::DELEGATE_BG, Color::Rgb(0x15, 0x10, 0x1f));
     }
 }

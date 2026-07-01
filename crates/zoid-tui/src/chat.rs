@@ -67,9 +67,17 @@ pub fn conversation_lines<'a>(msgs: &'a [ChatMsg], streaming: bool, caret_on: bo
                     Span::styled(format!(" → {}", first_line(output)), Style::new().fg(color::DIM)),
                 ]));
             }
-            // D2 fills the real delegated card
-            ChatMsg::Delegated { summary, .. } => {
-                lines.push(Line::styled(format!("  {summary}"), Style::new().fg(color::DIM)));
+            ChatMsg::Delegated { summary, ok } => {
+                let (mark, mark_color) = if *ok { (glyph::PASS, color::OK) } else { (glyph::WARNING, color::ERROR) };
+                lines.push(Line::from(vec![
+                    // Purple label with the card background = the collapsed chip.
+                    Span::styled(
+                        format!("{} delegated · {}", glyph::COLLAPSED, first_line(summary)),
+                        Style::new().fg(color::BRANCH).bg(color::DELEGATE_BG),
+                    ),
+                    Span::styled(format!("  {mark} "), Style::new().fg(mark_color)),
+                    Span::styled(format!("{} peek", glyph::RETURN), Style::new().fg(color::DIM)),
+                ]));
             }
         }
     }
@@ -175,6 +183,19 @@ fn detail_lines(msgs: &[ChatMsg], tz_offset_secs: i32) -> Vec<Line<'static>> {
                 out.push(Line::from(vec![header]));
                 let lang = id_path.get(id.as_str()).map(|p| Language::from_path(p)).unwrap_or(Language::PlainText);
                 out.extend(collapse_to_signatures(output, lang));
+            }
+            ChatMsg::Delegated { summary, ok } => {
+                let (mark, mark_color) = if *ok { (glyph::PASS, color::OK) } else { (glyph::WARNING, color::ERROR) };
+                out.push(Line::from(vec![
+                    Span::styled(format!("{} delegated ", glyph::EXPANDED), Style::new().fg(color::BRANCH).bg(color::DELEGATE_BG)),
+                    Span::styled(format!("{mark}"), Style::new().fg(mark_color)),
+                ]));
+                // PLAN-1 seam: route the summary through Plan 1's markdown renderer.
+                for line in crate::markdown::render_markdown(summary) {
+                    let mut spans = vec![Span::styled("    ", Style::new())];
+                    spans.extend(line.spans);
+                    out.push(Line::from(spans));
+                }
             }
             other => out.extend(conversation_lines(std::slice::from_ref(other), false, true, tz_offset_secs).into_iter().map(own_line)),
         }
@@ -433,5 +454,19 @@ mod tests {
         assert!(spans.iter().any(|(_, st)| st.fg == Some(color::SYN_KEYWORD)));
         // the "zoid " role prefix still leads the first line
         assert!(spans.iter().any(|(t, _)| t == "zoid "));
+    }
+
+    #[test]
+    fn delegated_card_renders_chevron_status_and_bg() {
+        use crate::tokens::{color, glyph};
+        let msgs = vec![ChatMsg::Delegated { summary: "Added shared NotFound helper.".into(), ok: true }];
+        let lines = conversation_lines(&msgs, false, true, 0);
+        let joined: String = lines.iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string())).collect();
+        assert!(joined.contains(glyph::COLLAPSED), "collapsed chevron ▸ present");
+        assert!(joined.contains("delegated"));
+        assert!(joined.contains(glyph::PASS), "done status ✓ present");
+        // The card label carries the delegate background (proves §16 token use).
+        assert!(lines.iter().any(|l| l.spans.iter().any(|s| s.style.bg == Some(color::DELEGATE_BG))));
     }
 }

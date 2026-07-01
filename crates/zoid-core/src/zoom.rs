@@ -72,9 +72,14 @@ pub fn digests(msgs: &[ChatMsg]) -> Vec<TurnDigest> {
                 });
                 d.has_error |= *is_error;
             }
-            ChatMsg::Delegated { summary, ok } => {
-                if let Some(d) = cur.take() { out.push(d); }
-                out.push(TurnDigest { headline: trim_headline(summary), tools: 0, files: 0, has_error: !ok });
+            ChatMsg::Delegated { .. } => {
+                // A folded delegation belongs to the current turn; no extra counts.
+                let _ = cur.get_or_insert_with(|| TurnDigest {
+                    headline: String::new(),
+                    tools: 0,
+                    files: 0,
+                    has_error: false,
+                });
             }
         }
     }

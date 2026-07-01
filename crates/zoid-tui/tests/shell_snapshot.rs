@@ -394,3 +394,25 @@ fn running_title_frame() {
         .unwrap();
     insta::assert_snapshot!(format!("{:#?}", terminal.backend().buffer()));
 }
+
+fn seeded_delegated() -> Vec<ChatMsg> {
+    vec![
+        ChatMsg::User { text: "extract NotFound handling into a shared helper".into(), ts: 0 },
+        ChatMsg::Delegated { summary: "Added shared NotFound helper; get_user reuses it.".into(), ok: true },
+    ]
+}
+
+fn draw_delegated(w: u16, h: u16) -> String {
+    let s = ShellState::new();
+    let input = TextArea::default();
+    let backend = TestBackend::new(w, h);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|f| render_shell(f, &s, &empty_economy(), &seeded_delegated(), &input, false, &normal_view()))
+        .unwrap();
+    // Buffer Debug per §8 snapshot standard — captures the DELEGATE_BG style.
+    format!("{:#?}", terminal.backend().buffer())
+}
+
+#[test] fn delegated_card_frame() { insta::assert_snapshot!(draw_delegated(100, 24)); }
+#[test] fn delegated_card_wide_frame() { insta::assert_snapshot!(draw_delegated(140, 24)); }
