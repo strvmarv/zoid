@@ -109,7 +109,8 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
     // 3. Focus-contextual.
     match state.focus {
         Focus::Input => match (key.code, key.modifiers) {
-            (KeyCode::Enter, m) if m.contains(KeyModifiers::ALT) => Action::Newline,
+            // ⇧⏎ (keyboard-enhancement flags on) or Alt+⏎ (fallback) → newline.
+            (KeyCode::Enter, m) if m.contains(KeyModifiers::ALT) || m.contains(KeyModifiers::SHIFT) => Action::Newline,
             (KeyCode::Enter, _) => Action::Submit,
             _ => Action::Edit(key),
         },
@@ -252,6 +253,7 @@ mod tests {
         let s = ShellState::new(); // focus Input
         assert_eq!(route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)), Action::Submit);
         assert_eq!(route_key(&s, key(KeyCode::Enter, KeyModifiers::ALT)), Action::Newline);
+        assert_eq!(route_key(&s, key(KeyCode::Enter, KeyModifiers::SHIFT)), Action::Newline);
         assert!(matches!(route_key(&s, key(KeyCode::Char('h'), KeyModifiers::NONE)), Action::Edit(_)));
     }
 

@@ -1,8 +1,14 @@
 use anyhow::{Context, Result};
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture, Event as CEvent, EventStream},
+    event::{
+        DisableMouseCapture, EnableMouseCapture, Event as CEvent, EventStream,
+        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{
+        disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, EnterAlternateScreen,
+        LeaveAlternateScreen,
+    },
 };
 use futures_util::StreamExt;
 use ratatui::{layout::Rect, prelude::CrosstermBackend, Terminal};
@@ -139,11 +145,21 @@ async fn main() -> Result<()> {
     enable_raw_mode()?;
     let mut out = stdout();
     execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
+    // Kitty keyboard protocol: lets the terminal report ⇧⏎ distinctly from ⏎ so
+    // route.rs can map Shift+Enter → newline. Degrade gracefully — only push the
+    // flags when supported; otherwise the Alt+⏎ fallback stands.
+    let kbd_enhanced = supports_keyboard_enhancement().unwrap_or(false);
+    if kbd_enhanced {
+        execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES))?;
+    }
     let mut terminal = Terminal::new(CrosstermBackend::new(out))?;
 
     let result = run(&mut terminal, &mut app, &mut ui_rx).await;
 
     // Restore the terminal on every exit path — drive through errors, don't bail.
+    if kbd_enhanced {
+        let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
+    }
     let _ = disable_raw_mode();
     let _ = execute!(terminal.backend_mut(), DisableMouseCapture, LeaveAlternateScreen);
     let _ = terminal.show_cursor();
