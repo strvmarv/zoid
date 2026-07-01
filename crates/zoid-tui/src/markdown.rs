@@ -7,7 +7,7 @@
 
 use crate::syntax_view::highlight_lines;
 use crate::tokens::{color, glyph};
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use zoid_syntax::Language;
@@ -15,13 +15,13 @@ use zoid_syntax::Language;
 /// Max container nesting (lists + blockquotes) before we bail to plain text.
 const MAX_DEPTH: usize = 8;
 
-/// Render markdown `source` into owned ratatui `Line`s. Non-empty input yields
-/// at least one line; empty input yields an empty vec.
+/// Render markdown `source` into owned ratatui `Line`s. Most non-empty input
+/// yields at least one line; whitespace-only input can yield an empty vec (the
+/// caller — `push_message` — handles an empty body by emitting the prefix
+/// alone). Empty input also yields an empty vec.
 pub fn render_markdown(source: &str) -> Vec<Line<'static>> {
     let mut b = Builder::default();
-    let mut opts = Options::empty();
-    opts.insert(Options::ENABLE_STRIKETHROUGH);
-    for ev in Parser::new_ext(source, opts) {
+    for ev in Parser::new(source) {
         b.event(ev);
         if b.bail {
             return plain_lines(source);
@@ -212,7 +212,26 @@ impl Builder {
             TagEnd::CodeBlock => {
                 let lang = self.fence.take().unwrap_or(Language::PlainText);
                 let code = std::mem::take(&mut self.code_buf);
-                self.lines.extend(highlight_lines(&code, lang));
+                let hl = highlight_lines(&code, lang);
+                if self.quote == 0 && self.list.is_empty() {
+                    self.lines.extend(hl); // top-level fence — unchanged
+                } else {
+                    let list_indent = "  ".repeat(self.list.len());
+                    for line in hl {
+                        let mut spans: Vec<Span<'static>> = Vec::new();
+                        for _ in 0..self.quote {
+                            spans.push(Span::styled(
+                                format!("{} ", glyph::QUOTE_BAR),
+                                Style::new().fg(color::DIM),
+                            ));
+                        }
+                        if !list_indent.is_empty() {
+                            spans.push(Span::styled(list_indent.clone(), Style::new()));
+                        }
+                        spans.extend(line.spans);
+                        self.lines.push(Line::from(spans));
+                    }
+                }
             }
             _ => {}
         }
@@ -275,5 +294,35 @@ mod tests {
     fn unknown_fence_is_plain_text() {
         let lines = render_markdown("```\nplain body\n```");
         assert!(lines.iter().all(|l| l.spans.iter().all(|s| s.style.fg == Some(color::TXT))));
+    }
+
+    #[test]
+    fn fenced_code_in_blockquote_keeps_quote_bar() {
+        let lines = render_markdown("> ```rust\n> fn x() {}\n> ```");
+        // every rendered code line must carry the quote bar prefix
+        assert!(lines.iter().all(|l| l.spans.first()
+            .map(|s| s.content.contains(glyph::QUOTE_BAR))
+            .unwrap_or(false)),
+            "blockquote fence lines must start with the quote bar");
+    }
+
+    #[test]
+    fn fenced_code_in_list_is_indented() {
+        let lines = render_markdown("- item\n\n  ```rust\n  fn x() {}\n  ```");
+        // at least one code line is indented (leading spaces) under the list
+        assert!(lines.iter().any(|l| l.spans.first()
+            .map(|s| s.content.starts_with(' '))
+            .unwrap_or(false)),
+            "list fence lines must be indented under the item");
+    }
+
+    #[test]
+    fn link_text_is_md_link_underlined() {
+        let lines = render_markdown("see [docs](http://x)");
+        let s = spans(&lines);
+        assert!(s.iter().any(|(t, st)| t.contains("docs")
+            && st.fg == Some(color::MD_LINK)
+            && st.add_modifier.contains(ratatui::style::Modifier::UNDERLINED)),
+            "link text must render in MD_LINK, underlined");
     }
 }

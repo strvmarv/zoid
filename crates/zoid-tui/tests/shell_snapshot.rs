@@ -379,3 +379,19 @@ fn markdown_message_frame() {
         .unwrap();
     insta::assert_snapshot!(format!("{:#?}", terminal.backend().buffer()));
 }
+
+/// The `streaming = true` title arm (`⠿ running` in CHAT_ACCENT) has no
+/// coverage elsewhere — every other shell snapshot renders with
+/// `streaming = false`. Buffer-Debug captures the title's fg so the
+/// CHAT_ACCENT styling is actually asserted, not just the glyph.
+#[test]
+fn running_title_frame() {
+    let s = ShellState::new();
+    let input = TextArea::default();
+    let backend = TestBackend::new(100, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|f| render_shell(f, &s, &empty_economy(), &seeded(), &input, true, &normal_view()))
+        .unwrap();
+    insta::assert_snapshot!(format!("{:#?}", terminal.backend().buffer()));
+}

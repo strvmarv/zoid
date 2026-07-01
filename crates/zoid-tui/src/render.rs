@@ -84,7 +84,7 @@ fn render_title(frame: &mut Frame, streaming: bool, area: Rect) {
     let (icon, label, fg) = if streaming {
         (glyph::STREAM, "running", color::CHAT_ACCENT)
     } else {
-        (glyph::IDLE, "idle", color::DIM)
+        (glyph::IDLE, "idle", color::OK)
     };
     let title = Line::from(vec![
         Span::styled(" zoid ", Style::new().fg(color::TXT).bold()),
