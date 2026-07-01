@@ -208,6 +208,31 @@ pub fn context_window(events: &[Event]) -> ContextWindow {
     ContextWindow { items, total_tokens }
 }
 
+/// Resolve each File context item to its content: `"file:{path}"` → the latest
+/// non-error tool-result output for that path. Mirrors `context_window`'s File
+/// keying so a `ContextItem.key` looks up here. Used by the subagent context
+/// builder (P5) to fetch relevant code WITHOUT the chat transcript.
+pub fn file_contents(events: &[Event]) -> HashMap<String, String> {
+    let mut call_path: HashMap<String, String> = HashMap::new(); // tool id → path
+    let mut out: HashMap<String, String> = HashMap::new();
+    for e in events {
+        match &e.kind {
+            EventKind::ToolCall { id, args, .. } => {
+                if let Some(p) = tool_path(args) {
+                    call_path.insert(id.clone(), p);
+                }
+            }
+            EventKind::ToolResult { id, output, is_error: false, .. } => {
+                if let Some(p) = call_path.get(id) {
+                    out.insert(format!("file:{p}"), output.clone()); // latest wins
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 fn heat_of(refs: u32, last_turn: usize, current_turn: usize) -> Heat {
     let recency = current_turn.saturating_sub(last_turn);
     if refs >= HOT_REFS || recency == 0 {
@@ -255,6 +280,37 @@ mod tests {
             output: out.into(),
             is_error: false,
         })
+    }
+
+    #[test]
+    fn file_contents_resolves_latest_output_by_path_key() {
+        let evs = vec![
+            u("go"),
+            call("c1", "read_file", "src/a.rs"),
+            result("c1", "read_file", "fn one() {}"),
+            call("c2", "read_file", "src/a.rs"),       // re-read → latest wins
+            result("c2", "read_file", "fn two() {}"),
+            call("c3", "read_file", "src/b.rs"),
+            result("c3", "read_file", "// b"),
+            // a non-file tool result must NOT be keyed as a file
+            ev(EventKind::ToolCall { id: "c4".into(), name: "shell".into(), args: r#"{"command":"ls"}"#.into() }),
+            ev(EventKind::ToolResult { id: "c4".into(), name: "shell".into(), output: "out".into(), is_error: false }),
+        ];
+        let map = file_contents(&evs);
+        assert_eq!(map.get("file:src/a.rs").map(String::as_str), Some("fn two() {}"));
+        assert_eq!(map.get("file:src/b.rs").map(String::as_str), Some("// b"));
+        assert!(!map.keys().any(|k| k.starts_with("tool:")));
+    }
+
+    #[test]
+    fn file_contents_skips_errored_results() {
+        let evs = vec![
+            u("go"),
+            call("c1", "read_file", "x.rs"),
+            ev(EventKind::ToolResult { id: "c1".into(), name: "read_file".into(), output: "boom".into(), is_error: true }),
+        ];
+        let map = file_contents(&evs);
+        assert!(!map.contains_key("file:x.rs"));
     }
 
     #[test]
