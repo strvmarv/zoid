@@ -65,6 +65,11 @@ impl Event {
         self.session_id = session_id;
         self
     }
+
+    pub fn with_tokens(mut self, tokens: TokenStat) -> Self {
+        self.tokens = Some(tokens);
+        self
+    }
 }
 
 #[cfg(test)]
