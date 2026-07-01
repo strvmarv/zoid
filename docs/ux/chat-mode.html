@@ -14,11 +14,12 @@
   .mode.chat{background:#0d2a4d;color:var(--blue);font-weight:700;padding:2px 14px;border-radius:5px;font-size:13px;}
   .dim{color:var(--dim);}.acc{color:var(--acc);}.ok{color:var(--ok);}.warn{color:var(--warn);}.del{color:var(--del);}.add{color:var(--add);}.br{color:var(--br);}.blue{color:var(--blue);}.mut{color:var(--mut);}
   .kw{color:var(--kw);}.fn{color:var(--fn);}.ty{color:var(--ty);}.str{color:var(--str);}.num{color:var(--num);}.cm{color:var(--cm);}
-  .main{display:grid;grid-template-columns:1fr minmax(680px,940px) 290px;min-height:700px;}
-  .gutter{background:#0b0e13;}
-  .col{padding:18px 30px;border-left:1px solid var(--line2);border-right:1px solid var(--line2);}
-  .rail{background:#0b0e13;padding:16px 16px;}
+  .main{display:grid;grid-template-columns:minmax(680px,940px) 1fr 300px;min-height:700px;}
+  .slack{background:var(--bg);}
+  .col{padding:18px 30px;}
+  .rail{background:#0b0e13;padding:16px 16px;border-left:1px solid var(--line2);}
   .row{white-space:pre;}
+  .cwd{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim);}
   .sb{display:flex;gap:18px;padding:11px 22px;border-top:1px solid var(--line);background:#161b22;color:var(--mut);font-size:13px;}.sb .sp{flex:1;}
   .chip{border:1px solid var(--br);border-radius:6px;background:#15101f;padding:3px 9px;display:inline-block;}
   .sel{background:#16335c;color:#cfe3ff;}
@@ -27,20 +28,21 @@
   .drawer.on{border-color:var(--acc);}
   .dh{font-size:12px;letter-spacing:.05em;text-transform:uppercase;display:flex;justify-content:space-between;margin-bottom:9px;}
   .spark{letter-spacing:2px;}
-  .input{border-top:1px solid var(--line2);padding:12px 30px;color:var(--dim);background:#0b0f14;display:flex;gap:10px;}
+  .input{border-top:1px solid var(--line2);padding:12px 30px 16px;background:#0b0f14;}
+  .msgbox{border:1px solid var(--dim);border-radius:6px;padding:8px 12px;position:relative;color:var(--dim);}
+  .msgbox .lbl{position:absolute;top:-8px;left:10px;background:#0b0f14;padding:0 6px;font-size:11px;color:var(--dim);}
   .cap{color:var(--mut);font-size:13px;margin:6px 14px 22px;}.cap b{color:#c9d1d9;}
 </style></head>
 <body>
   <div class="head"><h1>zoid — Chat mode (full scale)</h1><p>Conversation + manual implementation. You drive; the agent assists one action at a time. No autonomous loop.</p></div>
 
   <div class="winL">
-    <div class="tb"><span class="name">zoid</span><span class="mode chat">CHAT</span><span>⎇ <span class="br">main</span></span><span class="dim">~/proj</span><span class="dim">⌃ altitude: detail</span><span class="sp"></span><span class="acc">claude-opus-4-8</span><span>58k / 200k</span><span class="ok">● idle</span></div>
+    <div class="tb"><span class="name">zoid</span><span class="sp"></span><span class="ok">● idle</span></div>
     <div class="main">
-      <div class="gutter"></div>
       <div class="col">
-<div class="row"><span class="acc">›</span> what's causing the 500 on GET /users/:id when the row is missing?
+<div class="row"><span class="dim">14:02</span> <span class="acc">›</span> what's causing the 500 on GET /users/:id when the row is missing?
 
-<span class="mut">zoid</span>  Probably an unwrapped lookup in the handler. Looking…
+<span class="dim">14:02</span> <span class="mut">zoid</span>  Probably an unwrapped lookup in the handler. Looking…
    <span class="dim">⠿ read</span> <span class="acc">api/routes/users.rs</span>
 
    Found it — line 42:
@@ -54,22 +56,37 @@
 <span class="ok">▸</span> fix it          <span class="dim">→ return 404 on None</span>
 <span class="ok">▸</span> wrap in match
 <span class="ok">▸</span> write a failing test first</div></div>
-<div class="row"><span class="acc">›</span> fix it
+<div class="row"><span class="dim">14:05</span> <span class="acc">›</span> fix it
 
-<span class="mut">zoid</span>  <span class="ok">●</span> edited <span class="acc">users.rs</span>  <span class="add">+3</span> <span class="del">-1</span>   <span class="dim">→ peek</span>
+<span class="dim">14:05</span> <span class="mut">zoid</span>  <span class="ok">●</span> edited <span class="acc">users.rs</span>  <span class="add">+3</span> <span class="del">-1</span>   <span class="dim">→ peek</span>
    now returns <span class="num">404</span> via <span class="kw">ok_or</span>(NotFound) instead of panicking.
    <span class="ok">✓</span> cargo check   <span class="dim">(one edit, done — your move)</span>
 
-<span class="acc">›</span> now add input validation across all 12 endpoints
+<span class="dim">14:07</span> <span class="acc">›</span> extract that NotFound handling into a shared helper and reuse it in get_user
 
-<span class="mut">zoid</span>  That's multi-step — a shared validator, 12 handlers, tests.
-   <span class="chip"><span class="br">▸ switch to Build?</span> <span class="ok">[⏎ yes]</span> <span class="dim">[n] keep manual</span></span>
-   <span class="dim">(your conversation carries straight in — no re-explaining)</span></div>
+<span class="dim">14:07</span> <span class="mut">zoid</span>  A discrete unit — I'll <span class="br">delegate</span> it to one subagent in an isolated worktree.
+   <span class="chip"><span class="br">▸ delegated · shared NotFound helper</span> <span class="ok">✓ done</span> <span class="dim">→ peek card</span></span>
+   <span class="dim">(constructed context = the two files + the error — never the whole transcript)</span></div>
       </div>
+      <div class="slack"></div>
       <div class="rail">
-        <div class="dh" style="color:var(--acc);"><span>chat rail</span><span class="dim">^5 ^F ^B ^P</span></div>
+        <div class="dh" style="color:var(--acc);"><span>chat</span></div>
         <div class="drawer on">
-          <div class="dh"><span class="acc">⑤ context · tokens</span><span class="dim">^5</span></div>
+          <div class="dh"><span class="acc">repo</span></div>
+<div class="row">zoid   <span class="br">⎇ main</span>
+<span class="dim">worktree</span> (none)
+<span class="dim">changes</span> <span class="add">+128</span> <span class="del">-34</span> <span class="dim">· 7 files</span></div>
+        </div>
+        <div class="drawer on">
+          <div class="dh"><span class="acc">session</span></div>
+<div class="row">fix 500 on GET /users
+<span class="acc">glm-5.2</span> <span class="dim">· ollama</span>
+<span class="dim">dur</span> 12m   <span class="dim">tok</span> 58k
+<span class="dim">ctx</span> 58k/200k</div>
+<div class="cwd"><span class="dim">cwd</span> ~/develop/projects/zoid/crates/zoid-tui/src</div>
+        </div>
+        <div class="drawer on">
+          <div class="dh"><span class="acc">⑤ context · tokens</span></div>
 <div class="row">  grep          6k <span class="ok">██</span>
   schema.sql    5k <span style="color:#475569">░░</span> <span class="del">cold</span>
 <span class="ok">●</span> users.rs      4k <span class="ok">██</span>
@@ -77,13 +94,10 @@
 churn <span class="spark ok">▁▂▁▃▁</span>
 <span class="acc">[x] evict cold</span></div>
         </div>
-        <div class="drawer"><div class="dh"><span class="dim">▸ files</span><span class="dim">^F</span></div></div>
-        <div class="drawer"><div class="dh"><span class="dim">▸ branch · main</span><span class="dim">^B</span></div></div>
-        <div class="drawer"><div class="dh"><span class="dim">▸ palette</span><span class="dim">^P</span></div></div>
       </div>
     </div>
-    <div class="input"><span class="acc">›</span><span>message zoid…</span><span class="dim">⏎ send · ⇧⏎ newline · / commands · v select · ⌃scroll zoom · ⇧Tab Build</span></div>
-    <div class="sb"><span class="mode chat">CHAT</span><span>⎇ <span class="br">main</span> · manual</span><span class="sp"></span><span class="dim">^5 context · ^P palette · ⇧Tab → Build</span></div>
+    <div class="input"><div class="msgbox"><span class="lbl">message</span>ask zoid…<span class="acc">▌</span></div></div>
+    <div class="sb"><span class="mode chat">CHAT</span><span class="dim">zoom detail · ^P palette</span></div>
   </div>
-  <p class="cap"><b>Manual cadence:</b> read → propose → <em>you</em> approve → <b>one</b> edit → stop. ④ object-first verbs let you act on a selected expression (<span class="dim">db.find(id).unwrap()</span>) without typing; ⑤ context — <em>every</em> token-spending item (tool output, files, conversation), each with heat + pin/evict — lives in a light rail; ① zoom on the titlebar. When an ask is genuinely multi-step, the agent offers <b>Build</b> — and the conversation carries straight in. No autonomy here; that's Build's job.</p>
+  <p class="cap"><b>Manual cadence:</b> read → propose → <em>you</em> approve → <b>one</b> edit → stop. ④ object-first verbs act on a selected expression (<span class="dim">db.find(id).unwrap()</span>) without typing; ⑤ context — <em>every</em> token-spending item, each with heat + pin/evict — lives in the rail alongside the <b>session</b> and <b>repo</b> widgets; ① zoom altitude shows in the status bar (<span class="dim">Alt+=/-</span>). Messages render <b>markdown + syntax-highlighted code</b>. A discrete unit can be <b>delegated</b> to a single subagent (isolated worktree, constructed context) whose result folds back as a card. Sessions are <b>bounded &amp; resumable</b> — new/resume from the palette; zoid auto-loads the last session for this repo. <span class="dim">(Build — the autonomous loop — is deferred.)</span></p>
 </body></html>

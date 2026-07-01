@@ -9,7 +9,7 @@ The **visual source of truth** for zoid's TUI. The visual-language contract and 
 | File | Specifies |
 |---|---|
 | `modes.html` | The two isolated modes (Chat vs Build), mode indicator, switching |
-| `chat-mode.html` | **Chat mode** (full scale): conversation + *manual* implementation, light rail (⑤/files/branch/palette), ① semantic zoom, ④ object-first verbs, single-step cadence, Build offramp |
+| `chat-mode.html` | **Chat mode** (full scale): conversation + *manual* implementation, flush-left stream + measure-cap slack, light rail (**repo / session / context ⑤**, no drawer keybinds; files via palette), ① semantic zoom, ④ object-first verbs, markdown + highlighted-code message rendering, single-step cadence, single-subagent delegation |
 | `build-pipeline.html` | **Build as a stepped pipeline** (superpowers 7-phase): step bar; brainstorm→spec→worktree→plan with the spec/plan approval cards, code-grounded plan, criteria→gates, pre-flight |
 | `build-mode.html` | **Build execute step**: 2 panes (Overview · Follow-stream) + rail (④ economy · changed-files tree · steering); per-task review-pipeline status; full width |
 | `finalize-and-decisions.html` | The autonomy contract diagram, **blocker escalation**, and **Build's finalize step** (summary + autonomous-decisions log + changed-files/diff + merge/PR/discard) |
@@ -33,7 +33,7 @@ The **visual source of truth** for zoid's TUI. The visual-language contract and 
 ## Fidelity pipeline (how these bind to code)
 
 1. **Reference** — these files.
-2. **Contract** — spec §6 (layouts, keymaps, min-widths) + the visual-language table above.
+2. **Contract** — the mode specs (Chat/Build: layouts, keymaps, min-widths, rail drawer sets) + the core spec §13 + the visual-language table above.
 3. **Design-tokens module** — one Rust module holds all glyphs/colors/spacing/layout constants; every view renders from it.
 4. **Enforcement** — `ratatui::TestBackend` + `insta` snapshot tests per screen; first snapshot built to match the mockup; later drift is a reviewed PR diff.
 5. **Acceptance** — each TUI plan task's definition-of-done cites its mockup + snapshot test.

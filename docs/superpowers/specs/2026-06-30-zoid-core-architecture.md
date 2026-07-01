@@ -128,7 +128,7 @@ Switching modes never copies state — it swaps the active surface. This:
 > **Sequencing note (important):** the mode seam is **not** Build's to introduce. Because Chat is the non-removable floor and the seam is the extension thesis, the seam lands **before** Build — it is a Chat-spec deliverable (P6-front in the combined roadmap, now owned by the Chat sequence's tail). Build is then simply the *first additional* `impl Mode`. See §9.
 
 ### 4.3 The rail (per-mode drawers)
-A reusable right-rail component hosts **stackable, collapsible drawers**; **each mode owns its own drawer set** (modes are isolated — the rail is a shared *component*, not shared *contents*). Chat: context-economy ⑤ / files / branch. Build: economy ⑤ / changed-files-tree / steering. Panes are for what you watch continuously; rail drawers are for what you consult contextually.
+A reusable right-rail component hosts **stackable, collapsible drawers**; **each mode owns its own drawer set** (modes are isolated — the rail is a shared *component*, not shared *contents*). Chat: repo / session / context-economy ⑤ (Chat spec §2.1). Build: economy ⑤ / changed-files-tree / steering. Panes are for what you watch continuously; rail drawers are for what you consult contextually.
 
 ### 4.4 Subagent runtime (shared; **Chat drives one, Build automates many**)
 A reusable executor that runs an agent turn in isolation: its own branch/head, optional **git worktree** for filesystem isolation, reporting results back as events. **Each subagent receives a precisely-constructed context — never the session history** (superpowers principle): the orchestrator assembles exactly what a task needs (its unit of work + relevant code), which is why the **context economy is the orchestrator's core job**, not just a UI (see the Chat spec's Economy section for the constructed-context assembler).
@@ -151,6 +151,7 @@ Event {
   id: ulid               // monotonic, sortable
   parent: ulid?          // enables the DAG / branches (retained even though branching is deferred)
   branch: BranchId
+  session_id: ulid       // groups events into one resumable session (see below)
   ts: long               // injected (no ambient clock in pure code)
   type: enum             // UserMessage | ModelDelta | ToolCall | ToolResult
                          // | ContextMutation | WorkflowStarted | TaskStateChanged
@@ -163,11 +164,14 @@ Event {
 
 **Schema note:** `parent` and `branch` are **intentionally retained** even though branching/undo/time-travel are deferred (§4.1, §9) — the schema encodes the full vision so post-roadmap branching is *added behavior, not a migration*. v1 always writes a single linear branch. Likewise, the workflow/decision event types are reserved now though only Build emits them.
 
+**Sessions & the application database.** The store lives at **`~/.local/share/zoid/zoid.db`** (XDG data dir, honoring `$XDG_DATA_HOME`; overridable via `ZOID_DB`) — a **single, user-global database**, not a per-repo file, and the **zoid application database** rather than merely an event log. v1 holds the append-only `events` table plus a **`sessions` table** (`id`, `name`, `root_path` — the repo/cwd the session belongs to — `created_ts`, `last_touched_ts`); every event carries a **`session_id`** so the one log partitions into independent, resumable conversations, **each with its own bounded context window** — the precondition for the economy ⑤ to mean anything (an unbounded forever-log defeats pin/evict/compact). Because the DB is user-global, a session records its `root_path`, so zoid auto-resumes the **last session for the current repo** and the palette lists history across (or filtered to) repos. The same DB is the intended home for **usage/metrics tracking** and, later, **DB-backed in-app configuration** (§7.1) — so the schema is designed as a general app store from the start, not retrofitted. `SessionList()` folds the session rows; the Chat spec owns the resume/new-session UX and the session rail widget.
+
 **Shared projections (all pure functions of the log + a head):**
 - `Transcript(head)` **(P0)** — ordered turns; supports semantic zoom ① (Chat spec).
 - `ContextWindow(head)` **(P3)** — current items + token cost + usage heat (⑤a). *(Detailed in the Chat spec's Economy.)*
 - `ChurnTimeline(head)` **(P3)** — per-turn token deltas; flags re-sent items (⑤c).
 - `TokenLedger(scope)` **(P3)** — the economy ledger.
+- `SessionList()` **(P2)** — sessions (id, name, `root_path`, created/last-touched ts, token totals) folded from the `sessions` table; supports auto-resume-last-for-repo + the palette resume picker + the session rail widget (Chat spec).
 - `BranchDAG()` *(post-roadmap)* — the graph of heads; powers undo/fork/time-travel and Canvas mode ②.
 
 **Build-only projections** — `WorkflowBoard`, `ChangedFiles`, `DecisionsLog` — are defined in the Build spec (they fold the workflow/decision event types reserved above).
@@ -203,14 +207,14 @@ Event {
 v1 codifies only the configuration that **already exists in code** plus a precedence model; the broader surface is enumerated as deferred decisions so nothing is designed by accident.
 
 - **Two namespaces, one principle.** *zoid-native* config lives in zoid's namespace; *adopted ecosystem entities* are read from their conventional Claude-style locations.
-  - **zoid-native:** `~/.config/zoid/config.toml` (user global) and `./.zoid/config.toml` (project) — TOML. The session DB lives at `./.zoid/session.db`.
+  - **zoid-native:** config is `~/.config/zoid/config.toml` (user global) and `./.zoid/config.toml` (project) — TOML. The **application database** is user-global at `~/.local/share/zoid/zoid.db` (XDG data dir, `$XDG_DATA_HOME` honored; **not** in the repo) — the event log + sessions today, usage/metrics and later DB-backed settings tomorrow (§5).
   - **adopted entities `[POST-V1 loaders]`:** `.claude/agents/*.md`, skills, `.claude/commands/*.md`, MCP server definitions (`.mcp.json`-style) — read from the ecosystem's locations, not redefined.
 - **Precedence (low → high):** compiled defaults → user global → project `./.zoid/config.toml` → local gitignored `./.zoid/config.local.toml` → `ZOID_*` environment → CLI flags.
-- **Current knobs (the whole v1 surface):** `OLLAMA_API_KEY` / `ANTHROPIC_API_KEY` (provider select **+ secret**), `ZOID_MODEL` (model), `ZOID_DB` (session DB path), `ZOID_REDUCED_MOTION` (motion). Provider `base_url` is currently hardcoded per provider.
+- **Current knobs (the whole v1 surface):** `OLLAMA_API_KEY` / `ANTHROPIC_API_KEY` (provider select **+ secret**), `ZOID_MODEL` (model), `ZOID_DB` (application DB path; default `~/.local/share/zoid/zoid.db`), `ZOID_REDUCED_MOTION` (motion). Provider `base_url` is currently hardcoded per provider.
 - **Secrets rule:** API keys are **never** read from committed config — environment, the gitignored `config.local.toml`, or (later) an OS keyring only.
 - **Surfacing:** settings appear **read-only** in the `^P` palette's *settings* group; editing is file-first — **no in-TUI settings editor in v1**.
 
-**`[POST-V1]` — configuration decisions to review before they're built:** format finality (TOML vs `settings.json`-parity); secrets/keyring; entity-discovery paths + project-trust; provider/model config (`base_url` override, per-mode/agent model, auto-routing, request params); per-subsystem policy-as-config (economy ceilings + thresholds, permission rules, `notify-cmd` + channel toggles); the `ModePolicy` load path; validation/hot-reload/in-TUI editor/`zoid config` CLI/first-run onboarding.
+**`[POST-V1]` — configuration decisions to review before they're built:** format finality (TOML vs `settings.json`-parity); secrets/keyring; entity-discovery paths + project-trust; provider/model config (`base_url` override, per-mode/agent model, auto-routing, request params); per-subsystem policy-as-config (economy ceilings + thresholds, permission rules, `notify-cmd` + channel toggles); the `ModePolicy` load path; validation/hot-reload/in-TUI editor/`zoid config` CLI/first-run onboarding; **DB-backed in-app configuration & usage tracking** (the user-global `zoid.db` as home for settings + metrics, vs file-only config).
 
 ---
 
@@ -239,7 +243,7 @@ The build proceeds as a sequence of **vertical slices**. Each phase (a) compiles
 |---|---|---|
 | **P0 · Spine & skeleton** | Cargo workspace; design-tokens module; event log (`rusqlite`) + fold engine + `Transcript`; fake provider; bare `ratatui` shell; `proptest` + `TestBackend`/`insta` harness | core → Chat |
 | **P1 · Chat MVP** | Provider (SSE streaming + tool-calling); agent loop; core tools (fs/shell/search) in cwd; inline tool rendering with `→ peek`; real multi-line input (`tui-textarea`) | Chat |
-| **P2 · Modal shell** | App-framework floor (focus/keys/mouse/panes); the rail component; command palette `^P` + command line `:`; files & branch drawers; persistent mode indicator | Chat |
+| **P2 · Modal shell** | App-framework floor (focus/keys/mouse/panes); the rail component; command palette `^P` + command line `:`; repo/session/context rail drawers; **user-global multi-session store (`~/.local/share/zoid/zoid.db`: `sessions` table + `session_id`) + palette new/resume + auto-load-last-for-repo**; persistent mode indicator | Chat |
 | **P3 · Context economy ⑤** | `TokenLedger` + `ContextWindow`(heat) + `ChurnTimeline`; pin/evict; auto-evict-cold + compact-at-threshold; optional token ceiling; economy rail drawer with Ⓡ4 dataviz; the **constructed-context assembler** primitive | Chat |
 | **P4 · Signature Chat** | Ⓡ2 motion engine; ① semantic zoom; Ⓡ3 tree-sitter (highlight, structural fold, symbol selection); ④ object-first verbs | Chat |
 | **P5 · Orchestrator + subagent runtime (L1)** | Subagent executor; `git2` **worktree isolation**; constructed-context assembler wired to dispatch; **one subagent at a time**; **available from Chat** (delegate a discrete unit) | Chat |

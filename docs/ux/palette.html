@@ -32,7 +32,7 @@
   <div class="head"><h1>zoid — command palette (^P) &amp; command line (:)</h1><p>Fuzzy, mode-aware action launcher that shows each keybind (teaches its own shortcuts). : for direct commands.</p></div>
 
   <div class="winL">
-    <div class="tb"><span class="name">zoid</span><span class="mode chat">CHAT</span><span>⎇ <span class="br">main</span></span><span class="sp"></span><span class="dim">^P palette · : command</span></div>
+    <div class="tb"><span class="name">zoid</span><span class="dim">session:</span><span>fix 500 on GET /users</span><span class="sp"></span><span class="dim">^P palette · : command</span></div>
     <!-- dimmed content behind -->
     <div class="behind"><div class="row">› what's causing the 500 on /users/:id …
 zoid  ● edited users.rs +3 -1 · ✓ cargo check
@@ -43,8 +43,14 @@ zoid  ● edited users.rs +3 -1 · ✓ cargo check
     <div class="palette">
       <div class="pq"><span class="car">⌘</span><span class="q">compact</span><span class="cur">▌</span><span style="margin-left:auto;color:var(--dim);font-size:12px;">fuzzy · all actions</span></div>
 
-      <div class="grp">mode</div>
-      <div class="it"><span class="ic">⇢</span> Switch to Build <span class="dim">— continue this conversation into the loop</span><span class="k">⇧Tab · :build</span></div>
+      <div class="grp">session</div>
+      <div class="it"><span class="ic">＋</span> New session <span class="dim">— fresh thread + clean context budget</span><span class="k">:new</span></div>
+      <div class="it"><span class="ic">↺</span> Resume session… <span class="dim">— this repo, most-recent first</span><span class="k">⏎</span></div>
+      <div class="it"><span class="ic">✎</span> Rename session…<span class="k">:rename</span></div>
+
+      <div class="grp">mode / app</div>
+      <div class="it" style="opacity:.5;"><span class="ic">⇢</span> Switch to Build <span class="dim">— deferred (autonomous loop not yet built)</span><span class="k">:build</span></div>
+      <div class="it"><span class="ic">⏻</span> Quit zoid<span class="k">:q</span></div>
 
       <div class="grp" style="opacity:.5;">branch ⎇ <span style="text-transform:none;">· post-v1</span></div>
       <div class="it" style="opacity:.5;"><span class="ic">⎇</span> Fork from here <span class="dim">— new branch at this turn</span><span class="k">:fork</span></div>
@@ -53,7 +59,8 @@ zoid  ● edited users.rs +3 -1 · ✓ cargo check
 
       <div class="grp">navigate</div>
       <div class="it"><span class="ic">ƒ</span> Go to symbol… <span class="dim">(tree-sitter)</span><span class="k">gs</span></div>
-      <div class="it"><span class="ic">▤</span> Open file…<span class="k">^F</span></div>
+      <div class="it"><span class="ic">▤</span> Open file…<span class="k"></span></div>
+      <div class="it"><span class="ic">▸</span> Toggle drawer… <span class="dim">— repo · session · context ⑤</span><span class="k"></span></div>
 
       <div class="grp">context ⑤</div>
       <div class="it"><span class="ic">●</span> Pin file to context<span class="k"></span></div>
@@ -71,7 +78,7 @@ zoid  ● edited users.rs +3 -1 · ✓ cargo check
       <div class="pf"><span>↑↓ move</span><span>⏎ run</span><span>esc close</span><span>type to filter</span><span class="dim">results rank by recency + match</span></div>
     </div>
 
-    <div class="cmdline">: build<span class="dim">         ← vim-style direct command (:build :model … :pin :q) for power users</span></div>
+    <div class="cmdline">: new<span class="dim">         ← vim-style direct command (:new :rename :chat :model … :pin :q) for power users</span></div>
   </div>
-  <p class="cap"><b>Two entry points:</b> <b>^P</b> opens the fuzzy, mode-aware palette — grouped (mode · branch · navigate · context · settings · recipes), each row showing its <em>keybind</em> so you learn shortcuts by using it; results rank by recency + match. <b>:</b> is the direct command line for power users. The palette surfaces <em>global</em> verbs (switch mode, settings) plus actions relevant to the <em>current mode</em>. Mode-switch (<span class="dim">:build / :chat</span>) lives here and on <span class="dim">⇧Tab</span>.</p>
+  <p class="cap"><b>Two entry points:</b> <b>^P</b> opens the fuzzy, mode-aware palette — grouped (session · mode/app · navigate · context ⑤ · settings), each row showing its <em>keybind</em> so you learn shortcuts by using it; results rank by recency + match. <b>:</b> is the direct command line for power users. The palette surfaces <em>global</em> verbs (new/resume session, quit, settings) plus current-mode actions — and since rail drawers carry no keybinds for now, it's how you toggle them. <span class="dim">(Switch to Build is deferred until the autonomous loop is built.)</span></p>
 </body></html>
