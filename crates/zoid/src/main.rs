@@ -47,6 +47,14 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// Build the message input with the tui-textarea cursor-line **underline**
+/// disabled (spec §2.2/§9): the default underline clutters the calm box.
+fn make_input(textarea: TextArea<'static>) -> TextArea<'static> {
+    let mut textarea = textarea;
+    textarea.set_cursor_line_style(ratatui::style::Style::default());
+    textarea
+}
+
 /// Best-effort current branch from `.git/HEAD` (`ref: refs/heads/<name>`); "main" otherwise.
 fn current_branch() -> String {
     std::fs::read_to_string(".git/HEAD")
@@ -119,7 +127,7 @@ async fn main() -> Result<()> {
         provider: default_provider(),
         tools: Arc::new(zoid_tools::registry()),
         model,
-        textarea: TextArea::default(),
+        textarea: make_input(TextArea::default()),
         streaming: false,
         shell,
         ui_tx,
@@ -306,7 +314,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             if app.streaming { return Ok(false); }
             let text = app.textarea.lines().join("\n");
             if text.trim().is_empty() { return Ok(false); }
-            app.textarea = TextArea::default();
+            app.textarea = make_input(TextArea::default());
             app.shell.status_hint = None;
             app.record(EventKind::UserMessage { text }).await?;
             app.streaming = true;
@@ -350,7 +358,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 if let Some(verb) = verbs.get(vsel) {
                     let prompt = zoid_tui::objects::verb_prompt(verb, obj);
                     // Queue (P4d): seed the input; P5 will dispatch it to a subagent.
-                    app.textarea = TextArea::from(prompt.lines().map(String::from).collect::<Vec<_>>());
+                    app.textarea = make_input(TextArea::from(prompt.lines().map(String::from).collect::<Vec<_>>()));
                     app.shell.status_hint = Some("queued · runs as a subagent in P5".into());
                     app.shell.focus = zoid_tui::Focus::Input;
                 }
@@ -382,4 +390,34 @@ fn spawn_turn(app: &App) {
     tokio::spawn(async move {
         let _ = run_agent_turn(provider, tools, session, seed, model, ui, now_ms).await;
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, style::Modifier, Terminal};
+    use tui_textarea::TextArea;
+
+    /// Render the textarea into a scratch buffer and report whether any cell
+    /// carries the UNDERLINED modifier (tui-textarea's default cursor line).
+    fn has_underline(ta: &TextArea<'static>) -> bool {
+        let backend = TestBackend::new(20, 3);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| f.render_widget(ta, f.area())).unwrap();
+        term.backend()
+            .buffer()
+            .content()
+            .iter()
+            .any(|c| c.modifier.contains(Modifier::UNDERLINED))
+    }
+
+    #[test]
+    fn make_input_disables_cursor_line_underline() {
+        // Sanity: the tui-textarea default underlines the cursor line.
+        let default = TextArea::from(vec!["hello".to_string()]);
+        assert!(has_underline(&default), "default TextArea underlines the cursor line");
+        // make_input turns it off.
+        let plain = make_input(TextArea::from(vec!["hello".to_string()]));
+        assert!(!has_underline(&plain), "make_input must disable the cursor-line underline");
+    }
 }
