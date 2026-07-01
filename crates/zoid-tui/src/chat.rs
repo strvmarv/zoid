@@ -1,5 +1,6 @@
 use crate::state::Zoom;
 use crate::syntax_view::highlight_lines;
+use crate::text::truncate;
 use crate::tokens::{color, glyph};
 use ratatui::{
     layout::{Constraint, Layout},
@@ -276,8 +277,6 @@ fn scalar(v: &serde_json::Value) -> String {
 fn first_line(s: &str) -> String {
     truncate(s.lines().next().unwrap_or(""), 40)
 }
-
-use crate::text::truncate;
 
 #[cfg(test)]
 mod tests {

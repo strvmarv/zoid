@@ -80,6 +80,21 @@ mod tests {
         }
     }
 
+    /// A *leading* wide glyph at max 0/1/2 is the tightest boundary: budget-1 can
+    /// be smaller than the first glyph, so it must be dropped whole, never split.
+    #[test]
+    fn leading_wide_glyph_at_tiny_max() {
+        assert_eq!(truncate("😀xyz", 0), "");
+        // max 1 → budget 0, the 2-col glyph can't fit → ellipsis only (width 1).
+        let one = truncate("😀xyz", 1);
+        assert_eq!(one, glyph::ELLIPSIS.to_string());
+        assert_eq!(UnicodeWidthStr::width(one.as_str()), 1);
+        // max 2 → budget 1, still can't fit the 2-col glyph → ellipsis only.
+        let two = truncate("😀xyz", 2);
+        assert!(UnicodeWidthStr::width(two.as_str()) <= 2);
+        assert_eq!(two, glyph::ELLIPSIS.to_string());
+    }
+
     #[test]
     fn pad_uses_display_width() {
         // "😀" is 2 cols, so pad_to width 5 adds 3 spaces, not 4.
