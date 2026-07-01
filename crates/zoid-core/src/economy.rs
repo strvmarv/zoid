@@ -134,6 +134,7 @@ mod tests {
             id: Ulid::new(),
             parent: None,
             branch: Default::default(),
+            session_id: Ulid::from(0u128),
             ts: 0,
             kind: EventKind::Usage,
             tokens: Some(TokenStat { input, output, cached }),

@@ -1,6 +1,7 @@
 use crate::event::{BranchId, Event};
 use anyhow::Result;
 use rusqlite::{params, Connection};
+use ulid::Ulid;
 
 /// Single-writer, append-only event log backed by SQLite. The store owns the
 /// connection; readers obtain owned `Vec<Event>` snapshots via `load_all`.
@@ -64,6 +65,7 @@ impl EventStore {
                 id: id.parse()?,
                 parent: parent.map(|p| p.parse()).transpose()?,
                 branch: BranchId(branch),
+                session_id: Ulid::from(0u128),
                 ts,
                 kind: serde_json::from_str(&kind)?,
                 tokens: tokens.map(|t| serde_json::from_str(&t)).transpose()?,
