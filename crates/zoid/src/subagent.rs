@@ -127,7 +127,14 @@ pub async fn run_subagent(
         run_agent_turn(config, provider, tools, session, vec![seed], model, ui, session_id, now).await?;
 
     // Distill: last non-empty assistant text = summary; an emitted ⚠ = not ok.
-    let summary = conversation(&produced)
+    // `conversation()` is branch-aware (Task D1) and skips non-main events, but
+    // this subagent's own turn lives entirely on `branch` — rebase a filtered
+    // copy onto the default branch so the fold sees it.
+    let mut branch_events: Vec<Event> = produced.iter().filter(|e| e.branch == branch).cloned().collect();
+    for e in &mut branch_events {
+        e.branch = BranchId::default();
+    }
+    let summary = conversation(&branch_events)
         .iter()
         .rev()
         .find_map(|m| match m {

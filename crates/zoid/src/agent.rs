@@ -75,6 +75,12 @@ fn map_msg(m: ChatMsg) -> Message {
             tool_name: None,
         },
         ChatMsg::ToolResult { name, output, .. } => Message::tool(name, output),
+        ChatMsg::Delegated { summary, .. } => Message {
+            role: zoid_provider::MsgRole::Assistant,
+            content: format!("[delegated subagent] {summary}"),
+            tool_calls: vec![],
+            tool_name: None,
+        },
     }
 }
 

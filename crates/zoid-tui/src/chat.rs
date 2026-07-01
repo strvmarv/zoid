@@ -67,6 +67,10 @@ pub fn conversation_lines<'a>(msgs: &'a [ChatMsg], streaming: bool, caret_on: bo
                     Span::styled(format!(" → {}", first_line(output)), Style::new().fg(color::DIM)),
                 ]));
             }
+            // D2 fills the real delegated card
+            ChatMsg::Delegated { summary, .. } => {
+                lines.push(Line::styled(format!("  {summary}"), Style::new().fg(color::DIM)));
+            }
         }
     }
     lines

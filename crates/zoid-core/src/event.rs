@@ -42,6 +42,9 @@ pub enum EventKind {
     /// A manual or automatic change to the context window, targeting a
     /// `ContextItem` by its stable `key`.
     ContextMutation { item: String, op: MutationOp },
+    /// A finished subagent's outcome, recorded on the MAIN branch. `branch`
+    /// names the subagent's sub-branch; `summary` is its closing report.
+    DelegationResult { branch: String, summary: String, ok: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,6 +149,15 @@ mod tests {
             let json = serde_json::to_string(&ev).unwrap();
             assert_eq!(ev, serde_json::from_str::<Event>(&json).unwrap());
         }
+    }
+
+    #[test]
+    fn delegation_result_round_trips() {
+        let ev = Event::new(Ulid::new(), None, 0, EventKind::DelegationResult {
+            branch: "subagent:zz".into(), summary: "did it".into(), ok: false,
+        });
+        let json = serde_json::to_string(&ev).unwrap();
+        assert_eq!(ev, serde_json::from_str::<Event>(&json).unwrap());
     }
 
     #[test]

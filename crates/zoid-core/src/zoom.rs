@@ -72,6 +72,10 @@ pub fn digests(msgs: &[ChatMsg]) -> Vec<TurnDigest> {
                 });
                 d.has_error |= *is_error;
             }
+            ChatMsg::Delegated { summary, ok } => {
+                if let Some(d) = cur.take() { out.push(d); }
+                out.push(TurnDigest { headline: trim_headline(summary), tools: 0, files: 0, has_error: !ok });
+            }
         }
     }
     if let Some(d) = cur.take() {

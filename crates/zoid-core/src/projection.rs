@@ -21,6 +21,8 @@ pub enum ChatMsg {
     User { text: String, ts: i64 },
     Assistant { text: String, tool_calls: Vec<ToolCallRef>, ts: i64 },
     ToolResult { id: String, name: String, output: String, is_error: bool, ts: i64 },
+    /// A folded subagent delegation — rendered as a collapsible card (① zoom).
+    Delegated { summary: String, ok: bool },
 }
 
 /// Fold the event log into ordered `ChatMsg` items. A run of `ModelDelta` plus
@@ -50,6 +52,11 @@ pub fn conversation(events: &[Event]) -> Vec<ChatMsg> {
     }
 
     for e in events {
+        // Subagent work lives on its own branch and never appears in the main
+        // conversation; only its folded DelegationResult (on main) surfaces.
+        if e.branch != crate::event::BranchId::default() {
+            continue;
+        }
         match &e.kind {
             EventKind::UserMessage { text: t } => {
                 flush(&mut text, &mut calls, &mut turn_ts, &mut out);
@@ -73,6 +80,10 @@ pub fn conversation(events: &[Event]) -> Vec<ChatMsg> {
                 out.push(ChatMsg::ToolResult {
                     id: id.clone(), name: name.clone(), output: output.clone(), is_error: *is_error, ts: e.ts,
                 });
+            }
+            EventKind::DelegationResult { summary, ok, .. } => {
+                flush(&mut text, &mut calls, &mut turn_ts, &mut out);
+                out.push(ChatMsg::Delegated { summary: summary.clone(), ok: *ok });
             }
             EventKind::Usage | EventKind::ContextMutation { .. } => {
                 // Economy bookkeeping; not part of the conversation projection.
@@ -197,6 +208,22 @@ mod tests {
         assert!(matches!(conv[0], ChatMsg::User { ts: 100, .. }));
         assert!(matches!(conv[1], ChatMsg::Assistant { ts: 200, .. }), "folded turn uses first event ts");
         assert!(matches!(conv[2], ChatMsg::ToolResult { ts: 300, .. }));
+    }
+
+    #[test]
+    fn conversation_skips_subagent_branch_and_folds_result() {
+        use crate::event::BranchId;
+        let mut work = Event::new(Ulid::from(10u128), None, 0, EventKind::ModelDelta { text: "subagent thinking".into() });
+        work.branch = BranchId("subagent:ax3".into());
+        let result = Event::new(Ulid::from(11u128), None, 0, EventKind::DelegationResult {
+            branch: "subagent:ax3".into(), summary: "Refactored parse()".into(), ok: true,
+        });
+        let evs = vec![user(1, "delegate this"), work, result];
+        let conv = conversation(&evs);
+        assert_eq!(conv, vec![
+            ChatMsg::User { text: "delegate this".into(), ts: 0 },
+            ChatMsg::Delegated { summary: "Refactored parse()".into(), ok: true },
+        ]);
     }
 
     proptest! {
