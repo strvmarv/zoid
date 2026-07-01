@@ -14,6 +14,8 @@ pub enum Command {
     RenameSession(String),
     /// Open the resume-session picker overlay (palette-only; no `:` form).
     ResumeSessionPicker,
+    /// Dispatch `task` to a single subagent (spec §6). Empty string = usage hint.
+    Delegate(String),
     Unknown(String),
 }
 
@@ -31,6 +33,9 @@ pub fn parse_command(raw: &str) -> Command {
         "new" => Command::NewSession,
         "rename" => Command::RenameSession(String::new()),
         s if s.starts_with("rename ") => Command::RenameSession(s["rename ".len()..].trim().to_string()),
+        rest if rest == "delegate" || rest.starts_with("delegate ") => {
+            Command::Delegate(rest.strip_prefix("delegate").unwrap().trim().to_string())
+        }
         other => Command::Unknown(other.to_string()),
     }
 }
@@ -56,6 +61,12 @@ mod tests {
     #[test]
     fn unknown_is_captured_verbatim() {
         assert_eq!(parse_command(":wat"), Command::Unknown("wat".into()));
+    }
+
+    #[test]
+    fn parses_delegate_with_task() {
+        assert_eq!(parse_command(":delegate add a test for parse()"), Command::Delegate("add a test for parse()".into()));
+        assert_eq!(parse_command(":delegate"), Command::Delegate(String::new()));
     }
 
     #[test]

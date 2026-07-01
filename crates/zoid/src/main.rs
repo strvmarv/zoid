@@ -222,6 +222,9 @@ struct App {
     /// Session ids backing the resume-session picker rows (index-aligned with
     /// `shell.sessions`), populated when `Command::ResumeSessionPicker` opens it.
     session_ids: Vec<Ulid>,
+    /// One subagent at a time (spec §6): set while a `:delegate` dispatch (or a
+    /// verb-picked task) is in flight; cleared when its `DelegationResult` lands.
+    delegating: bool,
 }
 
 impl App {
@@ -301,6 +304,7 @@ async fn main() -> Result<()> {
         tz_offset_secs,
         session_started_ms,
         session_ids: Vec::new(),
+        delegating: false,
     };
 
     enable_raw_mode()?;
@@ -426,7 +430,13 @@ async fn run<B: ratatui::backend::Backend>(
             }
             Some(update) = ui_rx.recv() => {
                 match update {
-                    AgentUpdate::Appended(ev) => { app.events.push(*ev); }
+                    AgentUpdate::Appended(ev) => {
+                        if matches!(ev.kind, EventKind::DelegationResult { .. }) {
+                            app.delegating = false;
+                            app.shell.status_hint = None;
+                        }
+                        app.events.push(*ev);
+                    }
                     AgentUpdate::TurnComplete => { app.streaming = false; }
                 }
             }
@@ -555,11 +565,10 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 let verbs = zoid_tui::objects::verbs_for(obj.kind);
                 let vsel = zoid_tui::palette::nav(app.shell.objects.verb_selected, 0, verbs.len());
                 if let Some(verb) = verbs.get(vsel) {
-                    let prompt = zoid_tui::objects::verb_prompt(verb, obj);
-                    // Queue (P4d): seed the input; P5 will dispatch it to a subagent.
-                    app.textarea = make_input(TextArea::from(prompt.lines().map(String::from).collect::<Vec<_>>()));
-                    app.shell.status_hint = Some("queued · runs as a subagent in P5".into());
-                    app.shell.focus = zoid_tui::Focus::Input;
+                    let task = zoid_tui::objects::verb_prompt(verb, obj);
+                    app.shell.close_overlay();
+                    start_delegation(app, task); // dispatches (P5) — closes P4d's "queued"
+                    return Ok(false);
                 }
             }
             app.shell.close_overlay();
@@ -644,8 +653,77 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             app.shell.overlay = zoid_tui::Overlay::Sessions;
             Ok(false)
         }
+        Command::Delegate(task) => { start_delegation(app, task); Ok(false) }
         Command::Unknown(_) => Ok(false),
     }
+}
+
+/// Dispatch `task` to a single subagent (spec §6). One at a time. Non-trivial:
+/// runs in an isolated git worktree (falls back to cwd if not a repo); its
+/// DelegationResult folds back as a card. (Trivial edits use the normal inline
+/// chat path — this is the explicit delegate path only.)
+fn start_delegation(app: &mut App, task: String) {
+    if app.streaming || app.delegating {
+        app.shell.status_hint = Some("busy · one subagent at a time".into());
+        return;
+    }
+    if task.trim().is_empty() {
+        app.shell.status_hint = Some("usage: :delegate <task>".into());
+        return;
+    }
+    app.delegating = true;
+    app.shell.status_hint = Some(format!("{} delegating…", zoid_tui::tokens::glyph::RUNNING));
+
+    let provider = app.provider.clone();
+    let session = app.session.clone();
+    let session_id = app.session_id;
+    let seed = app.events.clone(); // context for construction (B3)
+    let model = app.model.clone();
+    let ui = app.ui_tx.clone();
+    tokio::spawn(async move {
+        // Isolated worktree for the unit (spec §3/§4.4); fall back to cwd if the
+        // process is not inside a git repo (e.g. offline smoke).
+        let wt = zoid::worktree::create_worktree(
+            std::path::Path::new("."),
+            &format!("sub-{}", Ulid::new()),
+        )
+        .ok();
+        let cwd = wt.as_ref().map(|w| w.path().to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
+
+        let res = zoid::subagent::run_subagent(
+            &task,
+            &seed,
+            &zoid_core::agent_profile::AgentProfile::builtin(),
+            provider,
+            cwd,
+            model,
+            session.clone(),
+            session_id,
+            ui.clone(),
+            now_ms,
+        )
+        .await;
+        // WorktreeGuard `wt` drops here → worktree cleaned up (isolation preserved
+        // even on failure — the main copy never saw the subagent's edits).
+        drop(wt);
+
+        let (branch, summary, ok) = match res {
+            Ok(r) => (r.branch, r.summary, r.ok),
+            Err(e) => (String::new(), format!("delegation failed: {e}"), false),
+        };
+        // Record the outcome on the MAIN branch, tagged to this session, so
+        // conversation() folds it (Plan 2 seam: untagged events land in the nil
+        // session and never surface).
+        let ev = Event::new(
+            Ulid::new(),
+            None,
+            now_ms(),
+            EventKind::DelegationResult { branch, summary, ok },
+        )
+        .with_session(session_id);
+        let _ = session.append(ev.clone()).await;
+        let _ = ui.send(AgentUpdate::Appended(Box::new(ev))).await;
+    });
 }
 
 fn spawn_turn(app: &App) {
