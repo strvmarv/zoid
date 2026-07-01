@@ -108,14 +108,6 @@ fn render_build_placeholder(frame: &mut Frame, area: Rect) {
 }
 
 fn render_input(frame: &mut Frame, input: &TextArea<'_>, area: Rect) {
-    // Each rail drawer is now a bordered box tall enough that, at the rail's
-    // minimum supported height, the last (tallest) box can run a couple of
-    // rows past the rail's own bottom (ratatui rects aren't clipped to a
-    // parent container). `Clear` guarantees the input box always paints over
-    // a clean slate rather than leaving stray glyphs from an overlapping
-    // drawer bleeding through — TextArea only writes the cells its own
-    // content touches, not the whole area.
-    frame.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::new().fg(color::DIM))

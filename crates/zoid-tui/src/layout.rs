@@ -95,23 +95,28 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
     if let Some(rr) = rail {
         let inner = Rect { x: rr.x.saturating_add(1), y: rr.y, width: rr.width.saturating_sub(2), height: rr.height };
         let mut y = inner.y;
+        let bottom = inner.y.saturating_add(inner.height);
         for d in &state.drawers {
-            if y >= inner.y.saturating_add(inner.height) {
-                break;
+            let avail = bottom.saturating_sub(y);
+            if avail < 2 {
+                break; // no room for even an empty box (top+bottom border)
             }
-            let body_rows = if d.open { drawer_body_rows(d.id) } else { 0 };
-            let box_h = body_rows + 2; // top border (carries title) + body + bottom border
+            let want = if d.open { drawer_body_rows(d.id) + 2 } else { 2 };
+            let box_h = want.min(avail); // clamp so the box (incl. bottom border) stays in the rail
             drawer_headers.push((d.id, Rect { x: inner.x, y, width: inner.width, height: box_h }));
             if d.open {
-                drawer_bodies.push((
-                    d.id,
-                    Rect {
-                        x: inner.x.saturating_add(1),
-                        y: y.saturating_add(1),
-                        width: inner.width.saturating_sub(2),
-                        height: body_rows,
-                    },
-                ));
+                let body_rows = box_h.saturating_sub(2); // inner height after top+bottom borders
+                if body_rows > 0 {
+                    drawer_bodies.push((
+                        d.id,
+                        Rect {
+                            x: inner.x.saturating_add(1),
+                            y: y.saturating_add(1),
+                            width: inner.width.saturating_sub(2),
+                            height: body_rows,
+                        },
+                    ));
+                }
             }
             y = y.saturating_add(box_h + 1); // 1-row gap between boxes (mock margin-bottom)
         }
