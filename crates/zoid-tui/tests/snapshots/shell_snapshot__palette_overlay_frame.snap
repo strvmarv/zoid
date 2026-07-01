@@ -1,10 +1,9 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
-assertion_line: 128
 expression: "draw(&s, &seeded(), 100, 24)"
 ---
 " zoid  CHAT  ⎇ main                                                                                 "
-"┌ › build ────────────────────────────────────────────┐ ▾ context · tokens  ^5                      "
+"┌ › build ────────────────────────────────────────────┐ ▾ context · tokens                          "
 "│MODE                                                 │  churn                                      "
 "│ ⇢ Switch to Build  continue this conversation into t│  [x] evict cold                           0 "
 "│BRANCH ⎇ · POST-V1                                   │                                             "
@@ -12,9 +11,9 @@ expression: "draw(&s, &seeded(), 100, 24)"
 "│ ⤺ Undo last turn  move head back  u                 │                                             "
 "│NAVIGATE                                             │                                             "
 "│ ▤ Open files drawer  browse the working tree  ^F    │                                             "
-"│ ⎇ Open branch drawer  current branch  ^B            │ ▸ files  ^F                                 "
+"│ ⎇ Open branch drawer  current branch  ^B            │ ▸ files                                     "
 "│CONTEXT ⑤ · P3                                       │                                             "
-"│ ● Pin file to context  lands in P3                  │ ▸ branch  ^B                                "
+"│ ● Pin file to context  lands in P3                  │ ▸ branch                                    "
 "│ ✕ Evict cold items  lands in P3                     │                                             "
 "│SETTINGS                                             │                                             "
 "│ ◆ Quit zoid  exit  ^C                               │                                             "

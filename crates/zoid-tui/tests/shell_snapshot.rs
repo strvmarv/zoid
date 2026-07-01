@@ -70,6 +70,16 @@ fn chat_with_rail_frame() {
     insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
 }
 
+/// Rail drawer headers show title + chevron only — no keybind labels (spec §2.1).
+#[test]
+fn rail_headers_have_no_keybind_labels() {
+    let s = ShellState::new();
+    let out = draw(&s, &seeded(), 100, 24);
+    assert!(!out.contains("^5"), "economy keybind label must be gone");
+    assert!(!out.contains("^F"), "files keybind label must be gone");
+    assert!(!out.contains("^B"), "branch keybind label must be gone");
+}
+
 /// Wide frame: at >130 cols the measure-cap slack appears as a gutter. It must
 /// sit *between* the stream and the rail (stream flush-left), never to the left
 /// of the stream. The 100-col frames collapse this gutter to zero, so only a

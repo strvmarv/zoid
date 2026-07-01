@@ -1,13 +1,12 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
-assertion_line: 322
 expression: "draw_overlay(Overlay::Verbs, 100, 24)"
 ---
 Buffer {
     area: Rect { x: 0, y: 0, width: 100, height: 24 },
     content: [
         " zoid  CHAT  ⎇ main                                                                                 ",
-        "┌ ▷ verbs · src/ast.rs ───────────────────────────────┐ ▾ context · tokens  ^5                      ",
+        "┌ ▷ verbs · src/ast.rs ───────────────────────────────┐ ▾ context · tokens                          ",
         "│ explain                                             │  churn                                      ",
         "│ summarize                                           │  [x] evict cold                           0 ",
         "│ find usages                                         │                                             ",
@@ -15,9 +14,9 @@ Buffer {
         "│                                                     │                                             ",
         "│                                                     │                                             ",
         "│                                                     │                                             ",
-        "│                                                     │ ▸ files  ^F                                 ",
+        "│                                                     │ ▸ files                                     ",
         "│                                                     │                                             ",
-        "│                                                     │ ▸ branch  ^B                                ",
+        "│                                                     │ ▸ branch                                    ",
         "│                                                     │                                             ",
         "│                                                     │                                             ",
         "│                                                     │                                             ",
@@ -41,8 +40,7 @@ Buffer {
         x: 23, y: 1, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
         x: 55, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 56, y: 1, fg: Rgb(201, 209, 217), bg: Reset, underline: Reset, modifier: NONE,
-        x: 74, y: 1, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 78, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 74, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 2, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 2, fg: Rgb(201, 209, 217), bg: Rgb(22, 51, 92), underline: Reset, modifier: NONE,
         x: 9, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
@@ -83,7 +81,7 @@ Buffer {
         x: 54, y: 9, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
         x: 55, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 56, y: 9, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 67, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 63, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 10, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 54, y: 10, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
@@ -93,7 +91,7 @@ Buffer {
         x: 54, y: 11, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
         x: 55, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 56, y: 11, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 68, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 64, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 12, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 12, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 54, y: 12, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,

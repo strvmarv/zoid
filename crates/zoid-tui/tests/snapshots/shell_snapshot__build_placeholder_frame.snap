@@ -1,10 +1,9 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
-assertion_line: 143
 expression: "draw(&s, &[], 100, 24)"
 ---
 " zoid  BUILD  ⎇ main                                                                                "
-"                                                        ▾ context · tokens  ^5                      "
+"                                                        ▾ context · tokens                          "
 "  ◐ BUILD mode                                           churn                                      "
 "  The autonomous loop arrives in P6.                     [x] evict cold                           0 "
 "  ⇧Tab / :chat → back to Chat                                                                       "
@@ -12,9 +11,9 @@ expression: "draw(&s, &[], 100, 24)"
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
-"                                                        ▸ files  ^F                                 "
+"                                                        ▸ files                                     "
 "                                                                                                    "
-"                                                        ▸ branch  ^B                                "
+"                                                        ▸ branch                                    "
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "

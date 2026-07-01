@@ -1,13 +1,12 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
-assertion_line: 268
 expression: "draw_zoom(Zoom::Summary, 140, 24)"
 ---
 Buffer {
     area: Rect { x: 0, y: 0, width: 140, height: 24 },
     content: [
         " zoid  CHAT  ⎇ main                                                                                                                         ",
-        "› show me parse                            ~ 1t · 1f                                            ▾ context · tokens  ^5                      ",
+        "› show me parse                            ~ 1t · 1f                                            ▾ context · tokens                          ",
         "                                                                                                 churn                                      ",
         "                                                                                                 [x] evict cold                           0 ",
         "                                                                                                                                            ",
@@ -15,9 +14,9 @@ Buffer {
         "                                                                                                                                            ",
         "                                                                                                                                            ",
         "                                                                                                                                            ",
-        "                                                                                                ▸ files  ^F                                 ",
+        "                                                                                                ▸ files                                     ",
         "                                                                                                                                            ",
-        "                                                                                                ▸ branch  ^B                                ",
+        "                                                                                                ▸ branch                                    ",
         "                                                                                                                                            ",
         "                                                                                                                                            ",
         "                                                                                                                                            ",
@@ -41,16 +40,15 @@ Buffer {
         x: 43, y: 1, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 52, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 96, y: 1, fg: Rgb(201, 209, 217), bg: Reset, underline: Reset, modifier: NONE,
-        x: 114, y: 1, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 118, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 114, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 97, y: 2, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 103, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 97, y: 3, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 139, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 96, y: 9, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 107, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 103, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 96, y: 11, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 108, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 104, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 20, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 1, y: 21, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
         x: 2, y: 21, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,

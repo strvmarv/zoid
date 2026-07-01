@@ -56,7 +56,6 @@ pub enum DrawerId {
 pub struct Drawer {
     pub id: DrawerId,
     pub title: String,
-    pub keybind: String,
     pub open: bool,
 }
 
@@ -113,9 +112,9 @@ impl ShellState {
     /// (economy ⑤ open as in the mockup; files/branch/palette collapsed).
     pub fn new() -> Self {
         let drawers = vec![
-            Drawer { id: DrawerId::Economy, title: "context · tokens".into(), keybind: "^5".into(), open: true },
-            Drawer { id: DrawerId::Files,   title: "files".into(),             keybind: "^F".into(), open: false },
-            Drawer { id: DrawerId::Branch,  title: "branch".into(),            keybind: "^B".into(), open: false },
+            Drawer { id: DrawerId::Economy, title: "context · tokens".into(), open: true },
+            Drawer { id: DrawerId::Files,   title: "files".into(),             open: false },
+            Drawer { id: DrawerId::Branch,  title: "branch".into(),            open: false },
         ];
         Self {
             mode: Mode::Chat,
@@ -223,7 +222,7 @@ mod tests {
         assert_eq!(s.overlay, Overlay::None);
         assert!(s.rail_visible);
         assert_eq!(s.branch, "main");
-        // Chat rail set, in order, with the canonical keybinds.
+        // Chat rail set, in order (no keybind labels — §2.1).
         let ids: Vec<DrawerId> = s.drawers.iter().map(|d| d.id).collect();
         assert_eq!(ids, vec![DrawerId::Economy, DrawerId::Files, DrawerId::Branch]);
         // Economy is the default-open drawer (mockup `drawer on`); rest collapsed.

@@ -147,7 +147,6 @@ fn render_rail(frame: &mut Frame, state: &ShellState, economy: &EconomyView, lay
         let chevron = if d.open { glyph::EXPANDED } else { glyph::COLLAPSED };
         let hdr = Line::from(vec![
             Span::styled(format!("{chevron} {}", d.title), Style::new().fg(if d.open { color::TXT } else { color::DIM })),
-            Span::styled(format!("  {}", d.keybind), Style::new().fg(color::DIM)),
         ]);
         frame.render_widget(Paragraph::new(hdr), *hr);
         if d.open {

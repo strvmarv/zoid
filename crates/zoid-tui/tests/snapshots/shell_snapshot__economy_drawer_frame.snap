@@ -1,10 +1,9 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
-assertion_line: 149
 expression: "draw_econ(&s, &seeded_economy(), &seeded(), 100, 24)"
 ---
 " zoid  CHAT  ⎇ main                                                                                 "
-"00:00 › what's causing the 500?                         ▾ context · tokens  ^5                      "
+"00:00 › what's causing the 500?                         ▾ context · tokens                          "
 "00:00 zoid an unwrapped lookup in the handler.             grep                          6k ██      "
 "                                                           schema.sql                    5k ░░ cold "
 "                                                         ● users.rs                      4k ██      "
@@ -12,9 +11,9 @@ expression: "draw_econ(&s, &seeded_economy(), &seeded(), 100, 24)"
 "                                                         churn ▂▅▂█▂                                "
 "                                                         [x] evict cold                   142k/200k "
 "                                                                                                    "
-"                                                        ▸ files  ^F                                 "
+"                                                        ▸ files                                     "
 "                                                                                                    "
-"                                                        ▸ branch  ^B                                "
+"                                                        ▸ branch                                    "
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
