@@ -32,7 +32,7 @@ pub mod glyph {
     pub const IDLE: char = '●';        // title-bar activity — waiting for the user (§2.2)
     pub const BULLET: char = '•';      // markdown unordered-list marker (§3.5)
     pub const QUOTE_BAR: char = '│';   // markdown blockquote bar (§3.5)
-    pub const NEW: char = '＋';        // palette: new session
+    pub const NEW: char = '+';         // palette: new session
     pub const RESUME: char = '↺';      // palette: resume session
     pub const RENAME: char = '✎';      // palette: rename session
 }
@@ -136,7 +136,7 @@ mod tests {
 
     #[test]
     fn session_group_tokens_present() {
-        assert_eq!(glyph::NEW, '＋');
+        assert_eq!(glyph::NEW, '+');
         assert_eq!(glyph::RESUME, '↺');
         assert_eq!(glyph::RENAME, '✎');
     }

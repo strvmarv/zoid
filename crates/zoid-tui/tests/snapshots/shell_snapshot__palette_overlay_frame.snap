@@ -5,7 +5,7 @@ expression: "draw(&s, &seeded(), 100, 24)"
 " zoid ● idle                                                                                        "
 "┌ › build ────────────────────────────────────────────┐ ▾ context · tokens                          "
 "│SESSION                                              │  churn                                      "
-"│ ＋ New session  fresh thread + clean context budget │  [x] evict cold                           0 " Hidden by multi-width symbols: [(3, " ")]
+"│ + New session  fresh thread + clean context budget  │  [x] evict cold                           0 "
 "│ ↺ Resume session…  this repo, most-recent first  ⏎  │                                             "
 "│ ✎ Rename session…  rename the current thread  :renam│                                             "
 "│MODE                                                 │                                             "
