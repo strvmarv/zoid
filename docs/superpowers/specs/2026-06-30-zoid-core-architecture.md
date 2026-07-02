@@ -215,14 +215,15 @@ v1 codifies only the configuration that **already exists in code** plus a preced
 > no in-TUI editor" note**: a full-screen **configuration screen** (palette →
 > *Open settings*, or `:config`) now edits config live and writes back to
 > user-global (or the repo override via `r`). Model caps come from a basic
-> **caps-only model registry** (`zoid-provider::model`). `base_url` override is
-> surfaced but not yet applied to provider construction (follow-up).
+> **caps-only model registry** (`zoid-provider::model`). The `base_url` override
+> is now applied to provider construction (`AnthropicProvider`/`OllamaProvider`
+> `with_base_url`; blank keeps the built-in default).
 
 - **Two namespaces, one principle.** *zoid-native* config lives in zoid's namespace; *adopted ecosystem entities* are read from their conventional Claude-style locations.
   - **zoid-native:** config is `~/.config/zoid/config.toml` (user global) and `./.zoid/config.toml` (project) — TOML. The **application database** is user-global at `~/.local/share/zoid/zoid.db` (XDG data dir, `$XDG_DATA_HOME` honored; **not** in the repo) — the event log + sessions today, usage/metrics and later DB-backed settings tomorrow (§5).
   - **adopted entities `[POST-V1 loaders]`:** `.claude/agents/*.md`, skills, `.claude/commands/*.md`, MCP server definitions (`.mcp.json`-style) — read from the ecosystem's locations, not redefined.
 - **Precedence (low → high):** compiled defaults → user global → project `./.zoid/config.toml` → local gitignored `./.zoid/config.local.toml` → `ZOID_*` environment → CLI flags.
-- **Current knobs (the whole v1 surface):** `OLLAMA_API_KEY` / `ANTHROPIC_API_KEY` (provider select **+ secret**), `ZOID_MODEL` (model), `ZOID_DB` (application DB path; default `~/.local/share/zoid/zoid.db`), `ZOID_REDUCED_MOTION` (motion). Provider `base_url` is currently hardcoded per provider.
+- **Current knobs (the whole v1 surface):** `OLLAMA_API_KEY` / `ANTHROPIC_API_KEY` (provider select **+ secret**), `ZOID_MODEL` (model), `ZOID_DB` (application DB path; default `~/.local/share/zoid/zoid.db`), `ZOID_REDUCED_MOTION` (motion). Provider `base_url` is an optional config override applied at provider construction (blank ⇒ the provider's built-in default endpoint).
 - **Secrets rule:** API keys are **never** read from committed config — environment, the gitignored `config.local.toml`, or (later) an OS keyring only.
 - **Surfacing:** settings appear **read-only** in the `^P` palette's *settings* group; editing is file-first — **no in-TUI settings editor in v1**.
 

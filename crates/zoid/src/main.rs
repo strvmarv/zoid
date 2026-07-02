@@ -264,10 +264,17 @@ fn select_provider(
             s.get(name)
         })
     };
+    // `base_url` override (config §7.1). Empty/unset keeps the provider's
+    // built-in default — `with_base_url` ignores blank input — so we can pass it
+    // unconditionally. The offline `FakeProvider` fallback has no endpoint, so
+    // the override only applies on the keyed branches.
+    let base_url = config.base_url.clone().unwrap_or_default();
     match config.provider.as_str() {
         "anthropic" => match key_for("ANTHROPIC_API_KEY") {
             Some(k) => (
-                Arc::new(zoid_provider::anthropic::AnthropicProvider::new(k)),
+                Arc::new(
+                    zoid_provider::anthropic::AnthropicProvider::new(k).with_base_url(base_url),
+                ),
                 "anthropic",
                 true,
             ),
@@ -275,7 +282,7 @@ fn select_provider(
         },
         _ => match key_for("OLLAMA_API_KEY") {
             Some(k) => (
-                Arc::new(zoid_provider::ollama::OllamaProvider::new(k)),
+                Arc::new(zoid_provider::ollama::OllamaProvider::new(k).with_base_url(base_url)),
                 "ollama",
                 true,
             ),

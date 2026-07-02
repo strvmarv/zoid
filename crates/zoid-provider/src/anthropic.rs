@@ -108,6 +108,18 @@ impl AnthropicProvider {
             client: reqwest::Client::new(),
         }
     }
+
+    /// Override the default base URL (config `base_url`). An empty/whitespace
+    /// value is ignored (keeps the built-in default), and a trailing slash is
+    /// trimmed so the `{base}/v1/messages` join never produces a double slash.
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        let b = base_url.into();
+        let b = b.trim().trim_end_matches('/');
+        if !b.is_empty() {
+            self.base_url = b.to_string();
+        }
+        self
+    }
 }
 
 #[async_trait]
@@ -165,6 +177,37 @@ mod tests {
     use super::*;
     use crate::Message;
     use serde_json::json;
+
+    #[test]
+    fn new_uses_default_base_url() {
+        assert_eq!(
+            AnthropicProvider::new("k".into()).base_url,
+            "https://api.anthropic.com"
+        );
+    }
+
+    #[test]
+    fn with_base_url_overrides_and_trims_trailing_slash() {
+        let p =
+            AnthropicProvider::new("k".into()).with_base_url("https://proxy.internal/anthropic/");
+        assert_eq!(p.base_url, "https://proxy.internal/anthropic");
+    }
+
+    #[test]
+    fn with_base_url_ignores_empty_or_blank() {
+        assert_eq!(
+            AnthropicProvider::new("k".into())
+                .with_base_url("")
+                .base_url,
+            "https://api.anthropic.com"
+        );
+        assert_eq!(
+            AnthropicProvider::new("k".into())
+                .with_base_url("   ")
+                .base_url,
+            "https://api.anthropic.com"
+        );
+    }
 
     #[test]
     fn builds_messages_body_with_stream_flag() {
