@@ -4,6 +4,7 @@
 //! (no dependency on `zoid-core`) so the provider/plugin surface stays decoupled.
 
 pub mod anthropic;
+pub mod model;
 pub mod ollama;
 
 use anyhow::Result;
@@ -172,30 +173,8 @@ pub fn default_model() -> &'static str {
     }
 }
 
-/// The per-model context-window ceiling in tokens, ignoring env overrides.
-/// Table-driven and pure so it's unit-testable without touching process env.
-fn model_ceiling(model: &str) -> u64 {
-    let m = model.to_ascii_lowercase();
-    // Known caps only. Anthropic Claude is 200k. GLM's window is larger than
-    // 200k but its exact value is deferred to the planned model registry
-    // (docs/superpowers/specs/2026-07-01-model-registry.md) — until then GLM
-    // takes the 256k conservative default, and ZOID_CONTEXT_CEILING supplies an
-    // exact value. Under-estimating a warning ceiling is the safe direction
-    // (warns early) vs over-estimating (blows past the real limit silently).
-    if m.contains("claude") {
-        200_000
-    } else {
-        256_000 // conservative default (also covers GLM until the registry lands)
-    }
-}
-
-/// The context-window ceiling (tokens) for `model` — the economy ⑤ denominator
-/// (session-drawer "ctx X / CEILING"). `ZOID_CONTEXT_CEILING` (a positive
-/// integer) overrides the table for models we don't know or when the user wants
-/// an exact value; otherwise `model_ceiling` supplies a per-family default.
-/// This replaces the previously hard-coded 200_000, which was wrong for any
-/// non-200k model. A truly wire-derived value (Ollama `/api/show`
-/// `context_length`) is a future refinement.
+/// The context-window ceiling (tokens) for `model` — the economy ⑤ denominator.
+/// `ZOID_CONTEXT_CEILING` (a positive integer) overrides the registry.
 pub fn context_ceiling(model: &str) -> u64 {
     if let Ok(v) = std::env::var("ZOID_CONTEXT_CEILING") {
         if let Ok(n) = v.trim().parse::<u64>() {
@@ -204,21 +183,12 @@ pub fn context_ceiling(model: &str) -> u64 {
             }
         }
     }
-    model_ceiling(model)
+    model::model_info(model).context_window
 }
 
 #[cfg(test)]
 mod selection_tests {
     use super::*;
-
-    #[test]
-    fn model_ceiling_maps_known_caps_else_conservative_default() {
-        assert_eq!(model_ceiling("claude-sonnet-4-6"), 200_000);
-        assert_eq!(model_ceiling("CLAUDE-opus"), 200_000); // case-insensitive
-        // GLM's exact window is a registry TODO; interim = the 256k default.
-        assert_eq!(model_ceiling("glm-5.2:cloud"), 256_000);
-        assert_eq!(model_ceiling("llama3.1:70b"), 256_000); // unknown → default
-    }
 
     #[test]
     fn default_model_constants_are_wired() {
