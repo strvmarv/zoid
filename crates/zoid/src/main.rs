@@ -1371,6 +1371,12 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 }
             }
         }
+        // Question overlay state transitions land with rendering in Task 11.
+        Action::QuestionMove(_)
+        | Action::QuestionSelect
+        | Action::QuestionChar(_)
+        | Action::QuestionBackspace
+        | Action::QuestionAbort => {}
         Action::Noop => {}
     }
     Ok(false)

@@ -45,6 +45,7 @@ pub enum Overlay {
     Verbs,
     Sessions,
     Config,
+    Question,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,6 +148,10 @@ pub struct ShellState {
     pub config_sections: Vec<crate::config_view::Section>,
     /// Name of the tool currently executing (in-flight indicator), or `None`.
     pub active_tool: Option<String>,
+    /// The active `ask_user` question overlay's state, or `None` when no
+    /// question is pending (Task 11 renders it; Task 9 populates it via
+    /// `AgentUpdate::AskUser`).
+    pub question: Option<crate::question::QuestionState>,
 }
 
 impl ShellState {
@@ -210,6 +215,7 @@ impl ShellState {
             config_edit: None,
             config_sections: Vec::new(),
             active_tool: None,
+            question: None,
         }
     }
 

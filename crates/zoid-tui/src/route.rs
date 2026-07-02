@@ -61,6 +61,11 @@ pub enum Action {
     ConfigCycle(i32),
     ConfigSaveToRepo,
     ConfigClearSecret,
+    QuestionMove(i32),
+    QuestionSelect,
+    QuestionChar(char),
+    QuestionBackspace,
+    QuestionAbort,
     Noop,
 }
 
@@ -92,6 +97,12 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
         Overlay::Verbs => return route_verbs_key(key),
         Overlay::Sessions => return route_sessions_key(key),
         Overlay::Config => return route_config_key(state, key),
+        Overlay::Question => {
+            return match &state.question {
+                Some(q) => crate::question::route_question_key(q, key),
+                None => Action::Noop,
+            };
+        }
         Overlay::None => {}
     }
 
