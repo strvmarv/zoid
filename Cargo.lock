@@ -2743,5 +2743,6 @@ dependencies = [
  "tui-textarea",
  "unicode-width 0.2.0",
  "zoid-core",
+ "zoid-provider",
  "zoid-syntax",
 ]
