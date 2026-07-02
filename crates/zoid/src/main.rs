@@ -228,18 +228,37 @@ fn fmt_duration(start_ms: i64, now_ms: i64) -> String {
     }
 }
 
-/// Human provider label mirroring `zoid_provider::default_provider`'s selection:
-/// a non-empty `OLLAMA_API_KEY` → Ollama, else a non-empty `ANTHROPIC_API_KEY` →
-/// Anthropic, else the offline `FakeProvider` (labelled "offline" rather than
-/// misreporting "anthropic" when no key is set).
-fn provider_label() -> String {
-    let set = |k: &str| std::env::var(k).map(|v| !v.is_empty()).unwrap_or(false);
-    if set("OLLAMA_API_KEY") {
-        "ollama".into()
-    } else if set("ANTHROPIC_API_KEY") {
-        "anthropic".into()
+/// Human provider label for the provider actually constructed at startup
+/// (see the `config.provider` + secret-store match in `main`) — `provider_name`
+/// is the configured provider id ("anthropic"/"ollama"), `has_key` is whether a
+/// credential was found for it. Falls back to "offline" when no key was found,
+/// since that's when `default_provider()`'s offline `FakeProvider` is actually
+/// used instead of the configured one.
+fn provider_label(provider_name: &str, has_key: bool) -> String {
+    if has_key {
+        provider_name.to_string()
     } else {
         "offline".into()
+    }
+}
+
+/// Build the economy `ContextPolicy` (spec §7.2) from the loaded config's
+/// `[economy]` table, resolving `compact_threshold_pct` (0–100) against the
+/// resolved token `ceiling` — 0 disables compaction (`None`), else the
+/// absolute token count `ceiling * pct / 100`.
+fn policy_from_config(
+    econ: &zoid_core::config::EconomyConfig,
+    ceiling: u64,
+) -> zoid_core::assembler::ContextPolicy {
+    let compact_threshold = if econ.compact_threshold_pct == 0 {
+        None
+    } else {
+        Some(ceiling.saturating_mul(econ.compact_threshold_pct as u64) / 100)
+    };
+    zoid_core::assembler::ContextPolicy {
+        token_ceiling: econ.token_ceiling,
+        auto_evict_cold: econ.auto_evict_cold,
+        compact_threshold,
     }
 }
 
@@ -299,6 +318,10 @@ struct App {
     provider: Arc<dyn Provider>,
     tools: Arc<Vec<Box<dyn Tool>>>,
     model: String,
+    /// Economy config (spec §7.2), carried from `load_config()` so `run`'s
+    /// per-frame `ContextPolicy` build (via `policy_from_config`) doesn't need
+    /// its own copy of `main`'s `config` local.
+    economy: zoid_core::config::EconomyConfig,
     textarea: TextArea<'static>,
     streaming: bool,
     shell: zoid_tui::ShellState,
@@ -376,7 +399,7 @@ async fn main() -> Result<()> {
     };
     let events = session.snapshot_session(session_id).await?;
 
-    // Task 8 consumes _secrets; Tasks 10/12 consume _prov.
+    // Task 10/12 consume _prov.
     let (config, _prov) = load_config();
     let model = if config.model.is_empty() {
         default_model().to_string()
@@ -384,9 +407,39 @@ async fn main() -> Result<()> {
         config.model.clone()
     };
     let secret_key = resolve_secret_key_path(|k| std::env::var(k).ok());
-    let _secrets = zoid_core::secret::EncryptedDb::open(&path.to_string_lossy(), &secret_key)
+    let secrets = zoid_core::secret::EncryptedDb::open(&path.to_string_lossy(), &secret_key)
         .map(std::sync::Arc::new)
         .ok(); // None → secrets unavailable this run (non-fatal)
+
+    // Provider + credential from config.provider + the secret store (env wins
+    // inside SecretStore::get). No key found → fall back to the offline
+    // FakeProvider so the binary always runs; `provider_label` below mirrors
+    // this exact selection so the drawer never disagrees with reality.
+    let key_for = |name: &str| -> Option<String> {
+        secrets.as_ref().and_then(|s| {
+            use zoid_core::secret::SecretStore;
+            s.get(name)
+        })
+    };
+    let (provider, provider_name, has_key): (Arc<dyn Provider>, &str, bool) =
+        match config.provider.as_str() {
+            "anthropic" => match key_for("ANTHROPIC_API_KEY") {
+                Some(k) => (
+                    Arc::new(zoid_provider::anthropic::AnthropicProvider::new(k)),
+                    "anthropic",
+                    true,
+                ),
+                None => (default_provider(), "anthropic", false),
+            },
+            _ => match key_for("OLLAMA_API_KEY") {
+                Some(k) => (
+                    Arc::new(zoid_provider::ollama::OllamaProvider::new(k)),
+                    "ollama",
+                    true,
+                ),
+                None => (default_provider(), "ollama", false),
+            },
+        };
 
     let mut shell = zoid_tui::ShellState::new();
     shell.branch = current_branch();
@@ -408,7 +461,7 @@ async fn main() -> Result<()> {
         .economy
         .context_ceiling
         .unwrap_or_else(|| zoid_provider::context_ceiling(&model));
-    shell.provider = provider_label();
+    shell.provider = provider_label(provider_name, has_key);
     shell.cwd = root.clone();
 
     let (ui_tx, mut ui_rx) = mpsc::channel::<AgentUpdate>(256);
@@ -417,9 +470,10 @@ async fn main() -> Result<()> {
         session,
         session_id,
         events,
-        provider: default_provider(),
+        provider,
         tools: Arc::new(zoid_tools::registry()),
         model,
+        economy: config.economy,
         textarea: make_input(TextArea::default()),
         streaming: false,
         shell,
@@ -504,9 +558,9 @@ async fn run<B: ratatui::backend::Backend>(
             let churn = zoid_core::economy::churn_timeline(&app.events);
             let ledger = zoid_core::economy::token_ledger(&app.events);
             // T10 (manual control: shell.policy / shell.economy_selected) is DEFERRED post-P3.
-            // Until then the policy is the default (auto-evict-cold ON, no ceiling) and there is
-            // no row selection — the drawer is read-only/observability-only.
-            let policy = zoid_core::assembler::ContextPolicy::default();
+            // Until then the policy is config-derived (economy.rs) and there is no row
+            // selection — the drawer is read-only/observability-only.
+            let policy = policy_from_config(&app.economy, app.shell.ctx_ceiling);
             let economy = zoid_tui::EconomyView::build(&window, &churn, &ledger, &policy, 0);
             let elapsed = app.started.elapsed().as_millis() as u64;
             let caret = zoid_tui::motion::caret_on(elapsed, 1000, app.shell.reduced_motion);
@@ -1007,6 +1061,26 @@ mod tests {
     }
 
     #[test]
+    fn policy_from_config_maps_pct_to_absolute() {
+        let econ = zoid_core::config::EconomyConfig {
+            context_ceiling: Some(200_000),
+            auto_evict_cold: false,
+            compact_threshold_pct: 80,
+            token_ceiling: Some(50_000),
+        };
+        let p = policy_from_config(&econ, 200_000);
+        assert!(!p.auto_evict_cold);
+        assert_eq!(p.token_ceiling, Some(50_000));
+        assert_eq!(p.compact_threshold, Some(160_000)); // 80% of 200k
+                                                          // 0% disables compaction
+        let econ0 = zoid_core::config::EconomyConfig {
+            compact_threshold_pct: 0,
+            ..econ
+        };
+        assert_eq!(policy_from_config(&econ0, 200_000).compact_threshold, None);
+    }
+
+    #[test]
     fn zoid_db_overrides_everything() {
         let p = resolve_db_path(env_of(&[("ZOID_DB", "/tmp/x.db"), ("HOME", "/home/u")]));
         assert_eq!(p, PathBuf::from("/tmp/x.db"));
@@ -1131,6 +1205,7 @@ mod tests {
             provider: Arc::new(zoid_provider::FakeProvider::new(Vec::new())),
             tools: Arc::new(Vec::new()),
             model: "test-model".into(),
+            economy: zoid_core::config::EconomyConfig::default(),
             textarea: make_input(TextArea::default()),
             streaming: false,
             shell: zoid_tui::ShellState::new(),
