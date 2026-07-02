@@ -42,6 +42,24 @@ fn draw_econ(state: &ShellState, econ: &EconomyView, msgs: &[ChatMsg], w: u16, h
     terminal.backend().to_string()
 }
 
+fn draw_config(
+    state: &ShellState,
+    sections: &[zoid_tui::config_view::Section],
+    w: u16,
+    h: u16,
+) -> String {
+    use zoid_tui::render::render_config;
+    let backend = TestBackend::new(w, h);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|f| {
+            let area = f.area();
+            render_config(f, state, sections, area)
+        })
+        .unwrap();
+    terminal.backend().to_string()
+}
+
 fn seeded() -> Vec<ChatMsg> {
     vec![
         ChatMsg::User {
@@ -666,4 +684,34 @@ fn delegated_card_frame() {
 #[test]
 fn delegated_card_wide_frame() {
     insta::assert_snapshot!(draw_delegated(140, 24));
+}
+
+/// Config overlay (Task 11): two-pane full-screen frame, left nav + right
+/// detail, provenance tags, and a `⚠` marker on the env-shadowed `model` row.
+#[test]
+fn config_overlay_frame() {
+    use zoid_core::config::{Config, Provenance, Source};
+    use zoid_core::secret::SecretStatus;
+    use zoid_tui::config_view::build_sections;
+
+    let mut s = ShellState::new();
+    s.overlay = Overlay::Config;
+    let cfg = Config::default();
+    let prov = Provenance {
+        // all Default except model, shadowed by env.
+        provider: Source::Default,
+        base_url: Source::Default,
+        model: Source::Env,
+        context_ceiling: Source::Default,
+        auto_evict_cold: Source::Default,
+        compact_threshold_pct: Source::Default,
+        token_ceiling: Source::Default,
+        reduced_motion: Source::Default,
+    };
+    let ks = [
+        ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
+        ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
+    ];
+    let sections = build_sections(&cfg, &prov, &ks);
+    insta::assert_snapshot!(draw_config(&s, &sections, 100, 24));
 }

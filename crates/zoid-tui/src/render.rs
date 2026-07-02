@@ -78,6 +78,9 @@ pub fn render_shell(
         if let Some(p) = layout.palette {
             render_sessions_overlay(frame, state, p);
         }
+    } else if state.overlay == Overlay::Config {
+        let full = frame.area();
+        render_config(frame, state, &state.config_sections, full);
     }
 }
 
@@ -530,6 +533,95 @@ fn render_sessions_overlay(frame: &mut Frame, state: &ShellState, area: Rect) {
         &rows,
         sel,
     );
+}
+
+/// The full-screen config overlay (Task 11): a bordered "zoid · settings"
+/// frame split into a left section nav and a right detail pane for the active
+/// section's rows — label, current value (or the in-progress edit buffer +
+/// caret), a right-aligned provenance tag, and a `⚠` marker when an env var
+/// shadows the field. Full-screen (spec: replaces the conversation, unlike the
+/// small centered palette popup), so callers pass `frame.area()`.
+pub fn render_config(
+    frame: &mut Frame,
+    state: &ShellState,
+    sections: &[crate::config_view::Section],
+    area: Rect,
+) {
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" zoid · settings ")
+        .border_style(Style::new().fg(color::CHAT_ACCENT));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if sections.is_empty() {
+        return;
+    }
+
+    // Left nav (fixed width), right detail (remainder).
+    let nav_w = 18u16.min(inner.width.saturating_sub(1));
+    let cols = ratatui::layout::Layout::horizontal([
+        ratatui::layout::Constraint::Length(nav_w),
+        ratatui::layout::Constraint::Min(1),
+    ])
+    .split(inner);
+
+    let nav: Vec<Line> = sections
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let active = i == state.config_section;
+            let marker = if active { glyph::COLLAPSED } else { ' ' };
+            Line::from(Span::styled(
+                format!("{marker} {}", s.title),
+                Style::new().fg(if active { color::CHAT_ACCENT } else { color::DIM }),
+            ))
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(nav), cols[0]);
+
+    let sec = &sections[state.config_section.min(sections.len().saturating_sub(1))];
+    let rows: Vec<Line> = sec
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let cur = i == state.config_field;
+            let val = if cur {
+                if let Some(buf) = &state.config_edit {
+                    format!("{buf}{}", glyph::CARET)
+                } else {
+                    r.value.clone()
+                }
+            } else {
+                r.value.clone()
+            };
+            let (tag_txt, tag_col) = match r.source {
+                zoid_core::config::Source::Default => ("[default]", color::DIM),
+                zoid_core::config::Source::UserGlobal => ("[user]", color::CHAT_ACCENT),
+                zoid_core::config::Source::Project => ("[repo]", color::BRANCH),
+                zoid_core::config::Source::Local => ("[local]", color::BRANCH),
+                zoid_core::config::Source::Env => ("[env]", color::WARN),
+            };
+            let mut spans = vec![
+                Span::styled(
+                    format!(" {:<16} ", r.label),
+                    Style::new().fg(if cur { color::CHAT_ACCENT } else { color::TXT }),
+                ),
+                Span::styled(format!("{val:<28}"), Style::new().fg(color::TXT)),
+                Span::styled(format!("{tag_txt} "), Style::new().fg(tag_col)),
+            ];
+            if r.env_shadowed {
+                spans.push(Span::styled(
+                    glyph::WARNING.to_string(),
+                    Style::new().fg(color::WARN),
+                ));
+            }
+            Line::from(spans)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(rows), cols[1]);
 }
 
 fn object_row(o: &crate::objects::Obj) -> String {

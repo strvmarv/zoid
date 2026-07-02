@@ -134,6 +134,16 @@ pub struct ShellState {
     pub ctx_ceiling: u64,
     /// Current working directory shown (truncated) in the session drawer.
     pub cwd: String,
+    /// Highlighted section in the config overlay's left nav (Task 11).
+    pub config_section: usize,
+    /// Highlighted field row in the config overlay's active section (Task 11).
+    pub config_field: usize,
+    /// In-progress edit buffer for the current config field; `None` when not editing.
+    pub config_edit: Option<String>,
+    /// The resolved config sections rendered by the config overlay, computed by
+    /// the bin once per frame from `Config` + `Provenance` + secret statuses
+    /// (Task 12 wires population; empty here is a valid default).
+    pub config_sections: Vec<crate::config_view::Section>,
 }
 
 impl ShellState {
@@ -187,6 +197,10 @@ impl ShellState {
             ctx_used: 0,
             ctx_ceiling: 0,
             cwd: String::new(),
+            config_section: 0,
+            config_field: 0,
+            config_edit: None,
+            config_sections: Vec::new(),
         }
     }
 
