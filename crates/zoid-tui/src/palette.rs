@@ -97,6 +97,14 @@ pub fn all_items(mode: Mode) -> Vec<PaletteItem> {
         PaletteItem {
             group: "settings".to_string(),
             icon: glyph::SETTINGS,
+            label: "Open settings",
+            hint: "provider · model · economy · secrets",
+            keybind: ":config",
+            command: Some(Command::OpenConfig),
+        },
+        PaletteItem {
+            group: "settings".to_string(),
+            icon: glyph::SETTINGS,
             label: "Quit zoid",
             hint: "exit",
             keybind: "^C",
@@ -208,6 +216,14 @@ mod tests {
         assert_eq!(nav(2, 1, 3), 2);
         assert_eq!(nav(1, 1, 3), 2);
         assert_eq!(nav(0, 1, 0), 0);
+    }
+
+    #[test]
+    fn settings_group_has_open_settings() {
+        let items = all_items(Mode::Chat);
+        assert!(selectable_matches(&items, "settings")
+            .iter()
+            .any(|&i| items[i].command == Some(Command::OpenConfig)));
     }
 
     #[test]

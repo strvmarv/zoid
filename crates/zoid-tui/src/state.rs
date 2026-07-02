@@ -44,6 +44,7 @@ pub enum Overlay {
     Objects,
     Verbs,
     Sessions,
+    Config,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

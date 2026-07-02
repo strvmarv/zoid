@@ -909,6 +909,10 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             start_delegation(app, task);
             Ok(false)
         }
+        Command::OpenConfig => {
+            app.shell.overlay = zoid_tui::Overlay::Config;
+            Ok(false)
+        }
         Command::Unknown(_) => Ok(false),
     }
 }

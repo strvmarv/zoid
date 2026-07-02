@@ -76,6 +76,8 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
         Overlay::Objects => return route_objects_key(key),
         Overlay::Verbs => return route_verbs_key(key),
         Overlay::Sessions => return route_sessions_key(key),
+        // Task 9 open path only; key routing lands in a later task.
+        Overlay::Config => {}
         Overlay::None => {}
     }
 

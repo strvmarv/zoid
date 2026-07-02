@@ -16,6 +16,8 @@ pub enum Command {
     ResumeSessionPicker,
     /// Dispatch `task` to a single subagent (spec §6). Empty string = usage hint.
     Delegate(String),
+    /// Open the full-screen config overlay (provider/model/economy/secrets).
+    OpenConfig,
     Unknown(String),
 }
 
@@ -38,6 +40,7 @@ pub fn parse_command(raw: &str) -> Command {
         rest if rest == "delegate" || rest.starts_with("delegate ") => {
             Command::Delegate(rest.strip_prefix("delegate").unwrap().trim().to_string())
         }
+        "config" => Command::OpenConfig,
         other => Command::Unknown(other.to_string()),
     }
 }
@@ -78,6 +81,11 @@ mod tests {
             Command::Delegate("add a test for parse()".into())
         );
         assert_eq!(parse_command(":delegate"), Command::Delegate(String::new()));
+    }
+
+    #[test]
+    fn parses_config_command() {
+        assert_eq!(parse_command(":config"), Command::OpenConfig);
     }
 
     #[test]
