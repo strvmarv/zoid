@@ -72,14 +72,17 @@ pub fn digests(msgs: &[ChatMsg]) -> Vec<TurnDigest> {
                 });
                 d.has_error |= *is_error;
             }
-            ChatMsg::Delegated { .. } => {
-                // A folded delegation belongs to the current turn; no extra counts.
-                let _ = cur.get_or_insert_with(|| TurnDigest {
+            ChatMsg::Delegated { ok, .. } => {
+                // A folded delegation belongs to the current turn; no extra tool/file
+                // counts, but a failed delegation marks the turn as errored so the
+                // Summary-altitude digest matches the ⚠ shown at Detail.
+                let d = cur.get_or_insert_with(|| TurnDigest {
                     headline: String::new(),
                     tools: 0,
                     files: 0,
                     has_error: false,
                 });
+                d.has_error |= !ok;
             }
         }
     }
@@ -124,6 +127,24 @@ mod tests {
         assert_eq!(d[1].headline, "thanks");
         assert_eq!(d[1].tools, 0);
         assert!(!d[1].has_error);
+    }
+
+    #[test]
+    fn failed_delegation_marks_turn_errored() {
+        // A failed delegation folds into the current turn and marks it errored so
+        // the Summary digest matches the ⚠ shown at Detail; a successful one does not.
+        let d = digests(&[
+            ChatMsg::User { text: "delegate this".into(), ts: 0 },
+            ChatMsg::Delegated { summary: "could not finish".into(), ok: false },
+        ]);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].has_error, "failed delegation → digest has_error");
+
+        let ok = digests(&[
+            ChatMsg::User { text: "delegate this".into(), ts: 0 },
+            ChatMsg::Delegated { summary: "done".into(), ok: true },
+        ]);
+        assert!(!ok[0].has_error, "successful delegation → no error");
     }
 
     #[test]
