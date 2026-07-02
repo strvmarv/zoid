@@ -322,6 +322,13 @@ struct App {
     /// per-frame `ContextPolicy` build (via `policy_from_config`) doesn't need
     /// its own copy of `main`'s `config` local.
     economy: zoid_core::config::EconomyConfig,
+    /// Full resolved config + provenance, kept live so the config screen can
+    /// display current values and so edits reload/re-render without a restart.
+    config: zoid_core::config::Config,
+    prov: zoid_core::config::Provenance,
+    /// Encrypted secret store (None → unavailable this run; secret edits no-op
+    /// with a stderr note). Shared with the provider credential lookup.
+    secrets: Option<std::sync::Arc<zoid_core::secret::EncryptedDb>>,
     textarea: TextArea<'static>,
     streaming: bool,
     shell: zoid_tui::ShellState,
@@ -399,8 +406,7 @@ async fn main() -> Result<()> {
     };
     let events = session.snapshot_session(session_id).await?;
 
-    // Task 10/12 consume _prov.
-    let (config, _prov) = load_config();
+    let (config, prov) = load_config();
     let model = if config.model.is_empty() {
         default_model().to_string()
     } else {
@@ -480,6 +486,9 @@ async fn main() -> Result<()> {
         tools: Arc::new(zoid_tools::registry()),
         model,
         economy: config.economy,
+        config: config.clone(),
+        prov,
+        secrets: secrets.clone(),
         textarea: make_input(TextArea::default()),
         streaming: false,
         shell,
@@ -657,6 +666,188 @@ async fn run<B: ratatui::backend::Backend>(
             }
         }
     }
+}
+
+/// How an edited/committed text value is coerced before it is written to TOML.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TomlTy {
+    /// Free string, always written verbatim (provider, model).
+    Str,
+    /// String where an empty buffer removes the key (base_url).
+    StrUnsetEmpty,
+    /// Unsigned int; empty / "(none)" / unparseable removes the key (ceilings).
+    U64Unset,
+    /// Percent clamped to 0..=100; unparseable is a no-op (compact at %).
+    U8Pct,
+}
+
+/// Where the field under the cursor persists. Secret rows go to the secret
+/// store keyed by their label (the env-var name); everything else is a dotted
+/// TOML key with a coercion rule. Bools are omitted here — they persist via
+/// `ConfigToggle`, never through the text-edit buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FieldTarget {
+    Secret,
+    Toml { key: &'static str, ty: TomlTy },
+}
+
+/// Map a config row (by its EXACT label from `config_view::build_sections`, and
+/// its kind for secrets) to its write target. Keyed on label, never on index,
+/// so reordering the view can't silently corrupt writes.
+fn field_target(label: &str, kind: &zoid_tui::config_view::FieldKind) -> Option<FieldTarget> {
+    use zoid_tui::config_view::FieldKind;
+    if matches!(kind, FieldKind::Secret) {
+        return Some(FieldTarget::Secret);
+    }
+    Some(match label {
+        "provider" => FieldTarget::Toml { key: "provider", ty: TomlTy::Str },
+        "model" => FieldTarget::Toml { key: "model", ty: TomlTy::Str },
+        "base_url" => FieldTarget::Toml { key: "base_url", ty: TomlTy::StrUnsetEmpty },
+        "context ceiling" => FieldTarget::Toml { key: "economy.context_ceiling", ty: TomlTy::U64Unset },
+        "compact at %" => FieldTarget::Toml { key: "economy.compact_threshold_pct", ty: TomlTy::U8Pct },
+        "token ceiling" => FieldTarget::Toml { key: "economy.token_ceiling", ty: TomlTy::U64Unset },
+        // Bools (auto-evict cold / reduced motion) persist via toggle, not edit.
+        _ => return None,
+    })
+}
+
+/// Build the `TomlValue` a committed edit buffer produces for a given coercion.
+/// Returns None when the edit should be a no-op (e.g. unparseable percent).
+fn value_from_buffer(ty: &TomlTy, buf: &str) -> Option<zoid_core::config::TomlValue> {
+    use zoid_core::config::TomlValue;
+    let t = buf.trim();
+    Some(match ty {
+        TomlTy::Str => TomlValue::Str(buf.to_string()),
+        TomlTy::StrUnsetEmpty => {
+            if t.is_empty() { TomlValue::Unset } else { TomlValue::Str(buf.to_string()) }
+        }
+        TomlTy::U64Unset => {
+            if t.is_empty() || t == "(none)" {
+                TomlValue::Unset
+            } else {
+                match t.parse::<u64>() {
+                    Ok(n) => TomlValue::Int(n as i64),
+                    Err(_) => TomlValue::Unset,
+                }
+            }
+        }
+        TomlTy::U8Pct => match t.parse::<i64>() {
+            Ok(n) => TomlValue::Int(n.clamp(0, 100)),
+            Err(_) => return None,
+        },
+    })
+}
+
+/// The current (key, value) a field would write from `app.config` — used by
+/// `ConfigSaveToRepo` to copy the live value to the project config. Returns None
+/// for secret rows (never written to TOML) and unknown labels.
+fn current_write(
+    app: &App,
+    label: &str,
+    kind: &zoid_tui::config_view::FieldKind,
+) -> Option<(&'static str, zoid_core::config::TomlValue)> {
+    use zoid_core::config::TomlValue;
+    use zoid_tui::config_view::FieldKind;
+    if matches!(kind, FieldKind::Secret) {
+        return None;
+    }
+    let econ = &app.config.economy;
+    let opt_u64 = |o: Option<u64>| o.map(|n| TomlValue::Int(n as i64)).unwrap_or(TomlValue::Unset);
+    Some(match label {
+        "provider" => ("provider", TomlValue::Str(app.config.provider.clone())),
+        "model" => ("model", TomlValue::Str(app.config.model.clone())),
+        "base_url" => (
+            "base_url",
+            app.config.base_url.clone().map(TomlValue::Str).unwrap_or(TomlValue::Unset),
+        ),
+        "context ceiling" => ("economy.context_ceiling", opt_u64(econ.context_ceiling)),
+        "auto-evict cold" => ("economy.auto_evict_cold", TomlValue::Bool(econ.auto_evict_cold)),
+        "compact at %" => (
+            "economy.compact_threshold_pct",
+            TomlValue::Int(econ.compact_threshold_pct as i64),
+        ),
+        "token ceiling" => ("economy.token_ceiling", opt_u64(econ.token_ceiling)),
+        "reduced motion" => ("reduced_motion", TomlValue::Bool(app.config.reduced_motion)),
+        _ => return None,
+    })
+}
+
+/// The (label, kind) of the row under the config cursor, if any.
+fn current_config_field(app: &App) -> Option<(&'static str, zoid_tui::config_view::FieldKind)> {
+    app.shell
+        .config_sections
+        .get(app.shell.config_section)
+        .and_then(|s| s.rows.get(app.shell.config_field))
+        .map(|r| (r.label, r.kind.clone()))
+}
+
+/// Rebuild the live config screen from the current config/provenance/secret
+/// statuses.
+fn refresh_config_sections(app: &mut App) {
+    use zoid_core::secret::{SecretStatus, SecretStore};
+    let status = |name: &str| {
+        app.secrets
+            .as_ref()
+            .map(|s| s.status(name))
+            .unwrap_or(SecretStatus::NotSet)
+    };
+    let key_status = [
+        ("OLLAMA_API_KEY", status("OLLAMA_API_KEY")),
+        ("ANTHROPIC_API_KEY", status("ANTHROPIC_API_KEY")),
+    ];
+    app.shell.config_sections =
+        zoid_tui::config_view::build_sections(&app.config, &app.prov, &key_status);
+}
+
+/// Set (or remove, for `Unset`) a dotted key in the TOML file at `path`,
+/// preserving all other content and creating parent dirs. Pure IO; separated
+/// from `apply_config_write` so it can be unit-tested against a temp dir.
+fn write_config_file(
+    path: &Path,
+    dotted_key: &str,
+    value: zoid_core::config::TomlValue,
+) -> Result<()> {
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let out = zoid_core::config::set_in_toml(&existing, dotted_key, value)?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(path, out)?;
+    Ok(())
+}
+
+/// Persist a single TOML key (to the repo `./.zoid/config.toml` when `to_repo`,
+/// else the user-global `~/.config/zoid/config.toml`), then reload + re-render +
+/// live-apply. Config-write failures are non-fatal: logged, never a crash.
+fn apply_config_write(
+    app: &mut App,
+    dotted_key: &str,
+    value: zoid_core::config::TomlValue,
+    to_repo: bool,
+) {
+    let path = if to_repo {
+        PathBuf::from("./.zoid/config.toml")
+    } else {
+        resolve_config_dir(|k| std::env::var(k).ok()).join("config.toml")
+    };
+    if let Err(e) = write_config_file(&path, dotted_key, value) {
+        eprintln!("zoid: config write failed ({}): {e}", path.display());
+        return;
+    }
+    // Reload the whole layered config so provenance + merged view stay honest.
+    let (c, p) = load_config();
+    app.config = c;
+    app.prov = p;
+    app.economy = app.config.economy;
+    refresh_config_sections(app);
+    // Live-apply the bits the running UI caches (economy auto-applies per frame
+    // via policy_from_config(&app.economy, ...)).
+    app.shell.reduced_motion = app.config.reduced_motion;
+    app.shell.ctx_ceiling = app
+        .config
+        .economy
+        .context_ceiling
+        .unwrap_or_else(|| zoid_provider::context_ceiling(&app.model));
 }
 
 async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result<bool> {
@@ -883,14 +1074,106 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             app.shell.config_edit = None;
         }
         Action::ConfigCommitEdit => {
-            // Task 12b: persist edited value before clearing.
+            if let (Some((label, kind)), Some(buffer)) =
+                (current_config_field(app), app.shell.config_edit.clone())
+            {
+                match field_target(label, &kind) {
+                    Some(FieldTarget::Secret) => {
+                        if let Some(s) = &app.secrets {
+                            use zoid_core::secret::SecretStore;
+                            if let Err(e) = s.set(label, &buffer) {
+                                eprintln!("zoid: secret set failed for {label}: {e}");
+                            }
+                        } else {
+                            eprintln!("zoid: secret store unavailable; cannot set {label}");
+                        }
+                        refresh_config_sections(app);
+                    }
+                    Some(FieldTarget::Toml { key, ty }) => {
+                        if let Some(value) = value_from_buffer(&ty, &buffer) {
+                            apply_config_write(app, key, value, false);
+                        }
+                    }
+                    // Bools / unknown labels: nothing to commit from a buffer.
+                    None => {}
+                }
+            }
             app.shell.config_edit = None;
         }
-        // Task 12b: toggle/cycle/save/clear-secret persistence lands with write-back.
-        Action::ConfigToggle => {}
-        Action::ConfigCycle(_) => {}
-        Action::ConfigSaveToRepo => {}
-        Action::ConfigClearSecret => {}
+        Action::ConfigToggle => {
+            use zoid_core::config::TomlValue;
+            if let Some((label, _kind)) = current_config_field(app) {
+                let write = match label {
+                    "auto-evict cold" => {
+                        Some(("economy.auto_evict_cold", !app.config.economy.auto_evict_cold))
+                    }
+                    "reduced motion" => Some(("reduced_motion", !app.config.reduced_motion)),
+                    _ => None,
+                };
+                if let Some((key, new)) = write {
+                    apply_config_write(app, key, TomlValue::Bool(new), false);
+                }
+            }
+        }
+        Action::ConfigCycle(_dir) => {
+            use zoid_core::config::TomlValue;
+            if let Some((label, _kind)) = current_config_field(app) {
+                match label {
+                    "provider" => {
+                        let list = zoid_provider::model::KNOWN_PROVIDERS;
+                        let cur = app.config.provider.as_str();
+                        let next = match list.iter().position(|p| *p == cur) {
+                            Some(i) => list[(i + 1) % list.len()],
+                            None => list[0],
+                        };
+                        apply_config_write(app, "provider", TomlValue::Str(next.to_string()), false);
+                    }
+                    "model" => {
+                        let list = zoid_provider::model::models_for(&app.config.provider);
+                        if !list.is_empty() {
+                            let cur = app.config.model.as_str();
+                            let next = match list.iter().position(|m| *m == cur) {
+                                Some(i) => list[(i + 1) % list.len()],
+                                None => list[0],
+                            };
+                            apply_config_write(app, "model", TomlValue::Str(next.to_string()), false);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Action::ConfigSaveToRepo => {
+            use zoid_tui::config_view::FieldKind;
+            if let Some((label, kind)) = current_config_field(app) {
+                match current_write(app, label, &kind) {
+                    Some((key, value)) => apply_config_write(app, key, value, true),
+                    None => {
+                        if matches!(kind, FieldKind::Secret) {
+                            eprintln!(
+                                "zoid: secrets are never written to config.toml; not saving {label} to repo"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Action::ConfigClearSecret => {
+            use zoid_tui::config_view::FieldKind;
+            if let Some((label, kind)) = current_config_field(app) {
+                if matches!(kind, FieldKind::Secret) {
+                    if let Some(s) = &app.secrets {
+                        use zoid_core::secret::SecretStore;
+                        if let Err(e) = s.clear(label) {
+                            eprintln!("zoid: secret clear failed for {label}: {e}");
+                        }
+                    } else {
+                        eprintln!("zoid: secret store unavailable; cannot clear {label}");
+                    }
+                    refresh_config_sections(app);
+                }
+            }
+        }
         Action::Noop => {}
     }
     Ok(false)
@@ -970,6 +1253,10 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
         }
         Command::OpenConfig => {
             app.shell.overlay = zoid_tui::Overlay::Config;
+            app.shell.config_section = 0;
+            app.shell.config_field = 0;
+            app.shell.config_edit = None;
+            refresh_config_sections(app);
             Ok(false)
         }
         Command::Unknown(_) => Ok(false),
@@ -1150,6 +1437,75 @@ mod tests {
     }
 
     #[test]
+    fn config_field_target_and_value_mapping() {
+        use zoid_core::config::TomlValue;
+        use zoid_tui::config_view::FieldKind;
+        // Secret rows always target the secret store, keyed by their label.
+        assert_eq!(
+            field_target("OLLAMA_API_KEY", &FieldKind::Secret),
+            Some(FieldTarget::Secret)
+        );
+        // provider / model → string TOML keys.
+        assert_eq!(
+            field_target("provider", &FieldKind::Cycle(&[])),
+            Some(FieldTarget::Toml { key: "provider", ty: TomlTy::Str })
+        );
+        assert_eq!(
+            field_target("model", &FieldKind::Text),
+            Some(FieldTarget::Toml { key: "model", ty: TomlTy::Str })
+        );
+        // context ceiling → economy.context_ceiling, uint-with-unset.
+        assert_eq!(
+            field_target("context ceiling", &FieldKind::Uint),
+            Some(FieldTarget::Toml { key: "economy.context_ceiling", ty: TomlTy::U64Unset })
+        );
+        // empty base_url removes the key.
+        assert_eq!(
+            field_target("base_url", &FieldKind::Text),
+            Some(FieldTarget::Toml { key: "base_url", ty: TomlTy::StrUnsetEmpty })
+        );
+        // Bools persist via toggle, not the edit buffer → no text target.
+        assert!(field_target("reduced motion", &FieldKind::Bool).is_none());
+        assert!(field_target("auto-evict cold", &FieldKind::Bool).is_none());
+
+        // Value coercion: empty / "(none)" ceiling ⇒ Unset; a number ⇒ Int.
+        assert_eq!(value_from_buffer(&TomlTy::U64Unset, ""), Some(TomlValue::Unset));
+        assert_eq!(value_from_buffer(&TomlTy::U64Unset, "(none)"), Some(TomlValue::Unset));
+        assert_eq!(value_from_buffer(&TomlTy::U64Unset, "512000"), Some(TomlValue::Int(512_000)));
+        assert_eq!(value_from_buffer(&TomlTy::U64Unset, "bogus"), Some(TomlValue::Unset));
+        // Empty base_url buffer ⇒ Unset (removes key); non-empty ⇒ Str.
+        assert_eq!(value_from_buffer(&TomlTy::StrUnsetEmpty, "  "), Some(TomlValue::Unset));
+        assert_eq!(
+            value_from_buffer(&TomlTy::StrUnsetEmpty, "http://x"),
+            Some(TomlValue::Str("http://x".into()))
+        );
+        // compact % clamps to 0..=100; unparseable is a no-op.
+        assert_eq!(value_from_buffer(&TomlTy::U8Pct, "150"), Some(TomlValue::Int(100)));
+        assert_eq!(value_from_buffer(&TomlTy::U8Pct, "80"), Some(TomlValue::Int(80)));
+        assert_eq!(value_from_buffer(&TomlTy::U8Pct, "xx"), None);
+    }
+
+    #[test]
+    fn write_config_file_round_trips_through_temp_dir() {
+        use zoid_core::config::{parse_toml, TomlValue};
+        let dir = tempfile::tempdir().unwrap();
+        // Parent dir does not exist yet — write_config_file must create it.
+        let path = dir.path().join("nested").join("config.toml");
+        write_config_file(&path, "reduced_motion", TomlValue::Bool(true)).unwrap();
+        let parsed = parse_toml(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(parsed.reduced_motion, Some(true));
+        // A nested-table write preserves the earlier top-level key.
+        write_config_file(&path, "economy.context_ceiling", TomlValue::Int(200_000)).unwrap();
+        let parsed = parse_toml(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(parsed.reduced_motion, Some(true));
+        assert_eq!(parsed.economy.context_ceiling, Some(200_000));
+        // Unset removes the key again.
+        write_config_file(&path, "economy.context_ceiling", TomlValue::Unset).unwrap();
+        let parsed = parse_toml(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(parsed.economy.context_ceiling, None);
+    }
+
+    #[test]
     fn zoid_db_overrides_everything() {
         let p = resolve_db_path(env_of(&[("ZOID_DB", "/tmp/x.db"), ("HOME", "/home/u")]));
         assert_eq!(p, PathBuf::from("/tmp/x.db"));
@@ -1275,6 +1631,21 @@ mod tests {
             tools: Arc::new(Vec::new()),
             model: "test-model".into(),
             economy: zoid_core::config::EconomyConfig::default(),
+            config: zoid_core::config::Config::default(),
+            prov: {
+                use zoid_core::config::Source;
+                zoid_core::config::Provenance {
+                    provider: Source::Default,
+                    base_url: Source::Default,
+                    model: Source::Default,
+                    context_ceiling: Source::Default,
+                    auto_evict_cold: Source::Default,
+                    compact_threshold_pct: Source::Default,
+                    token_ceiling: Source::Default,
+                    reduced_motion: Source::Default,
+                }
+            },
+            secrets: None,
             textarea: make_input(TextArea::default()),
             streaming: false,
             shell: zoid_tui::ShellState::new(),
