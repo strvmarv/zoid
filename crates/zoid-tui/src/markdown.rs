@@ -7,7 +7,7 @@
 
 use crate::syntax_view::highlight_lines;
 use crate::tokens::{color, glyph};
-use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use zoid_syntax::Language;
@@ -21,7 +21,7 @@ const MAX_DEPTH: usize = 8;
 /// alone). Empty input also yields an empty vec.
 pub fn render_markdown(source: &str) -> Vec<Line<'static>> {
     let mut b = Builder::default();
-    for ev in Parser::new(source) {
+    for ev in Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH) {
         b.event(ev);
         if b.bail {
             return plain_lines(source);
@@ -65,6 +65,7 @@ struct Builder {
     italic: u32,
     code: bool,
     link: bool,
+    strike: bool,
     heading: bool,
     quote: u32,
     list: Vec<Option<u64>>, // per level: next ordinal (Some) or bullet (None)
@@ -76,17 +77,17 @@ struct Builder {
 impl Builder {
     fn style(&self) -> Style {
         let mut fg = color::TXT;
-        if self.heading {
-            fg = color::CHAT_ACCENT;
-        }
         if self.quote > 0 {
             fg = color::DIM;
         }
-        if self.code {
-            fg = color::MD_CODE;
+        if self.heading {
+            fg = color::CHAT_ACCENT; // heading beats the blockquote tint
         }
         if self.link {
             fg = color::MD_LINK;
+        }
+        if self.code {
+            fg = color::MD_CODE; // inline code beats link colouring
         }
         let mut m = Modifier::empty();
         if self.bold > 0 || self.heading {
@@ -97,6 +98,9 @@ impl Builder {
         }
         if self.link {
             m |= Modifier::UNDERLINED;
+        }
+        if self.strike {
+            m |= Modifier::CROSSED_OUT;
         }
         Style::new().fg(fg).add_modifier(m)
     }
@@ -151,6 +155,7 @@ impl Builder {
             }
             Tag::Strong => self.bold += 1,
             Tag::Emphasis => self.italic += 1,
+            Tag::Strikethrough => self.strike = true,
             Tag::Link { .. } => self.link = true,
             Tag::BlockQuote(_) => {
                 self.flush();
@@ -200,6 +205,7 @@ impl Builder {
             }
             TagEnd::Strong => self.bold = self.bold.saturating_sub(1),
             TagEnd::Emphasis => self.italic = self.italic.saturating_sub(1),
+            TagEnd::Strikethrough => self.strike = false,
             TagEnd::Link => self.link = false,
             TagEnd::BlockQuote(_) => {
                 self.flush();
@@ -324,5 +330,29 @@ mod tests {
             && st.fg == Some(color::MD_LINK)
             && st.add_modifier.contains(ratatui::style::Modifier::UNDERLINED)),
             "link text must render in MD_LINK, underlined");
+    }
+
+    #[test]
+    fn inline_code_inside_link_is_md_code_not_md_link() {
+        let lines = render_markdown("[`c`](http://x)");
+        let s = spans(&lines);
+        assert!(s.iter().any(|(t, st)| t == "c" && st.fg == Some(color::MD_CODE)),
+            "inline code inside a link must render in MD_CODE, not MD_LINK");
+    }
+
+    #[test]
+    fn heading_inside_blockquote_is_accent_bold_not_dim() {
+        let lines = render_markdown("> # Title");
+        let (_, style) = spans(&lines).into_iter().find(|(t, _)| t.contains("Title")).unwrap();
+        assert_eq!(style.fg, Some(color::CHAT_ACCENT), "heading fg must beat blockquote dim");
+        assert!(style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn strikethrough_is_crossed_out() {
+        let lines = render_markdown("~~struck~~");
+        let s = spans(&lines);
+        assert!(s.iter().any(|(t, st)| t == "struck" && st.add_modifier.contains(Modifier::CROSSED_OUT)),
+            "strikethrough text must carry CROSSED_OUT");
     }
 }
