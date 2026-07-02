@@ -7,6 +7,9 @@ use anyhow::{Context, Result};
 use chacha20poly1305::aead::{Aead, KeyInit, OsRng};
 use chacha20poly1305::{AeadCore, XChaCha20Poly1305, XNonce};
 use rusqlite::{params, Connection};
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +58,9 @@ impl EncryptedDb {
             )
             .ok();
         let (ct, nonce) = row?;
+        if nonce.len() != 24 {
+            return None;
+        }
         let pt = self.cipher.decrypt(XNonce::from_slice(&nonce), ct.as_ref()).ok()?;
         String::from_utf8(pt).ok()
     }
@@ -110,6 +116,11 @@ fn load_or_create_key(path: &Path) -> Result<[u8; 32]> {
             k.copy_from_slice(&bytes);
             return Ok(k);
         }
+        eprintln!(
+            "zoid: secret key at {} is {} bytes (expected 32); regenerating — previously stored secrets will be unreadable",
+            path.display(),
+            bytes.len()
+        );
     }
     use rand::RngCore;
     let mut k = [0u8; 32];
@@ -117,7 +128,15 @@ fn load_or_create_key(path: &Path) -> Result<[u8; 32]> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).ok();
     }
-    std::fs::write(path, k).with_context(|| format!("writing key file {}", path.display()))?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    opts.mode(0o600);
+    let mut f = opts
+        .open(path)
+        .with_context(|| format!("writing key file {}", path.display()))?;
+    f.write_all(&k)
+        .with_context(|| format!("writing key file {}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -165,5 +184,17 @@ mod tests {
             .query_row("SELECT ciphertext FROM secrets WHERE name='K'", [], |r| r.get(0))
             .unwrap();
         assert!(!raw.windows(6).any(|w| w == b"secret"));
+    }
+
+    #[test]
+    fn corrupt_nonce_returns_none_not_panic() {
+        let (_d, db, key) = tmp();
+        let s = EncryptedDb::open(&db, &key).unwrap();
+        s.set("K", "v").unwrap();
+        // Corrupt the nonce column to a wrong length; must NOT panic.
+        s.conn
+            .execute("UPDATE secrets SET nonce = ?1 WHERE name = 'K'", params![vec![0u8; 5]])
+            .unwrap();
+        assert_eq!(s.get("K"), None);
     }
 }
