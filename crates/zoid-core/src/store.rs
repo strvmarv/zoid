@@ -30,6 +30,12 @@ impl EventStore {
                 root_path       TEXT NOT NULL,
                 created_ts      INTEGER NOT NULL,
                 last_touched_ts INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS secrets (
+                name        TEXT PRIMARY KEY,
+                ciphertext  BLOB NOT NULL,
+                nonce       BLOB NOT NULL,
+                created_ts  INTEGER NOT NULL
             );",
         )?;
         Ok(EventStore { conn })
@@ -372,5 +378,16 @@ mod tests {
         assert!(matches!(&events[0].kind, EventKind::UserMessage { text } if text == "old q"));
         assert_eq!(events[1].parent, Some(id1));
         assert!(matches!(&events[1].kind, EventKind::AssistantMessage { text } if text == "old a"));
+    }
+
+    #[test]
+    fn open_creates_secrets_table() {
+        let s = EventStore::open(":memory:").unwrap();
+        // If the table exists this query succeeds (0 rows); otherwise it errors.
+        let n: i64 = s
+            .conn
+            .query_row("SELECT count(*) FROM secrets", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
     }
 }
