@@ -31,7 +31,7 @@ fn draw_econ(state: &ShellState, econ: &EconomyView, msgs: &[ChatMsg], w: u16, h
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|f| {
-            render_shell(f, state, econ, msgs, &input, false, &normal_view());
+            render_shell(f, state, econ, msgs, &[], &input, false, &normal_view());
         })
         .unwrap();
     terminal.backend().to_string()
@@ -217,6 +217,7 @@ fn long_turn_wraps_instead_of_clipping() {
                 &s,
                 &empty_economy(),
                 &msgs,
+                &[],
                 &input,
                 false,
                 &normal_view(),
@@ -322,6 +323,7 @@ fn economy_drawer_selection_highlights_only_when_rail_focused() {
                     &s,
                     &seeded_economy(),
                     &seeded(),
+                    &[],
                     &input,
                     false,
                     &normal_view(),
@@ -440,6 +442,7 @@ fn draw_zoom(zoom: Zoom, w: u16, h: u16) -> String {
                 &s,
                 &empty_economy(),
                 &seeded_detail(),
+                &[],
                 &input,
                 false,
                 &view,
@@ -516,6 +519,7 @@ fn draw_overlay(overlay: Overlay, w: u16, h: u16) -> String {
                 &s,
                 &empty_economy(),
                 &seeded_objects(),
+                &[],
                 &input,
                 false,
                 &normal_view(),
@@ -565,6 +569,7 @@ fn growing_message_box_frame() {
                 &s,
                 &empty_economy(),
                 &seeded(),
+                &[],
                 &input,
                 false,
                 &normal_view(),
@@ -600,6 +605,7 @@ fn markdown_message_frame() {
                 &s,
                 &empty_economy(),
                 &seeded_markdown(),
+                &[],
                 &input,
                 false,
                 &normal_view(),
@@ -626,6 +632,7 @@ fn running_title_frame() {
                 &s,
                 &empty_economy(),
                 &seeded(),
+                &[],
                 &input,
                 true,
                 &normal_view(),
@@ -660,6 +667,7 @@ fn draw_delegated(w: u16, h: u16) -> String {
                 &s,
                 &empty_economy(),
                 &seeded_delegated(),
+                &[],
                 &input,
                 false,
                 &normal_view(),

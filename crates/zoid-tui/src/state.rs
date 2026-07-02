@@ -52,6 +52,7 @@ pub enum DrawerId {
     Repo,
     Session,
     Context,
+    Tasks,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,6 +167,11 @@ impl ShellState {
             Drawer {
                 id: DrawerId::Context,
                 title: "context · tokens".into(),
+                open: true,
+            },
+            Drawer {
+                id: DrawerId::Tasks,
+                title: "tasks".into(),
                 open: true,
             },
         ];
@@ -319,12 +325,26 @@ mod tests {
         let ids: Vec<DrawerId> = s.drawers.iter().map(|d| d.id).collect();
         assert_eq!(
             ids,
-            vec![DrawerId::Repo, DrawerId::Session, DrawerId::Context]
+            vec![
+                DrawerId::Repo,
+                DrawerId::Session,
+                DrawerId::Context,
+                DrawerId::Tasks
+            ]
         );
-        // All three expanded (mockup shows repo/session/context all `on`).
+        // All four expanded (mockup shows repo/session/context all `on`; tasks joins them).
         assert!(s.drawer(DrawerId::Repo).unwrap().open);
         assert!(s.drawer(DrawerId::Session).unwrap().open);
         assert!(s.drawer(DrawerId::Context).unwrap().open);
+        assert!(s.drawer(DrawerId::Tasks).unwrap().open);
+    }
+
+    #[test]
+    fn tasks_drawer_is_last_and_open() {
+        let s = ShellState::new();
+        let last = s.drawers.last().unwrap();
+        assert_eq!(last.id, DrawerId::Tasks);
+        assert!(last.open);
     }
 
     #[test]

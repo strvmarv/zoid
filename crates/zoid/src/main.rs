@@ -661,6 +661,10 @@ async fn run<B: ratatui::backend::Backend>(
             // post-P3 — the drawer is read-only/observability-only, so the view needs
             // only the window + churn (no policy or ledger).
             let economy = zoid_tui::EconomyView::build(&window, &churn, 0);
+            // Tasks drawer (Task 8): computed fresh from the event log every frame
+            // (not cached on ShellState) so it rehydrates on session resume, matching
+            // how `economy`/`msgs` are threaded above.
+            let task_items = zoid_core::tasks::tasks(&app.events);
             let elapsed = app.started.elapsed().as_millis() as u64;
             let caret = zoid_tui::motion::caret_on(elapsed, 1000, app.shell.reduced_motion);
             // Measure total lines (which re-runs conversation_view — tree-sitter in
@@ -711,6 +715,7 @@ async fn run<B: ratatui::backend::Backend>(
                 &app.shell,
                 &economy,
                 &msgs,
+                &task_items,
                 &app.textarea,
                 app.streaming,
                 &view,

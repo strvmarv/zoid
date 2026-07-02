@@ -21,11 +21,13 @@ use tui_textarea::TextArea;
 use unicode_width::UnicodeWidthStr;
 use zoid_core::projection::ChatMsg;
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_shell(
     frame: &mut Frame,
     state: &ShellState,
     economy: &EconomyView,
     msgs: &[ChatMsg],
+    tasks: &[zoid_core::tasks::TaskItem],
     input: &TextArea<'_>,
     streaming: bool,
     view: &ChatView,
@@ -83,7 +85,7 @@ pub fn render_shell(
     }
 
     if layout.rail.is_some() {
-        render_rail(frame, state, economy, &layout);
+        render_rail(frame, state, economy, tasks, &layout);
     }
 
     render_input(frame, input, layout.input);
@@ -202,7 +204,13 @@ fn render_status(
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn render_rail(frame: &mut Frame, state: &ShellState, economy: &EconomyView, layout: &ShellLayout) {
+fn render_rail(
+    frame: &mut Frame,
+    state: &ShellState,
+    economy: &EconomyView,
+    tasks: &[zoid_core::tasks::TaskItem],
+    layout: &ShellLayout,
+) {
     // Each drawer is a rounded bordered box (spec `docs/ux/chat-mode.html`
     // `.drawer{border:1px solid var(--line2);border-radius:8px}`): border +
     // title are the Chat accent blue when open, dim when closed. No "chat
@@ -242,6 +250,7 @@ fn render_rail(frame: &mut Frame, state: &ShellState, economy: &EconomyView, lay
                 }
                 DrawerId::Repo => render_repo_body(frame, state, body_rect),
                 DrawerId::Session => render_session_body(frame, state, body_rect), // Task 13
+                DrawerId::Tasks => render_tasks_body(frame, body_rect, tasks),
             }
         }
     }
@@ -431,6 +440,42 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
         ),
     ]));
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// The tasks drawer body (Task 8): one row per task, a token glyph+color for
+/// status (☐ pending/dim, ◐ active/warn, ✓ done/ok — spec §16, no literals),
+/// label truncated to fit, capped to the rows the box actually has. Empty →
+/// a dim "no tasks" line rather than a blank body.
+fn render_tasks_body(frame: &mut Frame, area: Rect, items: &[zoid_core::tasks::TaskItem]) {
+    use crate::text::truncate;
+    use zoid_core::tasks::TaskStatus;
+    if items.is_empty() {
+        let line = Line::from(Span::styled("no tasks", Style::new().fg(color::DIM)));
+        frame.render_widget(Paragraph::new(line), area);
+        return;
+    }
+    let rows: Vec<Line> = items
+        .iter()
+        .take(area.height as usize)
+        .map(|it| {
+            let (g, c) = match it.status {
+                TaskStatus::Pending => (glyph::PENDING, color::DIM),
+                TaskStatus::Active => (glyph::RUNNING, color::WARN),
+                TaskStatus::Done => (glyph::PASS, color::OK),
+            };
+            let text_color = if matches!(it.status, TaskStatus::Done) {
+                color::DIM
+            } else {
+                color::TXT
+            };
+            let label = truncate(&it.text, area.width.saturating_sub(2) as usize);
+            Line::from(vec![
+                Span::styled(format!("{g} "), Style::new().fg(c)),
+                Span::styled(label, Style::new().fg(text_color)),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(rows), area);
 }
 
 fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {

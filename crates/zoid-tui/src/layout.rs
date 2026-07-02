@@ -29,6 +29,8 @@ pub const SESSION_BODY_ROWS: u16 = 5;
 /// Context drawer body rows: items + the churn/cache sparkline line (the manual
 /// evict toggle and token-budget line were removed — observe-only drawer).
 pub const CONTEXT_BODY_ROWS: u16 = 5;
+/// Tasks drawer body rows: up to a handful of the model's current tasks.
+pub const TASKS_BODY_ROWS: u16 = 5;
 /// Message-box max content rows before it stops growing and scrolls internally
 /// (spec §2.2). Not a §16 token — a numeric layout constant, like RAIL_WIDTH.
 pub const MAX_INPUT_ROWS: u16 = 8;
@@ -45,6 +47,7 @@ pub fn drawer_body_rows(id: DrawerId) -> u16 {
         DrawerId::Repo => REPO_BODY_ROWS,
         DrawerId::Session => SESSION_BODY_ROWS,
         DrawerId::Context => CONTEXT_BODY_ROWS,
+        DrawerId::Tasks => TASKS_BODY_ROWS,
     }
 }
 
@@ -229,7 +232,12 @@ mod tests {
         let l = compute(area(100, 24), &s);
         let rail = l.rail.expect("rail visible at 100 cols");
         assert_eq!(rail.width, RAIL_WIDTH);
-        assert_eq!(l.drawer_headers.len(), 3); // repo/session/context
+        // At 100×24 with all four drawers open, the rail (19 inner rows) has
+        // room for repo(5) + session(7) + a clipped context(5) but no space
+        // left for tasks (avail hits 0) — so only 3 headers fit. This mirrors
+        // `drawer_body_rows`/space-clamping behavior already in place; it is
+        // not a regression, just the same clamp now visible one drawer sooner.
+        assert_eq!(l.drawer_headers.len(), 3); // repo/session/context (tasks has no room here)
                                                // headers stack downward
         assert!(l.drawer_headers[1].1.y > l.drawer_headers[0].1.y);
     }
