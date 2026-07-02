@@ -242,6 +242,48 @@ fn provider_label(provider_name: &str, has_key: bool) -> String {
     }
 }
 
+/// Provider + credential from `config.provider` + the secret store (env wins
+/// inside `SecretStore::get`). No key found → fall back to the offline
+/// `FakeProvider` so the binary always runs; `provider_label` mirrors this
+/// exact selection so the drawer never disagrees with reality. Shared by
+/// startup and by live config-save re-selection (`apply_config_write`) so
+/// both paths pick the provider identically.
+fn select_provider(
+    config: &zoid_core::config::Config,
+    secrets: &Option<std::sync::Arc<zoid_core::secret::EncryptedDb>>,
+) -> (Arc<dyn Provider>, &'static str, bool) {
+    let key_for = |name: &str| -> Option<String> {
+        // env wins, and must work even if the encrypted secret store failed to open
+        if let Ok(v) = std::env::var(name) {
+            if !v.is_empty() {
+                return Some(v);
+            }
+        }
+        secrets.as_ref().and_then(|s| {
+            use zoid_core::secret::SecretStore;
+            s.get(name)
+        })
+    };
+    match config.provider.as_str() {
+        "anthropic" => match key_for("ANTHROPIC_API_KEY") {
+            Some(k) => (
+                Arc::new(zoid_provider::anthropic::AnthropicProvider::new(k)),
+                "anthropic",
+                true,
+            ),
+            None => (default_provider(), "anthropic", false),
+        },
+        _ => match key_for("OLLAMA_API_KEY") {
+            Some(k) => (
+                Arc::new(zoid_provider::ollama::OllamaProvider::new(k)),
+                "ollama",
+                true,
+            ),
+            None => (default_provider(), "ollama", false),
+        },
+    }
+}
+
 /// Build the economy `ContextPolicy` (spec §7.2) from the loaded config's
 /// `[economy]` table, resolving `compact_threshold_pct` (0–100) against the
 /// resolved token `ceiling` — 0 disables compaction (`None`), else the
@@ -417,41 +459,7 @@ async fn main() -> Result<()> {
         .map(std::sync::Arc::new)
         .ok(); // None → secrets unavailable this run (non-fatal)
 
-    // Provider + credential from config.provider + the secret store (env wins
-    // inside SecretStore::get). No key found → fall back to the offline
-    // FakeProvider so the binary always runs; `provider_label` below mirrors
-    // this exact selection so the drawer never disagrees with reality.
-    let key_for = |name: &str| -> Option<String> {
-        // env wins, and must work even if the encrypted secret store failed to open
-        if let Ok(v) = std::env::var(name) {
-            if !v.is_empty() {
-                return Some(v);
-            }
-        }
-        secrets.as_ref().and_then(|s| {
-            use zoid_core::secret::SecretStore;
-            s.get(name)
-        })
-    };
-    let (provider, provider_name, has_key): (Arc<dyn Provider>, &str, bool) =
-        match config.provider.as_str() {
-            "anthropic" => match key_for("ANTHROPIC_API_KEY") {
-                Some(k) => (
-                    Arc::new(zoid_provider::anthropic::AnthropicProvider::new(k)),
-                    "anthropic",
-                    true,
-                ),
-                None => (default_provider(), "anthropic", false),
-            },
-            _ => match key_for("OLLAMA_API_KEY") {
-                Some(k) => (
-                    Arc::new(zoid_provider::ollama::OllamaProvider::new(k)),
-                    "ollama",
-                    true,
-                ),
-                None => (default_provider(), "ollama", false),
-            },
-        };
+    let (provider, provider_name, has_key) = select_provider(&config, &secrets);
 
     let mut shell = zoid_tui::ShellState::new();
     shell.branch = current_branch();
@@ -875,11 +883,27 @@ fn apply_config_write(
     // Live-apply the bits the running UI caches (economy auto-applies per frame
     // via policy_from_config(&app.economy, ...)).
     app.shell.reduced_motion = app.config.reduced_motion;
+    // Live-apply the model (mirrors the startup logic that derives model/shell.model
+    // from config) before recomputing ctx_ceiling, so the ceiling denominator and
+    // the drawer label both reflect the newly-saved model.
+    let new_model = if app.config.model.is_empty() {
+        default_model().to_string()
+    } else {
+        app.config.model.clone()
+    };
+    app.model = new_model.clone();
+    app.shell.model = new_model;
     app.shell.ctx_ceiling = app
         .config
         .economy
         .context_ceiling
         .unwrap_or_else(|| zoid_provider::context_ceiling(&app.model));
+    // Live-apply the provider (same selection as startup) so a provider change
+    // takes effect on the next turn, and keep the cached drawer label truthful
+    // (shell.provider is set once at startup, not recomputed per frame).
+    let (provider, provider_name, has_key) = select_provider(&app.config, &app.secrets);
+    app.provider = provider;
+    app.shell.provider = provider_label(provider_name, has_key);
 }
 
 async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result<bool> {

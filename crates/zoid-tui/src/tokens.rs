@@ -34,6 +34,7 @@ pub mod glyph {
     pub const NEW: char = '+'; // palette: new session
     pub const RESUME: char = '↺'; // palette: resume session
     pub const RENAME: char = '✎'; // palette: rename session
+    pub const MASK: char = '•'; // config screen: masked secret edit buffer
 }
 
 /// Colors (visual-language table, spec §16 / docs/ux/README.md).

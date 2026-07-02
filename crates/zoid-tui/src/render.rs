@@ -594,7 +594,12 @@ pub fn render_config(
             let cur = i == state.config_field;
             let val = if cur {
                 if let Some(buf) = &state.config_edit {
-                    format!("{buf}{}", glyph::CARET)
+                    let shown = if matches!(r.kind, crate::config_view::FieldKind::Secret) {
+                        glyph::MASK.to_string().repeat(buf.chars().count())
+                    } else {
+                        buf.clone()
+                    };
+                    format!("{shown}{}", glyph::CARET)
                 } else {
                     r.value.clone()
                 }
