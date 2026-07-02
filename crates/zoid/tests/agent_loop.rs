@@ -65,15 +65,11 @@ async fn agent_loop_runs_tool_then_finishes() {
         turns: Mutex::new(std::collections::VecDeque::from(vec![
             // Turn 1: the model calls write_file, then ends its turn.
             vec![
-                ProviderEvent::ToolCall(ToolCall {
-                    id: "".into(),
-                    name: "write_file".into(),
-                    args: json!({ "path": path_str, "content": "hi" }),
-                }),
+                zoid_testkit::tool_call("write_file", json!({ "path": path_str, "content": "hi" })),
                 ProviderEvent::Done,
             ],
             // Turn 2: with the tool result in context, the model replies in text.
-            vec![ProviderEvent::TextDelta("done".into()), ProviderEvent::Done],
+            vec![zoid_testkit::text("done"), ProviderEvent::Done],
         ])),
         requests: Mutex::new(Vec::new()),
     });
