@@ -148,3 +148,72 @@ mod merge_tests {
         assert!(parse_toml("bogus = 1").is_err());
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TomlValue { Str(String), Int(i64), Bool(bool), Unset }
+
+/// Set (or, for `Unset`, remove) a dotted key in a TOML document string,
+/// preserving all other content. Only the top-level table and a single nested
+/// table (e.g. `economy.*`) are supported — matching Config's shape.
+pub fn set_in_toml(existing: &str, dotted_key: &str, value: TomlValue) -> anyhow::Result<String> {
+    let mut doc: toml::Table = if existing.trim().is_empty() {
+        toml::Table::new()
+    } else {
+        existing.parse()?
+    };
+    let to_val = |v: &TomlValue| -> Option<toml::Value> {
+        match v {
+            TomlValue::Str(s) => Some(toml::Value::String(s.clone())),
+            TomlValue::Int(i) => Some(toml::Value::Integer(*i)),
+            TomlValue::Bool(b) => Some(toml::Value::Boolean(*b)),
+            TomlValue::Unset => None,
+        }
+    };
+    match dotted_key.split_once('.') {
+        None => {
+            match to_val(&value) {
+                Some(v) => { doc.insert(dotted_key.to_string(), v); }
+                None => { doc.remove(dotted_key); }
+            }
+        }
+        Some((table, key)) => {
+            let entry = doc.entry(table.to_string())
+                .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+            if let toml::Value::Table(t) = entry {
+                match to_val(&value) {
+                    Some(v) => { t.insert(key.to_string(), v); }
+                    None => { t.remove(key); }
+                }
+            }
+        }
+    }
+    Ok(toml::to_string_pretty(&doc)?)
+}
+
+#[cfg(test)]
+mod write_tests {
+    use super::*;
+
+    #[test]
+    fn sets_top_level_and_nested_preserving_others() {
+        let src = "model = \"old\"\n[economy]\nauto_evict_cold = true\n";
+        let out = set_in_toml(src, "model", TomlValue::Str("new".into())).unwrap();
+        let out = set_in_toml(&out, "economy.context_ceiling", TomlValue::Int(512000)).unwrap();
+        let p = parse_toml(&out).unwrap();
+        assert_eq!(p.model.as_deref(), Some("new"));
+        assert_eq!(p.economy.context_ceiling, Some(512000));
+        assert_eq!(p.economy.auto_evict_cold, Some(true)); // preserved
+    }
+
+    #[test]
+    fn unset_removes_key() {
+        let out = set_in_toml("model = \"x\"\n", "model", TomlValue::Unset).unwrap();
+        assert!(parse_toml(&out).unwrap().model.is_none());
+    }
+
+    #[test]
+    fn writes_into_empty_document() {
+        let out = set_in_toml("", "reduced_motion", TomlValue::Bool(true)).unwrap();
+        assert_eq!(parse_toml(&out).unwrap().reduced_motion, Some(true));
+    }
+}
