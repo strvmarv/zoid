@@ -43,6 +43,9 @@ pub fn estimate_tokens(s: &str) -> u64 {
 pub struct ChurnPoint {
     pub turn: usize,
     pub tokens: u64,
+    /// Cache-read tokens spent this turn (the cache-hit subset of input). Powers
+    /// the context drawer's per-turn cache sparkline, mirroring `tokens`/churn.
+    pub cached: u64,
     /// Cross-turn re-sent cost. NOTE (P3): populated but not yet rendered — the
     /// EconomyView sparkline maps only `tokens`; a later churn view surfaces this.
     /// It currently sizes the re-sent file's *path string* (churn sees `ToolCall`
@@ -89,6 +92,7 @@ pub fn churn_timeline(events: &[Event]) -> ChurnTimeline {
                 cur = Some(ChurnPoint {
                     turn: points.len(),
                     tokens: 0,
+                    cached: 0,
                     resent_tokens: 0,
                 });
             }
@@ -106,6 +110,7 @@ pub fn churn_timeline(events: &[Event]) -> ChurnTimeline {
         }
         if let (Some(p), Some(t)) = (cur.as_mut(), e.tokens) {
             p.tokens += t.input + t.output;
+            p.cached += t.cached;
         }
     }
     // Close the last turn.
@@ -224,6 +229,21 @@ mod tests {
         assert_eq!(t.points[1].tokens, 170); // 140+30
                                              // "src/a.rs" is 8 chars → ceil(8/4) = 2 tokens re-sent
         assert_eq!(t.points[1].resent_tokens, 2);
+    }
+
+    #[test]
+    fn churn_accumulates_cached_per_turn() {
+        let evs = vec![
+            umsg("turn 1"),
+            usage(100, 20, 30), // 30 cached this turn
+            umsg("turn 2"),
+            usage(140, 30, 0), // no cache reads this turn
+            usage(10, 5, 7),   // +7 cached, same turn
+        ];
+        let t = churn_timeline(&evs);
+        assert_eq!(t.points.len(), 2);
+        assert_eq!(t.points[0].cached, 30);
+        assert_eq!(t.points[1].cached, 7);
     }
 
     fn toolcall_nopath(id: &str) -> Event {

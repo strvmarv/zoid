@@ -28,6 +28,8 @@ serde_json = { workspace = true }
 # read the system timezone. `clock` pulls the platform tz lookup; nothing else.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 git2 = { workspace = true }
+# OSC 52 clipboard copy of code blocks (SSH-safe; no platform clipboard dep).
+base64 = "0.22"
 
 [dev-dependencies]
 tempfile = { workspace = true }

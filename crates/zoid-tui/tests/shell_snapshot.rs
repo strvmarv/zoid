@@ -129,26 +129,31 @@ fn seeded_economy() -> EconomyView {
             zoid_core::economy::ChurnPoint {
                 turn: 0,
                 tokens: 10,
+                cached: 0,
                 resent_tokens: 0,
             },
             zoid_core::economy::ChurnPoint {
                 turn: 1,
                 tokens: 30,
+                cached: 8,
                 resent_tokens: 0,
             },
             zoid_core::economy::ChurnPoint {
                 turn: 2,
                 tokens: 12,
+                cached: 20,
                 resent_tokens: 0,
             },
             zoid_core::economy::ChurnPoint {
                 turn: 3,
                 tokens: 48,
+                cached: 40,
                 resent_tokens: 0,
             },
             zoid_core::economy::ChurnPoint {
                 turn: 4,
                 tokens: 12,
+                cached: 12,
                 resent_tokens: 0,
             },
         ],

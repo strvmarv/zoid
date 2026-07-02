@@ -1,3 +1,4 @@
+use crate::markdown::{render_body, BodyKind};
 use crate::state::Zoom;
 use crate::syntax_view::highlight_lines;
 use crate::text::truncate;
@@ -10,19 +11,59 @@ use ratatui::{
     Frame,
 };
 use tui_textarea::TextArea;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use zoid_core::economy::tool_path;
 use zoid_core::projection::ChatMsg;
 use zoid_core::zoom::{digests, TurnDigest};
 use zoid_syntax::{fold_regions, FoldRegion, Language};
 
+/// A clickable code block: the transcript line range it occupies (inclusive) and
+/// its raw source, so the bin can copy the specific block the user clicks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeHit {
+    pub header_line: usize,
+    pub end_line: usize,
+    pub source: String,
+}
+
 /// Build the conversation lines (user/assistant turns + inline tool cards).
-/// Shared by `render_chat` and the modal `render_shell`.
-pub fn conversation_lines<'a>(
-    msgs: &'a [ChatMsg],
+/// Shared by `render_chat` and the modal `render_shell`. `width` is the text
+/// column width used to word-wrap prose with a hanging indent (spec §3.5); pass
+/// the conversation rect's inner width. Thin wrapper over `build_conversation`.
+pub fn conversation_lines(
+    msgs: &[ChatMsg],
     streaming: bool,
     caret_on: bool,
     tz_offset_secs: i32,
-) -> Vec<Line<'a>> {
+    width: usize,
+) -> Vec<Line<'static>> {
+    let mut hits = Vec::new();
+    build_conversation(msgs, streaming, caret_on, tz_offset_secs, width, &mut hits)
+}
+
+/// The clickable code-block map (line ranges + source) for the same inputs
+/// `conversation_lines` would render at Normal altitude. Called on demand (on a
+/// click), so the extra build cost is paid then, not every frame.
+pub fn code_hits(
+    msgs: &[ChatMsg],
+    streaming: bool,
+    caret_on: bool,
+    tz_offset_secs: i32,
+    width: usize,
+) -> Vec<CodeHit> {
+    let mut hits = Vec::new();
+    build_conversation(msgs, streaming, caret_on, tz_offset_secs, width, &mut hits);
+    hits
+}
+
+fn build_conversation(
+    msgs: &[ChatMsg],
+    streaming: bool,
+    caret_on: bool,
+    tz_offset_secs: i32,
+    width: usize,
+    hits: &mut Vec<CodeHit>,
+) -> Vec<Line<'static>> {
     let last = msgs.len().saturating_sub(1);
     if msgs.is_empty() {
         return vec![Line::styled(
@@ -37,10 +78,16 @@ pub fn conversation_lines<'a>(
             Style::new().fg(color::DIM),
         )
     };
-    let mut lines: Vec<Line> = Vec::new();
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    // (header_line, end_line, raw source) of every top-level code block, in
+    // document order. Source is carried from the same render pass that produces
+    // the range (via the `CodeHead` `BodyLine`), so a block and its clipboard
+    // text can never desync — including when a message bails to plain text.
+    let mut code_ranges: Vec<(usize, usize, String)> = Vec::new();
     for (i, m) in msgs.iter().enumerate() {
         match m {
             ChatMsg::User { text, ts } => {
+                blank_between_turns(&mut lines);
                 let prefix = vec![
                     stamp(*ts),
                     Span::styled(
@@ -48,7 +95,13 @@ pub fn conversation_lines<'a>(
                         Style::new().fg(color::CHAT_ACCENT),
                     ),
                 ];
-                push_message(&mut lines, prefix, crate::markdown::render_markdown(text));
+                push_message(
+                    &mut lines,
+                    &mut code_ranges,
+                    prefix,
+                    render_body(text),
+                    width,
+                );
             }
             ChatMsg::Assistant {
                 text,
@@ -60,11 +113,18 @@ pub fn conversation_lines<'a>(
                     shown.push(glyph::CARET);
                 }
                 if !shown.is_empty() || tool_calls.is_empty() {
+                    blank_between_turns(&mut lines);
                     let prefix = vec![
                         stamp(*ts),
                         Span::styled("zoid ".to_string(), Style::new().fg(color::DIM)),
                     ];
-                    push_message(&mut lines, prefix, crate::markdown::render_markdown(&shown));
+                    push_message(
+                        &mut lines,
+                        &mut code_ranges,
+                        prefix,
+                        render_body(&shown),
+                        width,
+                    );
                 }
                 for tc in tool_calls {
                     lines.push(Line::from(vec![
@@ -125,29 +185,229 @@ pub fn conversation_lines<'a>(
             }
         }
     }
+    // Every top-level code block advertises the click-to-copy affordance on its
+    // header row (spec §3.5). Clicking anywhere in the block copies its raw
+    // source (the bin resolves the click via `code_hits`).
+    for &(head, _end, _) in &code_ranges {
+        add_copy_hint(&mut lines, head);
+    }
+    // The click-to-copy map falls straight out of the render pass: each range
+    // already carries its own source, so there is no second parse to keep aligned.
+    for (header_line, end_line, source) in code_ranges {
+        hits.push(CodeHit {
+            header_line,
+            end_line,
+            source,
+        });
+    }
     lines
 }
 
+/// Attach the `⧉ copy` affordance to the code-block header at `idx`, stealing
+/// room from its trailing background pad so it sits at the panel's right edge
+/// without widening the row; if there's no stealable pad (a very narrow column)
+/// it is appended and clips at the rail edge (the transcript renders with wrap
+/// off) — an acceptable edge.
+fn add_copy_hint(lines: &mut [Line<'static>], idx: usize) {
+    let Some(line) = lines.get_mut(idx) else {
+        return;
+    };
+    let hint = format!(" {} copy ", glyph::COPY);
+    let hint_w = hint.width();
+    if let Some(last) = line.spans.last_mut() {
+        if last.style.bg == Some(color::CODE_BG)
+            && last.content.chars().all(|c| c == ' ')
+            && last.content.width() >= hint_w
+        {
+            let keep = last.content.width() - hint_w;
+            *last = Span::styled(" ".repeat(keep), Style::new().bg(color::CODE_BG));
+        }
+    }
+    line.spans.push(Span::styled(
+        hint,
+        Style::new().fg(color::CHAT_ACCENT).bg(color::CODE_BG),
+    ));
+}
+
+/// Push a blank spacer line before a new turn, unless the transcript is empty
+/// (no leading blank) — the vertical rhythm that keeps turns from feeling
+/// squeezed (spec §3.5).
+fn blank_between_turns(out: &mut Vec<Line<'static>>) {
+    if !out.is_empty() {
+        out.push(Line::from(""));
+    }
+}
+
 /// Push a message (user/assistant) into `out`: the `prefix` (stamp + role) leads
-/// the first body line; continuation lines are indented under the text column so
-/// wrapped markdown/lists stay aligned. `body` comes from the markdown renderer.
-fn push_message<'a>(out: &mut Vec<Line<'a>>, prefix: Vec<Span<'static>>, body: Vec<Line<'static>>) {
-    use unicode_width::UnicodeWidthStr;
+/// the first body line; continuation rows are indented under the text column so
+/// wrapped prose stays aligned (the hanging indent). Prose word-wraps to
+/// `width`; code lines are emitted verbatim (their leading whitespace is
+/// significant). Each top-level code block's `(header_line, end_line)` range is
+/// appended to `code_ranges` (a `CodeHead` opens a range; contiguous `Code` lines
+/// extend it; any prose closes it), powering the click-to-copy map.
+fn push_message(
+    out: &mut Vec<Line<'static>>,
+    code_ranges: &mut Vec<(usize, usize, String)>,
+    prefix: Vec<Span<'static>>,
+    body: Vec<crate::markdown::BodyLine>,
+    width: usize,
+) {
     if body.is_empty() {
         out.push(Line::from(prefix));
         return;
     }
     let indent_w: usize = prefix.iter().map(|s| s.content.width()).sum();
     let indent = " ".repeat(indent_w);
-    for (i, line) in body.into_iter().enumerate() {
-        let mut spans: Vec<Span<'static>> = if i == 0 {
+    let content_w = width.saturating_sub(indent_w).max(1);
+    let mut open: Option<usize> = None; // index into code_ranges of the open block
+    for (i, bl) in body.into_iter().enumerate() {
+        let lead: Vec<Span<'static>> = if i == 0 {
             prefix.clone()
         } else {
             vec![Span::styled(indent.clone(), Style::new())]
         };
-        spans.extend(line.spans);
-        out.push(Line::from(spans));
+        let crate::markdown::BodyLine { line, kind, source } = bl;
+        match kind {
+            BodyKind::Prose => {
+                open = None; // a prose line closes any open code block
+                let rows = wrap_content(&line.spans, content_w);
+                for (r, row) in rows.into_iter().enumerate() {
+                    let mut spans: Vec<Span<'static>> = if r == 0 {
+                        lead.clone()
+                    } else {
+                        vec![Span::styled(indent.clone(), Style::new())]
+                    };
+                    spans.extend(row);
+                    out.push(Line::from(spans));
+                }
+            }
+            BodyKind::CodeHead => {
+                let ln = out.len();
+                // The head carries this block's raw source (see `markdown::BodyLine`).
+                code_ranges.push((ln, ln, source.unwrap_or_default()));
+                open = Some(code_ranges.len() - 1);
+                out.push(code_line(lead, line.spans, content_w));
+            }
+            BodyKind::Code => {
+                let ln = out.len();
+                out.push(code_line(lead, line.spans, content_w));
+                if let Some(o) = open {
+                    code_ranges[o].1 = ln;
+                }
+            }
+        }
     }
+}
+
+/// Assemble one code-panel row: `lead` (prefix/indent) + the code spans, then
+/// pad the code portion to `content_w` with the panel background so the block
+/// reads as a rectangle. Padding is capped at `content_w` — a line already at or
+/// over the width gets no pad (it wraps via the widget) rather than overflowing.
+fn code_line(
+    lead: Vec<Span<'static>>,
+    code: Vec<Span<'static>>,
+    content_w: usize,
+) -> Line<'static> {
+    let w: usize = code.iter().map(|s| s.content.width()).sum();
+    let mut spans = lead;
+    spans.extend(code);
+    if content_w > w {
+        spans.push(Span::styled(
+            " ".repeat(content_w - w),
+            Style::new().bg(color::CODE_BG),
+        ));
+    }
+    Line::from(spans)
+}
+
+/// Break styled `content` into rows no wider than `width`, preserving each
+/// span's style, breaking on spaces (dropping the break's whitespace), and
+/// hard-splitting any single token longer than `width`. Returns at least one
+/// (possibly empty) row.
+fn wrap_content(content: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
+    let width = width.max(1);
+    // Tokenize into (text, style, is_space) runs, split at whitespace boundaries.
+    let mut toks: Vec<(String, Style, bool)> = Vec::new();
+    for s in content {
+        let mut chars = s.content.chars().peekable();
+        while let Some(&c) = chars.peek() {
+            let is_space = c == ' ';
+            let mut t = String::new();
+            while let Some(&c2) = chars.peek() {
+                if (c2 == ' ') != is_space {
+                    break;
+                }
+                t.push(c2);
+                chars.next();
+            }
+            toks.push((t, s.style, is_space));
+        }
+    }
+
+    let mut rows: Vec<Vec<Span<'static>>> = Vec::new();
+    let mut cur: Vec<Span<'static>> = Vec::new();
+    let mut cur_w = 0usize;
+    for (text, style, is_space) in toks {
+        let w = text.width();
+        if is_space {
+            if cur.is_empty() {
+                continue; // no leading spaces at the start of a wrapped row
+            }
+            if cur_w + w > width {
+                rows.push(std::mem::take(&mut cur));
+                cur_w = 0;
+            } else {
+                cur.push(Span::styled(text, style));
+                cur_w += w;
+            }
+            continue;
+        }
+        if cur_w + w > width && !cur.is_empty() {
+            // trim any trailing spaces before wrapping the row (cur_w resets to 0
+            // right after, so no need to track its decrement here)
+            while cur
+                .last()
+                .map(|s| s.content.chars().all(|c| c == ' '))
+                .unwrap_or(false)
+            {
+                cur.pop();
+            }
+            rows.push(std::mem::take(&mut cur));
+            cur_w = 0;
+        }
+        if w > width {
+            // Token longer than the column — hard-split by DISPLAY WIDTH, not char
+            // count, so wide (CJK/emoji) glyphs never overflow the column and force
+            // a widget re-wrap. Accumulate chars until the next one would exceed the
+            // remaining width, then flush the row (always at least one char/row).
+            let mut piece = String::new();
+            let mut piece_w = 0usize;
+            for ch in text.chars() {
+                let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+                if cur_w + piece_w + cw > width && cur_w + piece_w > 0 {
+                    if !piece.is_empty() {
+                        cur.push(Span::styled(std::mem::take(&mut piece), style));
+                    }
+                    piece_w = 0;
+                    rows.push(std::mem::take(&mut cur));
+                    cur_w = 0;
+                }
+                piece.push(ch);
+                piece_w += cw;
+            }
+            if !piece.is_empty() {
+                cur.push(Span::styled(piece, style));
+                cur_w += piece_w;
+            }
+        } else {
+            cur.push(Span::styled(text, style));
+            cur_w += w;
+        }
+    }
+    if !cur.is_empty() || rows.is_empty() {
+        rows.push(cur);
+    }
+    rows
 }
 
 /// Per-frame conversation view-model the bin assembles: altitude + caret blink
@@ -163,15 +423,19 @@ pub struct ChatView {
 }
 
 /// Build the conversation lines at the requested altitude, capped to
-/// `view.reveal` lines when set.
-pub fn conversation_view(msgs: &[ChatMsg], view: &ChatView, streaming: bool) -> Vec<Line<'static>> {
+/// `view.reveal` lines when set. `width` is the text column width for prose wrap.
+pub fn conversation_view(
+    msgs: &[ChatMsg],
+    view: &ChatView,
+    streaming: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = match view.zoom {
         Zoom::Summary => digest_lines(&digests(msgs)),
-        Zoom::Normal => conversation_lines(msgs, streaming, view.caret_on, view.tz_offset_secs)
-            .into_iter()
-            .map(own_line)
-            .collect(),
-        Zoom::Detail => detail_lines(msgs, view.tz_offset_secs),
+        Zoom::Normal => {
+            conversation_lines(msgs, streaming, view.caret_on, view.tz_offset_secs, width)
+        }
+        Zoom::Detail => detail_lines(msgs, view.tz_offset_secs, width),
     };
     if let Some(n) = view.reveal {
         lines.truncate(n);
@@ -214,7 +478,7 @@ fn digest_lines(ds: &[TurnDigest]) -> Vec<Line<'static>> {
 /// Detail altitude: the normal view, but file tool-results are rendered with
 /// syntax highlighting (Ⓡ3, P4a). The file's language is inferred from the
 /// originating tool call's path (correlated by id).
-fn detail_lines(msgs: &[ChatMsg], tz_offset_secs: i32) -> Vec<Line<'static>> {
+fn detail_lines(msgs: &[ChatMsg], tz_offset_secs: i32, width: usize) -> Vec<Line<'static>> {
     use std::collections::HashMap;
     // id → file path, from assistant tool calls.
     let mut id_path: HashMap<&str, String> = HashMap::new();
@@ -269,11 +533,13 @@ fn detail_lines(msgs: &[ChatMsg], tz_offset_secs: i32) -> Vec<Line<'static>> {
                     out.push(Line::from(spans));
                 }
             }
-            other => out.extend(
-                conversation_lines(std::slice::from_ref(other), false, true, tz_offset_secs)
-                    .into_iter()
-                    .map(own_line),
-            ),
+            other => out.extend(conversation_lines(
+                std::slice::from_ref(other),
+                false,
+                true,
+                tz_offset_secs,
+                width,
+            )),
         }
     }
     out
@@ -333,16 +599,6 @@ pub(crate) fn collapse_to_signatures(source: &str, lang: Language) -> Vec<Line<'
     out
 }
 
-/// Convert a borrowed Line into an owned ('static) one by cloning span content.
-fn own_line(l: Line) -> Line<'static> {
-    Line::from(
-        l.spans
-            .into_iter()
-            .map(|s| Span::styled(s.content.into_owned(), s.style))
-            .collect::<Vec<_>>(),
-    )
-}
-
 /// Render the Chat surface: title bar, conversation column, input box, status bar.
 /// When `streaming` is true, a caret `▌` trails the in-progress assistant text
 /// (only when the last message is an Assistant turn with no tool calls).
@@ -368,7 +624,7 @@ pub fn render_chat(frame: &mut Frame, msgs: &[ChatMsg], input: &TextArea<'_>, st
 
     // Conversation: user/assistant text turns + inline tool cards. This legacy
     // standalone renderer (tests only) has no view-model, so stamps in UTC.
-    let body = conversation_lines(msgs, streaming, true, 0);
+    let body = conversation_lines(msgs, streaming, true, 0, chunks[1].width as usize);
     frame.render_widget(Paragraph::new(body), chunks[1]);
 
     // Input box (bordered text area).
@@ -435,7 +691,7 @@ mod tests {
             ts: 0,
         }];
         let has_caret = |streaming, caret| {
-            conversation_lines(&msgs, streaming, caret, 0)
+            conversation_lines(&msgs, streaming, caret, 0, 80)
                 .iter()
                 .any(|l| l.spans.iter().any(|s| s.content.contains(glyph::CARET)))
         };
@@ -495,7 +751,7 @@ mod tests {
 
     #[test]
     fn summary_collapses_to_one_line_per_turn() {
-        let lines = conversation_view(&seeded(), &view(Zoom::Summary), false);
+        let lines = conversation_view(&seeded(), &view(Zoom::Summary), false, 80);
         // two turns → two digest lines
         assert_eq!(lines.len(), 2);
     }
@@ -503,7 +759,7 @@ mod tests {
     #[test]
     fn detail_highlights_file_tool_results() {
         use crate::tokens::color;
-        let lines = conversation_view(&seeded(), &view(Zoom::Detail), false);
+        let lines = conversation_view(&seeded(), &view(Zoom::Detail), false, 80);
         // A keyword (`fn`/`let`) must carry the syntax keyword color — proves the
         // id→path→Rust resolution fired and highlighting actually ran, rather than
         // silently falling back to PlainText (which colors everything TXT).
@@ -521,7 +777,7 @@ mod tests {
     #[test]
     fn detail_collapses_function_bodies_to_signatures() {
         use crate::tokens::glyph;
-        let lines = conversation_view(&seeded(), &view(Zoom::Detail), false);
+        let lines = conversation_view(&seeded(), &view(Zoom::Detail), false, 80);
         let text: Vec<String> = lines
             .iter()
             .map(|l| {
@@ -548,8 +804,8 @@ mod tests {
     #[test]
     fn normal_matches_conversation_lines() {
         let msgs = seeded();
-        let normal = conversation_view(&msgs, &view(Zoom::Normal), false);
-        let baseline = conversation_lines(&msgs, false, true, 0);
+        let normal = conversation_view(&msgs, &view(Zoom::Normal), false, 80);
+        let baseline = conversation_lines(&msgs, false, true, 0, 80);
         assert_eq!(normal.len(), baseline.len());
     }
 
@@ -557,7 +813,7 @@ mod tests {
     fn reveal_caps_line_count() {
         let mut v = view(Zoom::Normal);
         v.reveal = Some(1);
-        let lines = conversation_view(&seeded(), &v, false);
+        let lines = conversation_view(&seeded(), &v, false, 80);
         assert_eq!(lines.len(), 1);
     }
 
@@ -569,7 +825,7 @@ mod tests {
             tool_calls: vec![],
             ts: 0,
         }];
-        let lines = conversation_lines(&msgs, false, true, 0);
+        let lines = conversation_lines(&msgs, false, true, 0, 80);
         let spans: Vec<(String, Style)> = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| (s.content.to_string(), s.style)))
@@ -586,6 +842,71 @@ mod tests {
         assert!(spans.iter().any(|(t, _)| t == "zoid "));
     }
 
+    // Each clickable code range must carry ITS OWN source. Two code blocks in
+    // separate turns → two hits, each mapping to the block the user sees.
+    #[test]
+    fn code_hits_pair_each_block_with_its_own_source() {
+        let msgs = vec![
+            ChatMsg::Assistant {
+                text: "first\n\n```rust\nlet a = 1;\n```".into(),
+                tool_calls: vec![],
+                ts: 0,
+            },
+            ChatMsg::Assistant {
+                text: "second\n\n```rust\nlet b = 2;\n```".into(),
+                tool_calls: vec![],
+                ts: 0,
+            },
+        ];
+        let hits = code_hits(&msgs, false, true, 0, 80);
+        assert_eq!(hits.len(), 2, "one hit per top-level block");
+        assert!(hits[0].source.contains("let a = 1;"));
+        assert!(hits[1].source.contains("let b = 2;"));
+        // The range points at real, rendered panel rows.
+        for h in &hits {
+            assert!(h.header_line <= h.end_line);
+        }
+    }
+
+    // Regression (gilfoyle CRITICAL): a message whose markdown over-nests bails to
+    // plain text, emitting NO code panel. Its fence must not leak a phantom source
+    // that shifts every later block's clipboard mapping. Deriving source from the
+    // same render pass makes the bail contribute 0 ranges AND 0 sources.
+    #[test]
+    fn bailed_message_does_not_desync_later_code_sources() {
+        // 9 levels of list nesting > MAX_DEPTH(8) → render_body bails to plain text,
+        // discarding the top-level fence that precedes it.
+        let bailing = concat!(
+            "```rust\nlet PHANTOM = 0;\n```\n\n",
+            "- l1\n  - l2\n    - l3\n      - l4\n        - l5\n",
+            "          - l6\n            - l7\n              - l8\n                - l9\n",
+        );
+        let msgs = vec![
+            ChatMsg::Assistant {
+                text: bailing.into(),
+                tool_calls: vec![],
+                ts: 0,
+            },
+            ChatMsg::Assistant {
+                text: "```rust\nlet real = 42;\n```".into(),
+                tool_calls: vec![],
+                ts: 0,
+            },
+        ];
+        let hits = code_hits(&msgs, false, true, 0, 80);
+        // Only the second (non-bailed) block is clickable…
+        assert_eq!(hits.len(), 1, "bailed message emits no clickable block");
+        // …and it copies its OWN source, never the phantom from the bailed fence.
+        assert!(
+            hits[0].source.contains("let real = 42;"),
+            "clicked block copies its own source"
+        );
+        assert!(
+            !hits[0].source.contains("PHANTOM"),
+            "no phantom source leaked from the bailed message"
+        );
+    }
+
     #[test]
     fn delegated_card_renders_chevron_status_and_bg() {
         use crate::tokens::{color, glyph};
@@ -593,7 +914,7 @@ mod tests {
             summary: "Added shared NotFound helper.".into(),
             ok: true,
         }];
-        let lines = conversation_lines(&msgs, false, true, 0);
+        let lines = conversation_lines(&msgs, false, true, 0, 80);
         let joined: String = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))

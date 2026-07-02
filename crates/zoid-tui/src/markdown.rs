@@ -15,11 +15,39 @@ use zoid_syntax::Language;
 /// Max container nesting (lists + blockquotes) before we bail to plain text.
 const MAX_DEPTH: usize = 8;
 
-/// Render markdown `source` into owned ratatui `Line`s. Most non-empty input
-/// yields at least one line; whitespace-only input can yield an empty vec (the
-/// caller — `push_message` — handles an empty body by emitting the prefix
-/// alone). Empty input also yields an empty vec.
-pub fn render_markdown(source: &str) -> Vec<Line<'static>> {
+/// What a rendered body line is, so downstream layout can treat it correctly:
+/// prose word-wraps with a hanging indent; code lines never word-wrap (their
+/// leading whitespace is significant) and `CodeHead` is where the copy hint
+/// attaches (spec §3.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BodyKind {
+    Prose,
+    CodeHead,
+    Code,
+}
+
+/// A rendered body line plus its kind. `render_body` is the real builder;
+/// `render_markdown` is the flatten-to-`Line` wrapper kept for callers that
+/// don't need the kind (delegated-summary rendering, tests).
+///
+/// `source` is `Some` only on the `CodeHead` of a **top-level** code panel: it
+/// carries that block's raw text so the click-to-copy map (`chat::code_hits`) can
+/// pair each clickable range with its own source from this single render pass.
+/// Deriving the source here — rather than re-parsing the markdown separately —
+/// means a block and its source can never desync (e.g. when `render_body` bails
+/// to plain text on over-nesting, no `CodeHead` is emitted, so no orphan source
+/// leaks into the map).
+#[derive(Debug, Clone)]
+pub struct BodyLine {
+    pub line: Line<'static>,
+    pub kind: BodyKind,
+    pub source: Option<String>,
+}
+
+/// Render markdown `source` into typed body lines. Most non-empty input yields at
+/// least one line; whitespace-only input can yield an empty vec (the caller —
+/// `push_message` — handles an empty body by emitting the prefix alone).
+pub fn render_body(source: &str) -> Vec<BodyLine> {
     let mut b = Builder::default();
     for ev in Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH) {
         b.event(ev);
@@ -30,12 +58,80 @@ pub fn render_markdown(source: &str) -> Vec<Line<'static>> {
     b.finish()
 }
 
-/// One TXT-styled `Line` per source row — the parse-issue / over-nesting fallback.
-fn plain_lines(source: &str) -> Vec<Line<'static>> {
+/// Flatten [`render_body`] to plain `Line`s (drops the per-line kind).
+pub fn render_markdown(source: &str) -> Vec<Line<'static>> {
+    render_body(source).into_iter().map(|b| b.line).collect()
+}
+
+/// One TXT-styled prose `Line` per source row — the parse-issue / over-nesting fallback.
+fn plain_lines(source: &str) -> Vec<BodyLine> {
     source
         .split('\n')
-        .map(|l| Line::from(Span::styled(l.to_string(), Style::new().fg(color::TXT))))
+        .map(|l| BodyLine {
+            line: Line::from(Span::styled(l.to_string(), Style::new().fg(color::TXT))),
+            kind: BodyKind::Prose,
+            source: None,
+        })
         .collect()
+}
+
+/// Short display label for a fenced-code language; PlainText → "" (no tag).
+fn lang_label(lang: Language) -> &'static str {
+    match lang {
+        Language::Rust => "rust",
+        Language::Toml => "toml",
+        Language::Json => "json",
+        Language::Yaml => "yaml",
+        Language::Markdown => "markdown",
+        Language::PlainText => "",
+    }
+}
+
+/// Build the Style A code container: a dim left rule + faint background under the
+/// content, led by a language-tag header row. Rows are NOT right-padded here —
+/// `push_message` pads each code line to the body-column width once it knows the
+/// available width, so the panel becomes a clean rectangle without ever
+/// overflowing a narrow column. Offset into the body column is the caller's job.
+fn code_panel(hl: Vec<Line<'static>>, lang: Language, source: String) -> Vec<BodyLine> {
+    let bar = || {
+        Span::styled(
+            format!("{} ", glyph::CODE_BAR),
+            Style::new().fg(color::DIM).bg(color::CODE_BG),
+        )
+    };
+    let label = lang_label(lang);
+
+    let mut out: Vec<BodyLine> = Vec::new();
+    // Header row: bar + italic language tag. It also carries the block's raw
+    // source for the click-to-copy map (only the head, so a block contributes
+    // exactly one source in document order).
+    out.push(BodyLine {
+        line: Line::from(vec![
+            bar(),
+            Span::styled(
+                label.to_string(),
+                Style::new()
+                    .fg(color::DIM)
+                    .add_modifier(Modifier::ITALIC)
+                    .bg(color::CODE_BG),
+            ),
+        ]),
+        kind: BodyKind::CodeHead,
+        source: Some(source),
+    });
+    // Body rows: highlighted source with the panel background under each span.
+    for l in hl {
+        let mut spans = vec![bar()];
+        for s in l.spans {
+            spans.push(Span::styled(s.content, s.style.bg(color::CODE_BG)));
+        }
+        out.push(BodyLine {
+            line: Line::from(spans),
+            kind: BodyKind::Code,
+            source: None,
+        });
+    }
+    out
 }
 
 /// Resolve a fenced-code info string ("rust", "rs", "toml", …) to a Language;
@@ -59,7 +155,7 @@ fn lang_from_fence(info: &str) -> Language {
 
 #[derive(Default)]
 struct Builder {
-    lines: Vec<Line<'static>>,
+    lines: Vec<BodyLine>,
     cur: Vec<Span<'static>>,
     bold: u32,
     italic: u32,
@@ -121,7 +217,11 @@ impl Builder {
             ));
         }
         spans.append(&mut self.cur);
-        self.lines.push(Line::from(spans));
+        self.lines.push(BodyLine {
+            line: Line::from(spans),
+            kind: BodyKind::Prose,
+            source: None,
+        });
     }
 
     fn event(&mut self, ev: Event) {
@@ -146,10 +246,32 @@ impl Builder {
         }
     }
 
+    /// Emit a blank spacer between top-level block elements so paragraphs, code
+    /// blocks, headings, and quotes don't stack flush (spec §3.5 breathing room).
+    /// No-op at the very start, inside lists/quotes, or after an existing blank.
+    fn block_sep(&mut self) {
+        if self.quote > 0 || !self.list.is_empty() {
+            return;
+        }
+        match self.lines.last() {
+            None => {}
+            Some(b) if b.line.spans.iter().all(|s| s.content.trim().is_empty()) => {}
+            Some(_) => self.lines.push(BodyLine {
+                line: Line::from(""),
+                kind: BodyKind::Prose,
+                source: None,
+            }),
+        }
+    }
+
     fn start(&mut self, tag: Tag) {
         match tag {
-            Tag::Paragraph => self.flush(),
+            Tag::Paragraph => {
+                self.block_sep();
+                self.flush();
+            }
             Tag::Heading { .. } => {
+                self.block_sep();
                 self.flush();
                 self.heading = true;
             }
@@ -158,6 +280,7 @@ impl Builder {
             Tag::Strikethrough => self.strike = true,
             Tag::Link { .. } => self.link = true,
             Tag::BlockQuote(_) => {
+                self.block_sep();
                 self.flush();
                 self.quote += 1;
                 if self.quote as usize + self.list.len() > MAX_DEPTH {
@@ -188,6 +311,7 @@ impl Builder {
                 ));
             }
             Tag::CodeBlock(kind) => {
+                self.block_sep();
                 self.flush();
                 self.fence = Some(match kind {
                     CodeBlockKind::Fenced(info) => lang_from_fence(&info),
@@ -222,8 +346,14 @@ impl Builder {
                 let code = std::mem::take(&mut self.code_buf);
                 let hl = highlight_lines(&code, lang);
                 if self.quote == 0 && self.list.is_empty() {
-                    self.lines.extend(hl); // top-level fence — unchanged
+                    // Top-level fence → the Style A container panel. The panel's
+                    // head carries `raw` for the click-to-copy map (trailing
+                    // fence newline trimmed to match the copied text).
+                    let raw = code.trim_end_matches('\n').to_string();
+                    self.lines.extend(code_panel(hl, lang, raw));
                 } else {
+                    // Nested in a list/quote: keep the quote-bar / indent chrome
+                    // (no panel) so blockquote and list nesting still read.
                     let list_indent = "  ".repeat(self.list.len());
                     for line in hl {
                         let mut spans: Vec<Span<'static>> = Vec::new();
@@ -237,7 +367,11 @@ impl Builder {
                             spans.push(Span::styled(list_indent.clone(), Style::new()));
                         }
                         spans.extend(line.spans);
-                        self.lines.push(Line::from(spans));
+                        self.lines.push(BodyLine {
+                            line: Line::from(spans),
+                            kind: BodyKind::Code,
+                            source: None,
+                        });
                     }
                 }
             }
@@ -245,7 +379,7 @@ impl Builder {
         }
     }
 
-    fn finish(mut self) -> Vec<Line<'static>> {
+    fn finish(mut self) -> Vec<BodyLine> {
         self.flush();
         self.lines
     }
@@ -322,10 +456,46 @@ mod tests {
 
     #[test]
     fn unknown_fence_is_plain_text() {
+        // An unknown/empty fence is not syntax-highlighted: no span carries a
+        // SYN_* hue. (The container chrome — bar/tag — is dim, so we assert the
+        // absence of highlighting rather than "everything is TXT".)
         let lines = render_markdown("```\nplain body\n```");
+        assert!(lines.iter().all(|l| l
+            .spans
+            .iter()
+            .all(|s| s.style.fg != Some(color::SYN_KEYWORD)
+                && s.style.fg != Some(color::SYN_TYPE)
+                && s.style.fg != Some(color::SYN_FUNC))));
+        // and the body text is present, TXT-colored
+        let joined: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(joined.contains("plain body"));
+    }
+
+    #[test]
+    fn top_level_fence_has_bar_and_language_header() {
+        let lines = render_markdown("```rust\nfn x() {}\n```");
+        // header row carries the language tag…
+        let joined: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(joined.iter().any(|t: &String| t.contains("rust")));
+        // …and every panel row starts with the code bar.
+        assert!(
+            lines.iter().all(|l| l
+                .spans
+                .first()
+                .map(|s| s.content.contains(glyph::CODE_BAR))
+                .unwrap_or(false)),
+            "each code panel row must start with the code bar"
+        );
+        // background panel is applied.
         assert!(lines
             .iter()
-            .all(|l| l.spans.iter().all(|s| s.style.fg == Some(color::TXT))));
+            .all(|l| l.spans.iter().any(|s| s.style.bg == Some(color::CODE_BG))));
     }
 
     #[test]

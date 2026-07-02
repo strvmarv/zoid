@@ -35,6 +35,8 @@ pub mod glyph {
     pub const RESUME: char = '↺'; // palette: resume session
     pub const RENAME: char = '✎'; // palette: rename session
     pub const MASK: char = '•'; // config screen: masked secret edit buffer
+    pub const CODE_BAR: char = '▏'; // fenced-code container left rule (§3.5)
+    pub const COPY: char = '⧉'; // code-block copy affordance (§3.5)
 }
 
 /// Colors (visual-language table, spec §16 / docs/ux/README.md).
@@ -72,6 +74,9 @@ pub mod color {
     // visual language stays uniform: inline/fenced `code` = string hue, links = accent.
     pub const MD_CODE: Color = SYN_STRING;
     pub const MD_LINK: Color = CHAT_ACCENT;
+    // Fenced-code container panel background (§3.5) — a subtly elevated dark so a
+    // code block reads as a contained artifact against the pane, without a border.
+    pub const CODE_BG: Color = Color::Rgb(0x16, 0x1b, 0x22);
 
     pub const DELEGATE_BG: Color = Color::Rgb(0x15, 0x10, 0x1f); // ▸ delegated card bg (chat-mode.html .chip)
 }
@@ -138,6 +143,14 @@ mod tests {
         assert_eq!(glyph::QUOTE_BAR, '│');
         assert_eq!(color::MD_CODE, color::SYN_STRING); // inline/`code` reuses the string hue
         assert_eq!(color::MD_LINK, color::CHAT_ACCENT); // links use the Chat accent
+    }
+
+    #[test]
+    fn code_container_tokens_present() {
+        use ratatui::style::Color;
+        assert_eq!(glyph::CODE_BAR, '▏'); // fenced-code left rule
+        assert_eq!(glyph::COPY, '⧉'); // copy affordance
+        assert_eq!(color::CODE_BG, Color::Rgb(0x16, 0x1b, 0x22));
     }
 
     #[test]

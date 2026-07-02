@@ -2662,6 +2662,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64",
  "chrono",
  "crossterm",
  "futures-util",

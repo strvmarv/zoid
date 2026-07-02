@@ -33,6 +33,9 @@ pub enum Action {
     /// Run the command line buffer (parsed into a `Command`).
     RunCommand(Command),
     ScrollConversation(i32),
+    /// A left-click landed in the conversation at this screen row. The bin
+    /// focuses the conversation and, if the row falls on a code block, copies it.
+    ConversationClick(u16),
     ZoomIn,
     ZoomOut,
     Submit,
@@ -316,7 +319,7 @@ pub fn route_mouse(state: &ShellState, layout: &ShellLayout, m: MouseEvent) -> A
         MouseEventKind::Down(MouseButton::Left) => match hit_test(layout, m.column, m.row) {
             Target::DrawerHeader(id) => Action::ToggleDrawer(id),
             Target::Input => Action::FocusRegion(Focus::Input),
-            Target::Conversation => Action::FocusRegion(Focus::Conversation),
+            Target::Conversation => Action::ConversationClick(m.row),
             Target::None => Action::Noop,
         },
         _ => Action::Noop,
@@ -595,6 +598,30 @@ mod tests {
         assert_eq!(
             route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)),
             Action::FocusRegion(Focus::Input)
+        );
+    }
+
+    #[test]
+    fn conversation_click_carries_row() {
+        let s = ShellState::new();
+        let l = compute(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 24,
+            },
+            &s,
+        );
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: l.conversation.x,
+            row: l.conversation.y,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(
+            route_mouse(&s, &l, click),
+            Action::ConversationClick(l.conversation.y)
         );
     }
 

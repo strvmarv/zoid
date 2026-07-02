@@ -6,18 +6,19 @@
 
 use crate::chat::{conversation_view, ChatView};
 use crate::economy_view::EconomyView;
-use crate::layout::{compute, ShellLayout};
+use crate::layout::{compute, ShellLayout, CONV_PAD};
 use crate::palette::{all_items, nav, selectable_matches, PaletteItem};
 use crate::state::{DrawerId, Focus, Mode, Overlay, ShellState};
 use crate::tokens::{color, glyph};
 use ratatui::{
-    layout::Rect,
+    layout::{Margin, Rect},
     style::{Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph},
     Frame,
 };
 use tui_textarea::TextArea;
+use unicode_width::UnicodeWidthStr;
 use zoid_core::projection::ChatMsg;
 
 pub fn render_shell(
@@ -31,20 +32,28 @@ pub fn render_shell(
 ) {
     let layout = compute(frame.area(), state);
 
-    render_title(frame, streaming, layout.title);
+    // The top row is intentionally blank: the app name was removed from the
+    // title bar and the activity indicator now lives in the status bar (right).
+    // The empty row doubles as top breathing room.
 
     match state.mode {
         Mode::Chat => {
-            let body = conversation_view(msgs, view, streaming);
-            // `trim: false` so indentation survives on wrapped continuation rows —
-            // Detail altitude renders syntax-highlighted code whose leading space is
-            // meaningful. Without wrap, ratatui clips any turn wider than the column
-            // mid-word with no ellipsis. Scroll offset is row-based either way.
+            // Inset the stream by CONV_PAD columns for left/right breathing room.
+            // `conversation_view` has already wrapped prose (with the hanging
+            // indent) and padded code to this exact width, so every line fits on
+            // one row — we render WITHOUT widget wrap. That keeps a strict
+            // 1-line-per-row transcript (exact mouse copy hit-testing) and avoids
+            // ratatui's phantom-blank quirk on lines exactly at the width. The
+            // rare over-wide code line clips; click-to-copy still yields its full
+            // source, so nothing is lost to the clipboard.
+            let text = layout.conversation.inner(Margin {
+                horizontal: CONV_PAD,
+                vertical: 0,
+            });
+            let body = conversation_view(msgs, view, streaming, text.width as usize);
             frame.render_widget(
-                Paragraph::new(body)
-                    .wrap(Wrap { trim: false })
-                    .scroll((state.conversation_scroll, 0)),
-                layout.conversation,
+                Paragraph::new(body).scroll((state.conversation_scroll, 0)),
+                text,
             );
         }
         Mode::Build => render_build_placeholder(frame, layout.conversation),
@@ -55,7 +64,7 @@ pub fn render_shell(
     }
 
     render_input(frame, input, layout.input);
-    render_status(frame, state, view, layout.status);
+    render_status(frame, state, view, streaming, layout.status);
 
     // Overlays last, over a cleared region.
     if state.overlay == Overlay::Palette {
@@ -82,22 +91,6 @@ pub fn render_shell(
         let full = frame.area();
         render_config(frame, state, &state.config_sections, full);
     }
-}
-
-fn render_title(frame: &mut Frame, streaming: bool, area: Rect) {
-    // App name + a live activity indicator only (spec §2.2): idle when waiting
-    // for the user, running while the agent streams or a tool runs. The mode chip
-    // lives in the status bar; branch lives in the rail.
-    let (icon, label, fg) = if streaming {
-        (glyph::STREAM, "running", color::CHAT_ACCENT)
-    } else {
-        (glyph::IDLE, "idle", color::OK)
-    };
-    let title = Line::from(vec![
-        Span::styled(" zoid ", Style::new().fg(color::TXT).bold()),
-        Span::styled(format!("{icon} {label}"), Style::new().fg(fg)),
-    ]);
-    frame.render_widget(Paragraph::new(title), area);
 }
 
 fn render_build_placeholder(frame: &mut Frame, area: Rect) {
@@ -132,7 +125,13 @@ fn render_input(frame: &mut Frame, input: &TextArea<'_>, area: Rect) {
     frame.render_widget(input, inner);
 }
 
-fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: Rect) {
+fn render_status(
+    frame: &mut Frame,
+    state: &ShellState,
+    view: &ChatView,
+    streaming: bool,
+    area: Rect,
+) {
     let mut spans = match state.mode {
         Mode::Chat => vec![
             Span::styled(
@@ -160,6 +159,22 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
             Style::new().fg(color::DIM),
         ));
     }
+
+    // Live activity indicator, right-aligned (spec §2.2): idle when waiting for
+    // the user, running while the agent streams or a tool runs.
+    let (icon, label, fg) = if streaming {
+        (glyph::STREAM, "running", color::CHAT_ACCENT)
+    } else {
+        (glyph::IDLE, "idle", color::OK)
+    };
+    let right = format!("{icon} {label} ");
+    let left_w: usize = spans.iter().map(|s| s.content.width()).sum();
+    let pad = (area.width as usize).saturating_sub(left_w + right.width());
+    if pad > 0 {
+        spans.push(Span::styled(" ".repeat(pad), Style::new()));
+    }
+    spans.push(Span::styled(right, Style::new().fg(fg)));
+
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -209,10 +224,10 @@ fn render_rail(frame: &mut Frame, state: &ShellState, economy: &EconomyView, lay
 }
 
 fn render_economy_body(frame: &mut Frame, econ: &EconomyView, area: Rect, rail_focused: bool) {
-    use crate::economy_view::{heat_bar, heat_color};
+    use crate::economy_view::{heat_bar, heat_color, tail};
     use crate::text::{pad_to, truncate};
     let mut lines: Vec<Line> = Vec::new();
-    let max_rows = area.height.saturating_sub(2) as usize; // leave room for churn + footer
+    let max_rows = area.height.saturating_sub(1) as usize; // leave room for the churn/cache line
     let shown = econ.rows.iter().take(max_rows);
     // Both the label and token columns are arbitrary-width strings, and Rust's
     // `{:<N}`/`{:>N}` only *pad* to a minimum — they never cap. So a long label
@@ -255,25 +270,30 @@ fn render_economy_body(frame: &mut Frame, econ: &EconomyView, area: Rect, rail_f
         }
         lines.push(Line::from(spans));
     }
-    lines.push(Line::from(vec![
-        Span::styled("churn ", Style::new().fg(color::DIM)),
-        Span::styled(econ.churn.clone(), Style::new().fg(color::CHAT_ACCENT)),
-    ]));
-    let check = if econ.auto_evict_cold { "[x]" } else { "[ ]" };
-    let left = format!("{check} evict cold");
-    let ledger_color = if econ.over_ceiling {
-        color::WARN
+    // churn sparkline (left) + per-turn prompt-cache sparkline (right). Both series
+    // grow one cell per turn, so a long session would push the right-hand cache off
+    // the rail. Window each to the last N turns, N = half the cells left after the
+    // two fixed labels and a one-space gap — so cache stays visible at any length.
+    // Cache is dimmed when the model/provider reported no cache reads. The manual
+    // "evict cold" toggle and the token "budget" line were removed — eviction is
+    // policy-driven and the drawer stays observe-only.
+    let label_w = "churn ".chars().count(); // == "cache "
+    let per_series = (area.width as usize).saturating_sub(2 * label_w + 1).max(2) / 2;
+    let churn_s = tail(&econ.churn, per_series);
+    let cache_s = tail(&econ.cache, per_series);
+    let used = 2 * label_w + churn_s.chars().count() + cache_s.chars().count();
+    let churn_pad = (area.width as usize).saturating_sub(used).max(1);
+    let cache_color = if econ.cache_active {
+        color::OK
     } else {
         color::DIM
     };
-    let pad =
-        (area.width as usize).saturating_sub(left.chars().count() + econ.ledger.chars().count());
     lines.push(Line::from(vec![
-        Span::styled(left, Style::new().fg(color::DIM)),
-        Span::styled(
-            format!("{}{}", " ".repeat(pad), econ.ledger),
-            Style::new().fg(ledger_color),
-        ),
+        Span::styled("churn ", Style::new().fg(color::DIM)),
+        Span::styled(churn_s, Style::new().fg(color::CHAT_ACCENT)),
+        Span::styled(" ".repeat(churn_pad), Style::new()),
+        Span::styled("cache ", Style::new().fg(color::DIM)),
+        Span::styled(cache_s, Style::new().fg(cache_color)),
     ]));
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -317,7 +337,7 @@ fn render_repo_body(frame: &mut Frame, state: &ShellState, area: Rect) {
 }
 
 fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
-    use crate::economy_view::human_tokens;
+    use crate::economy_view::{gauge, human_tokens};
     use crate::text::truncate;
     let name = if state.session_name.is_empty() {
         "(unnamed)"
@@ -357,10 +377,26 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
                 Style::new().fg(color::TXT),
             ),
         ]),
-        Line::from(vec![
-            Span::styled("ctx ", Style::new().fg(color::DIM)),
-            Span::styled(ctx, Style::new().fg(color::TXT)),
-        ]),
+        {
+            // ctx used/ceiling + a visual fill gauge coloured by how close the
+            // window is to its ceiling (green → warn → error).
+            let mut spans = vec![
+                Span::styled("ctx ", Style::new().fg(color::DIM)),
+                Span::styled(format!("{ctx} "), Style::new().fg(color::TXT)),
+            ];
+            if state.ctx_ceiling > 0 {
+                let frac = state.ctx_used as f64 / state.ctx_ceiling as f64;
+                let col = if frac >= 0.9 {
+                    color::ERROR
+                } else if frac >= 0.7 {
+                    color::WARN
+                } else {
+                    color::OK
+                };
+                spans.push(Span::styled(gauge(frac, 8), Style::new().fg(col)));
+            }
+            Line::from(spans)
+        },
     ];
     // cwd: truncate to the drawer width, never wrap (paths get long).
     lines.push(Line::from(vec![

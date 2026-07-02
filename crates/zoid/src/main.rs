@@ -242,6 +242,57 @@ fn provider_label(provider_name: &str, has_key: bool) -> String {
     }
 }
 
+/// Copy `text` to the system clipboard via the OSC 52 terminal escape
+/// (`ESC ] 52 ; c ; <base64> BEL`). Works locally and over SSH without any
+/// platform clipboard dependency, provided the terminal has OSC 52 enabled
+/// (kitty, WezTerm, iTerm2, tmux with `set -g set-clipboard on`, …). Writing the
+/// escape directly to stdout is safe under crossterm's raw/alt-screen mode — the
+/// terminal consumes it and emits nothing visible. Best-effort: I/O errors are
+/// ignored (the on-screen "copied" hint is the only feedback we can give).
+///
+/// Caveat: some terminals cap the OSC 52 payload (tmux ~8 KB by default), so a
+/// very large code block may be silently truncated or dropped while the "copied"
+/// hint still shows. Acceptable for typical code blocks; chunking is a future
+/// option if large-block copy proves important.
+fn copy_to_clipboard_osc52(text: &str) {
+    use base64::Engine;
+    use std::io::Write;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+    let mut out = stdout();
+    let _ = write!(out, "\x1b]52;c;{b64}\x07");
+    let _ = out.flush();
+}
+
+/// Resolve a left-click in the conversation: focus it, and — at Normal altitude,
+/// where transcript rows map 1:1 to lines — copy the clicked code block's raw
+/// source via OSC 52 (each code block is click-to-copy). Off-block clicks just
+/// focus. Needs the conversation rect + wrap width, hence the loop, not
+/// `handle_action`.
+fn handle_conversation_click(app: &mut App, layout: &zoid_tui::layout::ShellLayout, row: u16) {
+    use zoid_tui::state::{Focus, Zoom};
+    app.shell.focus = Focus::Conversation;
+    if app.shell.zoom != Zoom::Normal {
+        return;
+    }
+    let conv = layout.conversation;
+    if row < conv.y {
+        return;
+    }
+    let clicked_line = app.shell.conversation_scroll as usize + (row - conv.y) as usize;
+    let width = zoid_tui::layout::conv_text_width(conv.width) as usize;
+    let msgs = conversation(&app.events);
+    let hits = zoid_tui::chat::code_hits(&msgs, app.streaming, true, app.tz_offset_secs, width);
+    if let Some(h) = hits
+        .into_iter()
+        .find(|h| clicked_line >= h.header_line && clicked_line <= h.end_line)
+    {
+        copy_to_clipboard_osc52(&h.source);
+        let n = h.source.lines().count().max(1);
+        let unit = if n == 1 { "line" } else { "lines" };
+        app.shell.status_hint = Some(format!("copied {n} {unit}"));
+    }
+}
+
 /// Provider + credential from `config.provider` + the secret store (env wins
 /// inside `SecretStore::get`). No key found → fall back to the offline
 /// `FakeProvider` so the binary always runs; `provider_label` mirrors this
@@ -601,6 +652,11 @@ async fn run<B: ratatui::backend::Backend>(
                 Some(t0) => {
                     let elapsed_ms = t0.elapsed().as_millis() as u64;
                     if elapsed_ms < ZOOM_ANIM_MS && !app.shell.reduced_motion {
+                        // Wrap width must match render_shell's inset stream width so
+                        // the reveal line count matches what's actually drawn.
+                        let text_w = zoid_tui::layout::conv_text_width(
+                            compute(f.area(), &app.shell).conversation.width,
+                        ) as usize;
                         let total_lines = zoid_tui::chat::conversation_view(
                             &msgs,
                             &ChatView {
@@ -610,6 +666,7 @@ async fn run<B: ratatui::backend::Backend>(
                                 tz_offset_secs: app.tz_offset_secs,
                             },
                             app.streaming,
+                            text_w,
                         )
                         .len();
                         zoid_tui::motion::zoom_reveal(
@@ -654,8 +711,17 @@ async fn run<B: ratatui::backend::Backend>(
                             .map(|s| Rect { x: 0, y: 0, width: s.width, height: s.height })
                             .unwrap_or_default();
                         let layout = compute(area, &app.shell);
-                        if handle_action(app, route_mouse(&app.shell, &layout, me)).await? {
-                            return Ok(());
+                        match route_mouse(&app.shell, &layout, me) {
+                            // Resolved here (not in handle_action) because it needs
+                            // the conversation rect + wrap width from `layout`.
+                            zoid_tui::route::Action::ConversationClick(row) => {
+                                handle_conversation_click(app, &layout, row);
+                            }
+                            action => {
+                                if handle_action(app, action).await? {
+                                    return Ok(());
+                                }
+                            }
                         }
                     }
                     Some(Ok(_)) => { /* resize: redraw next loop */ }
@@ -963,6 +1029,10 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             let next = app.shell.conversation_scroll as i32 + d;
             app.shell.conversation_scroll = next.max(0) as u16;
         }
+        // Conversation clicks are resolved in the event loop (where the layout is
+        // available) via `handle_conversation_click`; this arm keeps the match
+        // exhaustive and never fires from the keyboard.
+        Action::ConversationClick(_) => {}
         Action::ZoomIn => {
             let before = app.shell.zoom;
             app.shell.zoom_in();

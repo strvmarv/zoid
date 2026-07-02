@@ -37,6 +37,39 @@ pub fn heat_color(heat: Heat) -> Color {
     }
 }
 
+/// A fixed-width progress gauge: `frac` (clamped to 0..1) filled over `width`
+/// cells using the heat-bar glyphs (`█` filled, `░` empty). Shared by the
+/// session context meter and the context-drawer cache bar.
+pub fn gauge(frac: f64, width: usize) -> String {
+    let frac = if frac.is_finite() {
+        frac.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let filled = ((frac * width as f64).round() as usize).min(width);
+    (0..width)
+        .map(|i| {
+            if i < filled {
+                glyph::HEAT_FULL
+            } else {
+                glyph::HEAT_SHADE
+            }
+        })
+        .collect()
+}
+
+/// The last `n` cells of a sparkline string, preserving order (each sparkline
+/// glyph is one display cell). Windows a growing per-turn series to the most
+/// recent `n` turns so a long session can't push it past the rail edge.
+pub fn tail(s: &str, n: usize) -> String {
+    let count = s.chars().count();
+    if count <= n {
+        s.to_string()
+    } else {
+        s.chars().skip(count - n).collect()
+    }
+}
+
 /// Map values onto the 8-step sparkline ramp (max → top).
 pub fn sparkline(values: &[u64]) -> String {
     if values.is_empty() {
@@ -71,8 +104,13 @@ pub struct EconomyView {
     pub churn: String,
     pub ledger: String,
     pub over_ceiling: bool,
-    pub auto_evict_cold: bool,
     pub selected: usize,
+    /// Per-turn prompt-cache sparkline (cache-read tokens per turn), mirroring
+    /// `churn`; the churn line renders this pulled right.
+    pub cache: String,
+    /// Whether any cache reads were reported this session (else the sparkline is
+    /// flat/empty and dimmed — the model/provider doesn't report cache reads).
+    pub cache_active: bool,
 }
 
 impl EconomyView {
@@ -95,6 +133,7 @@ impl EconomyView {
             })
             .collect();
         let churn_vals: Vec<u64> = churn.points.iter().map(|p| p.tokens).collect();
+        let cache_vals: Vec<u64> = churn.points.iter().map(|p| p.cached).collect();
         let used = ledger.total;
         let ledger_label = match policy.token_ceiling {
             Some(c) => format!("{}/{}", human_tokens(used), human_tokens(c)),
@@ -105,8 +144,9 @@ impl EconomyView {
             churn: sparkline(&churn_vals),
             ledger: ledger_label,
             over_ceiling: policy.token_ceiling.is_some_and(|c| used > c),
-            auto_evict_cold: policy.auto_evict_cold,
             selected,
+            cache: sparkline(&cache_vals),
+            cache_active: cache_vals.iter().any(|&c| c > 0),
         }
     }
 }
@@ -145,6 +185,31 @@ mod tests {
         assert_eq!(heat_color(Heat::Hot), color::HEAT_HOT);
         assert_eq!(heat_color(Heat::Warm), color::HEAT_WARM);
         assert_eq!(heat_color(Heat::Cold), color::HEAT_COLD);
+    }
+
+    #[test]
+    fn gauge_fills_proportionally_and_clamps() {
+        assert_eq!(gauge(0.0, 5), format!("{}", glyph::HEAT_SHADE).repeat(5));
+        assert_eq!(gauge(1.0, 5), format!("{}", glyph::HEAT_FULL).repeat(5));
+        assert_eq!(gauge(2.0, 4), format!("{}", glyph::HEAT_FULL).repeat(4)); // clamps
+                                                                              // 0.5 of 4 → 2 filled
+        assert_eq!(
+            gauge(0.5, 4),
+            format!("{0}{0}{1}{1}", glyph::HEAT_FULL, glyph::HEAT_SHADE)
+        );
+        // non-finite guards to empty
+        assert_eq!(
+            gauge(f64::NAN, 3),
+            format!("{}", glyph::HEAT_SHADE).repeat(3)
+        );
+    }
+
+    #[test]
+    fn tail_windows_to_last_n_cells() {
+        assert_eq!(tail("abcde", 3), "cde"); // keeps the most recent cells, in order
+        assert_eq!(tail("ab", 5), "ab"); // shorter than budget → unchanged
+        assert_eq!(tail("abc", 0), ""); // zero budget → empty
+        assert_eq!(tail("", 4), ""); // empty in → empty out
     }
 
     #[test]
@@ -187,11 +252,13 @@ mod tests {
                 ChurnPoint {
                     turn: 0,
                     tokens: 10,
+                    cached: 0,
                     resent_tokens: 0,
                 },
                 ChurnPoint {
                     turn: 1,
                     tokens: 80,
+                    cached: 0,
                     resent_tokens: 5,
                 },
             ],
@@ -212,7 +279,51 @@ mod tests {
         assert!(v.rows[1].cold);
         assert_eq!(v.ledger, "10k/200k");
         assert!(!v.over_ceiling);
-        assert!(v.auto_evict_cold);
         assert_eq!(v.churn.chars().count(), 2);
+        // no cache reads → inactive; sparkline has one cell per turn (all min)
+        assert!(!v.cache_active);
+        assert_eq!(v.cache.chars().count(), 2);
+        assert_eq!(v.cache, format!("{}", glyph::SPARK[0]).repeat(2));
+    }
+
+    #[test]
+    fn build_reports_cache_when_present() {
+        let w = ContextWindow {
+            items: vec![],
+            total_tokens: 0,
+        };
+        // per-turn cache reads → an active sparkline, one cell per turn.
+        let churn = ChurnTimeline {
+            points: vec![
+                ChurnPoint {
+                    turn: 0,
+                    tokens: 100,
+                    cached: 0,
+                    resent_tokens: 0,
+                },
+                ChurnPoint {
+                    turn: 1,
+                    tokens: 100,
+                    cached: 500,
+                    resent_tokens: 0,
+                },
+            ],
+        };
+        let ledger = TokenLedger {
+            input: 1000,
+            output: 100,
+            cached: 500,
+            total: 1100,
+        };
+        let policy = ContextPolicy::default();
+        let v = EconomyView::build(&w, &churn, &ledger, &policy, 0);
+        assert!(v.cache_active);
+        assert_eq!(v.cache.chars().count(), 2); // one cell per turn
+                                                // turn 0 had no cache (min ramp), turn 1 was the max (top ramp)
+        assert_eq!(v.cache.chars().next().unwrap(), glyph::SPARK[0]);
+        assert_eq!(
+            v.cache.chars().last().unwrap(),
+            *glyph::SPARK.last().unwrap()
+        );
     }
 }

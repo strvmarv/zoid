@@ -11,14 +11,24 @@ pub const RAIL_WIDTH: u16 = 45;
 /// Minimum total width before the rail is shown: keep a usable stream (≥ ~50)
 /// alongside the wider rail, so the rail only appears once both fit (spec §6.2).
 pub const RAIL_MIN_TOTAL: u16 = 95;
-/// Conversation column measure cap (spec §6.1: ~80–100 cols, ergonomics).
-pub const MAX_MEASURE: u16 = 100;
+/// Left/right breathing pad inside the conversation column (spec §3.5). The
+/// stream's text is inset by this many columns on each side so turns don't sit
+/// flush against the frame edge.
+pub const CONV_PAD: u16 = 2;
+
+/// The prose word-wrap width for a conversation rect of the given width: the
+/// rect minus the left+right [`CONV_PAD`]. Shared by the renderer (which insets
+/// the same amount) and the bin's zoom-reveal line measurement so both agree.
+pub fn conv_text_width(conv_width: u16) -> u16 {
+    conv_width.saturating_sub(CONV_PAD * 2)
+}
 /// Repo drawer body rows: name+branch · worktree · changes.
 pub const REPO_BODY_ROWS: u16 = 3;
 /// Session drawer body rows: name · model·provider · dur·tok · ctx · cwd.
 pub const SESSION_BODY_ROWS: u16 = 5;
-/// Context ⑤ drawer body rows: items + churn + ledger/toggle (unchanged economy body).
-pub const CONTEXT_BODY_ROWS: u16 = 6;
+/// Context drawer body rows: items + the churn/cache sparkline line (the manual
+/// evict toggle and token-budget line were removed — observe-only drawer).
+pub const CONTEXT_BODY_ROWS: u16 = 5;
 /// Message-box max content rows before it stops growing and scrolls internally
 /// (spec §2.2). Not a §16 token — a numeric layout constant, like RAIL_WIDTH.
 pub const MAX_INPUT_ROWS: u16 = 8;
@@ -73,20 +83,14 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
 
     let show_rail = state.rail_visible && area.width >= RAIL_MIN_TOTAL;
     let rail_w = if show_rail { RAIL_WIDTH } else { 0 };
-    let avail = body.width.saturating_sub(rail_w);
-    let conv_w = avail.min(MAX_MEASURE);
-    let gutter_w = avail.saturating_sub(conv_w);
+    // The conversation fills all width up to the rail (no measure cap): on wide
+    // terminals the stream grows to use the screen rather than leaving a gutter.
+    let conv_w = body.width.saturating_sub(rail_w);
 
-    // Conversation flush-left; the measure-cap slack falls in a gutter *between*
-    // the stream and the rail, not to the left of the stream.
-    let cols = Layout::horizontal([
-        Constraint::Length(conv_w),
-        Constraint::Length(gutter_w),
-        Constraint::Length(rail_w),
-    ])
-    .split(body);
+    let cols =
+        Layout::horizontal([Constraint::Length(conv_w), Constraint::Length(rail_w)]).split(body);
     let conversation = cols[0];
-    let rail = if show_rail { Some(cols[2]) } else { None };
+    let rail = if show_rail { Some(cols[1]) } else { None };
 
     // Drawer box rects: each drawer renders as a rounded bordered box (spec
     // `docs/ux/chat-mode.html` `.drawer`), stacked from the rail top (1-col
@@ -231,10 +235,13 @@ mod tests {
     }
 
     #[test]
-    fn measure_is_capped_on_ultrawide() {
+    fn stream_fills_to_rail_on_ultrawide() {
         let s = ShellState::new();
         let l = compute(area(200, 24), &s);
-        assert_eq!(l.conversation.width, MAX_MEASURE);
+        // No measure cap: the stream expands to all width up to the rail, and
+        // stream + rail together span the full terminal (no gutter).
+        assert_eq!(l.conversation.width, 200 - RAIL_WIDTH);
+        assert_eq!(l.conversation.width + l.rail.unwrap().width, 200);
     }
 
     #[test]
