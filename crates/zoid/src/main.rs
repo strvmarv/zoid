@@ -416,6 +416,12 @@ async fn main() -> Result<()> {
     // FakeProvider so the binary always runs; `provider_label` below mirrors
     // this exact selection so the drawer never disagrees with reality.
     let key_for = |name: &str| -> Option<String> {
+        // env wins, and must work even if the encrypted secret store failed to open
+        if let Ok(v) = std::env::var(name) {
+            if !v.is_empty() {
+                return Some(v);
+            }
+        }
         secrets.as_ref().and_then(|s| {
             use zoid_core::secret::SecretStore;
             s.get(name)
