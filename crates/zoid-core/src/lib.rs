@@ -8,6 +8,7 @@ pub mod context;
 pub mod economy;
 pub mod event;
 pub mod projection;
+pub mod secret;
 pub mod session;
 pub mod sessions;
 pub mod store;
