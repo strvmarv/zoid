@@ -49,6 +49,7 @@ pub fn parse_task_items(args: &serde_json::Value) -> Result<Vec<TaskItem>, Strin
 pub fn tasks(events: &[Event]) -> Vec<TaskItem> {
     events
         .iter()
+        .filter(|e| e.branch == crate::event::BranchId::default())
         .rev()
         .find_map(|e| match &e.kind {
             EventKind::Tasks { items } => Some(items.clone()),
@@ -110,6 +111,23 @@ mod tests {
     #[test]
     fn tasks_empty_when_none_published() {
         assert!(tasks(&[]).is_empty());
+    }
+
+    #[test]
+    fn tasks_ignores_subagent_branch() {
+        use crate::event::BranchId;
+        let main_ev = tasks_event(vec![TaskItem {
+            text: "main task".into(),
+            status: TaskStatus::Active,
+        }]);
+        let mut sub_ev = tasks_event(vec![TaskItem {
+            text: "sub task".into(),
+            status: TaskStatus::Done,
+        }]);
+        sub_ev.branch = BranchId("subagent:x1".into());
+        let got = tasks(&[main_ev, sub_ev]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].text, "main task");
     }
 
     #[test]

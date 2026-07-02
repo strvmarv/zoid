@@ -782,6 +782,7 @@ async fn run<B: ratatui::backend::Backend>(
                     AgentUpdate::TurnComplete => {
                         app.streaming = false;
                         app.shell.clear_active_tool();
+                        app.pending_answer = None;
                     }
                     // Raise the question overlay and hold the reply channel:
                     // the user's answer (or an Esc-abort, which drops `reply`)

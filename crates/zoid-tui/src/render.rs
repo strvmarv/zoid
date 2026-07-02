@@ -64,7 +64,10 @@ pub fn render_shell(
             if let Some(name) = &state.active_tool {
                 body.push(Line::from(vec![
                     Span::styled(format!("{} ", glyph::RUNNING), Style::new().fg(color::WARN)),
-                    Span::styled(format!("running · {name} …"), Style::new().fg(color::DIM)),
+                    Span::styled(
+                        format!("running · {name} {}", glyph::ELLIPSIS),
+                        Style::new().fg(color::DIM),
+                    ),
                 ]));
             }
             // Clamp the scroll offset to the body produced at THIS altitude. The three
