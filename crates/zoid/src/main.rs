@@ -320,6 +320,9 @@ async fn main() -> Result<()> {
     shell.changes_files = boot_files;
     shell.session_name = session_name;
     shell.model = model.clone();
+    // Economy ⑤ denominator: model-derived (ZOID_CONTEXT_CEILING overrides).
+    // Constant for the process lifetime, so set once here rather than per frame.
+    shell.ctx_ceiling = zoid_provider::context_ceiling(&model);
     shell.provider = provider_label();
     shell.cwd = root.clone();
 
@@ -408,7 +411,6 @@ async fn run<B: ratatui::backend::Backend>(
         let window = zoid_core::context::context_window(&app.events);
         app.shell.session_tokens = ledger.total;
         app.shell.ctx_used = window.total_tokens;
-        app.shell.ctx_ceiling = 200_000;
         app.shell.duration = fmt_duration(app.session_started_ms, now_ms());
         app.shell.input_rows = app.textarea.lines().len().max(1) as u16;
         terminal.draw(|f| {

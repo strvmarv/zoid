@@ -172,9 +172,49 @@ pub fn default_model() -> &'static str {
     }
 }
 
+/// The per-model context-window ceiling in tokens, ignoring env overrides.
+/// Table-driven and pure so it's unit-testable without touching process env.
+fn model_ceiling(model: &str) -> u64 {
+    let m = model.to_ascii_lowercase();
+    // Known 200k-context families: GLM cloud (e.g. glm-5.2:cloud) and Anthropic
+    // Claude. Unknown models fall back to a conservative 128k. Split the
+    // condition here if these families ever diverge.
+    if m.contains("glm") || m.contains("claude") {
+        200_000
+    } else {
+        128_000
+    }
+}
+
+/// The context-window ceiling (tokens) for `model` — the economy ⑤ denominator
+/// (session-drawer "ctx X / CEILING"). `ZOID_CONTEXT_CEILING` (a positive
+/// integer) overrides the table for models we don't know or when the user wants
+/// an exact value; otherwise `model_ceiling` supplies a per-family default.
+/// This replaces the previously hard-coded 200_000, which was wrong for any
+/// non-200k model. A truly wire-derived value (Ollama `/api/show`
+/// `context_length`) is a future refinement.
+pub fn context_ceiling(model: &str) -> u64 {
+    if let Ok(v) = std::env::var("ZOID_CONTEXT_CEILING") {
+        if let Ok(n) = v.trim().parse::<u64>() {
+            if n > 0 {
+                return n;
+            }
+        }
+    }
+    model_ceiling(model)
+}
+
 #[cfg(test)]
 mod selection_tests {
     use super::*;
+
+    #[test]
+    fn model_ceiling_maps_known_families_else_default() {
+        assert_eq!(model_ceiling("glm-5.2:cloud"), 200_000);
+        assert_eq!(model_ceiling("claude-sonnet-4-6"), 200_000);
+        assert_eq!(model_ceiling("GLM-4.6"), 200_000); // case-insensitive
+        assert_eq!(model_ceiling("llama3.1:70b"), 128_000); // unknown → default
+    }
 
     #[test]
     fn default_model_constants_are_wired() {
