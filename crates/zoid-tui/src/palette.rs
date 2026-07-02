@@ -4,7 +4,7 @@
 //! selectable. Pure; rendering lives in `render.rs`.
 
 use crate::command::Command;
-use crate::state::{DrawerId, Mode};
+use crate::state::Mode;
 use crate::tokens::glyph;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,31 +75,6 @@ pub fn all_items(mode: Mode) -> Vec<PaletteItem> {
             hint: "move head back",
             keybind: "u",
             command: None,
-        },
-        // navigate
-        PaletteItem {
-            group: "navigate".to_string(),
-            icon: glyph::COLLAPSED,
-            label: "Toggle repo drawer",
-            hint: "repo · branch · changes",
-            keybind: "",
-            command: Some(Command::OpenDrawer(DrawerId::Repo)),
-        },
-        PaletteItem {
-            group: "navigate".to_string(),
-            icon: glyph::COLLAPSED,
-            label: "Toggle session drawer",
-            hint: "name · model · cost · cwd",
-            keybind: "",
-            command: Some(Command::OpenDrawer(DrawerId::Session)),
-        },
-        PaletteItem {
-            group: "navigate".to_string(),
-            icon: glyph::CONTEXT,
-            label: "Toggle context drawer",
-            hint: "tokens · heat · churn",
-            keybind: "",
-            command: Some(Command::OpenDrawer(DrawerId::Context)),
         },
         // context ⑤ — placeholder (real actions land P3), disabled for now
         PaletteItem {
@@ -233,19 +208,6 @@ mod tests {
         assert_eq!(nav(2, 1, 3), 2);
         assert_eq!(nav(1, 1, 3), 2);
         assert_eq!(nav(0, 1, 0), 0);
-    }
-
-    #[test]
-    fn navigate_group_targets_new_drawers() {
-        let items = all_items(Mode::Chat);
-        let nav: Vec<&Command> = items
-            .iter()
-            .filter(|i| i.group == "navigate")
-            .filter_map(|i| i.command.as_ref())
-            .collect();
-        assert!(nav.contains(&&Command::OpenDrawer(DrawerId::Repo)));
-        assert!(nav.contains(&&Command::OpenDrawer(DrawerId::Session)));
-        assert!(nav.contains(&&Command::OpenDrawer(DrawerId::Context)));
     }
 
     #[test]

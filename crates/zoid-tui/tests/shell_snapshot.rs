@@ -239,15 +239,16 @@ fn palette_overlay_frame() {
     insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
 }
 
-/// After Plan 2 added the "session" group, the full grouped list overflows the
-/// fixed 18-row overlay at a 24-row terminal. Navigating to the LAST
-/// selectable item (Quit) must scroll it into view, not clip it.
+/// Drawn at a deliberately short 20-row terminal so the overlay is
+/// height-clamped below the grouped list's length (independent of how many
+/// palette rows exist). Navigating to the LAST selectable item (Quit) must
+/// scroll it into view, not clip it — this is the CL5 scroll-follow guard.
 #[test]
 fn palette_overlay_scrolled_to_end_frame() {
     let mut s = ShellState::new();
     s.overlay = Overlay::Palette;
     s.palette.selected = 1000; // nav() clamps to the last selectable row (usize::MAX would overflow nav's i64 cast)
-    let out = draw(&s, &seeded(), 100, 24);
+    let out = draw(&s, &seeded(), 100, 20);
     assert!(
         out.contains("Quit zoid"),
         "the last row (Quit) must be visible, not clipped:\n{out}"
