@@ -716,3 +716,45 @@ fn config_overlay_frame() {
     let sections = build_sections(&cfg, &prov, &ks);
     insta::assert_snapshot!(draw_config(&s, &sections, 100, 24));
 }
+
+/// The `ask_user` question overlay (Task 11), pick mode: a centered card
+/// listing the model's choices plus the two synthetic "Other…"/"— let you
+/// decide —" rows, the first row (default `selected == 0`) highlighted with
+/// `SEL_BG`. Buffer-Debug captures the highlight style, not just the text.
+fn draw_question(q: zoid_tui::question::QuestionState, w: u16, h: u16) -> String {
+    let mut s = ShellState::new();
+    s.overlay = Overlay::Question;
+    s.question = Some(q);
+    let input = TextArea::default();
+    let backend = TestBackend::new(w, h);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|f| {
+            render_shell(
+                f,
+                &s,
+                &empty_economy(),
+                &[],
+                &[],
+                &input,
+                false,
+                &normal_view(),
+            );
+        })
+        .unwrap();
+    format!("{:#?}", terminal.backend().buffer())
+}
+
+#[test]
+fn question_overlay_pick_frame() {
+    use zoid_tui::question::QuestionState;
+    let q = QuestionState::new("Which DB?", vec!["postgres".into(), "sqlite".into()]);
+    insta::assert_snapshot!(draw_question(q, 100, 24));
+}
+
+#[test]
+fn question_overlay_freetext_frame() {
+    use zoid_tui::question::QuestionState;
+    let q = QuestionState::new("Describe the bug", vec![]);
+    insta::assert_snapshot!(draw_question(q, 100, 24));
+}
