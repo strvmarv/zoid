@@ -35,7 +35,7 @@ fn draw(state: &ShellState, msgs: &[ChatMsg], w: u16, h: u16) -> String {
                 &input,
                 false,
                 &normal_view(),
-            )
+            );
         })
         .unwrap();
     terminal.backend().to_string()

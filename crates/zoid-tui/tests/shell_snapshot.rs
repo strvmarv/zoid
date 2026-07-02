@@ -30,7 +30,9 @@ fn draw_econ(state: &ShellState, econ: &EconomyView, msgs: &[ChatMsg], w: u16, h
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|f| render_shell(f, state, econ, msgs, &input, false, &normal_view()))
+        .draw(|f| {
+            render_shell(f, state, econ, msgs, &input, false, &normal_view());
+        })
         .unwrap();
     terminal.backend().to_string()
 }
@@ -209,7 +211,7 @@ fn long_turn_wraps_instead_of_clipping() {
                 &input,
                 false,
                 &normal_view(),
-            )
+            );
         })
         .unwrap();
     let buf = terminal.backend().buffer().clone();
@@ -314,7 +316,7 @@ fn economy_drawer_selection_highlights_only_when_rail_focused() {
                     &input,
                     false,
                     &normal_view(),
-                )
+                );
             })
             .unwrap();
         terminal
@@ -432,7 +434,7 @@ fn draw_zoom(zoom: Zoom, w: u16, h: u16) -> String {
                 &input,
                 false,
                 &view,
-            )
+            );
         })
         .unwrap();
     format!("{:#?}", terminal.backend().buffer())
@@ -508,7 +510,7 @@ fn draw_overlay(overlay: Overlay, w: u16, h: u16) -> String {
                 &input,
                 false,
                 &normal_view(),
-            )
+            );
         })
         .unwrap();
     format!("{:#?}", terminal.backend().buffer())
@@ -557,7 +559,7 @@ fn growing_message_box_frame() {
                 &input,
                 false,
                 &normal_view(),
-            )
+            );
         })
         .unwrap();
     insta::assert_snapshot!(format!("{:#?}", terminal.backend().buffer()));
@@ -592,7 +594,7 @@ fn markdown_message_frame() {
                 &input,
                 false,
                 &normal_view(),
-            )
+            );
         })
         .unwrap();
     insta::assert_snapshot!(format!("{:#?}", terminal.backend().buffer()));
@@ -618,7 +620,7 @@ fn running_title_frame() {
                 &input,
                 true,
                 &normal_view(),
-            )
+            );
         })
         .unwrap();
     insta::assert_snapshot!(format!("{:#?}", terminal.backend().buffer()));
@@ -652,7 +654,7 @@ fn draw_delegated(w: u16, h: u16) -> String {
                 &input,
                 false,
                 &normal_view(),
-            )
+            );
         })
         .unwrap();
     // Buffer Debug per §8 snapshot standard — captures the DELEGATE_BG style.

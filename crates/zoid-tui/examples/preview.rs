@@ -226,7 +226,9 @@ fn main() {
         tz_offset_secs: 0,
     };
     terminal
-        .draw(|f| render_shell(f, &state, &economy, &msgs, &input, false, &view))
+        .draw(|f| {
+            render_shell(f, &state, &economy, &msgs, &input, false, &view);
+        })
         .unwrap();
 
     // A ruler makes column drift obvious at a glance.

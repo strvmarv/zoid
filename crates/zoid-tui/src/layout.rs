@@ -185,7 +185,7 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
 }
 
 /// A rect `w×h` (clamped to `area`) centered horizontally, near the top third.
-fn centered(area: Rect, w: u16, h: u16) -> Rect {
+pub(crate) fn centered(area: Rect, w: u16, h: u16) -> Rect {
     let w = w.min(area.width);
     let h = h.min(area.height);
     let x = area.x.saturating_add((area.width.saturating_sub(w)) / 2);

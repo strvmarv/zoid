@@ -29,8 +29,12 @@ pub fn render_shell(
     input: &TextArea<'_>,
     streaming: bool,
     view: &ChatView,
-) {
+) -> u16 {
     let layout = compute(frame.area(), state);
+    // The max conversation scroll offset at the current altitude, returned so the
+    // bin can clamp the STORED offset (not just the drawn one) and avoid a silent
+    // dead-scroll-up zone. 0 unless the Chat conversation is drawn this frame.
+    let mut conv_max_scroll = 0u16;
 
     // The top row is intentionally blank: the app name was removed from the
     // title bar and the activity indicator now lives in the status bar (right).
@@ -61,6 +65,7 @@ pub fn render_shell(
                 .len()
                 .saturating_sub(text.height as usize)
                 .min(u16::MAX as usize) as u16;
+            conv_max_scroll = max_scroll;
             let scroll = state.conversation_scroll.min(max_scroll);
             frame.render_widget(Paragraph::new(body).scroll((scroll, 0)), text);
         }
@@ -96,9 +101,10 @@ pub fn render_shell(
             render_sessions_overlay(frame, state, p);
         }
     } else if state.overlay == Overlay::Config {
-        let full = frame.area();
-        render_config(frame, state, &state.config_sections, full);
+        // render_config centers its own card within the given area.
+        render_config(frame, state, &state.config_sections, frame.area());
     }
+    conv_max_scroll
 }
 
 fn render_build_placeholder(frame: &mut Frame, area: Rect) {
@@ -579,66 +585,54 @@ fn render_sessions_overlay(frame: &mut Frame, state: &ShellState, area: Rect) {
     );
 }
 
-/// The full-screen config overlay (Task 11): a bordered "zoid · settings"
-/// frame split into a left section nav and a right detail pane for the active
-/// section's rows — label, current value (or the in-progress edit buffer +
-/// caret), a right-aligned provenance tag, and a `⚠` marker when an env var
-/// shadows the field. Full-screen (spec: replaces the conversation, unlike the
-/// small centered palette popup), so callers pass `frame.area()`.
+/// The config overlay (Task 11): a contained, centered "zoid · settings" card.
+/// Single column — the section list (active marked), then the active section's
+/// rows (label, current value or the in-progress edit buffer + caret, and a
+/// right-aligned provenance tag with a `⚠` when an env var shadows the field),
+/// then a footer keybinding hint. Sized to its content and centered so a few
+/// short fields don't leave a vast empty screen. `area` is the full frame.
 pub fn render_config(
     frame: &mut Frame,
     state: &ShellState,
     sections: &[crate::config_view::Section],
     area: Rect,
 ) {
-    use crate::text::truncate;
-    frame.render_widget(Clear, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" zoid · settings ")
-        .border_style(Style::new().fg(color::CHAT_ACCENT));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    use crate::layout::centered;
+    use crate::text::{pad_to, truncate};
 
+    frame.render_widget(Clear, area); // focus the card: clear the frame behind it
     if sections.is_empty() {
         return;
     }
+    let active = state.config_section.min(sections.len() - 1);
+    // Words, not arrow glyphs, keep the footer within §16 (no untokenized glyphs).
+    let footer = "Tab section · Left/Right change · Enter edit · Esc close";
 
-    // Left nav (fixed width) · gap · right detail (remainder).
-    let nav_w = 18u16.min(inner.width.saturating_sub(1));
-    let cols = ratatui::layout::Layout::horizontal([
-        ratatui::layout::Constraint::Length(nav_w),
-        ratatui::layout::Constraint::Length(2), // gap so nav text can't touch detail
-        ratatui::layout::Constraint::Min(1),
-    ])
-    .split(inner);
-
-    let nav: Vec<Line> = sections
+    // Content width: fit the footer and the widest section title, with a floor,
+    // plus one column of left indent, capped to the frame. Field rows are padded/
+    // truncated to this width so the provenance tag always lands at the card edge.
+    let title_w = sections
         .iter()
-        .enumerate()
-        .map(|(i, s)| {
-            let active = i == state.config_section;
-            let marker = if active { glyph::COLLAPSED } else { ' ' };
-            Line::from(Span::styled(
-                format!("{marker} {}", s.title),
-                Style::new().fg(if active {
-                    color::CHAT_ACCENT
-                } else {
-                    color::DIM
-                }),
-            ))
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(nav), cols[0]);
+        .map(|s| s.title.width() + 2)
+        .max()
+        .unwrap_or(0);
+    let inner_w = (footer.width().max(title_w).max(40) + 1)
+        .min(area.width.saturating_sub(2) as usize)
+        .max(8);
 
-    let sec = &sections[state.config_section.min(sections.len().saturating_sub(1))];
-    // Rows span the full detail-pane width: fixed label column on the left, the
-    // value stretched across the middle, and the provenance tag (+ shadow ⚠)
-    // pinned to the right edge — so the page fills the screen instead of hugging
-    // the left. `Tab` switches section, `←/→` change the focused value.
-    let pane_w = cols[2].width as usize;
-    let mut detail: Vec<Line> = Vec::new();
-    for (i, r) in sec.rows.iter().enumerate() {
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from("")); // top breathing room
+    for (i, s) in sections.iter().enumerate() {
+        let on = i == active;
+        let marker = if on { glyph::COLLAPSED } else { ' ' };
+        lines.push(Line::from(Span::styled(
+            format!(" {marker} {}", s.title),
+            Style::new().fg(if on { color::CHAT_ACCENT } else { color::DIM }),
+        )));
+    }
+    lines.push(Line::from(""));
+
+    for (i, r) in sections[active].rows.iter().enumerate() {
         let cur = i == state.config_field;
         let val = if cur {
             if let Some(buf) = &state.config_edit {
@@ -666,27 +660,45 @@ pub fn render_config(
         } else {
             String::new()
         };
-        // Cursor marker in the gutter so the focused row reads without color alone.
+        // Cursor marker + label on the left; value stretched (display-width padded)
+        // so the tag lands at the card's right edge.
         let marker = if cur { glyph::COLLAPSED } else { ' ' };
-        let label = format!("{marker} {:<16} ", r.label); // fixed-width label column
-                                                          // Stretch the value to fill the gap so the tag lands at the right edge.
-        let fixed = label.width() + tag_txt.width() + warn.width();
-        let mid_w = pane_w.saturating_sub(fixed).max(1);
-        let val_shown = truncate(&val, mid_w);
+        let left = format!(" {marker} {}", pad_to(r.label, 14));
+        let fixed = left.width() + tag_txt.width() + warn.width();
+        let mid = inner_w.saturating_sub(fixed).max(1);
+        let val_shown = pad_to(&truncate(&val, mid), mid);
         let mut spans = vec![
             Span::styled(
-                label,
+                left,
                 Style::new().fg(if cur { color::CHAT_ACCENT } else { color::TXT }),
             ),
-            Span::styled(format!("{val_shown:<mid_w$}"), Style::new().fg(color::TXT)),
+            Span::styled(val_shown, Style::new().fg(color::TXT)),
             Span::styled(tag_txt.to_string(), Style::new().fg(tag_col)),
         ];
         if !warn.is_empty() {
             spans.push(Span::styled(warn, Style::new().fg(color::WARN)));
         }
-        detail.push(Line::from(spans));
+        lines.push(Line::from(spans));
     }
-    frame.render_widget(Paragraph::new(detail), cols[2]);
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!(" {footer}"),
+        Style::new().fg(color::DIM),
+    )));
+
+    // Card = content + border, centered; content is already 1-space indented.
+    let card_w = inner_w as u16 + 2;
+    let card_h = (lines.len() as u16 + 2).min(area.height);
+    let rect = centered(area, card_w, card_h);
+    // (the full-frame Clear above already wiped the card region)
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(" zoid · settings ")
+        .border_style(Style::new().fg(color::CHAT_ACCENT));
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn object_row(o: &crate::objects::Obj) -> String {

@@ -446,6 +446,11 @@ struct App {
     last_git_refresh: std::time::Instant,
     /// When the altitude last changed, for the fold/unfold reveal (Ⓡ2).
     zoom_changed_at: Option<std::time::Instant>,
+    /// Max conversation scroll offset from the last rendered frame (body length −
+    /// viewport height at the current altitude). Cached from `render_shell` so the
+    /// scroll handler can clamp the STORED offset and never let it run away past
+    /// the last line (which would make scroll-up appear dead).
+    last_conv_max_scroll: u16,
     /// Local UTC offset (seconds) for message-row HH:MM stamps, sampled once.
     tz_offset_secs: i32,
     /// Epoch-millis the active session started (resumed session's `created_ts`,
@@ -567,6 +572,7 @@ async fn main() -> Result<()> {
         started: std::time::Instant::now(),
         last_git_refresh: std::time::Instant::now(),
         zoom_changed_at: None,
+        last_conv_max_scroll: 0,
         tz_offset_secs,
         session_started_ms,
         session_ids: Vec::new(),
@@ -606,11 +612,13 @@ async fn main() -> Result<()> {
     result
 }
 
-/// Whether a zoom fold/unfold animation is still in flight (not yet past
-/// `ZOOM_ANIM_MS`, and not short-circuited by reduced-motion).
-fn zoom_animating(app: &App) -> bool {
-    matches!(app.zoom_changed_at, Some(t0) if t0.elapsed().as_millis() < ZOOM_ANIM_MS as u128)
-        && !app.shell.reduced_motion
+/// Clamp a proposed conversation scroll offset into `[0, max]`. `max` is the last
+/// rendered frame's max offset (body length − viewport height). Clamping the
+/// STORED offset — not just the drawn one — keeps it from running away past the
+/// last line, which would otherwise make scroll-up appear dead until the overshoot
+/// unwinds keypress by keypress.
+fn clamp_scroll(next: i32, max: u16) -> u16 {
+    next.clamp(0, max as i32) as u16
 }
 
 async fn run<B: ratatui::backend::Backend>(
@@ -638,6 +646,13 @@ async fn run<B: ratatui::backend::Backend>(
         app.shell.ctx_used = window.total_tokens;
         app.shell.duration = fmt_duration(app.session_started_ms, now_ms());
         app.shell.input_rows = app.textarea.lines().len().max(1) as u16;
+        let mut frame_conv_max = 0u16;
+        // Whether the frame we're about to draw is "settled" (no reveal truncation).
+        // Used to end the zoom animation only after a full-body frame is actually
+        // painted — otherwise a tick landing just before the animation window closes
+        // paints a truncated frame and the loop stops redrawing (stale until an
+        // unrelated event wakes it).
+        let mut frame_reveal_none = false;
         terminal.draw(|f| {
             let msgs = conversation(&app.events);
             let window = zoid_core::context::context_window(&app.events);
@@ -684,13 +699,14 @@ async fn run<B: ratatui::backend::Backend>(
                 }
                 None => None,
             };
+            frame_reveal_none = reveal.is_none();
             let view = ChatView {
                 zoom: app.shell.zoom,
                 caret_on: caret,
                 reveal,
                 tz_offset_secs: app.tz_offset_secs,
             };
-            render_shell(
+            frame_conv_max = render_shell(
                 f,
                 &app.shell,
                 &economy,
@@ -700,6 +716,12 @@ async fn run<B: ratatui::backend::Backend>(
                 &view,
             );
         })?;
+        app.last_conv_max_scroll = frame_conv_max;
+        // End the zoom animation only once a settled (reveal-complete) frame has
+        // actually been painted, so the final full-body frame is never skipped.
+        if frame_reveal_none && app.zoom_changed_at.is_some() {
+            app.zoom_changed_at = None;
+        }
 
         tokio::select! {
             maybe_term = term_events.next() => {
@@ -743,10 +765,11 @@ async fn run<B: ratatui::backend::Backend>(
                     AgentUpdate::TurnComplete => { app.streaming = false; }
                 }
             }
-            _ = motion_tick.tick(), if app.streaming || zoom_animating(app) => {
-                // Wake to redraw the blinking caret or the in-flight zoom reveal. The
-                // budget: this branch is disabled when nothing is animating, so an
-                // idle app never ticks.
+            _ = motion_tick.tick(), if app.streaming || app.zoom_changed_at.is_some() => {
+                // Wake to redraw the blinking caret or the in-flight zoom reveal. Ticks
+                // stay armed until `zoom_changed_at` is cleared (above, after a settled
+                // frame is painted), so the reveal always ends on a full-body frame
+                // rather than a truncated one. Idle + not-animating never ticks.
             }
         }
     }
@@ -1030,7 +1053,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::ScrollConversation(d) => {
             let next = app.shell.conversation_scroll as i32 + d;
-            app.shell.conversation_scroll = next.max(0) as u16;
+            app.shell.conversation_scroll = clamp_scroll(next, app.last_conv_max_scroll);
         }
         // Conversation clicks are resolved in the event loop (where the layout is
         // available) via `handle_conversation_click`; this arm keeps the match
@@ -1592,6 +1615,19 @@ mod tests {
     }
 
     #[test]
+    fn clamp_scroll_bounds_offset() {
+        // floors at 0 (can't scroll above the top)
+        assert_eq!(clamp_scroll(-5, 40), 0);
+        // ordinary in-range move
+        assert_eq!(clamp_scroll(12, 40), 12);
+        // caps at max — the key fix: over-scroll can't store a runaway offset that
+        // makes later scroll-up appear dead.
+        assert_eq!(clamp_scroll(500, 40), 40);
+        // max 0 (body fits the viewport) pins to the top
+        assert_eq!(clamp_scroll(9, 0), 0);
+    }
+
+    #[test]
     fn config_field_target_and_value_mapping() {
         use zoid_core::config::TomlValue;
         use zoid_tui::config_view::FieldKind;
@@ -1841,6 +1877,7 @@ mod tests {
             started: std::time::Instant::now(),
             last_git_refresh: std::time::Instant::now(),
             zoom_changed_at: None,
+            last_conv_max_scroll: 0,
             tz_offset_secs: 0,
             session_started_ms: 0,
             session_ids: Vec::new(),
