@@ -288,7 +288,8 @@ async fn run_turn_inner(
         // Execute each pending tool in the configured working directory
         // (blocking work off the async runtime), recording its result as an event.
         let cwd_for_exec = config.cwd.clone();
-        for tc in pending {
+        let mut pending_iter = pending.into_iter();
+        while let Some(tc) = pending_iter.next() {
             if let Gate::Deny(reason) = gate.check(&tc) {
                 emit(
                     &session,
@@ -428,6 +429,27 @@ async fn run_turn_inner(
                                 now,
                             )
                             .await?;
+                            // Drain any remaining batched tool calls so none is
+                            // left without a matching ToolResult (the provider's
+                            // tool-call protocol requires every call to be
+                            // answered before the next request).
+                            for rest in pending_iter.by_ref() {
+                                emit(
+                                    &session,
+                                    &mut events,
+                                    ui,
+                                    &config.branch,
+                                    EventKind::ToolResult {
+                                        id: rest.id,
+                                        name: rest.name,
+                                        output: "[skipped: turn aborted]".to_string(),
+                                        is_error: false,
+                                    },
+                                    session_id,
+                                    now,
+                                )
+                                .await?;
+                            }
                             break 'turn;
                         }
                     }

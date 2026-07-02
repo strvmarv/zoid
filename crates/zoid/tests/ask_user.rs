@@ -134,3 +134,75 @@ async fn ask_user_dropped_sender_aborts_turn_with_balanced_result() {
         "expected a balanced [user aborted] ask_user ToolResult, got: {results:?}"
     );
 }
+
+#[tokio::test]
+async fn abort_drains_remaining_batched_tool_calls() {
+    // A single model turn batches TWO tool calls before Done, with ask_user
+    // first: [ask_user, read_file]. Both ToolCalls land in one `pending`
+    // batch. Aborting ask_user must not leave read_file's ToolCall dangling.
+    let provider = zoid_testkit::script(vec![
+        zoid_testkit::tool_call("ask_user", serde_json::json!({ "question": "stop?" })),
+        zoid_testkit::tool_call("read_file", serde_json::json!({ "path": "whatever.txt" })),
+        ProviderEvent::Done,
+    ]);
+
+    let tools = Arc::new(zoid_tools::registry());
+    let session = SessionHandle::spawn(":memory:").unwrap();
+    let seed = seed_events();
+    session.append(seed[0].clone()).await.unwrap();
+
+    let (ui_tx, mut ui_rx) = mpsc::channel::<AgentUpdate>(64);
+
+    // Responder DROPS the reply sender (models Esc-abort).
+    let responder = tokio::spawn(async move {
+        while let Some(u) = ui_rx.recv().await {
+            if let AgentUpdate::AskUser { reply, .. } = u {
+                drop(reply);
+            }
+        }
+    });
+
+    let events = run_agent_turn(
+        zoid::agent::chat_turn_config(),
+        provider,
+        tools,
+        Arc::new(zoid_tools::AllowAll),
+        session.clone(),
+        seed,
+        "fake".into(),
+        ui_tx,
+        ulid::Ulid::new(),
+        fixed_now,
+    )
+    .await
+    .unwrap();
+    responder.abort();
+
+    let results = zoid_testkit::tool_results(&events);
+
+    assert!(
+        results
+            .iter()
+            .any(|(n, out, _)| n == "ask_user" && out == "[user aborted]"),
+        "expected a balanced [user aborted] ask_user ToolResult, got: {results:?}"
+    );
+    assert!(
+        results
+            .iter()
+            .any(|(n, out, err)| n == "read_file" && !err && out == "[skipped: turn aborted]"),
+        "expected read_file to be drained with a balanced [skipped: turn aborted] result, got: {results:?}"
+    );
+
+    let tool_call_count = events
+        .iter()
+        .filter(|e| matches!(e.kind, EventKind::ToolCall { .. }))
+        .count();
+    let tool_result_count = events
+        .iter()
+        .filter(|e| matches!(e.kind, EventKind::ToolResult { .. }))
+        .count();
+    assert_eq!(
+        tool_call_count, tool_result_count,
+        "every ToolCall must have a matching ToolResult (no dangling calls)"
+    );
+}
