@@ -35,11 +35,28 @@ impl ToolOutput {
     }
 }
 
+/// How the agent loop must execute a tool. `Local` tools run synchronously in
+/// the working directory (the v1 default). `Emitting` tools append a domain
+/// event instead of doing I/O. `Interactive` tools suspend the loop to collect
+/// input from the UI. The loop branches on this BEFORE calling `run()`, so only
+/// `Local` tools ever have `run()` invoked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolKind {
+    Local,
+    Emitting,
+    Interactive,
+}
+
 /// A callable tool. `spec()` is sent to the provider; `run()` executes it.
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn spec(&self) -> ToolSpec;
     fn run(&self, args: &Value, cwd: &Path) -> ToolOutput;
+    /// The execution kind (see [`ToolKind`]). Defaults to `Local`; the five
+    /// built-in tools do not override it.
+    fn kind(&self) -> ToolKind {
+        ToolKind::Local
+    }
 }
 
 /// The compiled-in tool set (spec §9: fixed curated set in v1).
@@ -130,5 +147,17 @@ mod tests {
         let out = crate::read::ReadFile.run(&serde_json::json!({ "path": "note.txt" }), dir.path());
         assert!(!out.is_error, "{}", out.text);
         assert_eq!(out.text, "in cwd");
+    }
+
+    #[test]
+    fn registry_tools_are_all_local_by_default() {
+        for t in registry() {
+            assert_eq!(
+                t.kind(),
+                ToolKind::Local,
+                "{} should default to Local",
+                t.name()
+            );
+        }
     }
 }
