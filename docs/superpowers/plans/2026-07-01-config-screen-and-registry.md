@@ -295,9 +295,11 @@ Claude-Session: https://claude.ai/code/session_01JdLxmJhT6KA3k4tCuVs3DY"
   - `pub fn parse_toml(s: &str) -> anyhow::Result<PartialConfig>`
   - `pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance)`
 
-- [ ] **Step 1: Write the failing tests** — append to `config.rs`:
+- [ ] **Step 1: Write the failing tests** — append to `config.rs`. (Add `use serde::Deserialize;` at the top of `config.rs` — the `PartialConfig`/`PartialEconomy` derives below need it. `Serialize` is intentionally NOT imported: `Config` is not serde-derived; serialization goes through `set_in_toml` in Task 4.)
 
 ```rust
+use serde::Deserialize;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source { Default, UserGlobal, Project, Local, Env }
 
@@ -1166,7 +1168,7 @@ pub fn build_sections(
         ],
     };
     let economy = Section {
-        title: "Economy ⑤".into(),
+        title: "Economy".into(),
         rows: vec![
             FieldRow { label: "context ceiling", value: opt(&cfg.economy.context_ceiling),
                 kind: FieldKind::Uint, source: prov.context_ceiling,
