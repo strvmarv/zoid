@@ -7,13 +7,14 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use ulid::Ulid;
 
 use zoid_core::event::{BranchId, Event, EventKind};
 use zoid_core::projection::{conversation, ChatMsg};
 use zoid_core::session::SessionHandle;
 use zoid_provider::{CompletionRequest, Message, Provider, ProviderEvent, ToolCall, ToolSpec};
-use zoid_tools::Tool;
+use zoid_tools::{Gate, Tool, ToolGate};
 
 /// Warning glyph used in agent-generated error messages; avoids a TUI-layer dep.
 /// `pub(crate)` so `subagent.rs` can detect a failed subagent from the same
@@ -48,10 +49,28 @@ pub fn chat_turn_config() -> TurnConfig {
 /// Max tool rounds per user message before the loop force-ends (safety leash).
 pub const MAX_TOOL_ITERATIONS: u32 = 25;
 
+/// The user's answer to an `ask_user` prompt.
+pub enum Answer {
+    Choice(String),
+    FreeText(String),
+    /// The user chose to let the agent decide (a positive choice, not a cancel).
+    LetYouDecide,
+}
+
 /// UI-facing updates emitted as the turn progresses.
 pub enum AgentUpdate {
     /// A new event was persisted; the UI should cache it and redraw.
     Appended(Box<Event>),
+    /// A Local tool is about to run; the UI shows an in-flight spinner until the
+    /// matching `ToolResult` is appended (or the turn completes).
+    ToolStarted { name: String },
+    /// The model asked the user a question; the loop parks until `reply`
+    /// resolves. Dropping `reply` (Esc) aborts the turn.
+    AskUser {
+        question: String,
+        choices: Vec<String>,
+        reply: oneshot::Sender<Answer>,
+    },
     /// The turn is finished (model produced no further tool calls / cap / error).
     TurnComplete,
 }
@@ -125,6 +144,7 @@ pub async fn run_agent_turn(
     config: TurnConfig,
     provider: Arc<dyn Provider>,
     tools: Arc<Vec<Box<dyn Tool>>>,
+    gate: Arc<dyn ToolGate>,
     session: SessionHandle,
     events: Vec<Event>,
     model: String,
@@ -133,7 +153,7 @@ pub async fn run_agent_turn(
     now: fn() -> i64,
 ) -> Result<Vec<Event>> {
     let result = run_turn_inner(
-        &config, provider, tools, session, events, model, &ui, session_id, now,
+        &config, provider, tools, gate, session, events, model, &ui, session_id, now,
     )
     .await;
     // Best-effort: if the receiver is already gone we still return the inner result.
@@ -149,6 +169,7 @@ async fn run_turn_inner(
     config: &TurnConfig,
     provider: Arc<dyn Provider>,
     tools: Arc<Vec<Box<dyn Tool>>>,
+    gate: Arc<dyn ToolGate>,
     session: SessionHandle,
     mut events: Vec<Event>,
     model: String,
@@ -267,30 +288,204 @@ async fn run_turn_inner(
         // Execute each pending tool in the configured working directory
         // (blocking work off the async runtime), recording its result as an event.
         let cwd_for_exec = config.cwd.clone();
-        for tc in pending {
-            let tools_for_exec = tools.clone();
-            let name = tc.name.clone();
-            let args = tc.args.clone();
-            let cwd = cwd_for_exec.clone();
-            let out = tokio::task::spawn_blocking(move || {
-                zoid_tools::run_tool(&tools_for_exec, &name, &args, &cwd)
-            })
-            .await?;
-            emit(
-                &session,
-                &mut events,
-                ui,
-                &config.branch,
-                EventKind::ToolResult {
-                    id: tc.id,
-                    name: tc.name,
-                    output: out.text,
-                    is_error: out.is_error,
-                },
-                session_id,
-                now,
-            )
-            .await?;
+        let mut pending_iter = pending.into_iter();
+        while let Some(tc) = pending_iter.next() {
+            if let Gate::Deny(reason) = gate.check(&tc) {
+                emit(
+                    &session,
+                    &mut events,
+                    ui,
+                    &config.branch,
+                    EventKind::ToolResult {
+                        id: tc.id,
+                        name: tc.name,
+                        output: reason,
+                        is_error: true,
+                    },
+                    session_id,
+                    now,
+                )
+                .await?;
+                continue;
+            }
+
+            let kind = tools.iter().find(|t| t.name() == tc.name).map(|t| t.kind());
+
+            match kind {
+                Some(zoid_tools::ToolKind::Emitting) if tc.name == "update_tasks" => {
+                    match zoid_core::tasks::parse_task_items(&tc.args) {
+                        Ok(items) => {
+                            let n = items.len();
+                            let active = items
+                                .iter()
+                                .filter(|i| i.status == zoid_core::tasks::TaskStatus::Active)
+                                .count();
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::Tasks { items },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::ToolResult {
+                                    id: tc.id,
+                                    name: tc.name,
+                                    output: format!("{n} tasks · {active} active"),
+                                    is_error: false,
+                                },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                        }
+                        Err(msg) => {
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::ToolResult {
+                                    id: tc.id,
+                                    name: tc.name,
+                                    output: msg,
+                                    is_error: true,
+                                },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                        }
+                    }
+                }
+                Some(zoid_tools::ToolKind::Interactive) if tc.name == "ask_user" => {
+                    let question = tc
+                        .args
+                        .get("question")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let choices = tc
+                        .args
+                        .get("choices")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|c| c.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let (rtx, rrx) = oneshot::channel::<Answer>();
+                    let _ = ui
+                        .send(AgentUpdate::AskUser {
+                            question,
+                            choices,
+                            reply: rtx,
+                        })
+                        .await;
+                    match rrx.await {
+                        Ok(ans) => {
+                            let output = match ans {
+                                Answer::Choice(s) | Answer::FreeText(s) => s,
+                                Answer::LetYouDecide => "[let you decide]".to_string(),
+                            };
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::ToolResult {
+                                    id: tc.id,
+                                    name: tc.name,
+                                    output,
+                                    is_error: false,
+                                },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                        }
+                        Err(_) => {
+                            // Sender dropped == Esc hard-abort: balanced result, end the turn.
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::ToolResult {
+                                    id: tc.id,
+                                    name: tc.name,
+                                    output: "[user aborted]".to_string(),
+                                    is_error: false,
+                                },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                            // Drain any remaining batched tool calls so none is
+                            // left without a matching ToolResult (the provider's
+                            // tool-call protocol requires every call to be
+                            // answered before the next request).
+                            for rest in pending_iter.by_ref() {
+                                emit(
+                                    &session,
+                                    &mut events,
+                                    ui,
+                                    &config.branch,
+                                    EventKind::ToolResult {
+                                        id: rest.id,
+                                        name: rest.name,
+                                        output: "[skipped: turn aborted]".to_string(),
+                                        is_error: false,
+                                    },
+                                    session_id,
+                                    now,
+                                )
+                                .await?;
+                            }
+                            break 'turn;
+                        }
+                    }
+                }
+                _ => {
+                    // Local tools (the default): run in the working directory.
+                    let _ = ui
+                        .send(AgentUpdate::ToolStarted {
+                            name: tc.name.clone(),
+                        })
+                        .await;
+                    let tools_for_exec = tools.clone();
+                    let name = tc.name.clone();
+                    let args = tc.args.clone();
+                    let cwd = cwd_for_exec.clone();
+                    let out = tokio::task::spawn_blocking(move || {
+                        zoid_tools::run_tool(&tools_for_exec, &name, &args, &cwd)
+                    })
+                    .await?;
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::ToolResult {
+                            id: tc.id,
+                            name: tc.name,
+                            output: out.text,
+                            is_error: out.is_error,
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                }
+            }
         }
         // loop: re-request with the tool results now in context
     }

@@ -10,6 +10,7 @@ pub mod markdown;
 pub mod motion;
 pub mod objects;
 pub mod palette;
+pub mod question;
 pub mod render;
 pub mod route;
 pub mod state;

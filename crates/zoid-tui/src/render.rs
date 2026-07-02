@@ -21,11 +21,13 @@ use tui_textarea::TextArea;
 use unicode_width::UnicodeWidthStr;
 use zoid_core::projection::ChatMsg;
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_shell(
     frame: &mut Frame,
     state: &ShellState,
     economy: &EconomyView,
     msgs: &[ChatMsg],
+    tasks: &[zoid_core::tasks::TaskItem],
     input: &TextArea<'_>,
     streaming: bool,
     view: &ChatView,
@@ -54,7 +56,20 @@ pub fn render_shell(
                 horizontal: CONV_PAD,
                 vertical: 0,
             });
-            let body = conversation_view(msgs, view, streaming, text.width as usize);
+            let mut body = conversation_view(msgs, view, streaming, text.width as usize);
+            // In-flight tool indicator: a dim spinner line below the last message,
+            // above the input, shown while a Local tool call is running (cleared
+            // once its `ToolResult` arrives or the turn completes). §16: glyph and
+            // colors come from `tokens`, never a literal.
+            if let Some(name) = &state.active_tool {
+                body.push(Line::from(vec![
+                    Span::styled(format!("{} ", glyph::RUNNING), Style::new().fg(color::WARN)),
+                    Span::styled(
+                        format!("running · {name} {}", glyph::ELLIPSIS),
+                        Style::new().fg(color::DIM),
+                    ),
+                ]));
+            }
             // Clamp the scroll offset to the body produced at THIS altitude. The three
             // zoom altitudes (Summary/Normal/Detail) yield very different line counts,
             // so an offset valid at one is meaningless at another; without this clamp a
@@ -73,7 +88,7 @@ pub fn render_shell(
     }
 
     if layout.rail.is_some() {
-        render_rail(frame, state, economy, &layout);
+        render_rail(frame, state, economy, tasks, &layout);
     }
 
     render_input(frame, input, layout.input);
@@ -103,6 +118,10 @@ pub fn render_shell(
     } else if state.overlay == Overlay::Config {
         // render_config centers its own card within the given area.
         render_config(frame, state, &state.config_sections, frame.area());
+    } else if state.overlay == Overlay::Question {
+        if let Some(q) = &state.question {
+            render_question(frame, frame.area(), q);
+        }
     }
     conv_max_scroll
 }
@@ -192,7 +211,13 @@ fn render_status(
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn render_rail(frame: &mut Frame, state: &ShellState, economy: &EconomyView, layout: &ShellLayout) {
+fn render_rail(
+    frame: &mut Frame,
+    state: &ShellState,
+    economy: &EconomyView,
+    tasks: &[zoid_core::tasks::TaskItem],
+    layout: &ShellLayout,
+) {
     // Each drawer is a rounded bordered box (spec `docs/ux/chat-mode.html`
     // `.drawer{border:1px solid var(--line2);border-radius:8px}`): border +
     // title are the Chat accent blue when open, dim when closed. No "chat
@@ -232,6 +257,7 @@ fn render_rail(frame: &mut Frame, state: &ShellState, economy: &EconomyView, lay
                 }
                 DrawerId::Repo => render_repo_body(frame, state, body_rect),
                 DrawerId::Session => render_session_body(frame, state, body_rect), // Task 13
+                DrawerId::Tasks => render_tasks_body(frame, body_rect, tasks),
             }
         }
     }
@@ -421,6 +447,42 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
         ),
     ]));
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// The tasks drawer body (Task 8): one row per task, a token glyph+color for
+/// status (☐ pending/dim, ◐ active/warn, ✓ done/ok — spec §16, no literals),
+/// label truncated to fit, capped to the rows the box actually has. Empty →
+/// a dim "no tasks" line rather than a blank body.
+fn render_tasks_body(frame: &mut Frame, area: Rect, items: &[zoid_core::tasks::TaskItem]) {
+    use crate::text::truncate;
+    use zoid_core::tasks::TaskStatus;
+    if items.is_empty() {
+        let line = Line::from(Span::styled("no tasks", Style::new().fg(color::DIM)));
+        frame.render_widget(Paragraph::new(line), area);
+        return;
+    }
+    let rows: Vec<Line> = items
+        .iter()
+        .take(area.height as usize)
+        .map(|it| {
+            let (g, c) = match it.status {
+                TaskStatus::Pending => (glyph::PENDING, color::DIM),
+                TaskStatus::Active => (glyph::RUNNING, color::WARN),
+                TaskStatus::Done => (glyph::PASS, color::OK),
+            };
+            let text_color = if matches!(it.status, TaskStatus::Done) {
+                color::DIM
+            } else {
+                color::TXT
+            };
+            let label = truncate(&it.text, area.width.saturating_sub(2) as usize);
+            Line::from(vec![
+                Span::styled(format!("{g} "), Style::new().fg(c)),
+                Span::styled(label, Style::new().fg(text_color)),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(rows), area);
 }
 
 fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
@@ -699,6 +761,114 @@ pub fn render_config(
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The `ask_user` question overlay (Task 11): a centered, contained card —
+/// same chrome as `render_config` (rounded border, cleared background,
+/// content sized to fit). Pick mode lists `q.rows()` (the model's choices +
+/// the two synthetic "Other…"/"— let you decide —" rows from `question.rs`)
+/// with the selected row highlighted; free-text mode shows the buffer with a
+/// caret and a dim hint line. All glyphs/colors come from `tokens` (§16).
+const QUESTION_HINT: &str = "submit · empty = let you decide · Esc take over";
+
+pub fn render_question(frame: &mut Frame, area: Rect, q: &crate::question::QuestionState) {
+    use crate::layout::centered;
+    use crate::question::QuestionMode;
+
+    frame.render_widget(Clear, area); // focus the card: clear the frame behind it
+
+    // Content width: fit the question text / the widest row / (in free-text
+    // mode) the hint line, with a floor, capped to the frame (mirrors
+    // render_config's inner_w derivation).
+    let widest_row = match q.mode {
+        QuestionMode::Pick => q.rows().iter().map(|r| r.width()).max().unwrap_or(0),
+        QuestionMode::FreeText => (q.free_text.width() + 1) // + caret column
+            .max(QUESTION_HINT.width() + 2), // + glyph::RETURN + separating space
+    };
+    let content_w = widest_row
+        .max(q.question.width())
+        .max(40)
+        .min(area.width.saturating_sub(4) as usize);
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(""));
+    for l in wrap_plain(&q.question, content_w) {
+        lines.push(Line::from(Span::styled(
+            format!(" {l}"),
+            Style::new().fg(color::TXT),
+        )));
+    }
+    lines.push(Line::from(""));
+
+    match q.mode {
+        QuestionMode::Pick => {
+            for (i, r) in q.rows().iter().enumerate() {
+                let style = if i == q.selected {
+                    Style::new().fg(color::TXT).bg(color::SEL_BG)
+                } else {
+                    Style::new().fg(color::TXT)
+                };
+                lines.push(Line::from(Span::styled(format!(" {r}"), style)));
+            }
+        }
+        QuestionMode::FreeText => {
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {}", q.free_text), Style::new().fg(color::TXT)),
+                Span::styled(
+                    glyph::CARET.to_string(),
+                    Style::new().fg(color::CHAT_ACCENT),
+                ),
+            ]));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!(" {} {QUESTION_HINT}", glyph::RETURN),
+                Style::new().fg(color::DIM),
+            )));
+        }
+    }
+
+    let card_w = content_w as u16 + 2 + 1; // + left indent + border
+    let card_h = (lines.len() as u16 + 2).min(area.height);
+    let rect = centered(area, card_w, card_h);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(" zoid · question ")
+        .border_style(Style::new().fg(color::CHAT_ACCENT));
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Greedy word-wrap to at most `width` display columns per line (no hyphenation).
+/// Deterministic and simple — good enough for the short prose an `ask_user`
+/// question is expected to carry; a word longer than `width` is left whole
+/// (over-wide rather than mangled).
+fn wrap_plain(s: &str, width: usize) -> Vec<String> {
+    if s.is_empty() {
+        return vec![String::new()];
+    }
+    let mut lines = Vec::new();
+    let mut cur = String::new();
+    let mut cur_w = 0usize;
+    for word in s.split_whitespace() {
+        let word_w = word.width();
+        let sep_w = if cur.is_empty() { 0 } else { 1 };
+        if cur_w + sep_w + word_w > width && !cur.is_empty() {
+            lines.push(std::mem::take(&mut cur));
+            cur_w = 0;
+        }
+        if !cur.is_empty() {
+            cur.push(' ');
+            cur_w += 1;
+        }
+        cur.push_str(word);
+        cur_w += word_w;
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    lines
 }
 
 fn object_row(o: &crate::objects::Obj) -> String {

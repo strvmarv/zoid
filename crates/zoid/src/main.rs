@@ -463,6 +463,10 @@ struct App {
     /// One subagent at a time (spec §6): set while a `:delegate` dispatch (or a
     /// verb-picked task) is in flight; cleared when its `DelegationResult` lands.
     delegating: bool,
+    /// The reply channel for an in-flight `ask_user` question (Task 11): `Some`
+    /// while the question overlay is up. Dropping it (Esc-abort) makes the
+    /// agent loop record a balanced "[user aborted]" result and end the turn.
+    pending_answer: Option<tokio::sync::oneshot::Sender<zoid::agent::Answer>>,
 }
 
 impl App {
@@ -577,6 +581,7 @@ async fn main() -> Result<()> {
         session_started_ms,
         session_ids: Vec::new(),
         delegating: false,
+        pending_answer: None,
     };
 
     enable_raw_mode()?;
@@ -661,6 +666,10 @@ async fn run<B: ratatui::backend::Backend>(
             // post-P3 — the drawer is read-only/observability-only, so the view needs
             // only the window + churn (no policy or ledger).
             let economy = zoid_tui::EconomyView::build(&window, &churn, 0);
+            // Tasks drawer (Task 8): computed fresh from the event log every frame
+            // (not cached on ShellState) so it rehydrates on session resume, matching
+            // how `economy`/`msgs` are threaded above.
+            let task_items = zoid_core::tasks::tasks(&app.events);
             let elapsed = app.started.elapsed().as_millis() as u64;
             let caret = zoid_tui::motion::caret_on(elapsed, 1000, app.shell.reduced_motion);
             // Measure total lines (which re-runs conversation_view — tree-sitter in
@@ -711,6 +720,7 @@ async fn run<B: ratatui::backend::Backend>(
                 &app.shell,
                 &economy,
                 &msgs,
+                &task_items,
                 &app.textarea,
                 app.streaming,
                 &view,
@@ -760,9 +770,34 @@ async fn run<B: ratatui::backend::Backend>(
                             app.delegating = false;
                             app.shell.status_hint = None;
                         }
+                        // A tool result ends the in-flight indicator for that tool.
+                        if matches!(ev.kind, EventKind::ToolResult { .. }) {
+                            app.shell.clear_active_tool();
+                        }
                         app.events.push(*ev);
                     }
-                    AgentUpdate::TurnComplete => { app.streaming = false; }
+                    AgentUpdate::ToolStarted { name } => {
+                        app.shell.set_active_tool(name);
+                    }
+                    AgentUpdate::TurnComplete => {
+                        app.streaming = false;
+                        app.shell.clear_active_tool();
+                        app.pending_answer = None;
+                    }
+                    // Raise the question overlay and hold the reply channel:
+                    // the user's answer (or an Esc-abort, which drops `reply`)
+                    // is routed back to the agent loop by the action handlers
+                    // below (Task 11).
+                    AgentUpdate::AskUser {
+                        question,
+                        choices,
+                        reply,
+                    } => {
+                        app.shell.question =
+                            Some(zoid_tui::question::QuestionState::new(question, choices));
+                        app.shell.overlay = zoid_tui::state::Overlay::Question;
+                        app.pending_answer = Some(reply);
+                    }
                 }
             }
             _ = motion_tick.tick(), if app.streaming || app.zoom_changed_at.is_some() => {
@@ -1352,9 +1387,64 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 }
             }
         }
+        Action::QuestionMove(d) => {
+            if let Some(q) = &mut app.shell.question {
+                let len = q.rows().len();
+                q.selected = zoid_tui::palette::nav(q.selected, d, len);
+            }
+        }
+        Action::QuestionChar(c) => {
+            if let Some(q) = &mut app.shell.question {
+                q.free_text.push(c);
+            }
+        }
+        Action::QuestionBackspace => {
+            if let Some(q) = &mut app.shell.question {
+                q.free_text.pop();
+            }
+        }
+        Action::QuestionSelect => {
+            use zoid_tui::question::{QuestionMode, QuestionOutcome};
+            let outcome = app.shell.question.as_ref().map(|q| q.resolved());
+            match outcome {
+                Some(QuestionOutcome::EnterFreeText) => {
+                    if let Some(q) = &mut app.shell.question {
+                        q.mode = QuestionMode::FreeText;
+                    }
+                }
+                Some(QuestionOutcome::Choice(s)) => {
+                    answer_question(app, zoid::agent::Answer::Choice(s))
+                }
+                Some(QuestionOutcome::FreeText(s)) => {
+                    answer_question(app, zoid::agent::Answer::FreeText(s))
+                }
+                Some(QuestionOutcome::LetYouDecide) => {
+                    answer_question(app, zoid::agent::Answer::LetYouDecide)
+                }
+                None => {}
+            }
+        }
+        Action::QuestionAbort => {
+            // Esc = hard abort: dropping the sender makes the loop record a
+            // balanced "[user aborted]" result and end the turn.
+            app.pending_answer = None; // drop the Sender
+            app.shell.question = None;
+            app.shell.overlay = zoid_tui::state::Overlay::None;
+        }
         Action::Noop => {}
     }
     Ok(false)
+}
+
+/// Send the user's answer down the `ask_user` reply channel and close the
+/// overlay. A no-op if the channel was already consumed/dropped (e.g. a
+/// double-fire race), matching the other overlay-close handlers' style.
+fn answer_question(app: &mut App, ans: zoid::agent::Answer) {
+    if let Some(tx) = app.pending_answer.take() {
+        let _ = tx.send(ans);
+    }
+    app.shell.question = None;
+    app.shell.overlay = zoid_tui::state::Overlay::None;
 }
 
 async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<bool> {
@@ -1539,6 +1629,7 @@ fn spawn_turn(app: &App) {
             zoid::agent::chat_turn_config(),
             provider,
             tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
             session,
             seed,
             model,
@@ -1882,6 +1973,7 @@ mod tests {
             session_started_ms: 0,
             session_ids: Vec::new(),
             delegating: false,
+            pending_answer: None,
         }
     }
 

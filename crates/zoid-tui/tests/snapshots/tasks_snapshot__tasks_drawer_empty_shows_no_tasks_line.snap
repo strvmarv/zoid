@@ -1,16 +1,21 @@
 ---
-source: crates/zoid-tui/tests/shell_snapshot.rs
-assertion_line: 249
-expression: "draw(&s, &seeded(), 100, 24)"
+source: crates/zoid-tui/tests/tasks_snapshot.rs
+assertion_line: 74
+expression: "draw(&s, &[])"
 ---
 "                                                                                                    "
-"  00:00 › what's causing the 500?                       ╭ ▾ repo ─────────────────────────────────╮ "
+"    (no messages yet)                                   ╭ ▾ repo ─────────────────────────────────╮ "
 "                                                        │repo   ⎇ main                            │ "
-"  00:00 zoid an unwrapped lookup in the handler.        │worktree (none)                          │ "
+"                                                        │worktree (none)                          │ "
 "                                                        │changes +0 -0 · 0 files                  │ "
 "                                                        ╰─────────────────────────────────────────╯ "
 "                                                                                                    "
-"                                                        ╭ ▸ session ──────────────────────────────╮ "
+"                                                        ╭ ▾ session ──────────────────────────────╮ "
+"                                                        │(unnamed)                                │ "
+"                                                        │ ·                                       │ "
+"                                                        │dur 0m   tok 0                           │ "
+"                                                        │ctx 0                                    │ "
+"                                                        │cwd                                      │ "
 "                                                        ╰─────────────────────────────────────────╯ "
 "                                                                                                    "
 "                                                        ╭ ▾ context · tokens ─────────────────────╮ "
@@ -22,6 +27,9 @@ expression: "draw(&s, &seeded(), 100, 24)"
 "                                                        ╰─────────────────────────────────────────╯ "
 "                                                                                                    "
 "                                                        ╭ ▾ tasks ────────────────────────────────╮ "
+"                                                        │no tasks                                 │ "
+"                                                        │                                         │ "
+"                                                        │                                         │ "
 "                                                        ╰─────────────────────────────────────────╯ "
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"
 "│                                                                                                  │"

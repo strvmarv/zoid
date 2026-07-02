@@ -1,0 +1,12 @@
+[package]
+name = "zoid-testkit"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+zoid-core = { path = "../zoid-core" }
+zoid-provider = { path = "../zoid-provider" }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+ulid = { workspace = true }

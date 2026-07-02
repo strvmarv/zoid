@@ -45,6 +45,7 @@ pub enum Overlay {
     Verbs,
     Sessions,
     Config,
+    Question,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +53,7 @@ pub enum DrawerId {
     Repo,
     Session,
     Context,
+    Tasks,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,6 +146,12 @@ pub struct ShellState {
     /// the bin once per frame from `Config` + `Provenance` + secret statuses
     /// (Task 12 wires population; empty here is a valid default).
     pub config_sections: Vec<crate::config_view::Section>,
+    /// Name of the tool currently executing (in-flight indicator), or `None`.
+    pub active_tool: Option<String>,
+    /// The active `ask_user` question overlay's state, or `None` when no
+    /// question is pending (Task 11 renders it; Task 9 populates it via
+    /// `AgentUpdate::AskUser`).
+    pub question: Option<crate::question::QuestionState>,
 }
 
 impl ShellState {
@@ -164,6 +172,11 @@ impl ShellState {
             Drawer {
                 id: DrawerId::Context,
                 title: "context · tokens".into(),
+                open: true,
+            },
+            Drawer {
+                id: DrawerId::Tasks,
+                title: "tasks".into(),
                 open: true,
             },
         ];
@@ -201,6 +214,8 @@ impl ShellState {
             config_field: 0,
             config_edit: None,
             config_sections: Vec::new(),
+            active_tool: None,
+            question: None,
         }
     }
 
@@ -285,6 +300,16 @@ impl ShellState {
         }
         self.zoom = next;
     }
+
+    /// Show the in-flight spinner for a tool that has just started running.
+    pub fn set_active_tool(&mut self, name: impl Into<String>) {
+        self.active_tool = Some(name.into());
+    }
+
+    /// Clear the in-flight spinner (its `ToolResult` arrived, or the turn ended).
+    pub fn clear_active_tool(&mut self) {
+        self.active_tool = None;
+    }
 }
 
 impl Default for ShellState {
@@ -306,12 +331,26 @@ mod tests {
         let ids: Vec<DrawerId> = s.drawers.iter().map(|d| d.id).collect();
         assert_eq!(
             ids,
-            vec![DrawerId::Repo, DrawerId::Session, DrawerId::Context]
+            vec![
+                DrawerId::Repo,
+                DrawerId::Session,
+                DrawerId::Context,
+                DrawerId::Tasks
+            ]
         );
-        // All three expanded (mockup shows repo/session/context all `on`).
+        // All four expanded (mockup shows repo/session/context all `on`; tasks joins them).
         assert!(s.drawer(DrawerId::Repo).unwrap().open);
         assert!(s.drawer(DrawerId::Session).unwrap().open);
         assert!(s.drawer(DrawerId::Context).unwrap().open);
+        assert!(s.drawer(DrawerId::Tasks).unwrap().open);
+    }
+
+    #[test]
+    fn tasks_drawer_is_last_and_open() {
+        let s = ShellState::new();
+        let last = s.drawers.last().unwrap();
+        assert_eq!(last.id, DrawerId::Tasks);
+        assert!(last.open);
     }
 
     #[test]
@@ -437,5 +476,15 @@ mod tests {
             s.conversation_scroll, 17,
             "a saturating no-op zoom keypress preserves scroll"
         );
+    }
+
+    #[test]
+    fn active_tool_sets_and_clears() {
+        let mut s = ShellState::new();
+        assert_eq!(s.active_tool, None);
+        s.set_active_tool("shell");
+        assert_eq!(s.active_tool.as_deref(), Some("shell"));
+        s.clear_active_tool();
+        assert_eq!(s.active_tool, None);
     }
 }

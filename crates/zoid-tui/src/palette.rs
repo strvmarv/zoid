@@ -167,14 +167,16 @@ pub fn selectable_matches(items: &[PaletteItem], query: &str) -> Vec<usize> {
     scored.into_iter().map(|(i, _)| i).collect()
 }
 
-/// Move a selection index by `delta`, clamped to `[0, len)` (no wrap).
+/// Move a selection index by `delta`, wrapping at both ends (opencode-style):
+/// stepping past the last row lands on the first, and up from the first lands
+/// on the last. Returns 0 for an empty list. `len` is the row count.
 pub fn nav(selected: usize, delta: i32, len: usize) -> usize {
     if len == 0 {
         return 0;
     }
-    let max = len - 1;
+    let len_i = len as i64;
     let next = selected as i64 + delta as i64;
-    next.clamp(0, max as i64) as usize
+    next.rem_euclid(len_i) as usize
 }
 
 #[cfg(test)]
@@ -211,11 +213,17 @@ mod tests {
     }
 
     #[test]
-    fn nav_clamps() {
-        assert_eq!(nav(0, -1, 3), 0);
-        assert_eq!(nav(2, 1, 3), 2);
+    fn nav_wraps() {
+        // Down past the last row wraps to the top; up from the top wraps to the last.
+        assert_eq!(nav(2, 1, 3), 0);
+        assert_eq!(nav(0, -1, 3), 2);
+        // Interior moves are unchanged.
         assert_eq!(nav(1, 1, 3), 2);
+        assert_eq!(nav(1, -1, 3), 0);
+        // Empty list is a no-op (no panic, no divide-by-zero).
         assert_eq!(nav(0, 1, 0), 0);
+        // A multi-step delta still lands in range.
+        assert_eq!(nav(0, 5, 3), 2);
     }
 
     #[test]

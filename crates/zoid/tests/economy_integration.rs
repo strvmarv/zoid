@@ -36,6 +36,7 @@ async fn turn_usage_lands_in_ledger() {
         zoid::agent::chat_turn_config(),
         provider,
         Arc::new(zoid_tools::registry()),
+        Arc::new(zoid_tools::AllowAll),
         session.clone(),
         seed,
         "m".into(),

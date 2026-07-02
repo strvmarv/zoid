@@ -31,7 +31,7 @@ fn draw_econ(state: &ShellState, econ: &EconomyView, msgs: &[ChatMsg], w: u16, h
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|f| {
-            render_shell(f, state, econ, msgs, &input, false, &normal_view());
+            render_shell(f, state, econ, msgs, &[], &input, false, &normal_view());
         })
         .unwrap();
     terminal.backend().to_string()
@@ -162,6 +162,15 @@ fn chat_with_rail_frame() {
     insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
 }
 
+/// In-flight tool indicator: a dim spinner line below the last message while a
+/// Local tool call is running (P2 ①).
+#[test]
+fn active_tool_spinner_frame() {
+    let mut s = ShellState::new();
+    s.set_active_tool("shell");
+    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+}
+
 /// Rail drawer headers show title + chevron only — no keybind labels (spec §2.1).
 #[test]
 fn rail_headers_have_no_keybind_labels() {
@@ -208,6 +217,7 @@ fn long_turn_wraps_instead_of_clipping() {
                 &s,
                 &empty_economy(),
                 &msgs,
+                &[],
                 &input,
                 false,
                 &normal_view(),
@@ -255,7 +265,7 @@ fn palette_overlay_frame() {
 fn palette_overlay_scrolled_to_end_frame() {
     let mut s = ShellState::new();
     s.overlay = Overlay::Palette;
-    s.palette.selected = 1000; // nav() clamps to the last selectable row (usize::MAX would overflow nav's i64 cast)
+    s.palette.selected = 5; // directly select the last selectable item (Quit zoid)
     let out = draw(&s, &seeded(), 100, 20);
     assert!(
         out.contains("Quit zoid"),
@@ -313,6 +323,7 @@ fn economy_drawer_selection_highlights_only_when_rail_focused() {
                     &s,
                     &seeded_economy(),
                     &seeded(),
+                    &[],
                     &input,
                     false,
                     &normal_view(),
@@ -431,6 +442,7 @@ fn draw_zoom(zoom: Zoom, w: u16, h: u16) -> String {
                 &s,
                 &empty_economy(),
                 &seeded_detail(),
+                &[],
                 &input,
                 false,
                 &view,
@@ -507,6 +519,7 @@ fn draw_overlay(overlay: Overlay, w: u16, h: u16) -> String {
                 &s,
                 &empty_economy(),
                 &seeded_objects(),
+                &[],
                 &input,
                 false,
                 &normal_view(),
@@ -556,6 +569,7 @@ fn growing_message_box_frame() {
                 &s,
                 &empty_economy(),
                 &seeded(),
+                &[],
                 &input,
                 false,
                 &normal_view(),
@@ -591,6 +605,7 @@ fn markdown_message_frame() {
                 &s,
                 &empty_economy(),
                 &seeded_markdown(),
+                &[],
                 &input,
                 false,
                 &normal_view(),
@@ -617,6 +632,7 @@ fn running_title_frame() {
                 &s,
                 &empty_economy(),
                 &seeded(),
+                &[],
                 &input,
                 true,
                 &normal_view(),
@@ -651,6 +667,7 @@ fn draw_delegated(w: u16, h: u16) -> String {
                 &s,
                 &empty_economy(),
                 &seeded_delegated(),
+                &[],
                 &input,
                 false,
                 &normal_view(),
@@ -698,4 +715,46 @@ fn config_overlay_frame() {
     ];
     let sections = build_sections(&cfg, &prov, &ks);
     insta::assert_snapshot!(draw_config(&s, &sections, 100, 24));
+}
+
+/// The `ask_user` question overlay (Task 11), pick mode: a centered card
+/// listing the model's choices plus the two synthetic "Other…"/"— let you
+/// decide —" rows, the first row (default `selected == 0`) highlighted with
+/// `SEL_BG`. Buffer-Debug captures the highlight style, not just the text.
+fn draw_question(q: zoid_tui::question::QuestionState, w: u16, h: u16) -> String {
+    let mut s = ShellState::new();
+    s.overlay = Overlay::Question;
+    s.question = Some(q);
+    let input = TextArea::default();
+    let backend = TestBackend::new(w, h);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|f| {
+            render_shell(
+                f,
+                &s,
+                &empty_economy(),
+                &[],
+                &[],
+                &input,
+                false,
+                &normal_view(),
+            );
+        })
+        .unwrap();
+    format!("{:#?}", terminal.backend().buffer())
+}
+
+#[test]
+fn question_overlay_pick_frame() {
+    use zoid_tui::question::QuestionState;
+    let q = QuestionState::new("Which DB?", vec!["postgres".into(), "sqlite".into()]);
+    insta::assert_snapshot!(draw_question(q, 100, 24));
+}
+
+#[test]
+fn question_overlay_freetext_frame() {
+    use zoid_tui::question::QuestionState;
+    let q = QuestionState::new("Describe the bug", vec![]);
+    insta::assert_snapshot!(draw_question(q, 100, 24));
 }

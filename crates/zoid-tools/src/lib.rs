@@ -2,15 +2,17 @@
 //! Tools run in the process working directory (Chat is safe by human presence,
 //! spec §9); no path-jailing here.
 
+pub mod ask;
 pub mod edit;
 pub mod read;
 pub mod search;
 pub mod shell;
+pub mod tasks;
 pub mod write;
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use zoid_provider::ToolSpec;
+use zoid_provider::{ToolCall, ToolSpec};
 
 /// The outcome of running a tool. `text` is fed back to the model as the tool
 /// result; `is_error` marks failures (still returned to the model, not panicked).
@@ -35,11 +37,28 @@ impl ToolOutput {
     }
 }
 
+/// How the agent loop must execute a tool. `Local` tools run synchronously in
+/// the working directory (the v1 default). `Emitting` tools append a domain
+/// event instead of doing I/O. `Interactive` tools suspend the loop to collect
+/// input from the UI. The loop branches on this BEFORE calling `run()`, so only
+/// `Local` tools ever have `run()` invoked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolKind {
+    Local,
+    Emitting,
+    Interactive,
+}
+
 /// A callable tool. `spec()` is sent to the provider; `run()` executes it.
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn spec(&self) -> ToolSpec;
     fn run(&self, args: &Value, cwd: &Path) -> ToolOutput;
+    /// The execution kind (see [`ToolKind`]). Defaults to `Local`;
+    /// `update_tasks` overrides to `Emitting` and `ask_user` to `Interactive`.
+    fn kind(&self) -> ToolKind {
+        ToolKind::Local
+    }
 }
 
 /// The compiled-in tool set (spec §9: fixed curated set in v1).
@@ -50,7 +69,32 @@ pub fn registry() -> Vec<Box<dyn Tool>> {
         Box::new(edit::EditFile),
         Box::new(search::Search),
         Box::new(shell::Shell),
+        Box::new(tasks::UpdateTasks),
+        Box::new(ask::AskUser),
     ]
+}
+
+/// The decision a [`ToolGate`] returns for a pending tool call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Gate {
+    Allow,
+    /// Block the call; the string is fed back to the model as the tool result.
+    Deny(String),
+}
+
+/// Consulted once per pending tool call, immediately before dispatch. v1 ships
+/// only [`AllowAll`]; this is the insertion point where interactive tool
+/// approval will later live (an `ask_user` prompt gating `Deny`).
+pub trait ToolGate: Send + Sync {
+    fn check(&self, call: &ToolCall) -> Gate;
+}
+
+/// The v1 gate: every tool call is allowed.
+pub struct AllowAll;
+impl ToolGate for AllowAll {
+    fn check(&self, _call: &ToolCall) -> Gate {
+        Gate::Allow
+    }
 }
 
 /// Dispatch a tool call by name. Unknown tools return an error `ToolOutput`
@@ -100,6 +144,8 @@ mod tests {
         assert!(names.contains(&"edit_file"));
         assert!(names.contains(&"search"));
         assert!(names.contains(&"shell"));
+        assert!(names.contains(&"update_tasks"));
+        assert!(names.contains(&"ask_user"));
     }
 
     #[test]
@@ -130,5 +176,33 @@ mod tests {
         let out = crate::read::ReadFile.run(&serde_json::json!({ "path": "note.txt" }), dir.path());
         assert!(!out.is_error, "{}", out.text);
         assert_eq!(out.text, "in cwd");
+    }
+
+    #[test]
+    fn allow_all_allows_every_call() {
+        let g = AllowAll;
+        let call = zoid_provider::ToolCall {
+            id: String::new(),
+            name: "shell".into(),
+            args: json!({}),
+        };
+        assert_eq!(g.check(&call), Gate::Allow);
+    }
+
+    #[test]
+    fn registry_tools_are_all_local_by_default() {
+        // `update_tasks` (Emitting) and `ask_user` (Interactive) are the
+        // intentional exceptions; everything else still defaults to Local.
+        for t in registry()
+            .into_iter()
+            .filter(|t| t.name() != "update_tasks" && t.name() != "ask_user")
+        {
+            assert_eq!(
+                t.kind(),
+                ToolKind::Local,
+                "{} should default to Local",
+                t.name()
+            );
+        }
     }
 }

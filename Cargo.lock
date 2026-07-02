@@ -2676,6 +2676,7 @@ dependencies = [
  "ulid",
  "zoid-core",
  "zoid-provider",
+ "zoid-testkit",
  "zoid-tools",
  "zoid-tui",
 ]
@@ -2722,6 +2723,16 @@ dependencies = [
  "tree-sitter-rust",
  "tree-sitter-toml-ng",
  "tree-sitter-yaml",
+]
+
+[[package]]
+name = "zoid-testkit"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "ulid",
+ "zoid-core",
+ "zoid-provider",
 ]
 
 [[package]]
