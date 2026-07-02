@@ -13,5 +13,7 @@ spikes/dotnet-spike/out-aot
 # misc
 *.log
 
-# zoid local session data
-/.zoid/
+# zoid local session data + local (gitignored) config.local.toml;
+# project ./.zoid/config.toml IS committable (the shared repo override, §7.1).
+/.zoid/*
+!/.zoid/config.toml

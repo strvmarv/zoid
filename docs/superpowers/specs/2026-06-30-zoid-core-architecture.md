@@ -206,6 +206,18 @@ Event {
 
 v1 codifies only the configuration that **already exists in code** plus a precedence model; the broader surface is enumerated as deferred decisions so nothing is designed by accident.
 
+> **Status (2026-07-01) — implemented.** §7.1's TOML config + full precedence
+> (defaults → user-global → project → local → `ZOID_*` env) and an **encrypted-DB
+> secret store** now ship (see `2026-07-01-config-screen-design.md`). This
+> **amends the secrets rule below**: API keys may also live **encrypted in
+> `zoid.db`** (key file `~/.local/share/zoid/secret.key`, `0600`; env still wins
+> on read) — never in any `*.toml`. It also **supersedes the "read-only /
+> no in-TUI editor" note**: a full-screen **configuration screen** (palette →
+> *Open settings*, or `:config`) now edits config live and writes back to
+> user-global (or the repo override via `r`). Model caps come from a basic
+> **caps-only model registry** (`zoid-provider::model`). `base_url` override is
+> surfaced but not yet applied to provider construction (follow-up).
+
 - **Two namespaces, one principle.** *zoid-native* config lives in zoid's namespace; *adopted ecosystem entities* are read from their conventional Claude-style locations.
   - **zoid-native:** config is `~/.config/zoid/config.toml` (user global) and `./.zoid/config.toml` (project) — TOML. The **application database** is user-global at `~/.local/share/zoid/zoid.db` (XDG data dir, `$XDG_DATA_HOME` honored; **not** in the repo) — the event log + sessions today, usage/metrics and later DB-backed settings tomorrow (§5).
   - **adopted entities `[POST-V1 loaders]`:** `.claude/agents/*.md`, skills, `.claude/commands/*.md`, MCP server definitions (`.mcp.json`-style) — read from the ecosystem's locations, not redefined.
