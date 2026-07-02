@@ -291,34 +291,95 @@ async fn run_turn_inner(
                 .await?;
                 continue;
             }
-            let _ = ui
-                .send(AgentUpdate::ToolStarted {
-                    name: tc.name.clone(),
-                })
-                .await;
-            let tools_for_exec = tools.clone();
-            let name = tc.name.clone();
-            let args = tc.args.clone();
-            let cwd = cwd_for_exec.clone();
-            let out = tokio::task::spawn_blocking(move || {
-                zoid_tools::run_tool(&tools_for_exec, &name, &args, &cwd)
-            })
-            .await?;
-            emit(
-                &session,
-                &mut events,
-                ui,
-                &config.branch,
-                EventKind::ToolResult {
-                    id: tc.id,
-                    name: tc.name,
-                    output: out.text,
-                    is_error: out.is_error,
-                },
-                session_id,
-                now,
-            )
-            .await?;
+
+            let kind = tools.iter().find(|t| t.name() == tc.name).map(|t| t.kind());
+
+            match kind {
+                Some(zoid_tools::ToolKind::Emitting) if tc.name == "update_tasks" => {
+                    match zoid_core::tasks::parse_task_items(&tc.args) {
+                        Ok(items) => {
+                            let n = items.len();
+                            let active = items
+                                .iter()
+                                .filter(|i| i.status == zoid_core::tasks::TaskStatus::Active)
+                                .count();
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::Tasks { items },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::ToolResult {
+                                    id: tc.id,
+                                    name: tc.name,
+                                    output: format!("{n} tasks · {active} active"),
+                                    is_error: false,
+                                },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                        }
+                        Err(msg) => {
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::ToolResult {
+                                    id: tc.id,
+                                    name: tc.name,
+                                    output: msg,
+                                    is_error: true,
+                                },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                        }
+                    }
+                }
+                _ => {
+                    // Local tools (the default): run in the working directory.
+                    let _ = ui
+                        .send(AgentUpdate::ToolStarted {
+                            name: tc.name.clone(),
+                        })
+                        .await;
+                    let tools_for_exec = tools.clone();
+                    let name = tc.name.clone();
+                    let args = tc.args.clone();
+                    let cwd = cwd_for_exec.clone();
+                    let out = tokio::task::spawn_blocking(move || {
+                        zoid_tools::run_tool(&tools_for_exec, &name, &args, &cwd)
+                    })
+                    .await?;
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::ToolResult {
+                            id: tc.id,
+                            name: tc.name,
+                            output: out.text,
+                            is_error: out.is_error,
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                }
+            }
         }
         // loop: re-request with the tool results now in context
     }

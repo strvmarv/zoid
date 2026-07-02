@@ -6,6 +6,7 @@ pub mod edit;
 pub mod read;
 pub mod search;
 pub mod shell;
+pub mod tasks;
 pub mod write;
 
 use serde_json::Value;
@@ -67,6 +68,7 @@ pub fn registry() -> Vec<Box<dyn Tool>> {
         Box::new(edit::EditFile),
         Box::new(search::Search),
         Box::new(shell::Shell),
+        Box::new(tasks::UpdateTasks),
     ]
 }
 
@@ -140,6 +142,7 @@ mod tests {
         assert!(names.contains(&"edit_file"));
         assert!(names.contains(&"search"));
         assert!(names.contains(&"shell"));
+        assert!(names.contains(&"update_tasks"));
     }
 
     #[test]
@@ -185,7 +188,12 @@ mod tests {
 
     #[test]
     fn registry_tools_are_all_local_by_default() {
-        for t in registry() {
+        // `update_tasks` is the sole intentional exception (ToolKind::Emitting);
+        // everything else still defaults to Local.
+        for t in registry()
+            .into_iter()
+            .filter(|t| t.name() != "update_tasks")
+        {
             assert_eq!(
                 t.kind(),
                 ToolKind::Local,
