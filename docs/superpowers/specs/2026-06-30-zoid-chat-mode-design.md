@@ -8,7 +8,7 @@
 > **Spec set.** This is one of three documents. It assumes the **core-architecture** doc and covers **only Chat** — the mode-specific surface, interactions, economy detail, session management, and single-subagent delegation. Everything cross-cutting (event spine, mode seam, subagent *runtime*, data model, extensibility, testing harness, visual language) lives in the core doc and is **referenced, not restated**.
 > - **Core architecture** → `2026-06-30-zoid-core-architecture.md` (the shared substrate — read it first).
 > - **Chat mode** (this doc) → `2026-06-30-zoid-chat-mode-design.md` — conversation + manual implementation + single-subagent delegation (the v1 near-term work).
-> - **Build mode** → `2026-06-30-zoid-build-mode-design.md` (**deferred**: the autonomous 7-phase loop that *automates* Chat's shared subagent runtime across a whole plan).
+> - **Build mode** → **deferred and being redesigned.** The original design was archived 2026-07-02 to `docs/superpowers/archive/2026-07-02/specs/2026-06-30-zoid-build-mode-design.md`; a fresh design supersedes it.
 >
 > Where this doc says "see core §X" it means the core-architecture doc. Nothing here is a release — see the core roadmap (§9 there) and Chat's slice of it (§9 here).
 >
