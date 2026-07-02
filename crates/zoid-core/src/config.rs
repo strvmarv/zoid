@@ -2,6 +2,8 @@
 //! file/env IO lives in the binary. Secrets are NOT part of Config (see
 //! `secret.rs`) — never serialize an API key to a config file.
 
+use serde::Deserialize;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub provider: String,
@@ -50,5 +52,99 @@ mod tests {
         assert!(c.economy.auto_evict_cold);
         assert_eq!(c.economy.compact_threshold_pct, 0);
         assert!(c.economy.context_ceiling.is_none());
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source { Default, UserGlobal, Project, Local, Env }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Provenance {
+    pub provider: Source,
+    pub base_url: Source,
+    pub model: Source,
+    pub context_ceiling: Source,
+    pub auto_evict_cold: Source,
+    pub compact_threshold_pct: Source,
+    pub token_ceiling: Source,
+    pub reduced_motion: Source,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PartialEconomy {
+    pub context_ceiling: Option<u64>,
+    pub auto_evict_cold: Option<bool>,
+    pub compact_threshold_pct: Option<u8>,
+    pub token_ceiling: Option<u64>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PartialConfig {
+    pub provider: Option<String>,
+    pub base_url: Option<String>,
+    pub model: Option<String>,
+    pub reduced_motion: Option<bool>,
+    pub economy: PartialEconomy,
+}
+
+/// Parse one TOML layer. Unknown keys are rejected so typos surface early.
+pub fn parse_toml(s: &str) -> anyhow::Result<PartialConfig> {
+    Ok(toml::from_str(s)?)
+}
+
+/// Merge layers in order; later layers override earlier. Records the winning
+/// source per field. `layers` MUST start with `(Source::Default, _)` conceptually;
+/// callers pass real layers and merge seeds from `Config::default()`.
+pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
+    let mut cfg = Config::default();
+    let mut prov = Provenance {
+        provider: Source::Default, base_url: Source::Default, model: Source::Default,
+        context_ceiling: Source::Default, auto_evict_cold: Source::Default,
+        compact_threshold_pct: Source::Default, token_ceiling: Source::Default,
+        reduced_motion: Source::Default,
+    };
+    for (src, p) in layers {
+        if let Some(v) = &p.provider { cfg.provider = v.clone(); prov.provider = *src; }
+        if let Some(v) = &p.base_url { cfg.base_url = Some(v.clone()); prov.base_url = *src; }
+        if let Some(v) = &p.model { cfg.model = v.clone(); prov.model = *src; }
+        if let Some(v) = p.reduced_motion { cfg.reduced_motion = v; prov.reduced_motion = *src; }
+        if let Some(v) = p.economy.context_ceiling { cfg.economy.context_ceiling = Some(v); prov.context_ceiling = *src; }
+        if let Some(v) = p.economy.auto_evict_cold { cfg.economy.auto_evict_cold = v; prov.auto_evict_cold = *src; }
+        if let Some(v) = p.economy.compact_threshold_pct { cfg.economy.compact_threshold_pct = v; prov.compact_threshold_pct = *src; }
+        if let Some(v) = p.economy.token_ceiling { cfg.economy.token_ceiling = Some(v); prov.token_ceiling = *src; }
+    }
+    (cfg, prov)
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+
+    #[test]
+    fn later_layers_override_and_record_source() {
+        let user = parse_toml("model = \"a\"\nreduced_motion = true\n[economy]\nauto_evict_cold = false").unwrap();
+        let proj = parse_toml("model = \"b\"").unwrap();
+        let (cfg, prov) = merge(&[(Source::UserGlobal, user), (Source::Project, proj)]);
+        assert_eq!(cfg.model, "b");
+        assert_eq!(prov.model, Source::Project);        // project overrode user
+        assert!(cfg.reduced_motion);
+        assert_eq!(prov.reduced_motion, Source::UserGlobal);
+        assert!(!cfg.economy.auto_evict_cold);
+        assert_eq!(prov.auto_evict_cold, Source::UserGlobal);
+        assert_eq!(prov.provider, Source::Default);      // untouched
+    }
+
+    #[test]
+    fn empty_layer_changes_nothing() {
+        let (cfg, prov) = merge(&[(Source::UserGlobal, PartialConfig::default())]);
+        assert_eq!(cfg, Config::default());
+        assert_eq!(prov.model, Source::Default);
+    }
+
+    #[test]
+    fn unknown_key_is_rejected() {
+        assert!(parse_toml("bogus = 1").is_err());
     }
 }
