@@ -28,4 +28,11 @@ fn worktree_is_a_working_copy_and_cleans_up_on_drop() {
     } // WorktreeGuard dropped here
 
     assert!(!path.exists(), "worktree dir removed on drop");
+
+    // After drop: the worktree's branch ref is also cleaned up (no leak).
+    let repo = git2::Repository::open(tmp.path()).unwrap();
+    assert!(
+        repo.find_branch("sub-ax3", git2::BranchType::Local).is_err(),
+        "worktree branch removed on drop"
+    );
 }

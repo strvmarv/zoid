@@ -47,6 +47,11 @@ impl Drop for WorktreeGuard {
                 po.valid(true).working_tree(true);
                 let _ = wt.prune(Some(&mut po));
             }
+            // The worktree add created a local branch named after the worktree; prune
+            // leaves it behind. Delete it too so delegations don't accumulate refs.
+            if let Ok(mut branch) = repo.find_branch(&self.name, git2::BranchType::Local) {
+                let _ = branch.delete();
+            }
         }
     }
 }
