@@ -832,6 +832,65 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             }
             app.shell.close_overlay();
         }
+        Action::ConfigMoveField(d) => {
+            let n = app
+                .shell
+                .config_sections
+                .get(app.shell.config_section)
+                .map(|s| s.rows.len())
+                .unwrap_or(0);
+            app.shell.config_field = if n == 0 {
+                0
+            } else {
+                (app.shell.config_field as i32 + d).clamp(0, n as i32 - 1) as usize
+            };
+        }
+        Action::ConfigMoveSection(d) => {
+            let n = app.shell.config_sections.len();
+            app.shell.config_section = if n == 0 {
+                0
+            } else {
+                (app.shell.config_section as i32 + d).clamp(0, n as i32 - 1) as usize
+            };
+            app.shell.config_field = 0;
+            app.shell.config_edit = None;
+        }
+        Action::ConfigBeginEdit => {
+            let row = app
+                .shell
+                .config_sections
+                .get(app.shell.config_section)
+                .and_then(|s| s.rows.get(app.shell.config_field));
+            app.shell.config_edit = row.map(|r| {
+                if matches!(r.kind, zoid_tui::config_view::FieldKind::Secret) {
+                    String::new()
+                } else {
+                    r.value.clone()
+                }
+            });
+        }
+        Action::ConfigEditChar(c) => {
+            if let Some(buf) = app.shell.config_edit.as_mut() {
+                buf.push(c);
+            }
+        }
+        Action::ConfigEditBackspace => {
+            if let Some(buf) = app.shell.config_edit.as_mut() {
+                buf.pop();
+            }
+        }
+        Action::ConfigCancelEdit => {
+            app.shell.config_edit = None;
+        }
+        Action::ConfigCommitEdit => {
+            // Task 12b: persist edited value before clearing.
+            app.shell.config_edit = None;
+        }
+        // Task 12b: toggle/cycle/save/clear-secret persistence lands with write-back.
+        Action::ConfigToggle => {}
+        Action::ConfigCycle(_) => {}
+        Action::ConfigSaveToRepo => {}
+        Action::ConfigClearSecret => {}
         Action::Noop => {}
     }
     Ok(false)

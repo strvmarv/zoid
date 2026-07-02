@@ -5,6 +5,7 @@
 //! navigate). `:` opens the command line only when focus ≠ Input.
 
 use crate::command::{parse_command, Command};
+use crate::config_view::FieldKind;
 use crate::layout::{in_rect, ShellLayout};
 use crate::palette::{all_items, nav, selectable_matches};
 use crate::state::{DrawerId, Focus, Mode, Overlay, ShellState};
@@ -46,6 +47,17 @@ pub enum Action {
     VerbBack,
     SessionMove(i32),
     SessionPick,
+    ConfigMoveField(i32),
+    ConfigMoveSection(i32),
+    ConfigBeginEdit,
+    ConfigEditChar(char),
+    ConfigEditBackspace,
+    ConfigCommitEdit,
+    ConfigCancelEdit,
+    ConfigToggle,
+    ConfigCycle(i32),
+    ConfigSaveToRepo,
+    ConfigClearSecret,
     Noop,
 }
 
@@ -76,8 +88,7 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
         Overlay::Objects => return route_objects_key(key),
         Overlay::Verbs => return route_verbs_key(key),
         Overlay::Sessions => return route_sessions_key(key),
-        // Task 9 open path only; key routing lands in a later task.
-        Overlay::Config => {}
+        Overlay::Config => return route_config_key(state, key),
         Overlay::None => {}
     }
 
@@ -183,6 +194,74 @@ fn route_sessions_key(key: KeyEvent) -> Action {
         KeyCode::Enter => Action::SessionPick,
         KeyCode::Up | KeyCode::Char('k') => Action::SessionMove(-1),
         KeyCode::Down | KeyCode::Char('j') => Action::SessionMove(1),
+        _ => Action::Noop,
+    }
+}
+
+/// Route keys while the config overlay (Task 9's open path) is up. Editing a
+/// field's text buffer takes priority over navigation once `config_edit` is
+/// `Some` — the same buffer/commit/cancel shape as the palette/cmdline
+/// overlays, but scoped to a single field instead of the whole query/command.
+fn route_config_key(state: &ShellState, key: KeyEvent) -> Action {
+    let editing = state.config_edit.is_some();
+    let kind = state
+        .config_sections
+        .get(state.config_section)
+        .and_then(|s| s.rows.get(state.config_field))
+        .map(|r| r.kind.clone());
+    let is_model_field = state
+        .config_sections
+        .get(state.config_section)
+        .and_then(|s| s.rows.get(state.config_field))
+        .is_some_and(|r| r.label == "model");
+
+    if editing {
+        return match key.code {
+            KeyCode::Enter => Action::ConfigCommitEdit,
+            KeyCode::Esc => Action::ConfigCancelEdit,
+            KeyCode::Backspace => Action::ConfigEditBackspace,
+            KeyCode::Char(c) => Action::ConfigEditChar(c),
+            _ => Action::Noop,
+        };
+    }
+
+    match key.code {
+        KeyCode::Up => Action::ConfigMoveField(-1),
+        KeyCode::Down => Action::ConfigMoveField(1),
+        KeyCode::Left => Action::ConfigMoveSection(-1),
+        KeyCode::Right => Action::ConfigMoveSection(1),
+        KeyCode::Esc => Action::CloseOverlay,
+        KeyCode::Enter => {
+            if matches!(kind, Some(FieldKind::Bool)) {
+                Action::ConfigToggle
+            } else {
+                Action::ConfigBeginEdit
+            }
+        }
+        KeyCode::Char(' ') => {
+            if matches!(kind, Some(FieldKind::Bool)) {
+                Action::ConfigToggle
+            } else if matches!(kind, Some(FieldKind::Cycle(_))) || is_model_field {
+                Action::ConfigCycle(1)
+            } else {
+                Action::Noop
+            }
+        }
+        KeyCode::Tab => {
+            if is_model_field || matches!(kind, Some(FieldKind::Cycle(_))) {
+                Action::ConfigCycle(1)
+            } else {
+                Action::Noop
+            }
+        }
+        KeyCode::Char('r') => Action::ConfigSaveToRepo,
+        KeyCode::Char('x') => {
+            if matches!(kind, Some(FieldKind::Secret)) {
+                Action::ConfigClearSecret
+            } else {
+                Action::Noop
+            }
+        }
         _ => Action::Noop,
     }
 }
@@ -620,6 +699,62 @@ mod tests {
             route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)),
             Action::VerbBack
         );
+    }
+
+    #[test]
+    fn config_overlay_nav_and_escape() {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Config;
+        assert!(matches!(
+            route_key(&s, key(KeyCode::Down, KeyModifiers::NONE)),
+            Action::ConfigMoveField(1)
+        ));
+        assert!(matches!(
+            route_key(&s, key(KeyCode::Right, KeyModifiers::NONE)),
+            Action::ConfigMoveSection(1)
+        ));
+        assert!(matches!(
+            route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)),
+            Action::CloseOverlay
+        ));
+    }
+
+    #[test]
+    fn config_overlay_toggle_and_edit_buffer() {
+        use crate::config_view::{FieldKind, FieldRow, Section};
+        use zoid_core::config::Source;
+
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Config;
+        s.config_sections = vec![Section {
+            title: "Interface".into(),
+            rows: vec![FieldRow {
+                label: "reduced motion",
+                value: "off".into(),
+                kind: FieldKind::Bool,
+                source: Source::Default,
+                env_shadowed: false,
+            }],
+        }];
+        s.config_section = 0;
+        s.config_field = 0;
+
+        // Bool field: Enter toggles.
+        assert!(matches!(
+            route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)),
+            Action::ConfigToggle
+        ));
+
+        // Once editing, char/esc route into the edit buffer, not navigation.
+        s.config_edit = Some(String::new());
+        assert!(matches!(
+            route_key(&s, key(KeyCode::Char('a'), KeyModifiers::NONE)),
+            Action::ConfigEditChar('a')
+        ));
+        assert!(matches!(
+            route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)),
+            Action::ConfigCancelEdit
+        ));
     }
 
     #[test]
