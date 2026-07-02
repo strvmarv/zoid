@@ -75,7 +75,10 @@ fn session_drawer_truncates_long_cwd() {
     s.ctx_used = 58_000;
     s.ctx_ceiling = 200_000;
     s.cwd = "~/develop/projects/zoid/crates/zoid-tui/src/very/deep/nested/path".into();
-    let out = draw(&s, &[], 100, 24);
+    // Tall enough that the Session drawer opens fully and renders its cwd row
+    // (the fit allocator squeezes lower-priority drawers on a short rail); the
+    // narrow 100-col width is what forces the horizontal cwd truncation tested.
+    let out = draw(&s, &[], 100, 40);
     // The cwd never wraps — it is truncated with the §16 ellipsis.
     assert!(
         out.contains('\u{2026}'),

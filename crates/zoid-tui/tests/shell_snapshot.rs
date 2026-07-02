@@ -314,7 +314,9 @@ fn economy_drawer_selection_highlights_only_when_rail_focused() {
         let mut s = ShellState::new(); // economy open by default
         s.focus = focus;
         let input = TextArea::default();
-        let backend = TestBackend::new(100, 24);
+        // Tall enough that the Context drawer opens fully (it yields to Session
+        // on a short rail); this test is about the selection highlight, not fit.
+        let backend = TestBackend::new(100, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
@@ -373,7 +375,9 @@ fn long_economy_label_truncates_with_ellipsis() {
     };
     let econ = EconomyView::build(&w, &ChurnTimeline::default(), 0);
     let s = ShellState::new(); // economy drawer open by default
-    let out = draw_econ(&s, &econ, &seeded(), 100, 24);
+                               // Tall enough that the Context drawer opens fully (it yields to Session on a
+                               // short rail); this test is about horizontal label truncation, not fit.
+    let out = draw_econ(&s, &econ, &seeded(), 100, 40);
 
     assert!(
         out.contains(glyph::ELLIPSIS),
