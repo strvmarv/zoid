@@ -86,6 +86,10 @@ fn flush_delta(
     }
 }
 
+/// Project the MAIN branch's context window (spec §8 ⑤a). Subagent work lives
+/// on its own `subagent:<id>` branch (mirrors `conversation()` in
+/// `projection.rs`) and is not part of the main conversation's actual
+/// context, so non-default-branch events are skipped entirely here.
 pub fn context_window(events: &[Event]) -> ContextWindow {
     let mut order: Vec<String> = Vec::new(); // first-seen order of keys
     let mut acc: HashMap<String, Acc> = HashMap::new();
@@ -95,6 +99,11 @@ pub fn context_window(events: &[Event]) -> ContextWindow {
     let mut delta_text: Option<String> = None; // accumulates consecutive ModelDelta runs
 
     for e in events {
+        // Subagent work lives on its own branch and is not part of the main
+        // context window (mirrors `conversation()`); only main-branch events count.
+        if e.branch != crate::event::BranchId::default() {
+            continue;
+        }
         match &e.kind {
             EventKind::UserMessage { text } => {
                 flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn);
@@ -415,6 +424,27 @@ mod tests {
             panic!("no Message item with label containing 'hello'; items: {messages:?}")
         });
         assert_eq!(assistant.kind, ItemKind::Message);
+    }
+
+    /// FIX (CL2): a subagent-branch tool result must not be counted in the
+    /// main session's context window (mirrors `conversation()`'s branch skip).
+    #[test]
+    fn context_window_skips_non_main_branch_events() {
+        use crate::event::BranchId;
+        let mut sub = call("s1", "read_file", "sub/secret.rs");
+        sub.branch = BranchId("subagent:x".into());
+        let mut sub_res = result("s1", "read_file", "fn hidden() {}");
+        sub_res.branch = BranchId("subagent:x".into());
+        let evs = vec![
+            u("main task"),
+            call("m1", "read_file", "main.rs"),
+            result("m1", "read_file", "fn main() {}"),
+            sub,
+            sub_res,
+        ];
+        let w = context_window(&evs);
+        assert!(w.items.iter().any(|i| i.key == "file:main.rs"));
+        assert!(!w.items.iter().any(|i| i.key == "file:sub/secret.rs"), "subagent-branch file excluded");
     }
 
     use proptest::prelude::*;
