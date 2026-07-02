@@ -61,7 +61,7 @@ pub fn all_items(mode: Mode) -> Vec<PaletteItem> {
         },
         // branch group — post-v1, disabled/dimmed
         PaletteItem {
-            group: format!("branch {} · post-v1", glyph::BRANCH),
+            group: format!("branch {}", glyph::BRANCH),
             icon: glyph::BRANCH,
             label: "Fork from here",
             hint: "new branch at this turn",
@@ -69,7 +69,7 @@ pub fn all_items(mode: Mode) -> Vec<PaletteItem> {
             command: None,
         },
         PaletteItem {
-            group: format!("branch {} · post-v1", glyph::BRANCH),
+            group: format!("branch {}", glyph::BRANCH),
             icon: glyph::UNDO,
             label: "Undo last turn",
             hint: "move head back",
@@ -78,18 +78,18 @@ pub fn all_items(mode: Mode) -> Vec<PaletteItem> {
         },
         // context ⑤ — placeholder (real actions land P3), disabled for now
         PaletteItem {
-            group: format!("context {} · P3", glyph::CONTEXT),
+            group: "context".to_string(),
             icon: glyph::EDIT,
             label: "Pin file to context",
-            hint: "lands in P3",
+            hint: "coming soon",
             keybind: "",
             command: None,
         },
         PaletteItem {
-            group: format!("context {} · P3", glyph::CONTEXT),
+            group: "context".to_string(),
             icon: glyph::EVICT,
             label: "Evict cold items",
-            hint: "lands in P3",
+            hint: "coming soon",
             keybind: "",
             command: None,
         },
@@ -104,10 +104,10 @@ pub fn all_items(mode: Mode) -> Vec<PaletteItem> {
         },
         // recipes — post-v1
         PaletteItem {
-            group: "recipes · post-v1".to_string(),
+            group: "recipes".to_string(),
             icon: glyph::RECIPE,
             label: "Run recipe…",
-            hint: "post-v1",
+            hint: "coming soon",
             keybind: "",
             command: None,
         },

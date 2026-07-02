@@ -17,7 +17,6 @@ pub mod glyph {
     pub const WARNING: char = '⚠';
     pub const COLLAPSED: char = '▸';
     pub const EXPANDED: char = '▾';
-    pub const CONTEXT: char = '⑤'; // context-economy ⑤ motif
     pub const MODE_SWITCH: char = '⇢'; // palette: switch mode
     pub const UNDO: char = '⤺'; // palette: undo (post-v1)
     pub const OPEN: char = '▤'; // palette: open file

@@ -105,7 +105,7 @@ fn render_build_placeholder(frame: &mut Frame, area: Rect) {
             Style::new().fg(color::BUILD_ACCENT).bold(),
         )]),
         Line::from(vec![Span::styled(
-            "  The autonomous loop arrives in P6.",
+            "  The autonomous loop is coming soon.",
             Style::new().fg(color::DIM),
         )]),
         Line::from(vec![Span::styled(
