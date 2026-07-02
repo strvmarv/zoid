@@ -84,12 +84,14 @@ impl EventStore {
     }
 
     pub fn load_all(&self) -> Result<Vec<Event>> {
-        let mut stmt = self.conn.prepare(&format!("{} ORDER BY id ASC", Self::SELECT_COLS))?;
+        // append order, not ULID order, so same-ms events replay deterministically
+        let mut stmt = self.conn.prepare(&format!("{} ORDER BY rowid ASC", Self::SELECT_COLS))?;
         Self::decode_rows(&mut stmt, [])
     }
 
     pub fn load_session(&self, session_id: Ulid) -> Result<Vec<Event>> {
-        let mut stmt = self.conn.prepare(&format!("{} WHERE session_id = ?1 ORDER BY id ASC", Self::SELECT_COLS))?;
+        // append order, not ULID order, so same-ms events replay deterministically
+        let mut stmt = self.conn.prepare(&format!("{} WHERE session_id = ?1 ORDER BY rowid ASC", Self::SELECT_COLS))?;
         Self::decode_rows(&mut stmt, params![session_id.to_string()])
     }
 
@@ -139,8 +141,9 @@ impl EventStore {
 /// the NIL session sentinel; the caller re-tags them with the target session.
 pub fn load_legacy_events(path: &str) -> Result<Vec<Event>> {
     let conn = Connection::open(path)?;
+    // append order, not ULID order, so same-ms events replay deterministically
     let mut stmt = conn.prepare(
-        "SELECT id, parent, branch, ts, kind, tokens FROM events ORDER BY id ASC",
+        "SELECT id, parent, branch, ts, kind, tokens FROM events ORDER BY rowid ASC",
     )?;
     let rows = stmt
         .query_map([], |row| {
@@ -217,6 +220,24 @@ mod tests {
             id, name: "renamed".into(), root_path: "/repo/a".into(),
             created_ts: 100, last_touched_ts: 200,
         }]);
+    }
+
+    #[test]
+    fn load_all_returns_append_order_not_ulid_order() {
+        // ULIDs are DESCENDING as we append (3, 2, 1), so ULID-sort order
+        // (1, 2, 3) differs from append order (3, 2, 1). load_all must return
+        // events in append order (via rowid), proving it does not rely on the
+        // lexicographic ULID ordering.
+        let store = EventStore::open(":memory:").unwrap();
+        let e3 = Event::new(Ulid::from(3u128), None, 10, EventKind::UserMessage { text: "first-appended".into() });
+        let e2 = Event::new(Ulid::from(2u128), None, 20, EventKind::UserMessage { text: "second-appended".into() });
+        let e1 = Event::new(Ulid::from(1u128), None, 30, EventKind::UserMessage { text: "third-appended".into() });
+        store.append(&e3).unwrap();
+        store.append(&e2).unwrap();
+        store.append(&e1).unwrap();
+
+        let loaded = store.load_all().unwrap();
+        assert_eq!(loaded, vec![e3, e2, e1], "expected append order (3, 2, 1), not ULID order (1, 2, 3)");
     }
 
     #[test]
