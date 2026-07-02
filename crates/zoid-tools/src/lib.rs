@@ -10,7 +10,7 @@ pub mod write;
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use zoid_provider::ToolSpec;
+use zoid_provider::{ToolCall, ToolSpec};
 
 /// The outcome of running a tool. `text` is fed back to the model as the tool
 /// result; `is_error` marks failures (still returned to the model, not panicked).
@@ -68,6 +68,29 @@ pub fn registry() -> Vec<Box<dyn Tool>> {
         Box::new(search::Search),
         Box::new(shell::Shell),
     ]
+}
+
+/// The decision a [`ToolGate`] returns for a pending tool call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Gate {
+    Allow,
+    /// Block the call; the string is fed back to the model as the tool result.
+    Deny(String),
+}
+
+/// Consulted once per pending tool call, immediately before dispatch. v1 ships
+/// only [`AllowAll`]; this is the insertion point where interactive tool
+/// approval will later live (an `ask_user` prompt gating `Deny`).
+pub trait ToolGate: Send + Sync {
+    fn check(&self, call: &ToolCall) -> Gate;
+}
+
+/// The v1 gate: every tool call is allowed.
+pub struct AllowAll;
+impl ToolGate for AllowAll {
+    fn check(&self, _call: &ToolCall) -> Gate {
+        Gate::Allow
+    }
 }
 
 /// Dispatch a tool call by name. Unknown tools return an error `ToolOutput`
@@ -147,6 +170,17 @@ mod tests {
         let out = crate::read::ReadFile.run(&serde_json::json!({ "path": "note.txt" }), dir.path());
         assert!(!out.is_error, "{}", out.text);
         assert_eq!(out.text, "in cwd");
+    }
+
+    #[test]
+    fn allow_all_allows_every_call() {
+        let g = AllowAll;
+        let call = zoid_provider::ToolCall {
+            id: String::new(),
+            name: "shell".into(),
+            args: json!({}),
+        };
+        assert_eq!(g.check(&call), Gate::Allow);
     }
 
     #[test]

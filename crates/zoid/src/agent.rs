@@ -13,7 +13,7 @@ use zoid_core::event::{BranchId, Event, EventKind};
 use zoid_core::projection::{conversation, ChatMsg};
 use zoid_core::session::SessionHandle;
 use zoid_provider::{CompletionRequest, Message, Provider, ProviderEvent, ToolCall, ToolSpec};
-use zoid_tools::Tool;
+use zoid_tools::{Gate, Tool, ToolGate};
 
 /// Warning glyph used in agent-generated error messages; avoids a TUI-layer dep.
 /// `pub(crate)` so `subagent.rs` can detect a failed subagent from the same
@@ -125,6 +125,7 @@ pub async fn run_agent_turn(
     config: TurnConfig,
     provider: Arc<dyn Provider>,
     tools: Arc<Vec<Box<dyn Tool>>>,
+    gate: Arc<dyn ToolGate>,
     session: SessionHandle,
     events: Vec<Event>,
     model: String,
@@ -133,7 +134,7 @@ pub async fn run_agent_turn(
     now: fn() -> i64,
 ) -> Result<Vec<Event>> {
     let result = run_turn_inner(
-        &config, provider, tools, session, events, model, &ui, session_id, now,
+        &config, provider, tools, gate, session, events, model, &ui, session_id, now,
     )
     .await;
     // Best-effort: if the receiver is already gone we still return the inner result.
@@ -149,6 +150,7 @@ async fn run_turn_inner(
     config: &TurnConfig,
     provider: Arc<dyn Provider>,
     tools: Arc<Vec<Box<dyn Tool>>>,
+    gate: Arc<dyn ToolGate>,
     session: SessionHandle,
     mut events: Vec<Event>,
     model: String,
@@ -268,6 +270,24 @@ async fn run_turn_inner(
         // (blocking work off the async runtime), recording its result as an event.
         let cwd_for_exec = config.cwd.clone();
         for tc in pending {
+            if let Gate::Deny(reason) = gate.check(&tc) {
+                emit(
+                    &session,
+                    &mut events,
+                    ui,
+                    &config.branch,
+                    EventKind::ToolResult {
+                        id: tc.id,
+                        name: tc.name,
+                        output: reason,
+                        is_error: true,
+                    },
+                    session_id,
+                    now,
+                )
+                .await?;
+                continue;
+            }
             let tools_for_exec = tools.clone();
             let name = tc.name.clone();
             let args = tc.args.clone();

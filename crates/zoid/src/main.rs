@@ -1539,6 +1539,7 @@ fn spawn_turn(app: &App) {
             zoid::agent::chat_turn_config(),
             provider,
             tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
             session,
             seed,
             model,

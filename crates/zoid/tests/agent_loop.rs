@@ -47,6 +47,13 @@ fn fixed_now() -> i64 {
     0
 }
 
+struct DenyAll;
+impl zoid_tools::ToolGate for DenyAll {
+    fn check(&self, _c: &zoid_provider::ToolCall) -> zoid_tools::Gate {
+        zoid_tools::Gate::Deny("denied by policy".into())
+    }
+}
+
 #[tokio::test]
 async fn agent_loop_runs_tool_then_finishes() {
     // Arrange a write_file in a tempdir so the tool actually executes.
@@ -101,6 +108,7 @@ async fn agent_loop_runs_tool_then_finishes() {
         zoid::agent::chat_turn_config(),
         provider.clone(),
         tools,
+        std::sync::Arc::new(zoid_tools::AllowAll),
         session.clone(),
         seed,
         "fake".into(),
@@ -149,6 +157,82 @@ async fn agent_loop_runs_tool_then_finishes() {
 }
 
 #[tokio::test]
+async fn gate_deny_blocks_tool_and_feeds_reason_back() {
+    // Arrange a write_file in a tempdir so we can assert it was NOT written.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("note.txt");
+    let path_str = path.to_str().unwrap().to_string();
+
+    let provider = Arc::new(ScriptedProvider {
+        turns: Mutex::new(std::collections::VecDeque::from(vec![
+            // Turn 1: the model calls write_file, then ends its turn.
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "".into(),
+                    name: "write_file".into(),
+                    args: json!({ "path": path_str, "content": "hi" }),
+                }),
+                ProviderEvent::Done,
+            ],
+            // Turn 2: with the (denied) tool result in context, the model replies in text.
+            vec![ProviderEvent::TextDelta("done".into()), ProviderEvent::Done],
+        ])),
+        requests: Mutex::new(Vec::new()),
+    });
+
+    let tools = Arc::new(zoid_tools::registry());
+    let session = SessionHandle::spawn(":memory:").unwrap();
+    let seed = vec![Event::new(
+        ulid::Ulid::from(1u128),
+        None,
+        0,
+        EventKind::UserMessage {
+            text: "write hi".into(),
+        },
+    )];
+    session.append(seed[0].clone()).await.unwrap();
+
+    let (tx, mut rx) = mpsc::channel(64);
+    let drain = tokio::spawn(async move {
+        let mut complete = false;
+        while let Some(u) = rx.recv().await {
+            if matches!(u, AgentUpdate::TurnComplete) {
+                complete = true;
+            }
+        }
+        complete
+    });
+
+    let events = run_agent_turn(
+        zoid::agent::chat_turn_config(),
+        provider,
+        tools,
+        Arc::new(DenyAll),
+        session.clone(),
+        seed,
+        "fake".into(),
+        tx,
+        ulid::Ulid::new(),
+        fixed_now,
+    )
+    .await
+    .unwrap();
+
+    let _ = drain.await;
+
+    assert!(
+        !path.exists(),
+        "denied write_file must not touch the filesystem"
+    );
+    let denied = events.iter().any(|e| {
+        matches!(&e.kind,
+        EventKind::ToolResult { output, is_error, .. }
+            if *is_error && output.contains("denied by policy"))
+    });
+    assert!(denied, "a Deny must surface as an error ToolResult");
+}
+
+#[tokio::test]
 async fn agent_loop_returns_ok_and_emits_turn_complete_on_error_event() {
     let provider = Arc::new(ScriptedProvider {
         turns: Mutex::new(std::collections::VecDeque::from(vec![
@@ -184,6 +268,7 @@ async fn agent_loop_returns_ok_and_emits_turn_complete_on_error_event() {
         zoid::agent::chat_turn_config(),
         provider,
         tools,
+        std::sync::Arc::new(zoid_tools::AllowAll),
         session.clone(),
         seed,
         "fake".into(),

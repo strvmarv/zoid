@@ -151,6 +151,7 @@ pub async fn run_subagent(
         config,
         provider,
         tools,
+        std::sync::Arc::new(zoid_tools::AllowAll),
         session,
         vec![seed],
         model,
