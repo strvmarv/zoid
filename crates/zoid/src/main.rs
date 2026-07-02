@@ -346,6 +346,11 @@ fn select_provider(
 /// `[economy]` table, resolving `compact_threshold_pct` (0–100) against the
 /// resolved token `ceiling` — 0 disables compaction (`None`), else the
 /// absolute token count `ceiling * pct / 100`.
+///
+/// Not yet wired into the live loop: the economy drawer is observe-only and no
+/// longer takes a policy, so this config→policy mapping (and its test) is
+/// retained as scaffolding for the deferred T10 manual-control work.
+#[allow(dead_code)]
 fn policy_from_config(
     econ: &zoid_core::config::EconomyConfig,
     ceiling: u64,
@@ -637,12 +642,10 @@ async fn run<B: ratatui::backend::Backend>(
             let msgs = conversation(&app.events);
             let window = zoid_core::context::context_window(&app.events);
             let churn = zoid_core::economy::churn_timeline(&app.events);
-            let ledger = zoid_core::economy::token_ledger(&app.events);
-            // T10 (manual control: shell.policy / shell.economy_selected) is DEFERRED post-P3.
-            // Until then the policy is config-derived (economy.rs) and there is no row
-            // selection — the drawer is read-only/observability-only.
-            let policy = policy_from_config(&app.economy, app.shell.ctx_ceiling);
-            let economy = zoid_tui::EconomyView::build(&window, &churn, &ledger, &policy, 0);
+            // T10 (manual control: shell.policy / shell.economy_selected) is DEFERRED
+            // post-P3 — the drawer is read-only/observability-only, so the view needs
+            // only the window + churn (no policy or ledger).
+            let economy = zoid_tui::EconomyView::build(&window, &churn, 0);
             let elapsed = app.started.elapsed().as_millis() as u64;
             let caret = zoid_tui::motion::caret_on(elapsed, 1000, app.shell.reduced_motion);
             // Measure total lines (which re-runs conversation_view — tree-sitter in

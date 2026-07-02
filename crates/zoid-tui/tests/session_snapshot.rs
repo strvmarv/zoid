@@ -1,8 +1,7 @@
 use ratatui::{backend::TestBackend, Terminal};
 use tui_textarea::TextArea;
-use zoid_core::assembler::ContextPolicy;
 use zoid_core::context::ContextWindow;
-use zoid_core::economy::{ChurnTimeline, TokenLedger};
+use zoid_core::economy::ChurnTimeline;
 use zoid_core::projection::ChatMsg;
 use zoid_tui::chat::ChatView;
 use zoid_tui::render_shell;
@@ -19,13 +18,7 @@ fn normal_view() -> ChatView {
 }
 
 fn empty_economy() -> EconomyView {
-    EconomyView::build(
-        &ContextWindow::default(),
-        &ChurnTimeline::default(),
-        &TokenLedger::default(),
-        &ContextPolicy::default(),
-        0,
-    )
+    EconomyView::build(&ContextWindow::default(), &ChurnTimeline::default(), 0)
 }
 
 fn draw(state: &ShellState, msgs: &[ChatMsg], w: u16, h: u16) -> String {

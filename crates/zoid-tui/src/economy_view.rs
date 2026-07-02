@@ -1,12 +1,11 @@
 //! Pure view-model for the ⑤ economy drawer (Ⓡ4 dataviz). Turns core
-//! projections into render-ready strings (heat bars, churn sparkline, token
-//! ledger). No `Frame`; unit-tested independently of rendering.
+//! projections into render-ready strings (heat bars, churn + cache sparklines).
+//! No `Frame`; unit-tested independently of rendering.
 
 use crate::tokens::{color, glyph};
 use ratatui::style::Color;
-use zoid_core::assembler::ContextPolicy;
 use zoid_core::context::{ContextWindow, Heat};
-use zoid_core::economy::{ChurnTimeline, TokenLedger};
+use zoid_core::economy::ChurnTimeline;
 
 /// Compact token count: `4000 → "4k"`, `1_200_000 → "1.2M"`.
 pub fn human_tokens(n: u64) -> String {
@@ -102,8 +101,6 @@ pub struct EconomyRow {
 pub struct EconomyView {
     pub rows: Vec<EconomyRow>,
     pub churn: String,
-    pub ledger: String,
-    pub over_ceiling: bool,
     pub selected: usize,
     /// Per-turn prompt-cache sparkline (cache-read tokens per turn), mirroring
     /// `churn`; the churn line renders this pulled right.
@@ -114,13 +111,7 @@ pub struct EconomyView {
 }
 
 impl EconomyView {
-    pub fn build(
-        window: &ContextWindow,
-        churn: &ChurnTimeline,
-        ledger: &TokenLedger,
-        policy: &ContextPolicy,
-        selected: usize,
-    ) -> Self {
+    pub fn build(window: &ContextWindow, churn: &ChurnTimeline, selected: usize) -> Self {
         let rows = window
             .items
             .iter()
@@ -134,16 +125,9 @@ impl EconomyView {
             .collect();
         let churn_vals: Vec<u64> = churn.points.iter().map(|p| p.tokens).collect();
         let cache_vals: Vec<u64> = churn.points.iter().map(|p| p.cached).collect();
-        let used = ledger.total;
-        let ledger_label = match policy.token_ceiling {
-            Some(c) => format!("{}/{}", human_tokens(used), human_tokens(c)),
-            None => human_tokens(used),
-        };
         Self {
             rows,
             churn: sparkline(&churn_vals),
-            ledger: ledger_label,
-            over_ceiling: policy.token_ceiling.is_some_and(|c| used > c),
             selected,
             cache: sparkline(&cache_vals),
             cache_active: cache_vals.iter().any(|&c| c > 0),
@@ -155,9 +139,8 @@ impl EconomyView {
 mod tests {
     use super::*;
     use crate::tokens::{color, glyph};
-    use zoid_core::assembler::ContextPolicy;
     use zoid_core::context::{ContextItem, ContextWindow, Heat, ItemKind};
-    use zoid_core::economy::{ChurnPoint, ChurnTimeline, TokenLedger};
+    use zoid_core::economy::{ChurnPoint, ChurnTimeline};
 
     #[test]
     fn human_tokens_scales() {
@@ -223,7 +206,7 @@ mod tests {
     }
 
     #[test]
-    fn build_populates_rows_and_ledger() {
+    fn build_populates_rows_and_sparklines() {
         let w = ContextWindow {
             items: vec![
                 ContextItem {
@@ -263,22 +246,10 @@ mod tests {
                 },
             ],
         };
-        let ledger = TokenLedger {
-            input: 9000,
-            output: 1000,
-            cached: 0,
-            total: 10_000,
-        };
-        let policy = ContextPolicy {
-            token_ceiling: Some(200_000),
-            ..Default::default()
-        };
-        let v = EconomyView::build(&w, &churn, &ledger, &policy, 0);
+        let v = EconomyView::build(&w, &churn, 0);
         assert_eq!(v.rows.len(), 2);
         assert!(v.rows[0].pinned);
         assert!(v.rows[1].cold);
-        assert_eq!(v.ledger, "10k/200k");
-        assert!(!v.over_ceiling);
         assert_eq!(v.churn.chars().count(), 2);
         // no cache reads → inactive; sparkline has one cell per turn (all min)
         assert!(!v.cache_active);
@@ -309,14 +280,7 @@ mod tests {
                 },
             ],
         };
-        let ledger = TokenLedger {
-            input: 1000,
-            output: 100,
-            cached: 500,
-            total: 1100,
-        };
-        let policy = ContextPolicy::default();
-        let v = EconomyView::build(&w, &churn, &ledger, &policy, 0);
+        let v = EconomyView::build(&w, &churn, 0);
         assert!(v.cache_active);
         assert_eq!(v.cache.chars().count(), 2); // one cell per turn
                                                 // turn 0 had no cache (min ramp), turn 1 was the max (top ramp)

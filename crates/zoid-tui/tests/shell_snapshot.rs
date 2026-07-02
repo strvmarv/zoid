@@ -1,8 +1,7 @@
 use ratatui::{backend::TestBackend, Terminal};
 use tui_textarea::TextArea;
-use zoid_core::assembler::ContextPolicy;
 use zoid_core::context::ContextWindow;
-use zoid_core::economy::{ChurnTimeline, TokenLedger};
+use zoid_core::economy::ChurnTimeline;
 use zoid_core::projection::ChatMsg;
 use zoid_tui::chat::ChatView;
 use zoid_tui::render_shell;
@@ -19,13 +18,7 @@ fn normal_view() -> ChatView {
 }
 
 fn empty_economy() -> EconomyView {
-    EconomyView::build(
-        &ContextWindow::default(),
-        &ChurnTimeline::default(),
-        &TokenLedger::default(),
-        &ContextPolicy::default(),
-        0,
-    )
+    EconomyView::build(&ContextWindow::default(), &ChurnTimeline::default(), 0)
 }
 
 fn draw(state: &ShellState, msgs: &[ChatMsg], w: u16, h: u16) -> String {
@@ -158,17 +151,7 @@ fn seeded_economy() -> EconomyView {
             },
         ],
     };
-    let ledger = TokenLedger {
-        input: 142_000,
-        output: 0,
-        cached: 0,
-        total: 142_000,
-    };
-    let policy = ContextPolicy {
-        token_ceiling: Some(200_000),
-        ..Default::default()
-    };
-    EconomyView::build(&w, &churn, &ledger, &policy, 0)
+    EconomyView::build(&w, &churn, 0)
 }
 
 #[test]
@@ -375,13 +358,7 @@ fn long_economy_label_truncates_with_ellipsis() {
         }],
         total_tokens: 9000,
     };
-    let econ = EconomyView::build(
-        &w,
-        &ChurnTimeline::default(),
-        &TokenLedger::default(),
-        &ContextPolicy::default(),
-        0,
-    );
+    let econ = EconomyView::build(&w, &ChurnTimeline::default(), 0);
     let s = ShellState::new(); // economy drawer open by default
     let out = draw_econ(&s, &econ, &seeded(), 100, 24);
 

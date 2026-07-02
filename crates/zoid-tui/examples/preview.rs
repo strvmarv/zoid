@@ -60,22 +60,14 @@ fn seeded_objects() -> Vec<ChatMsg> {
 }
 
 fn empty_economy() -> EconomyView {
-    use zoid_core::assembler::ContextPolicy;
     use zoid_core::context::ContextWindow;
-    use zoid_core::economy::{ChurnTimeline, TokenLedger};
-    EconomyView::build(
-        &ContextWindow::default(),
-        &ChurnTimeline::default(),
-        &TokenLedger::default(),
-        &ContextPolicy::default(),
-        0,
-    )
+    use zoid_core::economy::ChurnTimeline;
+    EconomyView::build(&ContextWindow::default(), &ChurnTimeline::default(), 0)
 }
 
 fn seeded_economy() -> EconomyView {
-    use zoid_core::assembler::ContextPolicy;
     use zoid_core::context::{ContextItem, ContextWindow, Heat, ItemKind};
-    use zoid_core::economy::{ChurnPoint, ChurnTimeline, TokenLedger};
+    use zoid_core::economy::{ChurnPoint, ChurnTimeline};
     let it = |key: &str, label: &str, kind, tokens, heat, pinned| ContextItem {
         key: key.into(),
         label: label.into(),
@@ -156,17 +148,7 @@ fn seeded_economy() -> EconomyView {
             },
         ],
     };
-    let ledger = TokenLedger {
-        input: 142_000,
-        output: 0,
-        cached: 0,
-        total: 142_000,
-    };
-    let policy = ContextPolicy {
-        token_ceiling: Some(200_000),
-        ..Default::default()
-    };
-    EconomyView::build(&w, &churn, &ledger, &policy, 0)
+    EconomyView::build(&w, &churn, 0)
 }
 
 fn scene(name: &str) -> (ShellState, Vec<ChatMsg>, EconomyView) {
