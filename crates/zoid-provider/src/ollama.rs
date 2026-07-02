@@ -2,7 +2,7 @@
 //! (`POST {base}/api/chat`, NDJSON streaming, `"done":true` terminator).
 //! Self-contained like the `anthropic` module; uses the crate's `Provider` seam.
 
-use crate::{CompletionRequest, MsgRole, Provider, ProviderEvent, ToolCall};
+use crate::{CompletionRequest, MsgRole, Provider, ProviderEvent, ToolCall, Usage};
 use anyhow::Result;
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -111,6 +111,21 @@ pub fn parse_line(line: &str) -> Vec<ProviderEvent> {
                 out.push(ProviderEvent::ToolCall(ToolCall { id, name, args }));
             }
         }
+    }
+    // Token accounting: the native /api/chat final frame carries
+    // `prompt_eval_count` (input tokens) and `eval_count` (output tokens). Emit
+    // a Usage event whenever either is present so the economy ledger reflects
+    // real spend — this is the Ollama counterpart to the Anthropic provider's
+    // `usage` parsing, and the only reason the session "tok" line is non-zero
+    // on Ollama. Ordered before Done: the agent loop accumulates Usage during
+    // the stream and records it when the turn ends.
+    let input = v.get("prompt_eval_count").and_then(|n| n.as_u64());
+    let output = v.get("eval_count").and_then(|n| n.as_u64());
+    if input.is_some() || output.is_some() {
+        out.push(ProviderEvent::Usage(Usage {
+            input_tokens: input.unwrap_or(0),
+            output_tokens: output.unwrap_or(0),
+        }));
     }
     if v.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
         out.push(ProviderEvent::Done);
@@ -324,8 +339,41 @@ mod tests {
     }
 
     #[test]
-    fn done_line_yields_done() {
-        let line = r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","eval_count":58}"#;
+    fn done_line_with_counts_yields_usage_then_done() {
+        // The final frame carries prompt_eval_count (input) + eval_count (output);
+        // both surface as a Usage event ahead of Done.
+        let line = r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":124,"eval_count":58}"#;
+        assert_eq!(
+            parse_line(line),
+            vec![
+                ProviderEvent::Usage(Usage {
+                    input_tokens: 124,
+                    output_tokens: 58
+                }),
+                ProviderEvent::Done
+            ]
+        );
+    }
+
+    #[test]
+    fn partial_counts_default_missing_side_to_zero() {
+        // Only eval_count present → input defaults to 0, still emits Usage.
+        let line = r#"{"message":{"role":"assistant","content":""},"done":true,"eval_count":58}"#;
+        assert_eq!(
+            parse_line(line),
+            vec![
+                ProviderEvent::Usage(Usage {
+                    input_tokens: 0,
+                    output_tokens: 58
+                }),
+                ProviderEvent::Done
+            ]
+        );
+    }
+
+    #[test]
+    fn done_line_without_counts_yields_only_done() {
+        let line = r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop"}"#;
         assert_eq!(parse_line(line), vec![ProviderEvent::Done]);
     }
 
