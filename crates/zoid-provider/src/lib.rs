@@ -176,13 +176,16 @@ pub fn default_model() -> &'static str {
 /// Table-driven and pure so it's unit-testable without touching process env.
 fn model_ceiling(model: &str) -> u64 {
     let m = model.to_ascii_lowercase();
-    // Known 200k-context families: GLM cloud (e.g. glm-5.2:cloud) and Anthropic
-    // Claude. Unknown models fall back to a conservative 128k. Split the
-    // condition here if these families ever diverge.
-    if m.contains("glm") || m.contains("claude") {
+    // Known caps only. Anthropic Claude is 200k. GLM's window is larger than
+    // 200k but its exact value is deferred to the planned model registry
+    // (docs/superpowers/specs/2026-07-01-model-registry.md) — until then GLM
+    // takes the 256k conservative default, and ZOID_CONTEXT_CEILING supplies an
+    // exact value. Under-estimating a warning ceiling is the safe direction
+    // (warns early) vs over-estimating (blows past the real limit silently).
+    if m.contains("claude") {
         200_000
     } else {
-        128_000
+        256_000 // conservative default (also covers GLM until the registry lands)
     }
 }
 
@@ -209,11 +212,12 @@ mod selection_tests {
     use super::*;
 
     #[test]
-    fn model_ceiling_maps_known_families_else_default() {
-        assert_eq!(model_ceiling("glm-5.2:cloud"), 200_000);
+    fn model_ceiling_maps_known_caps_else_conservative_default() {
         assert_eq!(model_ceiling("claude-sonnet-4-6"), 200_000);
-        assert_eq!(model_ceiling("GLM-4.6"), 200_000); // case-insensitive
-        assert_eq!(model_ceiling("llama3.1:70b"), 128_000); // unknown → default
+        assert_eq!(model_ceiling("CLAUDE-opus"), 200_000); // case-insensitive
+        // GLM's exact window is a registry TODO; interim = the 256k default.
+        assert_eq!(model_ceiling("glm-5.2:cloud"), 256_000);
+        assert_eq!(model_ceiling("llama3.1:70b"), 256_000); // unknown → default
     }
 
     #[test]
