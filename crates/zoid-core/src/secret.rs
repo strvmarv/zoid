@@ -61,7 +61,10 @@ impl EncryptedDb {
         if nonce.len() != 24 {
             return None;
         }
-        let pt = self.cipher.decrypt(XNonce::from_slice(&nonce), ct.as_ref()).ok()?;
+        let pt = self
+            .cipher
+            .decrypt(XNonce::from_slice(&nonce), ct.as_ref())
+            .ok()?;
         String::from_utf8(pt).ok()
     }
 }
@@ -92,7 +95,8 @@ impl SecretStore for EncryptedDb {
     }
 
     fn clear(&self, name: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM secrets WHERE name = ?1", params![name])?;
+        self.conn
+            .execute("DELETE FROM secrets WHERE name = ?1", params![name])?;
         Ok(())
     }
 
@@ -162,7 +166,10 @@ mod tests {
         let s = EncryptedDb::open(&db, &key).unwrap();
         s.set("MY_KEY", "sk-abc123").unwrap();
         assert_eq!(s.get("MY_KEY").as_deref(), Some("sk-abc123"));
-        assert!(matches!(s.status("MY_KEY"), SecretStatus::Set { from_env: false }));
+        assert!(matches!(
+            s.status("MY_KEY"),
+            SecretStatus::Set { from_env: false }
+        ));
         s.clear("MY_KEY").unwrap();
         assert_eq!(s.get("MY_KEY"), None);
         assert!(matches!(s.status("MY_KEY"), SecretStatus::NotSet));
@@ -181,7 +188,9 @@ mod tests {
         }
         let raw: Vec<u8> = s
             .conn
-            .query_row("SELECT ciphertext FROM secrets WHERE name='K'", [], |r| r.get(0))
+            .query_row("SELECT ciphertext FROM secrets WHERE name='K'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert!(!raw.windows(6).any(|w| w == b"secret"));
     }
@@ -193,7 +202,10 @@ mod tests {
         s.set("K", "v").unwrap();
         // Corrupt the nonce column to a wrong length; must NOT panic.
         s.conn
-            .execute("UPDATE secrets SET nonce = ?1 WHERE name = 'K'", params![vec![0u8; 5]])
+            .execute(
+                "UPDATE secrets SET nonce = ?1 WHERE name = 'K'",
+                params![vec![0u8; 5]],
+            )
             .unwrap();
         assert_eq!(s.get("K"), None);
     }

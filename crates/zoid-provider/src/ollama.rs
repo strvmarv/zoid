@@ -373,7 +373,8 @@ mod tests {
 
     #[test]
     fn done_line_without_counts_yields_only_done() {
-        let line = r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop"}"#;
+        let line =
+            r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop"}"#;
         assert_eq!(parse_line(line), vec![ProviderEvent::Done]);
     }
 

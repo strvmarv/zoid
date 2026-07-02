@@ -30,8 +30,16 @@ pub fn model_info(model: &str) -> ModelInfo {
     let m = model.to_ascii_lowercase();
     // Claude is a known 200k family; everything else (incl. GLM, whose exact
     // window is a registry TODO) takes the 256k conservative default.
-    let context_window = if m.contains("claude") { 200_000 } else { 256_000 };
-    ModelInfo { context_window, max_output: 0, tools: true }
+    let context_window = if m.contains("claude") {
+        200_000
+    } else {
+        256_000
+    };
+    ModelInfo {
+        context_window,
+        max_output: 0,
+        tools: true,
+    }
 }
 
 #[cfg(test)]

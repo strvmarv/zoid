@@ -25,7 +25,12 @@ pub struct EconomyConfig {
 
 impl Default for EconomyConfig {
     fn default() -> Self {
-        Self { context_ceiling: None, auto_evict_cold: true, compact_threshold_pct: 0, token_ceiling: None }
+        Self {
+            context_ceiling: None,
+            auto_evict_cold: true,
+            compact_threshold_pct: 0,
+            token_ceiling: None,
+        }
     }
 }
 
@@ -56,7 +61,13 @@ mod tests {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Source { Default, UserGlobal, Project, Local, Env }
+pub enum Source {
+    Default,
+    UserGlobal,
+    Project,
+    Local,
+    Env,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Provenance {
@@ -100,20 +111,48 @@ pub fn parse_toml(s: &str) -> anyhow::Result<PartialConfig> {
 pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
     let mut cfg = Config::default();
     let mut prov = Provenance {
-        provider: Source::Default, base_url: Source::Default, model: Source::Default,
-        context_ceiling: Source::Default, auto_evict_cold: Source::Default,
-        compact_threshold_pct: Source::Default, token_ceiling: Source::Default,
+        provider: Source::Default,
+        base_url: Source::Default,
+        model: Source::Default,
+        context_ceiling: Source::Default,
+        auto_evict_cold: Source::Default,
+        compact_threshold_pct: Source::Default,
+        token_ceiling: Source::Default,
         reduced_motion: Source::Default,
     };
     for (src, p) in layers {
-        if let Some(v) = &p.provider { cfg.provider = v.clone(); prov.provider = *src; }
-        if let Some(v) = &p.base_url { cfg.base_url = Some(v.clone()); prov.base_url = *src; }
-        if let Some(v) = &p.model { cfg.model = v.clone(); prov.model = *src; }
-        if let Some(v) = p.reduced_motion { cfg.reduced_motion = v; prov.reduced_motion = *src; }
-        if let Some(v) = p.economy.context_ceiling { cfg.economy.context_ceiling = Some(v); prov.context_ceiling = *src; }
-        if let Some(v) = p.economy.auto_evict_cold { cfg.economy.auto_evict_cold = v; prov.auto_evict_cold = *src; }
-        if let Some(v) = p.economy.compact_threshold_pct { cfg.economy.compact_threshold_pct = v; prov.compact_threshold_pct = *src; }
-        if let Some(v) = p.economy.token_ceiling { cfg.economy.token_ceiling = Some(v); prov.token_ceiling = *src; }
+        if let Some(v) = &p.provider {
+            cfg.provider = v.clone();
+            prov.provider = *src;
+        }
+        if let Some(v) = &p.base_url {
+            cfg.base_url = Some(v.clone());
+            prov.base_url = *src;
+        }
+        if let Some(v) = &p.model {
+            cfg.model = v.clone();
+            prov.model = *src;
+        }
+        if let Some(v) = p.reduced_motion {
+            cfg.reduced_motion = v;
+            prov.reduced_motion = *src;
+        }
+        if let Some(v) = p.economy.context_ceiling {
+            cfg.economy.context_ceiling = Some(v);
+            prov.context_ceiling = *src;
+        }
+        if let Some(v) = p.economy.auto_evict_cold {
+            cfg.economy.auto_evict_cold = v;
+            prov.auto_evict_cold = *src;
+        }
+        if let Some(v) = p.economy.compact_threshold_pct {
+            cfg.economy.compact_threshold_pct = v;
+            prov.compact_threshold_pct = *src;
+        }
+        if let Some(v) = p.economy.token_ceiling {
+            cfg.economy.token_ceiling = Some(v);
+            prov.token_ceiling = *src;
+        }
     }
     (cfg, prov)
 }
@@ -124,16 +163,18 @@ mod merge_tests {
 
     #[test]
     fn later_layers_override_and_record_source() {
-        let user = parse_toml("model = \"a\"\nreduced_motion = true\n[economy]\nauto_evict_cold = false").unwrap();
+        let user =
+            parse_toml("model = \"a\"\nreduced_motion = true\n[economy]\nauto_evict_cold = false")
+                .unwrap();
         let proj = parse_toml("model = \"b\"").unwrap();
         let (cfg, prov) = merge(&[(Source::UserGlobal, user), (Source::Project, proj)]);
         assert_eq!(cfg.model, "b");
-        assert_eq!(prov.model, Source::Project);        // project overrode user
+        assert_eq!(prov.model, Source::Project); // project overrode user
         assert!(cfg.reduced_motion);
         assert_eq!(prov.reduced_motion, Source::UserGlobal);
         assert!(!cfg.economy.auto_evict_cold);
         assert_eq!(prov.auto_evict_cold, Source::UserGlobal);
-        assert_eq!(prov.provider, Source::Default);      // untouched
+        assert_eq!(prov.provider, Source::Default); // untouched
     }
 
     #[test]
@@ -150,7 +191,12 @@ mod merge_tests {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TomlValue { Str(String), Int(i64), Bool(bool), Unset }
+pub enum TomlValue {
+    Str(String),
+    Int(i64),
+    Bool(bool),
+    Unset,
+}
 
 /// Set (or, for `Unset`, remove) a dotted key in a TOML document string,
 /// preserving all other content. Only the top-level table and a single nested
@@ -170,19 +216,26 @@ pub fn set_in_toml(existing: &str, dotted_key: &str, value: TomlValue) -> anyhow
         }
     };
     match dotted_key.split_once('.') {
-        None => {
-            match to_val(&value) {
-                Some(v) => { doc.insert(dotted_key.to_string(), v); }
-                None => { doc.remove(dotted_key); }
+        None => match to_val(&value) {
+            Some(v) => {
+                doc.insert(dotted_key.to_string(), v);
             }
-        }
+            None => {
+                doc.remove(dotted_key);
+            }
+        },
         Some((table, key)) => {
-            let entry = doc.entry(table.to_string())
+            let entry = doc
+                .entry(table.to_string())
                 .or_insert_with(|| toml::Value::Table(toml::Table::new()));
             if let toml::Value::Table(t) = entry {
                 match to_val(&value) {
-                    Some(v) => { t.insert(key.to_string(), v); }
-                    None => { t.remove(key); }
+                    Some(v) => {
+                        t.insert(key.to_string(), v);
+                    }
+                    None => {
+                        t.remove(key);
+                    }
                 }
             }
         }

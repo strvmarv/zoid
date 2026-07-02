@@ -700,12 +700,30 @@ fn field_target(label: &str, kind: &zoid_tui::config_view::FieldKind) -> Option<
         return Some(FieldTarget::Secret);
     }
     Some(match label {
-        "provider" => FieldTarget::Toml { key: "provider", ty: TomlTy::Str },
-        "model" => FieldTarget::Toml { key: "model", ty: TomlTy::Str },
-        "base_url" => FieldTarget::Toml { key: "base_url", ty: TomlTy::StrUnsetEmpty },
-        "context ceiling" => FieldTarget::Toml { key: "economy.context_ceiling", ty: TomlTy::U64Unset },
-        "compact at %" => FieldTarget::Toml { key: "economy.compact_threshold_pct", ty: TomlTy::U8Pct },
-        "token ceiling" => FieldTarget::Toml { key: "economy.token_ceiling", ty: TomlTy::U64Unset },
+        "provider" => FieldTarget::Toml {
+            key: "provider",
+            ty: TomlTy::Str,
+        },
+        "model" => FieldTarget::Toml {
+            key: "model",
+            ty: TomlTy::Str,
+        },
+        "base_url" => FieldTarget::Toml {
+            key: "base_url",
+            ty: TomlTy::StrUnsetEmpty,
+        },
+        "context ceiling" => FieldTarget::Toml {
+            key: "economy.context_ceiling",
+            ty: TomlTy::U64Unset,
+        },
+        "compact at %" => FieldTarget::Toml {
+            key: "economy.compact_threshold_pct",
+            ty: TomlTy::U8Pct,
+        },
+        "token ceiling" => FieldTarget::Toml {
+            key: "economy.token_ceiling",
+            ty: TomlTy::U64Unset,
+        },
         // Bools (auto-evict cold / reduced motion) persist via toggle, not edit.
         _ => return None,
     })
@@ -719,7 +737,11 @@ fn value_from_buffer(ty: &TomlTy, buf: &str) -> Option<zoid_core::config::TomlVa
     Some(match ty {
         TomlTy::Str => TomlValue::Str(buf.to_string()),
         TomlTy::StrUnsetEmpty => {
-            if t.is_empty() { TomlValue::Unset } else { TomlValue::Str(buf.to_string()) }
+            if t.is_empty() {
+                TomlValue::Unset
+            } else {
+                TomlValue::Str(buf.to_string())
+            }
         }
         TomlTy::U64Unset => {
             if t.is_empty() || t == "(none)" {
@@ -752,16 +774,26 @@ fn current_write(
         return None;
     }
     let econ = &app.config.economy;
-    let opt_u64 = |o: Option<u64>| o.map(|n| TomlValue::Int(n as i64)).unwrap_or(TomlValue::Unset);
+    let opt_u64 = |o: Option<u64>| {
+        o.map(|n| TomlValue::Int(n as i64))
+            .unwrap_or(TomlValue::Unset)
+    };
     Some(match label {
         "provider" => ("provider", TomlValue::Str(app.config.provider.clone())),
         "model" => ("model", TomlValue::Str(app.config.model.clone())),
         "base_url" => (
             "base_url",
-            app.config.base_url.clone().map(TomlValue::Str).unwrap_or(TomlValue::Unset),
+            app.config
+                .base_url
+                .clone()
+                .map(TomlValue::Str)
+                .unwrap_or(TomlValue::Unset),
         ),
         "context ceiling" => ("economy.context_ceiling", opt_u64(econ.context_ceiling)),
-        "auto-evict cold" => ("economy.auto_evict_cold", TomlValue::Bool(econ.auto_evict_cold)),
+        "auto-evict cold" => (
+            "economy.auto_evict_cold",
+            TomlValue::Bool(econ.auto_evict_cold),
+        ),
         "compact at %" => (
             "economy.compact_threshold_pct",
             TomlValue::Int(econ.compact_threshold_pct as i64),
@@ -1104,9 +1136,10 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             use zoid_core::config::TomlValue;
             if let Some((label, _kind)) = current_config_field(app) {
                 let write = match label {
-                    "auto-evict cold" => {
-                        Some(("economy.auto_evict_cold", !app.config.economy.auto_evict_cold))
-                    }
+                    "auto-evict cold" => Some((
+                        "economy.auto_evict_cold",
+                        !app.config.economy.auto_evict_cold,
+                    )),
                     "reduced motion" => Some(("reduced_motion", !app.config.reduced_motion)),
                     _ => None,
                 };
@@ -1126,7 +1159,12 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                             Some(i) => list[(i + 1) % list.len()],
                             None => list[0],
                         };
-                        apply_config_write(app, "provider", TomlValue::Str(next.to_string()), false);
+                        apply_config_write(
+                            app,
+                            "provider",
+                            TomlValue::Str(next.to_string()),
+                            false,
+                        );
                     }
                     "model" => {
                         let list = zoid_provider::model::models_for(&app.config.provider);
@@ -1136,7 +1174,12 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                                 Some(i) => list[(i + 1) % list.len()],
                                 None => list[0],
                             };
-                            apply_config_write(app, "model", TomlValue::Str(next.to_string()), false);
+                            apply_config_write(
+                                app,
+                                "model",
+                                TomlValue::Str(next.to_string()),
+                                false,
+                            );
                         }
                     }
                     _ => {}
@@ -1428,7 +1471,7 @@ mod tests {
         assert!(!p.auto_evict_cold);
         assert_eq!(p.token_ceiling, Some(50_000));
         assert_eq!(p.compact_threshold, Some(160_000)); // 80% of 200k
-                                                          // 0% disables compaction
+                                                        // 0% disables compaction
         let econ0 = zoid_core::config::EconomyConfig {
             compact_threshold_pct: 0,
             ..econ
@@ -1448,40 +1491,73 @@ mod tests {
         // provider / model → string TOML keys.
         assert_eq!(
             field_target("provider", &FieldKind::Cycle(&[])),
-            Some(FieldTarget::Toml { key: "provider", ty: TomlTy::Str })
+            Some(FieldTarget::Toml {
+                key: "provider",
+                ty: TomlTy::Str
+            })
         );
         assert_eq!(
             field_target("model", &FieldKind::Text),
-            Some(FieldTarget::Toml { key: "model", ty: TomlTy::Str })
+            Some(FieldTarget::Toml {
+                key: "model",
+                ty: TomlTy::Str
+            })
         );
         // context ceiling → economy.context_ceiling, uint-with-unset.
         assert_eq!(
             field_target("context ceiling", &FieldKind::Uint),
-            Some(FieldTarget::Toml { key: "economy.context_ceiling", ty: TomlTy::U64Unset })
+            Some(FieldTarget::Toml {
+                key: "economy.context_ceiling",
+                ty: TomlTy::U64Unset
+            })
         );
         // empty base_url removes the key.
         assert_eq!(
             field_target("base_url", &FieldKind::Text),
-            Some(FieldTarget::Toml { key: "base_url", ty: TomlTy::StrUnsetEmpty })
+            Some(FieldTarget::Toml {
+                key: "base_url",
+                ty: TomlTy::StrUnsetEmpty
+            })
         );
         // Bools persist via toggle, not the edit buffer → no text target.
         assert!(field_target("reduced motion", &FieldKind::Bool).is_none());
         assert!(field_target("auto-evict cold", &FieldKind::Bool).is_none());
 
         // Value coercion: empty / "(none)" ceiling ⇒ Unset; a number ⇒ Int.
-        assert_eq!(value_from_buffer(&TomlTy::U64Unset, ""), Some(TomlValue::Unset));
-        assert_eq!(value_from_buffer(&TomlTy::U64Unset, "(none)"), Some(TomlValue::Unset));
-        assert_eq!(value_from_buffer(&TomlTy::U64Unset, "512000"), Some(TomlValue::Int(512_000)));
-        assert_eq!(value_from_buffer(&TomlTy::U64Unset, "bogus"), Some(TomlValue::Unset));
+        assert_eq!(
+            value_from_buffer(&TomlTy::U64Unset, ""),
+            Some(TomlValue::Unset)
+        );
+        assert_eq!(
+            value_from_buffer(&TomlTy::U64Unset, "(none)"),
+            Some(TomlValue::Unset)
+        );
+        assert_eq!(
+            value_from_buffer(&TomlTy::U64Unset, "512000"),
+            Some(TomlValue::Int(512_000))
+        );
+        assert_eq!(
+            value_from_buffer(&TomlTy::U64Unset, "bogus"),
+            Some(TomlValue::Unset)
+        );
         // Empty base_url buffer ⇒ Unset (removes key); non-empty ⇒ Str.
-        assert_eq!(value_from_buffer(&TomlTy::StrUnsetEmpty, "  "), Some(TomlValue::Unset));
+        assert_eq!(
+            value_from_buffer(&TomlTy::StrUnsetEmpty, "  "),
+            Some(TomlValue::Unset)
+        );
         assert_eq!(
             value_from_buffer(&TomlTy::StrUnsetEmpty, "http://x"),
             Some(TomlValue::Str("http://x".into()))
         );
         // compact % clamps to 0..=100; unparseable is a no-op.
-        assert_eq!(value_from_buffer(&TomlTy::U8Pct, "150"), Some(TomlValue::Int(100)));
-        assert_eq!(value_from_buffer(&TomlTy::U8Pct, "80"), Some(TomlValue::Int(80)));
+        assert_eq!(
+            value_from_buffer(&TomlTy::U8Pct, "150"),
+            Some(TomlValue::Int(100))
+        );
+        assert_eq!(
+            value_from_buffer(&TomlTy::U8Pct, "80"),
+            Some(TomlValue::Int(80))
+        );
         assert_eq!(value_from_buffer(&TomlTy::U8Pct, "xx"), None);
     }
 

@@ -575,7 +575,11 @@ pub fn render_config(
             let marker = if active { glyph::COLLAPSED } else { ' ' };
             Line::from(Span::styled(
                 format!("{marker} {}", s.title),
-                Style::new().fg(if active { color::CHAT_ACCENT } else { color::DIM }),
+                Style::new().fg(if active {
+                    color::CHAT_ACCENT
+                } else {
+                    color::DIM
+                }),
             ))
         })
         .collect();
