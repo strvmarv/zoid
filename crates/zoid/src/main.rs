@@ -145,12 +145,18 @@ fn fmt_duration(start_ms: i64, now_ms: i64) -> String {
     if mins < 60 { format!("{mins}m") } else { format!("{}h{}m", mins / 60, mins % 60) }
 }
 
-/// Human provider label from the same env used by `default_model` selection.
+/// Human provider label mirroring `zoid_provider::default_provider`'s selection:
+/// a non-empty `OLLAMA_API_KEY` → Ollama, else a non-empty `ANTHROPIC_API_KEY` →
+/// Anthropic, else the offline `FakeProvider` (labelled "offline" rather than
+/// misreporting "anthropic" when no key is set).
 fn provider_label() -> String {
-    if std::env::var("OLLAMA_API_KEY").map(|k| !k.is_empty()).unwrap_or(false) {
+    let set = |k: &str| std::env::var(k).map(|v| !v.is_empty()).unwrap_or(false);
+    if set("OLLAMA_API_KEY") {
         "ollama".into()
-    } else {
+    } else if set("ANTHROPIC_API_KEY") {
         "anthropic".into()
+    } else {
+        "offline".into()
     }
 }
 
