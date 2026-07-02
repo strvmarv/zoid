@@ -778,6 +778,10 @@ async fn run<B: ratatui::backend::Backend>(
                         app.streaming = false;
                         app.shell.clear_active_tool();
                     }
+                    // Task 10 wires the question overlay + routes the user's
+                    // answer back through `reply`. Until then, dropping it here
+                    // mirrors an immediate Esc-abort so the loop never hangs.
+                    AgentUpdate::AskUser { .. } => {}
                 }
             }
             _ = motion_tick.tick(), if app.streaming || app.zoom_changed_at.is_some() => {

@@ -119,6 +119,7 @@ pub async fn run_subagent(
         zoid_tools::registry()
             .into_iter()
             .filter(|t| profile.allows(t.name()))
+            .filter(|t| t.kind() != zoid_tools::ToolKind::Interactive)
             .collect(),
     );
 
@@ -256,6 +257,37 @@ mod tests {
             "session history excluded (spec §4.4/§5.4)"
         );
         assert!(!req.tools.is_empty(), "tools advertised");
+    }
+
+    #[test]
+    fn assembled_tools_exclude_interactive_ask_user() {
+        // Mirrors the exact filter chain `run_subagent` uses to build its tool
+        // set: a headless subagent cannot answer an `ask_user` prompt and
+        // would hang forever awaiting a reply, so Interactive tools are
+        // dropped before the request is ever built.
+        let profile = AgentProfile::builtin();
+        let tools: Vec<Box<dyn Tool>> = zoid_tools::registry()
+            .into_iter()
+            .filter(|t| profile.allows(t.name()))
+            .filter(|t| t.kind() != zoid_tools::ToolKind::Interactive)
+            .collect();
+        assert!(
+            !tools.iter().any(|t| t.name() == "ask_user"),
+            "ask_user must be filtered out of a subagent's tool set"
+        );
+
+        let req = build_subagent_request(
+            "do a thing",
+            &[],
+            &subagent_policy(),
+            &profile,
+            "glm",
+            &tools,
+        );
+        assert!(
+            !req.tools.iter().any(|s| s.name == "ask_user"),
+            "ask_user must not be advertised to the provider for a subagent"
+        );
     }
 
     #[test]

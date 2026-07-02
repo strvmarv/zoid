@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use ulid::Ulid;
 
 use zoid_core::event::{BranchId, Event, EventKind};
@@ -48,6 +49,14 @@ pub fn chat_turn_config() -> TurnConfig {
 /// Max tool rounds per user message before the loop force-ends (safety leash).
 pub const MAX_TOOL_ITERATIONS: u32 = 25;
 
+/// The user's answer to an `ask_user` prompt.
+pub enum Answer {
+    Choice(String),
+    FreeText(String),
+    /// The user chose to let the agent decide (a positive choice, not a cancel).
+    LetYouDecide,
+}
+
 /// UI-facing updates emitted as the turn progresses.
 pub enum AgentUpdate {
     /// A new event was persisted; the UI should cache it and redraw.
@@ -55,6 +64,13 @@ pub enum AgentUpdate {
     /// A Local tool is about to run; the UI shows an in-flight spinner until the
     /// matching `ToolResult` is appended (or the turn completes).
     ToolStarted { name: String },
+    /// The model asked the user a question; the loop parks until `reply`
+    /// resolves. Dropping `reply` (Esc) aborts the turn.
+    AskUser {
+        question: String,
+        choices: Vec<String>,
+        reply: oneshot::Sender<Answer>,
+    },
     /// The turn is finished (model produced no further tool calls / cap / error).
     TurnComplete,
 }
@@ -345,6 +361,74 @@ async fn run_turn_inner(
                                 now,
                             )
                             .await?;
+                        }
+                    }
+                }
+                Some(zoid_tools::ToolKind::Interactive) if tc.name == "ask_user" => {
+                    let question = tc
+                        .args
+                        .get("question")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let choices = tc
+                        .args
+                        .get("choices")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|c| c.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let (rtx, rrx) = oneshot::channel::<Answer>();
+                    let _ = ui
+                        .send(AgentUpdate::AskUser {
+                            question,
+                            choices,
+                            reply: rtx,
+                        })
+                        .await;
+                    match rrx.await {
+                        Ok(ans) => {
+                            let output = match ans {
+                                Answer::Choice(s) | Answer::FreeText(s) => s,
+                                Answer::LetYouDecide => "[let you decide]".to_string(),
+                            };
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::ToolResult {
+                                    id: tc.id,
+                                    name: tc.name,
+                                    output,
+                                    is_error: false,
+                                },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                        }
+                        Err(_) => {
+                            // Sender dropped == Esc hard-abort: balanced result, end the turn.
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::ToolResult {
+                                    id: tc.id,
+                                    name: tc.name,
+                                    output: "[user aborted]".to_string(),
+                                    is_error: false,
+                                },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                            break 'turn;
                         }
                     }
                 }

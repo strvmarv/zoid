@@ -2,6 +2,7 @@
 //! Tools run in the process working directory (Chat is safe by human presence,
 //! spec §9); no path-jailing here.
 
+pub mod ask;
 pub mod edit;
 pub mod read;
 pub mod search;
@@ -53,8 +54,8 @@ pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn spec(&self) -> ToolSpec;
     fn run(&self, args: &Value, cwd: &Path) -> ToolOutput;
-    /// The execution kind (see [`ToolKind`]). Defaults to `Local`; the five
-    /// built-in tools do not override it.
+    /// The execution kind (see [`ToolKind`]). Defaults to `Local`;
+    /// `update_tasks` overrides to `Emitting` and `ask_user` to `Interactive`.
     fn kind(&self) -> ToolKind {
         ToolKind::Local
     }
@@ -69,6 +70,7 @@ pub fn registry() -> Vec<Box<dyn Tool>> {
         Box::new(search::Search),
         Box::new(shell::Shell),
         Box::new(tasks::UpdateTasks),
+        Box::new(ask::AskUser),
     ]
 }
 
@@ -143,6 +145,7 @@ mod tests {
         assert!(names.contains(&"search"));
         assert!(names.contains(&"shell"));
         assert!(names.contains(&"update_tasks"));
+        assert!(names.contains(&"ask_user"));
     }
 
     #[test]
@@ -188,11 +191,11 @@ mod tests {
 
     #[test]
     fn registry_tools_are_all_local_by_default() {
-        // `update_tasks` is the sole intentional exception (ToolKind::Emitting);
-        // everything else still defaults to Local.
+        // `update_tasks` (Emitting) and `ask_user` (Interactive) are the
+        // intentional exceptions; everything else still defaults to Local.
         for t in registry()
             .into_iter()
-            .filter(|t| t.name() != "update_tasks")
+            .filter(|t| t.name() != "update_tasks" && t.name() != "ask_user")
         {
             assert_eq!(
                 t.kind(),
