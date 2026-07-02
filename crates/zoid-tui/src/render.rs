@@ -287,17 +287,30 @@ fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
     let sel = nav(state.palette.selected, 0, matches.len());
 
     // Render the full grouped list; highlight the selected *selectable* row.
+    // Track the line index of the selected row (group headers are interleaved)
+    // so the viewport can scroll to keep it visible — group counts vary with
+    // Plan 2's session group, so the list can exceed the overlay's fixed height.
     let mut lines: Vec<Line> = Vec::new();
     let mut last_group = String::new();
+    let mut selected_line: usize = 0;
     for (i, it) in items.iter().enumerate() {
         if it.group != last_group {
             lines.push(Line::styled(it.group.to_uppercase(), Style::new().fg(color::CHAT_ACCENT)));
             last_group = it.group.clone();
         }
         let is_sel = matches.get(sel) == Some(&i);
+        if is_sel {
+            selected_line = lines.len();
+        }
         lines.push(palette_row_line(it, is_sel));
     }
-    frame.render_widget(Paragraph::new(lines), inner);
+
+    // Scroll-follow: keep the selected line within the visible viewport. When
+    // the selection is near the top, offset is 0; as it moves past the bottom
+    // edge, the offset grows so the selected row stays on the last visible line.
+    let vh = inner.height as usize;
+    let off = selected_line.saturating_sub(vh.saturating_sub(1));
+    frame.render_widget(Paragraph::new(lines).scroll((off as u16, 0)), inner);
 }
 
 fn palette_row_line(it: &PaletteItem, selected: bool) -> Line<'static> {
@@ -321,8 +334,11 @@ fn render_cmdline(frame: &mut Frame, state: &ShellState, area: Rect) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
-/// A bordered, titled, single-selection list — shared by the object and verb
-/// pickers (spec ④). Same chrome as the palette overlay.
+/// A bordered, titled, single-selection list — shared by the object, verb, and
+/// resume-session pickers (spec ④). Same chrome as the palette overlay. Scroll-
+/// follows `selected` (the resume-session picker's row count is unbounded —
+/// as many sessions as this repo has — so it can clip the same way the
+/// palette did before its own scroll-follow fix).
 fn list_overlay(frame: &mut Frame, area: Rect, title: String, rows: &[String], selected: usize) {
     frame.render_widget(Clear, area);
     let block = Block::default()
@@ -331,6 +347,8 @@ fn list_overlay(frame: &mut Frame, area: Rect, title: String, rows: &[String], s
         .title(Span::styled(title, Style::new().fg(color::TXT)));
     let inner = area.inner(ratatui::layout::Margin { horizontal: 1, vertical: 1 });
     frame.render_widget(block, area);
+    let vh = inner.height as usize;
+    let off = selected.saturating_sub(vh.saturating_sub(1));
     let lines: Vec<Line> = rows
         .iter()
         .enumerate()
@@ -343,7 +361,7 @@ fn list_overlay(frame: &mut Frame, area: Rect, title: String, rows: &[String], s
             Line::from(Span::styled(format!(" {r}"), style))
         })
         .collect();
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines).scroll((off as u16, 0)), inner);
 }
 
 fn render_object_overlay(frame: &mut Frame, msgs: &[ChatMsg], state: &ShellState, area: Rect) {
