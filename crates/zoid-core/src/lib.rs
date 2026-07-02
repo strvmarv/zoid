@@ -12,6 +12,7 @@ pub mod secret;
 pub mod session;
 pub mod sessions;
 pub mod store;
+pub mod tasks;
 pub mod zoom;
 
 #[cfg(test)]

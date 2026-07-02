@@ -67,6 +67,12 @@ pub enum EventKind {
         summary: String,
         ok: bool,
     },
+    /// The model's full task-list snapshot (last-write-wins). Rendered in the
+    /// rail; never inlined into the conversation transcript. Faithful — no
+    /// cardinality rules enforced here.
+    Tasks {
+        items: Vec<crate::tasks::TaskItem>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
