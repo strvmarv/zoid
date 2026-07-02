@@ -680,6 +680,25 @@ fn start_delegation(app: &mut App, task: String) {
     app.delegating = true;
     app.shell.status_hint = Some(format!("{} delegating…", zoid_tui::tokens::glyph::RUNNING));
 
+    // Create the isolated worktree up front so a genuine failure (a real repo
+    // where worktree creation failed) can surface a hint; "not a git repo"
+    // falls back to the process cwd silently (isolation isn't possible there).
+    let wt = if Path::new(".git").exists() {
+        match zoid::worktree::create_worktree(Path::new("."), &format!("sub-{}", Ulid::new())) {
+            Ok(w) => Some(w),
+            Err(_) => {
+                app.shell.status_hint = Some(format!(
+                    "{} worktree failed — running in the main tree",
+                    zoid_tui::tokens::glyph::WARNING
+                ));
+                None
+            }
+        }
+    } else {
+        None // not a git repo: run in the process cwd, isolation not possible
+    };
+    let cwd = wt.as_ref().map(|w| w.path().to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
+
     let provider = app.provider.clone();
     let session = app.session.clone();
     let session_id = app.session_id;
@@ -687,15 +706,6 @@ fn start_delegation(app: &mut App, task: String) {
     let model = app.model.clone();
     let ui = app.ui_tx.clone();
     tokio::spawn(async move {
-        // Isolated worktree for the unit (spec §3/§4.4); fall back to cwd if the
-        // process is not inside a git repo (e.g. offline smoke).
-        let wt = zoid::worktree::create_worktree(
-            std::path::Path::new("."),
-            &format!("sub-{}", Ulid::new()),
-        )
-        .ok();
-        let cwd = wt.as_ref().map(|w| w.path().to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
-
         let res = zoid::subagent::run_subagent(
             &task,
             &seed,
