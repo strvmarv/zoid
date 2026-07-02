@@ -144,6 +144,8 @@ pub struct ShellState {
     /// the bin once per frame from `Config` + `Provenance` + secret statuses
     /// (Task 12 wires population; empty here is a valid default).
     pub config_sections: Vec<crate::config_view::Section>,
+    /// Name of the tool currently executing (in-flight indicator), or `None`.
+    pub active_tool: Option<String>,
 }
 
 impl ShellState {
@@ -201,6 +203,7 @@ impl ShellState {
             config_field: 0,
             config_edit: None,
             config_sections: Vec::new(),
+            active_tool: None,
         }
     }
 
@@ -284,6 +287,16 @@ impl ShellState {
             self.conversation_scroll = 0;
         }
         self.zoom = next;
+    }
+
+    /// Show the in-flight spinner for a tool that has just started running.
+    pub fn set_active_tool(&mut self, name: impl Into<String>) {
+        self.active_tool = Some(name.into());
+    }
+
+    /// Clear the in-flight spinner (its `ToolResult` arrived, or the turn ended).
+    pub fn clear_active_tool(&mut self) {
+        self.active_tool = None;
     }
 }
 
@@ -437,5 +450,15 @@ mod tests {
             s.conversation_scroll, 17,
             "a saturating no-op zoom keypress preserves scroll"
         );
+    }
+
+    #[test]
+    fn active_tool_sets_and_clears() {
+        let mut s = ShellState::new();
+        assert_eq!(s.active_tool, None);
+        s.set_active_tool("shell");
+        assert_eq!(s.active_tool.as_deref(), Some("shell"));
+        s.clear_active_tool();
+        assert_eq!(s.active_tool, None);
     }
 }

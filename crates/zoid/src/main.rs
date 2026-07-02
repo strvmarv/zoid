@@ -760,9 +760,19 @@ async fn run<B: ratatui::backend::Backend>(
                             app.delegating = false;
                             app.shell.status_hint = None;
                         }
+                        // A tool result ends the in-flight indicator for that tool.
+                        if matches!(ev.kind, EventKind::ToolResult { .. }) {
+                            app.shell.clear_active_tool();
+                        }
                         app.events.push(*ev);
                     }
-                    AgentUpdate::TurnComplete => { app.streaming = false; }
+                    AgentUpdate::ToolStarted { name } => {
+                        app.shell.set_active_tool(name);
+                    }
+                    AgentUpdate::TurnComplete => {
+                        app.streaming = false;
+                        app.shell.clear_active_tool();
+                    }
                 }
             }
             _ = motion_tick.tick(), if app.streaming || app.zoom_changed_at.is_some() => {

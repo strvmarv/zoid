@@ -54,7 +54,17 @@ pub fn render_shell(
                 horizontal: CONV_PAD,
                 vertical: 0,
             });
-            let body = conversation_view(msgs, view, streaming, text.width as usize);
+            let mut body = conversation_view(msgs, view, streaming, text.width as usize);
+            // In-flight tool indicator: a dim spinner line below the last message,
+            // above the input, shown while a Local tool call is running (cleared
+            // once its `ToolResult` arrives or the turn completes). §16: glyph and
+            // colors come from `tokens`, never a literal.
+            if let Some(name) = &state.active_tool {
+                body.push(Line::from(vec![
+                    Span::styled(format!("{} ", glyph::RUNNING), Style::new().fg(color::WARN)),
+                    Span::styled(format!("running · {name} …"), Style::new().fg(color::DIM)),
+                ]));
+            }
             // Clamp the scroll offset to the body produced at THIS altitude. The three
             // zoom altitudes (Summary/Normal/Detail) yield very different line counts,
             // so an offset valid at one is meaningless at another; without this clamp a

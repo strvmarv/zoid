@@ -162,6 +162,15 @@ fn chat_with_rail_frame() {
     insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
 }
 
+/// In-flight tool indicator: a dim spinner line below the last message while a
+/// Local tool call is running (P2 ①).
+#[test]
+fn active_tool_spinner_frame() {
+    let mut s = ShellState::new();
+    s.set_active_tool("shell");
+    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+}
+
 /// Rail drawer headers show title + chevron only — no keybind labels (spec §2.1).
 #[test]
 fn rail_headers_have_no_keybind_labels() {

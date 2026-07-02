@@ -52,6 +52,9 @@ pub const MAX_TOOL_ITERATIONS: u32 = 25;
 pub enum AgentUpdate {
     /// A new event was persisted; the UI should cache it and redraw.
     Appended(Box<Event>),
+    /// A Local tool is about to run; the UI shows an in-flight spinner until the
+    /// matching `ToolResult` is appended (or the turn completes).
+    ToolStarted { name: String },
     /// The turn is finished (model produced no further tool calls / cap / error).
     TurnComplete,
 }
@@ -288,6 +291,11 @@ async fn run_turn_inner(
                 .await?;
                 continue;
             }
+            let _ = ui
+                .send(AgentUpdate::ToolStarted {
+                    name: tc.name.clone(),
+                })
+                .await;
             let tools_for_exec = tools.clone();
             let name = tc.name.clone();
             let args = tc.args.clone();
