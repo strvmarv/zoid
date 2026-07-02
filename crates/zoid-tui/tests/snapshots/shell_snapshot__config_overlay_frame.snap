@@ -1,11 +1,12 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
+assertion_line: 698
 expression: "draw_config(&s, &sections, 100, 24)"
 ---
 "┌ zoid · settings ─────────────────────────────────────────────────────────────────────────────────┐"
-"│▸ Provider & Model provider         ollama                      [default]                         │"
-"│  Economy          model                                        [env] ⚠                           │"
-"│  Interface        base_url                                     [default]                         │"
+"│▸ Provider & Model  ▸ provider         ollama                                            [default]│"
+"│  Economy             model                                                                [env] ⚠│"
+"│  Interface           base_url                                                           [default]│"
 "│  Secrets                                                                                         │"
 "│                                                                                                  │"
 "│                                                                                                  │"

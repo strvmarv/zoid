@@ -258,20 +258,32 @@ impl ShellState {
         self.session_selected = 0;
     }
 
-    /// Increase detail (Summary → Normal → Detail), saturating.
+    /// Increase detail (Summary → Normal → Detail), saturating. A real altitude
+    /// change re-anchors `conversation_scroll` to the top: altitudes have
+    /// incomparable line counts, so a carried-over offset could otherwise land
+    /// past the new altitude's end and render blank.
     pub fn zoom_in(&mut self) {
-        self.zoom = match self.zoom {
+        let next = match self.zoom {
             Zoom::Summary => Zoom::Normal,
             Zoom::Normal | Zoom::Detail => Zoom::Detail,
         };
+        if next != self.zoom {
+            self.conversation_scroll = 0;
+        }
+        self.zoom = next;
     }
 
-    /// Decrease detail (Detail → Normal → Summary), saturating.
+    /// Decrease detail (Detail → Normal → Summary), saturating. Re-anchors scroll
+    /// on a real change (see `zoom_in`).
     pub fn zoom_out(&mut self) {
-        self.zoom = match self.zoom {
+        let next = match self.zoom {
             Zoom::Detail => Zoom::Normal,
             Zoom::Normal | Zoom::Summary => Zoom::Summary,
         };
+        if next != self.zoom {
+            self.conversation_scroll = 0;
+        }
+        self.zoom = next;
     }
 }
 
@@ -404,5 +416,26 @@ mod tests {
         assert_eq!(s.zoom, Zoom::Detail);
         s.zoom_in();
         assert_eq!(s.zoom, Zoom::Detail); // saturates
+    }
+
+    #[test]
+    fn zoom_change_resets_conversation_scroll_but_saturation_does_not() {
+        let mut s = ShellState::new(); // Normal
+        s.conversation_scroll = 42;
+        s.zoom_in(); // Normal → Detail: real change → reset
+        assert_eq!(s.zoom, Zoom::Detail);
+        assert_eq!(
+            s.conversation_scroll, 0,
+            "a real zoom change re-anchors scroll"
+        );
+
+        // At an extreme, a no-op zoom must NOT clobber the scroll offset.
+        s.conversation_scroll = 17;
+        s.zoom_in(); // already Detail → no change
+        assert_eq!(s.zoom, Zoom::Detail);
+        assert_eq!(
+            s.conversation_scroll, 17,
+            "a saturating no-op zoom keypress preserves scroll"
+        );
     }
 }

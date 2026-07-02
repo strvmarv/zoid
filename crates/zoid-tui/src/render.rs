@@ -51,10 +51,18 @@ pub fn render_shell(
                 vertical: 0,
             });
             let body = conversation_view(msgs, view, streaming, text.width as usize);
-            frame.render_widget(
-                Paragraph::new(body).scroll((state.conversation_scroll, 0)),
-                text,
-            );
+            // Clamp the scroll offset to the body produced at THIS altitude. The three
+            // zoom altitudes (Summary/Normal/Detail) yield very different line counts,
+            // so an offset valid at one is meaningless at another; without this clamp a
+            // large offset carried from a taller altitude renders past the end as blank
+            // rows after a zoom switch (the "corrupted display" bug). Display-only — the
+            // stored offset is reset to 0 on an actual zoom change.
+            let max_scroll = body
+                .len()
+                .saturating_sub(text.height as usize)
+                .min(u16::MAX as usize) as u16;
+            let scroll = state.conversation_scroll.min(max_scroll);
+            frame.render_widget(Paragraph::new(body).scroll((scroll, 0)), text);
         }
         Mode::Build => render_build_placeholder(frame, layout.conversation),
     }
@@ -583,6 +591,7 @@ pub fn render_config(
     sections: &[crate::config_view::Section],
     area: Rect,
 ) {
+    use crate::text::truncate;
     frame.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -595,10 +604,11 @@ pub fn render_config(
         return;
     }
 
-    // Left nav (fixed width), right detail (remainder).
+    // Left nav (fixed width) · gap · right detail (remainder).
     let nav_w = 18u16.min(inner.width.saturating_sub(1));
     let cols = ratatui::layout::Layout::horizontal([
         ratatui::layout::Constraint::Length(nav_w),
+        ratatui::layout::Constraint::Length(2), // gap so nav text can't touch detail
         ratatui::layout::Constraint::Min(1),
     ])
     .split(inner);
@@ -622,51 +632,61 @@ pub fn render_config(
     frame.render_widget(Paragraph::new(nav), cols[0]);
 
     let sec = &sections[state.config_section.min(sections.len().saturating_sub(1))];
-    let rows: Vec<Line> = sec
-        .rows
-        .iter()
-        .enumerate()
-        .map(|(i, r)| {
-            let cur = i == state.config_field;
-            let val = if cur {
-                if let Some(buf) = &state.config_edit {
-                    let shown = if matches!(r.kind, crate::config_view::FieldKind::Secret) {
-                        glyph::MASK.to_string().repeat(buf.chars().count())
-                    } else {
-                        buf.clone()
-                    };
-                    format!("{shown}{}", glyph::CARET)
+    // Rows span the full detail-pane width: fixed label column on the left, the
+    // value stretched across the middle, and the provenance tag (+ shadow ⚠)
+    // pinned to the right edge — so the page fills the screen instead of hugging
+    // the left. `Tab` switches section, `←/→` change the focused value.
+    let pane_w = cols[2].width as usize;
+    let mut detail: Vec<Line> = Vec::new();
+    for (i, r) in sec.rows.iter().enumerate() {
+        let cur = i == state.config_field;
+        let val = if cur {
+            if let Some(buf) = &state.config_edit {
+                let shown = if matches!(r.kind, crate::config_view::FieldKind::Secret) {
+                    glyph::MASK.to_string().repeat(buf.chars().count())
                 } else {
-                    r.value.clone()
-                }
+                    buf.clone()
+                };
+                format!("{shown}{}", glyph::CARET)
             } else {
                 r.value.clone()
-            };
-            let (tag_txt, tag_col) = match r.source {
-                zoid_core::config::Source::Default => ("[default]", color::DIM),
-                zoid_core::config::Source::UserGlobal => ("[user]", color::CHAT_ACCENT),
-                zoid_core::config::Source::Project => ("[repo]", color::BRANCH),
-                zoid_core::config::Source::Local => ("[local]", color::BRANCH),
-                zoid_core::config::Source::Env => ("[env]", color::WARN),
-            };
-            let mut spans = vec![
-                Span::styled(
-                    format!(" {:<16} ", r.label),
-                    Style::new().fg(if cur { color::CHAT_ACCENT } else { color::TXT }),
-                ),
-                Span::styled(format!("{val:<28}"), Style::new().fg(color::TXT)),
-                Span::styled(format!("{tag_txt} "), Style::new().fg(tag_col)),
-            ];
-            if r.env_shadowed {
-                spans.push(Span::styled(
-                    glyph::WARNING.to_string(),
-                    Style::new().fg(color::WARN),
-                ));
             }
-            Line::from(spans)
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(rows), cols[1]);
+        } else {
+            r.value.clone()
+        };
+        let (tag_txt, tag_col) = match r.source {
+            zoid_core::config::Source::Default => ("[default]", color::DIM),
+            zoid_core::config::Source::UserGlobal => ("[user]", color::CHAT_ACCENT),
+            zoid_core::config::Source::Project => ("[repo]", color::BRANCH),
+            zoid_core::config::Source::Local => ("[local]", color::BRANCH),
+            zoid_core::config::Source::Env => ("[env]", color::WARN),
+        };
+        let warn = if r.env_shadowed {
+            format!(" {}", glyph::WARNING)
+        } else {
+            String::new()
+        };
+        // Cursor marker in the gutter so the focused row reads without color alone.
+        let marker = if cur { glyph::COLLAPSED } else { ' ' };
+        let label = format!("{marker} {:<16} ", r.label); // fixed-width label column
+                                                          // Stretch the value to fill the gap so the tag lands at the right edge.
+        let fixed = label.width() + tag_txt.width() + warn.width();
+        let mid_w = pane_w.saturating_sub(fixed).max(1);
+        let val_shown = truncate(&val, mid_w);
+        let mut spans = vec![
+            Span::styled(
+                label,
+                Style::new().fg(if cur { color::CHAT_ACCENT } else { color::TXT }),
+            ),
+            Span::styled(format!("{val_shown:<mid_w$}"), Style::new().fg(color::TXT)),
+            Span::styled(tag_txt.to_string(), Style::new().fg(tag_col)),
+        ];
+        if !warn.is_empty() {
+            spans.push(Span::styled(warn, Style::new().fg(color::WARN)));
+        }
+        detail.push(Line::from(spans));
+    }
+    frame.render_widget(Paragraph::new(detail), cols[2]);
 }
 
 fn object_row(o: &crate::objects::Obj) -> String {

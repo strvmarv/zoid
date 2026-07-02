@@ -229,32 +229,22 @@ fn route_config_key(state: &ShellState, key: KeyEvent) -> Action {
     }
 
     match key.code {
+        // Up/Down move between fields in the active section; Tab/Shift+Tab switch
+        // the section (the "main items"); Left/Right change the focused field's
+        // value (toggle a bool, step a choice list). Text/number/secret fields
+        // still open an edit buffer with Enter.
         KeyCode::Up => Action::ConfigMoveField(-1),
         KeyCode::Down => Action::ConfigMoveField(1),
-        KeyCode::Left => Action::ConfigMoveSection(-1),
-        KeyCode::Right => Action::ConfigMoveSection(1),
+        KeyCode::Tab => Action::ConfigMoveSection(1),
+        KeyCode::BackTab => Action::ConfigMoveSection(-1),
+        KeyCode::Left => config_value_change(&kind, is_model_field, -1),
+        KeyCode::Right => config_value_change(&kind, is_model_field, 1),
         KeyCode::Esc => Action::CloseOverlay,
         KeyCode::Enter => {
             if matches!(kind, Some(FieldKind::Bool)) {
                 Action::ConfigToggle
             } else {
                 Action::ConfigBeginEdit
-            }
-        }
-        KeyCode::Char(' ') => {
-            if matches!(kind, Some(FieldKind::Bool)) {
-                Action::ConfigToggle
-            } else if matches!(kind, Some(FieldKind::Cycle(_))) || is_model_field {
-                Action::ConfigCycle(1)
-            } else {
-                Action::Noop
-            }
-        }
-        KeyCode::Tab => {
-            if is_model_field || matches!(kind, Some(FieldKind::Cycle(_))) {
-                Action::ConfigCycle(1)
-            } else {
-                Action::Noop
             }
         }
         KeyCode::Char('r') => Action::ConfigSaveToRepo,
@@ -266,6 +256,19 @@ fn route_config_key(state: &ShellState, key: KeyEvent) -> Action {
             }
         }
         _ => Action::Noop,
+    }
+}
+
+/// Left/Right value change for the focused config field: toggle a bool, step a
+/// choice list (provider / the model free-text cycle) by `dir` (±1), or no-op for
+/// text/number/secret fields (those edit via Enter).
+fn config_value_change(kind: &Option<FieldKind>, is_model_field: bool, dir: i32) -> Action {
+    if matches!(kind, Some(FieldKind::Bool)) {
+        Action::ConfigToggle
+    } else if is_model_field || matches!(kind, Some(FieldKind::Cycle(_))) {
+        Action::ConfigCycle(dir)
+    } else {
+        Action::Noop
     }
 }
 
@@ -732,13 +735,18 @@ mod tests {
     fn config_overlay_nav_and_escape() {
         let mut s = ShellState::new();
         s.overlay = Overlay::Config;
+        // Up/Down move between fields; Tab/Shift+Tab switch the section.
         assert!(matches!(
             route_key(&s, key(KeyCode::Down, KeyModifiers::NONE)),
             Action::ConfigMoveField(1)
         ));
         assert!(matches!(
-            route_key(&s, key(KeyCode::Right, KeyModifiers::NONE)),
+            route_key(&s, key(KeyCode::Tab, KeyModifiers::NONE)),
             Action::ConfigMoveSection(1)
+        ));
+        assert!(matches!(
+            route_key(&s, key(KeyCode::BackTab, KeyModifiers::NONE)),
+            Action::ConfigMoveSection(-1)
         ));
         assert!(matches!(
             route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)),
@@ -766,10 +774,38 @@ mod tests {
         s.config_section = 0;
         s.config_field = 0;
 
-        // Bool field: Enter toggles.
+        // Bool field: Enter toggles, and so do Left/Right (value control).
         assert!(matches!(
             route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)),
             Action::ConfigToggle
+        ));
+        assert!(matches!(
+            route_key(&s, key(KeyCode::Left, KeyModifiers::NONE)),
+            Action::ConfigToggle
+        ));
+        assert!(matches!(
+            route_key(&s, key(KeyCode::Right, KeyModifiers::NONE)),
+            Action::ConfigToggle
+        ));
+
+        // Cycle field: Left/Right step the choice list in each direction.
+        s.config_sections = vec![Section {
+            title: "Provider & Model".into(),
+            rows: vec![FieldRow {
+                label: "provider",
+                value: "ollama".into(),
+                kind: FieldKind::Cycle(&["ollama", "anthropic"]),
+                source: Source::Default,
+                env_shadowed: false,
+            }],
+        }];
+        assert!(matches!(
+            route_key(&s, key(KeyCode::Right, KeyModifiers::NONE)),
+            Action::ConfigCycle(1)
+        ));
+        assert!(matches!(
+            route_key(&s, key(KeyCode::Left, KeyModifiers::NONE)),
+            Action::ConfigCycle(-1)
         ));
 
         // Once editing, char/esc route into the edit buffer, not navigation.

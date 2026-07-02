@@ -1038,7 +1038,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::ConversationClick(_) => {}
         Action::ZoomIn => {
             let before = app.shell.zoom;
-            app.shell.zoom_in();
+            app.shell.zoom_in(); // re-anchors conversation_scroll on a real change
             if app.shell.zoom != before {
                 app.zoom_changed_at = Some(std::time::Instant::now());
             }
@@ -1252,15 +1252,23 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 }
             }
         }
-        Action::ConfigCycle(_dir) => {
+        Action::ConfigCycle(dir) => {
             use zoid_core::config::TomlValue;
+            // Step an index by `dir` (±1) with wraparound in either direction.
+            let step = |i: usize, len: usize| -> usize {
+                if len == 0 {
+                    0
+                } else {
+                    (i as i32 + dir).rem_euclid(len as i32) as usize
+                }
+            };
             if let Some((label, _kind)) = current_config_field(app) {
                 match label {
                     "provider" => {
                         let list = zoid_provider::model::KNOWN_PROVIDERS;
                         let cur = app.config.provider.as_str();
                         let next = match list.iter().position(|p| *p == cur) {
-                            Some(i) => list[(i + 1) % list.len()],
+                            Some(i) => list[step(i, list.len())],
                             None => list[0],
                         };
                         apply_config_write(
@@ -1275,7 +1283,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                         if !list.is_empty() {
                             let cur = app.config.model.as_str();
                             let next = match list.iter().position(|m| *m == cur) {
-                                Some(i) => list[(i + 1) % list.len()],
+                                Some(i) => list[step(i, list.len())],
                                 None => list[0],
                             };
                             apply_config_write(
