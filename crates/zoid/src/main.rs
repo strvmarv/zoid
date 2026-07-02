@@ -57,6 +57,79 @@ fn db_path() -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Pure config-dir resolver (env injected for testing), mirroring
+/// `resolve_db_path`'s precedence: `$XDG_CONFIG_HOME/zoid` >
+/// `$HOME/.config/zoid`.
+fn resolve_config_dir(env: impl Fn(&str) -> Option<String>) -> PathBuf {
+    let base = env("XDG_CONFIG_HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env("HOME").unwrap_or_default()).join(".config"));
+    base.join("zoid")
+}
+
+/// Pure secret-key-path resolver (env injected for testing), mirroring
+/// `resolve_db_path`'s precedence: `$XDG_DATA_HOME/zoid/secret.key` >
+/// `$HOME/.local/share/zoid/secret.key`.
+fn resolve_secret_key_path(env: impl Fn(&str) -> Option<String>) -> PathBuf {
+    let base = env("XDG_DATA_HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env("HOME").unwrap_or_default()).join(".local/share"));
+    base.join("zoid").join("secret.key")
+}
+
+/// Load config from files + env, in precedence order (user-global < project <
+/// local < env). Missing files are skipped (empty layer); a malformed file is
+/// skipped with a stderr note (non-fatal — the process still starts).
+fn load_config() -> (zoid_core::config::Config, zoid_core::config::Provenance) {
+    use zoid_core::config::{merge, parse_toml, PartialConfig, Source};
+    let env = |k: &str| std::env::var(k).ok();
+    let cfg_dir = resolve_config_dir(env);
+    let read = |p: PathBuf| -> Option<PartialConfig> {
+        let text = std::fs::read_to_string(&p).ok()?;
+        match parse_toml(&text) {
+            Ok(pc) => Some(pc),
+            Err(e) => {
+                eprintln!("zoid: ignoring {}: {e}", p.display());
+                None
+            }
+        }
+    };
+    let mut layers: Vec<(Source, PartialConfig)> = Vec::new();
+    if let Some(p) = read(cfg_dir.join("config.toml")) {
+        layers.push((Source::UserGlobal, p));
+    }
+    if let Some(p) = read(PathBuf::from("./.zoid/config.toml")) {
+        layers.push((Source::Project, p));
+    }
+    if let Some(p) = read(PathBuf::from("./.zoid/config.local.toml")) {
+        layers.push((Source::Local, p));
+    }
+    // env layer
+    let mut envp = PartialConfig::default();
+    if let Ok(m) = std::env::var("ZOID_MODEL") {
+        if !m.is_empty() {
+            envp.model = Some(m);
+        }
+    }
+    if let Ok(v) = std::env::var("ZOID_CONTEXT_CEILING") {
+        if let Ok(n) = v.trim().parse::<u64>() {
+            if n > 0 {
+                envp.economy.context_ceiling = Some(n);
+            }
+        }
+    }
+    if std::env::var("ZOID_REDUCED_MOTION")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+    {
+        envp.reduced_motion = Some(true);
+    }
+    layers.push((Source::Env, envp));
+    merge(&layers)
+}
+
 /// Wall-clock millis since the epoch — supplied by the binary (core stays clock-free).
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -303,13 +376,21 @@ async fn main() -> Result<()> {
     };
     let events = session.snapshot_session(session_id).await?;
 
-    let model = std::env::var("ZOID_MODEL").unwrap_or_else(|_| default_model().to_string());
+    // Task 8 consumes _secrets; Tasks 10/12 consume _prov.
+    let (config, _prov) = load_config();
+    let model = if config.model.is_empty() {
+        default_model().to_string()
+    } else {
+        config.model.clone()
+    };
+    let secret_key = resolve_secret_key_path(|k| std::env::var(k).ok());
+    let _secrets = zoid_core::secret::EncryptedDb::open(&path.to_string_lossy(), &secret_key)
+        .map(std::sync::Arc::new)
+        .ok(); // None → secrets unavailable this run (non-fatal)
 
     let mut shell = zoid_tui::ShellState::new();
     shell.branch = current_branch();
-    shell.reduced_motion = std::env::var("ZOID_REDUCED_MOTION")
-        .map(|v| !v.is_empty())
-        .unwrap_or(false);
+    shell.reduced_motion = config.reduced_motion;
     shell.repo_name = Path::new(&root)
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -320,9 +401,13 @@ async fn main() -> Result<()> {
     shell.changes_files = boot_files;
     shell.session_name = session_name;
     shell.model = model.clone();
-    // Economy ⑤ denominator: model-derived (ZOID_CONTEXT_CEILING overrides).
+    // Economy ⑤ denominator: config-derived (ZOID_CONTEXT_CEILING overrides via
+    // config.economy.context_ceiling), else the model registry's default.
     // Constant for the process lifetime, so set once here rather than per frame.
-    shell.ctx_ceiling = zoid_provider::context_ceiling(&model);
+    shell.ctx_ceiling = config
+        .economy
+        .context_ceiling
+        .unwrap_or_else(|| zoid_provider::context_ceiling(&model));
     shell.provider = provider_label();
     shell.cwd = root.clone();
 
@@ -937,6 +1022,14 @@ mod tests {
     fn falls_back_to_home_local_share() {
         let p = resolve_db_path(env_of(&[("HOME", "/home/u")]));
         assert_eq!(p, PathBuf::from("/home/u/.local/share/zoid/zoid.db"));
+    }
+
+    #[test]
+    fn resolve_config_dir_prefers_xdg_then_home() {
+        let x = resolve_config_dir(env_of(&[("XDG_CONFIG_HOME", "/x/cfg")]));
+        assert_eq!(x, PathBuf::from("/x/cfg/zoid"));
+        let h = resolve_config_dir(env_of(&[("HOME", "/home/u")]));
+        assert_eq!(h, PathBuf::from("/home/u/.config/zoid"));
     }
 
     #[test]
