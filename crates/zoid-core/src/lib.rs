@@ -3,6 +3,7 @@
 
 pub mod agent_profile;
 pub mod assembler;
+pub mod config;
 pub mod context;
 pub mod economy;
 pub mod event;
