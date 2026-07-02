@@ -54,7 +54,10 @@ pub struct ShellLayout {
 
 /// True when (col,row) falls inside `r` (half-open on right/bottom).
 pub fn in_rect(r: Rect, col: u16, row: u16) -> bool {
-    col >= r.x && col < r.x.saturating_add(r.width) && row >= r.y && row < r.y.saturating_add(r.height)
+    col >= r.x
+        && col < r.x.saturating_add(r.width)
+        && row >= r.y
+        && row < r.y.saturating_add(r.height)
 }
 
 pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
@@ -93,7 +96,12 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
     let mut drawer_headers = Vec::new();
     let mut drawer_bodies = Vec::new();
     if let Some(rr) = rail {
-        let inner = Rect { x: rr.x.saturating_add(1), y: rr.y, width: rr.width.saturating_sub(2), height: rr.height };
+        let inner = Rect {
+            x: rr.x.saturating_add(1),
+            y: rr.y,
+            width: rr.width.saturating_sub(2),
+            height: rr.height,
+        };
         let mut y = inner.y;
         let bottom = inner.y.saturating_add(inner.height);
         for d in &state.drawers {
@@ -101,9 +109,21 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
             if avail < 2 {
                 break; // no room for even an empty box (top+bottom border)
             }
-            let want = if d.open { drawer_body_rows(d.id) + 2 } else { 2 };
+            let want = if d.open {
+                drawer_body_rows(d.id) + 2
+            } else {
+                2
+            };
             let box_h = want.min(avail); // clamp so the box (incl. bottom border) stays in the rail
-            drawer_headers.push((d.id, Rect { x: inner.x, y, width: inner.width, height: box_h }));
+            drawer_headers.push((
+                d.id,
+                Rect {
+                    x: inner.x,
+                    y,
+                    width: inner.width,
+                    height: box_h,
+                },
+            ));
             if d.open {
                 let body_rows = box_h.saturating_sub(2); // inner height after top+bottom borders
                 if body_rows > 0 {
@@ -127,18 +147,37 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
     // the rail (overlays draw last and would otherwise clip the rail's drawers).
     // `centered` clamps the width to its area, so the box shrinks to fit a narrow
     // stream rather than bleeding right into the rail.
-    let palette = if matches!(state.overlay, Overlay::Palette | Overlay::Objects | Overlay::Verbs | Overlay::Sessions) {
+    let palette = if matches!(
+        state.overlay,
+        Overlay::Palette | Overlay::Objects | Overlay::Verbs | Overlay::Sessions
+    ) {
         Some(centered(conversation, 72, 18))
     } else {
         None
     };
     let cmdline = if state.overlay == Overlay::CommandLine {
-        Some(Rect { x: area.x, y: status.y, width: area.width, height: 1 })
+        Some(Rect {
+            x: area.x,
+            y: status.y,
+            width: area.width,
+            height: 1,
+        })
     } else {
         None
     };
 
-    ShellLayout { title, body, conversation, rail, drawer_headers, drawer_bodies, input, status, palette, cmdline }
+    ShellLayout {
+        title,
+        body,
+        conversation,
+        rail,
+        drawer_headers,
+        drawer_bodies,
+        input,
+        status,
+        palette,
+        cmdline,
+    }
 }
 
 /// A rect `w×h` (clamped to `area`) centered horizontally, near the top third.
@@ -147,7 +186,12 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
     let h = h.min(area.height);
     let x = area.x.saturating_add((area.width.saturating_sub(w)) / 2);
     let y = area.y.saturating_add((area.height.saturating_sub(h)) / 3);
-    Rect { x, y, width: w, height: h }
+    Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    }
 }
 
 #[cfg(test)]
@@ -156,7 +200,12 @@ mod tests {
     use crate::state::ShellState;
 
     fn area(w: u16, h: u16) -> Rect {
-        Rect { x: 0, y: 0, width: w, height: h }
+        Rect {
+            x: 0,
+            y: 0,
+            width: w,
+            height: h,
+        }
     }
 
     #[test]
@@ -177,7 +226,7 @@ mod tests {
         let rail = l.rail.expect("rail visible at 100 cols");
         assert_eq!(rail.width, RAIL_WIDTH);
         assert_eq!(l.drawer_headers.len(), 3); // repo/session/context
-        // headers stack downward
+                                               // headers stack downward
         assert!(l.drawer_headers[1].1.y > l.drawer_headers[0].1.y);
     }
 
@@ -204,19 +253,27 @@ mod tests {
         for ov in [Overlay::Objects, Overlay::Verbs] {
             let mut s = ShellState::new();
             s.overlay = ov;
-            assert!(compute(area(100, 24), &s).palette.is_some(), "{ov:?} needs a rect");
+            assert!(
+                compute(area(100, 24), &s).palette.is_some(),
+                "{ov:?} needs a rect"
+            );
         }
     }
 
     #[test]
     fn in_rect_half_open_boundaries() {
-        let r = Rect { x: 5, y: 10, width: 20, height: 8 };
-        assert!(in_rect(r, 5, 10));   // top-left corner: inside
-        assert!(in_rect(r, 24, 17));  // bottom-right interior corner: inside
+        let r = Rect {
+            x: 5,
+            y: 10,
+            width: 20,
+            height: 8,
+        };
+        assert!(in_rect(r, 5, 10)); // top-left corner: inside
+        assert!(in_rect(r, 24, 17)); // bottom-right interior corner: inside
         assert!(!in_rect(r, 25, 17)); // right edge: exclusive
         assert!(!in_rect(r, 24, 18)); // bottom edge: exclusive
-        assert!(!in_rect(r, 4, 10));  // left of rect: outside
-        assert!(!in_rect(r, 5, 9));   // above rect: outside
+        assert!(!in_rect(r, 4, 10)); // left of rect: outside
+        assert!(!in_rect(r, 5, 9)); // above rect: outside
     }
 
     #[test]
@@ -233,14 +290,29 @@ mod tests {
         let mut s = ShellState::new(); // all three open by default
         s.toggle_drawer(DrawerId::Repo); // Repo now closed
         let l = compute(area(100, 30), &s);
-        let context = l.drawer_bodies.iter().find(|(id, _)| *id == DrawerId::Context).unwrap().1;
-        let session = l.drawer_bodies.iter().find(|(id, _)| *id == DrawerId::Session).unwrap().1;
+        let context = l
+            .drawer_bodies
+            .iter()
+            .find(|(id, _)| *id == DrawerId::Context)
+            .unwrap()
+            .1;
+        let session = l
+            .drawer_bodies
+            .iter()
+            .find(|(id, _)| *id == DrawerId::Session)
+            .unwrap()
+            .1;
         assert_eq!(context.height, CONTEXT_BODY_ROWS);
         assert_eq!(session.height, SESSION_BODY_ROWS);
         // closed drawers have no body
         assert!(l.drawer_bodies.iter().all(|(id, _)| *id != DrawerId::Repo));
         // body sits directly under the box's top border (which carries the title)
-        let context_hdr = l.drawer_headers.iter().find(|(id, _)| *id == DrawerId::Context).unwrap().1;
+        let context_hdr = l
+            .drawer_headers
+            .iter()
+            .find(|(id, _)| *id == DrawerId::Context)
+            .unwrap()
+            .1;
         assert_eq!(context.y, context_hdr.y + 1);
     }
 
@@ -256,10 +328,22 @@ mod tests {
 
     #[test]
     fn input_height_grows_and_clamps() {
-        assert_eq!(input_height(1), 3, "one line → 3 rows (content + 2 borders); post-submit resting height");
+        assert_eq!(
+            input_height(1),
+            3,
+            "one line → 3 rows (content + 2 borders); post-submit resting height"
+        );
         assert_eq!(input_height(4), 6, "grows with content");
-        assert_eq!(input_height(MAX_INPUT_ROWS), MAX_INPUT_ROWS + 2, "at the cap");
-        assert_eq!(input_height(MAX_INPUT_ROWS + 5), MAX_INPUT_ROWS + 2, "clamps past the cap");
+        assert_eq!(
+            input_height(MAX_INPUT_ROWS),
+            MAX_INPUT_ROWS + 2,
+            "at the cap"
+        );
+        assert_eq!(
+            input_height(MAX_INPUT_ROWS + 5),
+            MAX_INPUT_ROWS + 2,
+            "clamps past the cap"
+        );
         assert_eq!(input_height(0), 3, "min one content row");
     }
 

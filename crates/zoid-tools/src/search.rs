@@ -17,7 +17,8 @@ impl Tool for Search {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: self.name().to_string(),
-            description: "Recursively search files for a literal substring (like grep -F).".to_string(),
+            description: "Recursively search files for a literal substring (like grep -F)."
+                .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -29,11 +30,17 @@ impl Tool for Search {
         }
     }
     fn run(&self, args: &Value, cwd: &Path) -> ToolOutput {
-        let query = match str_arg(args, "query") { Ok(q) => q, Err(e) => return e };
+        let query = match str_arg(args, "query") {
+            Ok(q) => q,
+            Err(e) => return e,
+        };
         if query.is_empty() {
             return ToolOutput::err("search: empty query");
         }
-        let root = crate::resolve(cwd, args.get("path").and_then(|v| v.as_str()).unwrap_or("."));
+        let root = crate::resolve(
+            cwd,
+            args.get("path").and_then(|v| v.as_str()).unwrap_or("."),
+        );
         let mut hits: Vec<String> = Vec::new();
         walk(&root, &root, &query, &mut hits);
         if hits.is_empty() {
@@ -79,7 +86,11 @@ fn walk(root: &Path, dir: &Path, query: &str, hits: &mut Vec<String>) {
         } else if path.is_dir() {
             walk(root, &path, query, hits);
         } else if let Ok(contents) = std::fs::read_to_string(&path) {
-            let rel = path.strip_prefix(root).unwrap_or(&path).display().to_string();
+            let rel = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .display()
+                .to_string();
             for (i, line) in contents.lines().enumerate() {
                 if line.contains(query) {
                     hits.push(format!("{rel}:{}: {}", i + 1, line.trim_end()));
@@ -104,7 +115,10 @@ mod tests {
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         std::fs::write(dir.path().join("sub/b.txt"), "nothing\nalso NEEDLE").unwrap();
 
-        let out = Search.run(&json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }), std::path::Path::new("."));
+        let out = Search.run(
+            &json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }),
+            std::path::Path::new("."),
+        );
         assert!(!out.is_error, "{}", out.text);
         assert!(out.text.contains("a.txt:2:"));
         assert!(out.text.contains("sub/b.txt:2:") || out.text.contains("sub\\b.txt:2:"));
@@ -115,7 +129,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("target")).unwrap();
         std::fs::write(dir.path().join("target/x.txt"), "NEEDLE").unwrap();
-        let out = Search.run(&json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }), std::path::Path::new("."));
+        let out = Search.run(
+            &json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }),
+            std::path::Path::new("."),
+        );
         assert!(out.text.contains("no matches"));
     }
 
@@ -129,7 +146,10 @@ mod tests {
         let sub = dir.path().join("sub");
         std::fs::create_dir(&sub).unwrap();
         std::os::unix::fs::symlink(dir.path(), sub.join("loop")).unwrap();
-        let out = Search.run(&json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }), std::path::Path::new("."));
+        let out = Search.run(
+            &json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }),
+            std::path::Path::new("."),
+        );
         assert!(!out.is_error, "{}", out.text);
         assert!(out.text.contains("a.txt:1:"));
     }
@@ -138,7 +158,10 @@ mod tests {
     fn no_match_reports_cleanly() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.txt"), "abc").unwrap();
-        let out = Search.run(&json!({ "query": "zzz", "path": dir.path().to_str().unwrap() }), std::path::Path::new("."));
+        let out = Search.run(
+            &json!({ "query": "zzz", "path": dir.path().to_str().unwrap() }),
+            std::path::Path::new("."),
+        );
         assert!(!out.is_error);
         assert!(out.text.contains("no matches"));
     }

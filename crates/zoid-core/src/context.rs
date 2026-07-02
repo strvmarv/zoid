@@ -64,7 +64,14 @@ fn upsert(
 ) {
     let e = acc.entry(key.clone()).or_insert_with(|| {
         order.push(key.clone());
-        Acc { key, label, kind, tokens: 0, refs: 0, last_turn: turn }
+        Acc {
+            key,
+            label,
+            kind,
+            tokens: 0,
+            refs: 0,
+            last_turn: turn,
+        }
     });
     e.tokens = tokens; // latest content wins
     e.refs += 1;
@@ -82,7 +89,15 @@ fn flush_delta(
     if let Some(text) = delta_text.take() {
         let key = format!("msg:{msg_seq}");
         *msg_seq += 1;
-        upsert(order, acc, key, truncate(&text, 40), ItemKind::Message, estimate_tokens(&text), turn);
+        upsert(
+            order,
+            acc,
+            key,
+            truncate(&text, 40),
+            ItemKind::Message,
+            estimate_tokens(&text),
+            turn,
+        );
     }
 }
 
@@ -146,7 +161,9 @@ pub fn context_window(events: &[Event]) -> ContextWindow {
                     call_path.insert(id.clone(), path.clone());
                 }
             }
-            EventKind::ToolResult { id, name, output, .. } => {
+            EventKind::ToolResult {
+                id, name, output, ..
+            } => {
                 flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn);
                 if let Some(path) = call_path.get(id) {
                     let key = format!("file:{path}");
@@ -214,7 +231,10 @@ pub fn context_window(events: &[Event]) -> ContextWindow {
     // Sort by tokens desc, then key asc (deterministic for snapshots).
     items.sort_by(|a, b| b.tokens.cmp(&a.tokens).then_with(|| a.key.cmp(&b.key)));
     let total_tokens = items.iter().map(|i| i.tokens).sum();
-    ContextWindow { items, total_tokens }
+    ContextWindow {
+        items,
+        total_tokens,
+    }
 }
 
 /// Resolve each File context item to its content: `"file:{path}"` → the latest
@@ -231,7 +251,12 @@ pub fn file_contents(events: &[Event]) -> HashMap<String, String> {
                     call_path.insert(id.clone(), p);
                 }
             }
-            EventKind::ToolResult { id, output, is_error: false, .. } => {
+            EventKind::ToolResult {
+                id,
+                output,
+                is_error: false,
+                ..
+            } => {
                 if let Some(p) = call_path.get(id) {
                     out.insert(format!("file:{p}"), output.clone()); // latest wins
                 }
@@ -297,16 +322,28 @@ mod tests {
             u("go"),
             call("c1", "read_file", "src/a.rs"),
             result("c1", "read_file", "fn one() {}"),
-            call("c2", "read_file", "src/a.rs"),       // re-read → latest wins
+            call("c2", "read_file", "src/a.rs"), // re-read → latest wins
             result("c2", "read_file", "fn two() {}"),
             call("c3", "read_file", "src/b.rs"),
             result("c3", "read_file", "// b"),
             // a non-file tool result must NOT be keyed as a file
-            ev(EventKind::ToolCall { id: "c4".into(), name: "shell".into(), args: r#"{"command":"ls"}"#.into() }),
-            ev(EventKind::ToolResult { id: "c4".into(), name: "shell".into(), output: "out".into(), is_error: false }),
+            ev(EventKind::ToolCall {
+                id: "c4".into(),
+                name: "shell".into(),
+                args: r#"{"command":"ls"}"#.into(),
+            }),
+            ev(EventKind::ToolResult {
+                id: "c4".into(),
+                name: "shell".into(),
+                output: "out".into(),
+                is_error: false,
+            }),
         ];
         let map = file_contents(&evs);
-        assert_eq!(map.get("file:src/a.rs").map(String::as_str), Some("fn two() {}"));
+        assert_eq!(
+            map.get("file:src/a.rs").map(String::as_str),
+            Some("fn two() {}")
+        );
         assert_eq!(map.get("file:src/b.rs").map(String::as_str), Some("// b"));
         assert!(!map.keys().any(|k| k.starts_with("tool:")));
     }
@@ -316,7 +353,12 @@ mod tests {
         let evs = vec![
             u("go"),
             call("c1", "read_file", "x.rs"),
-            ev(EventKind::ToolResult { id: "c1".into(), name: "read_file".into(), output: "boom".into(), is_error: true }),
+            ev(EventKind::ToolResult {
+                id: "c1".into(),
+                name: "read_file".into(),
+                output: "boom".into(),
+                is_error: true,
+            }),
         ];
         let map = file_contents(&evs);
         assert!(!map.contains_key("file:x.rs"));
@@ -349,7 +391,10 @@ mod tests {
         for pair in w.items.windows(2) {
             assert!(pair[0].tokens >= pair[1].tokens);
         }
-        assert_eq!(w.total_tokens, w.items.iter().map(|i| i.tokens).sum::<u64>());
+        assert_eq!(
+            w.total_tokens,
+            w.items.iter().map(|i| i.tokens).sum::<u64>()
+        );
     }
 
     #[test]
@@ -358,8 +403,14 @@ mod tests {
             u("go"),
             call("c1", "read_file", "a.rs"),
             result("c1", "read_file", "fn main() {}"),
-            ev(EventKind::ContextMutation { item: "file:a.rs".into(), op: MutationOp::Pin }),
-            ev(EventKind::ContextMutation { item: "file:a.rs".into(), op: MutationOp::Evict }),
+            ev(EventKind::ContextMutation {
+                item: "file:a.rs".into(),
+                op: MutationOp::Pin,
+            }),
+            ev(EventKind::ContextMutation {
+                item: "file:a.rs".into(),
+                op: MutationOp::Evict,
+            }),
         ];
         let w = context_window(&evs);
         let a = w.items.iter().find(|i| i.key == "file:a.rs").unwrap();
@@ -398,7 +449,11 @@ mod tests {
         let w = context_window(&evs);
         let item = w.items.iter().find(|i| i.key == "file:warm.rs").unwrap();
         // refs==2 → Warm; recency==4 > COLD_RECENCY_TURNS → not Hot by recency.
-        assert_eq!(item.heat, Heat::Warm, "two reads should yield Warm, not Hot (refs=2)");
+        assert_eq!(
+            item.heat,
+            Heat::Warm,
+            "two reads should yield Warm, not Hot (refs=2)"
+        );
     }
 
     /// FIX 2: A run of ModelDelta events collapses into exactly one Message item.
@@ -417,12 +472,23 @@ mod tests {
             }),
         ];
         let w = context_window(&evs);
-        let messages: Vec<_> = w.items.iter().filter(|i| i.kind == ItemKind::Message).collect();
+        let messages: Vec<_> = w
+            .items
+            .iter()
+            .filter(|i| i.kind == ItemKind::Message)
+            .collect();
         // Exactly 2 Message items: user "q" and assistant "hello".
-        assert_eq!(messages.len(), 2, "expected user msg + one collapsed assistant msg");
-        let assistant = messages.iter().find(|i| i.label.contains("hello")).unwrap_or_else(|| {
-            panic!("no Message item with label containing 'hello'; items: {messages:?}")
-        });
+        assert_eq!(
+            messages.len(),
+            2,
+            "expected user msg + one collapsed assistant msg"
+        );
+        let assistant = messages
+            .iter()
+            .find(|i| i.label.contains("hello"))
+            .unwrap_or_else(|| {
+                panic!("no Message item with label containing 'hello'; items: {messages:?}")
+            });
         assert_eq!(assistant.kind, ItemKind::Message);
     }
 
@@ -444,7 +510,10 @@ mod tests {
         ];
         let w = context_window(&evs);
         assert!(w.items.iter().any(|i| i.key == "file:main.rs"));
-        assert!(!w.items.iter().any(|i| i.key == "file:sub/secret.rs"), "subagent-branch file excluded");
+        assert!(
+            !w.items.iter().any(|i| i.key == "file:sub/secret.rs"),
+            "subagent-branch file excluded"
+        );
     }
 
     use proptest::prelude::*;

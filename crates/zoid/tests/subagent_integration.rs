@@ -24,7 +24,8 @@ fn init_repo(dir: &Path) {
     idx.write().unwrap();
     let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
     let sig = git2::Signature::now("zoid", "zoid@example.com").unwrap();
-    repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+    repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+        .unwrap();
 }
 
 /// A provider that pops one scripted turn per `stream()` call. Unlike the
@@ -37,8 +38,17 @@ struct ScriptedProvider {
 
 #[async_trait]
 impl Provider for ScriptedProvider {
-    async fn stream(&self, _req: &CompletionRequest, sink: mpsc::Sender<ProviderEvent>) -> anyhow::Result<()> {
-        let script = self.turns.lock().unwrap().pop_front().unwrap_or_else(|| vec![ProviderEvent::Done]);
+    async fn stream(
+        &self,
+        _req: &CompletionRequest,
+        sink: mpsc::Sender<ProviderEvent>,
+    ) -> anyhow::Result<()> {
+        let script = self
+            .turns
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| vec![ProviderEvent::Done]);
         for ev in script {
             if sink.send(ev).await.is_err() {
                 break;
@@ -63,9 +73,13 @@ async fn subagent_writes_inside_its_worktree_not_the_main_copy() {
         }),
         ProviderEvent::Done,
     ];
-    let turn2 = vec![ProviderEvent::TextDelta("Wrote out.txt.".into()), ProviderEvent::Done];
-    let provider: Arc<dyn Provider> =
-        Arc::new(ScriptedProvider { turns: Mutex::new(VecDeque::from(vec![turn1, turn2])) });
+    let turn2 = vec![
+        ProviderEvent::TextDelta("Wrote out.txt.".into()),
+        ProviderEvent::Done,
+    ];
+    let provider: Arc<dyn Provider> = Arc::new(ScriptedProvider {
+        turns: Mutex::new(VecDeque::from(vec![turn1, turn2])),
+    });
 
     let session = SessionHandle::spawn(":memory:").unwrap();
     let (tx, mut rx) = mpsc::channel(64);

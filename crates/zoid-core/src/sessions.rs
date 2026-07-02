@@ -31,7 +31,11 @@ pub struct SessionInfo {
 /// (ties broken by `id` desc for determinism). `token_total` sums each session's
 /// events' `input + output`. When `root_filter` is `Some`, only sessions whose
 /// `root_path` matches are returned. Pure.
-pub fn session_list(rows: &[SessionRow], events: &[Event], root_filter: Option<&str>) -> Vec<SessionInfo> {
+pub fn session_list(
+    rows: &[SessionRow],
+    events: &[Event],
+    root_filter: Option<&str>,
+) -> Vec<SessionInfo> {
     let mut totals: HashMap<Ulid, u64> = HashMap::new();
     for e in events {
         if let Some(t) = e.tokens {
@@ -50,7 +54,11 @@ pub fn session_list(rows: &[SessionRow], events: &[Event], root_filter: Option<&
             token_total: totals.get(&r.id).copied().unwrap_or(0),
         })
         .collect();
-    out.sort_by(|a, b| b.last_touched_ts.cmp(&a.last_touched_ts).then(b.id.cmp(&a.id)));
+    out.sort_by(|a, b| {
+        b.last_touched_ts
+            .cmp(&a.last_touched_ts)
+            .then(b.id.cmp(&a.id))
+    });
     out
 }
 
@@ -60,13 +68,22 @@ mod tests {
     use crate::event::{EventKind, TokenStat};
 
     fn row(id: u128, name: &str, root: &str, touched: i64) -> SessionRow {
-        SessionRow { id: Ulid::from(id), name: name.into(), root_path: root.into(),
-            created_ts: 0, last_touched_ts: touched }
+        SessionRow {
+            id: Ulid::from(id),
+            name: name.into(),
+            root_path: root.into(),
+            created_ts: 0,
+            last_touched_ts: touched,
+        }
     }
     fn usage(session: u128, input: u64, output: u64) -> Event {
         Event::new(Ulid::new(), None, 0, EventKind::Usage)
             .with_session(Ulid::from(session))
-            .with_tokens(TokenStat { input, output, cached: 0 })
+            .with_tokens(TokenStat {
+                input,
+                output,
+                cached: 0,
+            })
     }
 
     #[test]
@@ -79,11 +96,17 @@ mod tests {
         let events = vec![usage(1, 10, 5), usage(2, 100, 0), usage(2, 0, 40)];
         // No filter: most-recent-first across all repos, token totals folded.
         let all = session_list(&rows, &events, None);
-        assert_eq!(all.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), vec!["new", "other", "old"]);
+        assert_eq!(
+            all.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            vec!["new", "other", "old"]
+        );
         assert_eq!(all[0].token_total, 140); // session 2: 100 + 40
-        assert_eq!(all[2].token_total, 15);  // session 1: 10 + 5
-        // Filtered to /repo/a: drops "other".
+        assert_eq!(all[2].token_total, 15); // session 1: 10 + 5
+                                            // Filtered to /repo/a: drops "other".
         let a = session_list(&rows, &events, Some("/repo/a"));
-        assert_eq!(a.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), vec!["new", "old"]);
+        assert_eq!(
+            a.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            vec!["new", "old"]
+        );
     }
 }

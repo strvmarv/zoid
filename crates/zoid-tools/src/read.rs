@@ -43,14 +43,20 @@ mod tests {
     fn reads_existing_file() {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         write!(f, "hello tools").unwrap();
-        let out = ReadFile.run(&json!({ "path": f.path().to_str().unwrap() }), std::path::Path::new("."));
+        let out = ReadFile.run(
+            &json!({ "path": f.path().to_str().unwrap() }),
+            std::path::Path::new("."),
+        );
         assert!(!out.is_error);
         assert_eq!(out.text, "hello tools");
     }
 
     #[test]
     fn missing_file_is_error() {
-        let out = ReadFile.run(&json!({ "path": "/no/such/zoid/file" }), std::path::Path::new("."));
+        let out = ReadFile.run(
+            &json!({ "path": "/no/such/zoid/file" }),
+            std::path::Path::new("."),
+        );
         assert!(out.is_error);
     }
 

@@ -1,20 +1,31 @@
 use ratatui::{backend::TestBackend, Terminal};
 use tui_textarea::TextArea;
+use zoid_core::assembler::ContextPolicy;
+use zoid_core::context::ContextWindow;
+use zoid_core::economy::{ChurnTimeline, TokenLedger};
 use zoid_core::projection::ChatMsg;
 use zoid_tui::chat::ChatView;
 use zoid_tui::render_shell;
 use zoid_tui::state::{DrawerId, Focus, Mode, Overlay, ShellState, Zoom};
 use zoid_tui::EconomyView;
-use zoid_core::context::ContextWindow;
-use zoid_core::economy::{ChurnTimeline, TokenLedger};
-use zoid_core::assembler::ContextPolicy;
 
 fn normal_view() -> ChatView {
-    ChatView { zoom: Zoom::Normal, caret_on: true, reveal: None, tz_offset_secs: 0 }
+    ChatView {
+        zoom: Zoom::Normal,
+        caret_on: true,
+        reveal: None,
+        tz_offset_secs: 0,
+    }
 }
 
 fn empty_economy() -> EconomyView {
-    EconomyView::build(&ContextWindow::default(), &ChurnTimeline::default(), &TokenLedger::default(), &ContextPolicy::default(), 0)
+    EconomyView::build(
+        &ContextWindow::default(),
+        &ChurnTimeline::default(),
+        &TokenLedger::default(),
+        &ContextPolicy::default(),
+        0,
+    )
 }
 
 fn draw(state: &ShellState, msgs: &[ChatMsg], w: u16, h: u16) -> String {
@@ -25,42 +36,115 @@ fn draw_econ(state: &ShellState, econ: &EconomyView, msgs: &[ChatMsg], w: u16, h
     let input = TextArea::default();
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| render_shell(f, state, econ, msgs, &input, false, &normal_view())).unwrap();
+    terminal
+        .draw(|f| render_shell(f, state, econ, msgs, &input, false, &normal_view()))
+        .unwrap();
     terminal.backend().to_string()
 }
 
 fn seeded() -> Vec<ChatMsg> {
     vec![
-        ChatMsg::User { text: "what's causing the 500?".into(), ts: 0 },
-        ChatMsg::Assistant { text: "an unwrapped lookup in the handler.".into(), tool_calls: vec![], ts: 0 },
+        ChatMsg::User {
+            text: "what's causing the 500?".into(),
+            ts: 0,
+        },
+        ChatMsg::Assistant {
+            text: "an unwrapped lookup in the handler.".into(),
+            tool_calls: vec![],
+            ts: 0,
+        },
     ]
 }
 
 fn seeded_economy() -> EconomyView {
     use zoid_core::context::{ContextItem, Heat, ItemKind};
     let it = |key: &str, label: &str, kind, tokens, heat, pinned| ContextItem {
-        key: key.into(), label: label.into(), kind, tokens, heat, pinned, evicted: false,
+        key: key.into(),
+        label: label.into(),
+        kind,
+        tokens,
+        heat,
+        pinned,
+        evicted: false,
     };
     // Items span kinds (ToolResult / File / Message), not files-only — mirrors
     // docs/ux/chat-mode.html and what context_window() actually produces in P3.
     let w = ContextWindow {
         items: vec![
-            it("tool:grep:c9", "grep", ItemKind::ToolResult, 6000, Heat::Hot, false),
-            it("file:schema.sql", "schema.sql", ItemKind::File, 5000, Heat::Cold, false),
-            it("file:users.rs", "users.rs", ItemKind::File, 4000, Heat::Hot, true),
-            it("msg:2", "ship it?", ItemKind::Message, 3000, Heat::Warm, false),
+            it(
+                "tool:grep:c9",
+                "grep",
+                ItemKind::ToolResult,
+                6000,
+                Heat::Hot,
+                false,
+            ),
+            it(
+                "file:schema.sql",
+                "schema.sql",
+                ItemKind::File,
+                5000,
+                Heat::Cold,
+                false,
+            ),
+            it(
+                "file:users.rs",
+                "users.rs",
+                ItemKind::File,
+                4000,
+                Heat::Hot,
+                true,
+            ),
+            it(
+                "msg:2",
+                "ship it?",
+                ItemKind::Message,
+                3000,
+                Heat::Warm,
+                false,
+            ),
         ],
         total_tokens: 18000,
     };
-    let churn = ChurnTimeline { points: vec![
-        zoid_core::economy::ChurnPoint { turn: 0, tokens: 10, resent_tokens: 0 },
-        zoid_core::economy::ChurnPoint { turn: 1, tokens: 30, resent_tokens: 0 },
-        zoid_core::economy::ChurnPoint { turn: 2, tokens: 12, resent_tokens: 0 },
-        zoid_core::economy::ChurnPoint { turn: 3, tokens: 48, resent_tokens: 0 },
-        zoid_core::economy::ChurnPoint { turn: 4, tokens: 12, resent_tokens: 0 },
-    ] };
-    let ledger = TokenLedger { input: 142_000, output: 0, cached: 0, total: 142_000 };
-    let policy = ContextPolicy { token_ceiling: Some(200_000), ..Default::default() };
+    let churn = ChurnTimeline {
+        points: vec![
+            zoid_core::economy::ChurnPoint {
+                turn: 0,
+                tokens: 10,
+                resent_tokens: 0,
+            },
+            zoid_core::economy::ChurnPoint {
+                turn: 1,
+                tokens: 30,
+                resent_tokens: 0,
+            },
+            zoid_core::economy::ChurnPoint {
+                turn: 2,
+                tokens: 12,
+                resent_tokens: 0,
+            },
+            zoid_core::economy::ChurnPoint {
+                turn: 3,
+                tokens: 48,
+                resent_tokens: 0,
+            },
+            zoid_core::economy::ChurnPoint {
+                turn: 4,
+                tokens: 12,
+                resent_tokens: 0,
+            },
+        ],
+    };
+    let ledger = TokenLedger {
+        input: 142_000,
+        output: 0,
+        cached: 0,
+        total: 142_000,
+    };
+    let policy = ContextPolicy {
+        token_ceiling: Some(200_000),
+        ..Default::default()
+    };
     EconomyView::build(&w, &churn, &ledger, &policy, 0)
 }
 
@@ -99,14 +183,28 @@ fn long_turn_wraps_instead_of_clipping() {
     use ratatui::{backend::TestBackend, Terminal};
 
     let long = format!("HEADSENTINEL {} TAILSENTINEL", "wrap ".repeat(40));
-    let msgs = vec![ChatMsg::Assistant { text: long, tool_calls: vec![], ts: 0 }];
+    let msgs = vec![ChatMsg::Assistant {
+        text: long,
+        tool_calls: vec![],
+        ts: 0,
+    }];
 
     let s = ShellState::new();
     let input = TextArea::default();
     let backend = TestBackend::new(100, 24);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|f| render_shell(f, &s, &empty_economy(), &msgs, &input, false, &normal_view()))
+        .draw(|f| {
+            render_shell(
+                f,
+                &s,
+                &empty_economy(),
+                &msgs,
+                &input,
+                false,
+                &normal_view(),
+            )
+        })
         .unwrap();
     let buf = terminal.backend().buffer().clone();
 
@@ -118,8 +216,12 @@ fn long_turn_wraps_instead_of_clipping() {
     };
 
     let head = row_of("HEADSENTINEL").expect("head sentinel must render");
-    let tail = row_of("TAILSENTINEL").expect("tail sentinel must render (would be clipped without wrap)");
-    assert!(tail > head, "tail (row {tail}) must wrap below head (row {head})");
+    let tail =
+        row_of("TAILSENTINEL").expect("tail sentinel must render (would be clipped without wrap)");
+    assert!(
+        tail > head,
+        "tail (row {tail}) must wrap below head (row {head})"
+    );
 }
 
 #[test]
@@ -146,7 +248,10 @@ fn palette_overlay_scrolled_to_end_frame() {
     s.overlay = Overlay::Palette;
     s.palette.selected = 1000; // nav() clamps to the last selectable row (usize::MAX would overflow nav's i64 cast)
     let out = draw(&s, &seeded(), 100, 24);
-    assert!(out.contains("Quit zoid"), "the last row (Quit) must be visible, not clipped:\n{out}");
+    assert!(
+        out.contains("Quit zoid"),
+        "the last row (Quit) must be visible, not clipped:\n{out}"
+    );
     insta::assert_snapshot!(out);
 }
 
@@ -193,7 +298,17 @@ fn economy_drawer_selection_highlights_only_when_rail_focused() {
         let backend = TestBackend::new(100, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| render_shell(f, &s, &seeded_economy(), &seeded(), &input, false, &normal_view()))
+            .draw(|f| {
+                render_shell(
+                    f,
+                    &s,
+                    &seeded_economy(),
+                    &seeded(),
+                    &input,
+                    false,
+                    &normal_view(),
+                )
+            })
             .unwrap();
         terminal
             .backend()
@@ -204,8 +319,15 @@ fn economy_drawer_selection_highlights_only_when_rail_focused() {
             .count()
     };
 
-    assert_eq!(count_sel_bg(Focus::Input), 0, "no highlight when rail unfocused");
-    assert!(count_sel_bg(Focus::Rail) > 0, "selected row highlighted when rail focused");
+    assert_eq!(
+        count_sel_bg(Focus::Input),
+        0,
+        "no highlight when rail unfocused"
+    );
+    assert!(
+        count_sel_bg(Focus::Rail) > 0,
+        "selected row highlighted when rail focused"
+    );
 }
 
 /// A rail context label longer than its column must be truncated with the §16
@@ -229,13 +351,28 @@ fn long_economy_label_truncates_with_ellipsis() {
         }],
         total_tokens: 9000,
     };
-    let econ = EconomyView::build(&w, &ChurnTimeline::default(), &TokenLedger::default(), &ContextPolicy::default(), 0);
+    let econ = EconomyView::build(
+        &w,
+        &ChurnTimeline::default(),
+        &TokenLedger::default(),
+        &ContextPolicy::default(),
+        0,
+    );
     let s = ShellState::new(); // economy drawer open by default
     let out = draw_econ(&s, &econ, &seeded(), 100, 24);
 
-    assert!(out.contains(glyph::ELLIPSIS), "long label must be truncated with the ellipsis glyph");
-    assert!(!out.contains("OverflowTheRail"), "the truncated tail must not render");
-    assert!(out.contains("9k"), "the token count must still render (not pushed off the rail)");
+    assert!(
+        out.contains(glyph::ELLIPSIS),
+        "long label must be truncated with the ellipsis glyph"
+    );
+    assert!(
+        !out.contains("OverflowTheRail"),
+        "the truncated tail must not render"
+    );
+    assert!(
+        out.contains("9k"),
+        "the token count must still render (not pushed off the rail)"
+    );
 }
 
 // Zoom altitude render (P4c Task 3). The P3 `seeded()` above has no
@@ -247,7 +384,10 @@ use zoid_core::projection::ToolCallRef;
 
 fn seeded_detail() -> Vec<ChatMsg> {
     vec![
-        ChatMsg::User { text: "show me parse".into(), ts: 0 },
+        ChatMsg::User {
+            text: "show me parse".into(),
+            ts: 0,
+        },
         ChatMsg::Assistant {
             text: "reading it".into(),
             tool_calls: vec![ToolCallRef {
@@ -272,12 +412,27 @@ fn seeded_detail() -> Vec<ChatMsg> {
 /// payoff is actually captured by the snapshot, not just the glyphs.
 fn draw_zoom(zoom: Zoom, w: u16, h: u16) -> String {
     let s = ShellState::new();
-    let view = ChatView { zoom, caret_on: true, reveal: None, tz_offset_secs: 0 };
+    let view = ChatView {
+        zoom,
+        caret_on: true,
+        reveal: None,
+        tz_offset_secs: 0,
+    };
     let input = TextArea::default();
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|f| render_shell(f, &s, &empty_economy(), &seeded_detail(), &input, false, &view))
+        .draw(|f| {
+            render_shell(
+                f,
+                &s,
+                &empty_economy(),
+                &seeded_detail(),
+                &input,
+                false,
+                &view,
+            )
+        })
         .unwrap();
     format!("{:#?}", terminal.backend().buffer())
 }
@@ -309,11 +464,27 @@ fn seeded_objects() -> Vec<ChatMsg> {
     vec![
         ChatMsg::Assistant {
             text: String::new(),
-            tool_calls: vec![ToolCallRef { id: "c1".into(), name: "read_file".into(), args: r#"{"path":"src/ast.rs"}"#.into() }],
+            tool_calls: vec![ToolCallRef {
+                id: "c1".into(),
+                name: "read_file".into(),
+                args: r#"{"path":"src/ast.rs"}"#.into(),
+            }],
             ts: 0,
         },
-        ChatMsg::ToolResult { id: "c1".into(), name: "read_file".into(), output: "fn parse() {}\nstruct Ast {}\n".into(), is_error: false, ts: 0 },
-        ChatMsg::ToolResult { id: "c2".into(), name: "shell".into(), output: "FAILED\n".into(), is_error: true, ts: 0 },
+        ChatMsg::ToolResult {
+            id: "c1".into(),
+            name: "read_file".into(),
+            output: "fn parse() {}\nstruct Ast {}\n".into(),
+            is_error: false,
+            ts: 0,
+        },
+        ChatMsg::ToolResult {
+            id: "c2".into(),
+            name: "shell".into(),
+            output: "FAILED\n".into(),
+            is_error: true,
+            ts: 0,
+        },
     ]
 }
 
@@ -327,7 +498,17 @@ fn draw_overlay(overlay: Overlay, w: u16, h: u16) -> String {
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|f| render_shell(f, &s, &empty_economy(), &seeded_objects(), &input, false, &normal_view()))
+        .draw(|f| {
+            render_shell(
+                f,
+                &s,
+                &empty_economy(),
+                &seeded_objects(),
+                &input,
+                false,
+                &normal_view(),
+            )
+        })
         .unwrap();
     format!("{:#?}", terminal.backend().buffer())
 }
@@ -358,11 +539,25 @@ fn verb_overlay_wide_frame() {
 fn growing_message_box_frame() {
     let mut s = ShellState::new();
     s.input_rows = 3;
-    let input = TextArea::from(vec!["line one".to_string(), "line two".to_string(), "line three".to_string()]);
+    let input = TextArea::from(vec![
+        "line one".to_string(),
+        "line two".to_string(),
+        "line three".to_string(),
+    ]);
     let backend = TestBackend::new(100, 24);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|f| render_shell(f, &s, &empty_economy(), &seeded(), &input, false, &normal_view()))
+        .draw(|f| {
+            render_shell(
+                f,
+                &s,
+                &empty_economy(),
+                &seeded(),
+                &input,
+                false,
+                &normal_view(),
+            )
+        })
         .unwrap();
     insta::assert_snapshot!(format!("{:#?}", terminal.backend().buffer()));
 }
@@ -387,7 +582,17 @@ fn markdown_message_frame() {
     let backend = TestBackend::new(100, 24);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|f| render_shell(f, &s, &empty_economy(), &seeded_markdown(), &input, false, &normal_view()))
+        .draw(|f| {
+            render_shell(
+                f,
+                &s,
+                &empty_economy(),
+                &seeded_markdown(),
+                &input,
+                false,
+                &normal_view(),
+            )
+        })
         .unwrap();
     insta::assert_snapshot!(format!("{:#?}", terminal.backend().buffer()));
 }
@@ -403,15 +608,31 @@ fn running_title_frame() {
     let backend = TestBackend::new(100, 24);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|f| render_shell(f, &s, &empty_economy(), &seeded(), &input, true, &normal_view()))
+        .draw(|f| {
+            render_shell(
+                f,
+                &s,
+                &empty_economy(),
+                &seeded(),
+                &input,
+                true,
+                &normal_view(),
+            )
+        })
         .unwrap();
     insta::assert_snapshot!(format!("{:#?}", terminal.backend().buffer()));
 }
 
 fn seeded_delegated() -> Vec<ChatMsg> {
     vec![
-        ChatMsg::User { text: "extract NotFound handling into a shared helper".into(), ts: 0 },
-        ChatMsg::Delegated { summary: "Added shared NotFound helper; get_user reuses it.".into(), ok: true },
+        ChatMsg::User {
+            text: "extract NotFound handling into a shared helper".into(),
+            ts: 0,
+        },
+        ChatMsg::Delegated {
+            summary: "Added shared NotFound helper; get_user reuses it.".into(),
+            ok: true,
+        },
     ]
 }
 
@@ -421,11 +642,27 @@ fn draw_delegated(w: u16, h: u16) -> String {
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|f| render_shell(f, &s, &empty_economy(), &seeded_delegated(), &input, false, &normal_view()))
+        .draw(|f| {
+            render_shell(
+                f,
+                &s,
+                &empty_economy(),
+                &seeded_delegated(),
+                &input,
+                false,
+                &normal_view(),
+            )
+        })
         .unwrap();
     // Buffer Debug per §8 snapshot standard — captures the DELEGATE_BG style.
     format!("{:#?}", terminal.backend().buffer())
 }
 
-#[test] fn delegated_card_frame() { insta::assert_snapshot!(draw_delegated(100, 24)); }
-#[test] fn delegated_card_wide_frame() { insta::assert_snapshot!(draw_delegated(140, 24)); }
+#[test]
+fn delegated_card_frame() {
+    insta::assert_snapshot!(draw_delegated(100, 24));
+}
+#[test]
+fn delegated_card_wide_frame() {
+    insta::assert_snapshot!(draw_delegated(140, 24));
+}

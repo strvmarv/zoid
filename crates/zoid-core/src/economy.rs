@@ -86,7 +86,11 @@ pub fn churn_timeline(events: &[Event]) -> ChurnTimeline {
                 if let Some(p) = cur.take() {
                     points.push(p);
                 }
-                cur = Some(ChurnPoint { turn: points.len(), tokens: 0, resent_tokens: 0 });
+                cur = Some(ChurnPoint {
+                    turn: points.len(),
+                    tokens: 0,
+                    resent_tokens: 0,
+                });
             }
             EventKind::ToolCall { args, .. } => {
                 if let (Some(p), Some(path)) = (cur.as_mut(), tool_path(args)) {
@@ -122,10 +126,10 @@ mod tests {
     #[test]
     fn estimate_tokens_is_chars_over_four_rounded_up() {
         assert_eq!(estimate_tokens(""), 0);
-        assert_eq!(estimate_tokens("a"), 1);     // ceil(1/4)
-        assert_eq!(estimate_tokens("abcd"), 1);  // 4/4
+        assert_eq!(estimate_tokens("a"), 1); // ceil(1/4)
+        assert_eq!(estimate_tokens("abcd"), 1); // 4/4
         assert_eq!(estimate_tokens("abcde"), 2); // ceil(5/4)
-        // counts chars, not bytes
+                                                 // counts chars, not bytes
         assert_eq!(estimate_tokens("é"), 1);
     }
 
@@ -137,14 +141,23 @@ mod tests {
             session_id: Ulid::from(0u128),
             ts: 0,
             kind: EventKind::Usage,
-            tokens: Some(TokenStat { input, output, cached }),
+            tokens: Some(TokenStat {
+                input,
+                output,
+                cached,
+            }),
         }
     }
 
     #[test]
     fn ledger_sums_usage_and_ignores_untokened_events() {
         let evs = vec![
-            Event::new(Ulid::new(), None, 0, EventKind::UserMessage { text: "hi".into() }),
+            Event::new(
+                Ulid::new(),
+                None,
+                0,
+                EventKind::UserMessage { text: "hi".into() },
+            ),
             usage(100, 40, 10),
             usage(50, 20, 5),
         ];
@@ -171,13 +184,24 @@ mod tests {
     }
 
     fn umsg(text: &str) -> Event {
-        Event::new(Ulid::new(), None, 0, EventKind::UserMessage { text: text.into() })
+        Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::UserMessage { text: text.into() },
+        )
     }
     fn toolcall_read(id: &str, path: &str) -> Event {
-        Event::new(Ulid::new(), None, 0, EventKind::ToolCall {
-            id: id.into(), name: "read_file".into(),
-            args: format!(r#"{{"path":"{path}"}}"#),
-        })
+        Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::ToolCall {
+                id: id.into(),
+                name: "read_file".into(),
+                args: format!(r#"{{"path":"{path}"}}"#),
+            },
+        )
     }
 
     #[test]
@@ -194,19 +218,25 @@ mod tests {
         let t = churn_timeline(&evs);
         assert_eq!(t.points.len(), 2);
         assert_eq!(t.points[0].turn, 0);
-        assert_eq!(t.points[0].tokens, 120);       // 100+20
-        assert_eq!(t.points[0].resent_tokens, 0);  // first sight of a.rs
+        assert_eq!(t.points[0].tokens, 120); // 100+20
+        assert_eq!(t.points[0].resent_tokens, 0); // first sight of a.rs
         assert_eq!(t.points[1].turn, 1);
-        assert_eq!(t.points[1].tokens, 170);       // 140+30
-        // "src/a.rs" is 8 chars → ceil(8/4) = 2 tokens re-sent
+        assert_eq!(t.points[1].tokens, 170); // 140+30
+                                             // "src/a.rs" is 8 chars → ceil(8/4) = 2 tokens re-sent
         assert_eq!(t.points[1].resent_tokens, 2);
     }
 
     fn toolcall_nopath(id: &str) -> Event {
-        Event::new(Ulid::new(), None, 0, EventKind::ToolCall {
-            id: id.into(), name: "list_files".into(),
-            args: r#"{"command":"ls"}"#.into(),
-        })
+        Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::ToolCall {
+                id: id.into(),
+                name: "list_files".into(),
+                args: r#"{"command":"ls"}"#.into(),
+            },
+        )
     }
 
     #[test]
@@ -233,11 +263,7 @@ mod tests {
     fn churn_no_path_key_causes_no_resent_bump() {
         // A ToolCall whose args contain no recognised path key must not panic
         // and must not affect resent_tokens.
-        let evs = vec![
-            umsg("turn 1"),
-            toolcall_nopath("c1"),
-            usage(50, 10, 0),
-        ];
+        let evs = vec![umsg("turn 1"), toolcall_nopath("c1"), usage(50, 10, 0)];
         let t = churn_timeline(&evs);
         assert_eq!(t.points.len(), 1);
         assert_eq!(t.points[0].resent_tokens, 0);
@@ -259,7 +285,7 @@ mod tests {
         let t = churn_timeline(&evs);
         assert_eq!(t.points.len(), 2);
         assert_eq!(t.points[0].resent_tokens, 0); // same-turn dup not counted
-        // "dup.rs" is 6 chars → ceil(6/4) = 2 tokens
+                                                  // "dup.rs" is 6 chars → ceil(6/4) = 2 tokens
         assert_eq!(t.points[1].resent_tokens, 2);
     }
 }

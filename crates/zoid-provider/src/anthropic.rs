@@ -54,13 +54,23 @@ pub fn parse_event(event_type: &str, data: &str) -> Option<ProviderEvent> {
         }
         "message_start" => {
             let v: Value = serde_json::from_str(data).ok()?;
-            let input = v.get("message")?.get("usage")?.get("input_tokens")?.as_u64()?;
-            Some(ProviderEvent::Usage(Usage { input_tokens: input, output_tokens: 0 }))
+            let input = v
+                .get("message")?
+                .get("usage")?
+                .get("input_tokens")?
+                .as_u64()?;
+            Some(ProviderEvent::Usage(Usage {
+                input_tokens: input,
+                output_tokens: 0,
+            }))
         }
         "message_delta" => {
             let v: Value = serde_json::from_str(data).ok()?;
             let output = v.get("usage")?.get("output_tokens")?.as_u64()?;
-            Some(ProviderEvent::Usage(Usage { input_tokens: 0, output_tokens: output }))
+            Some(ProviderEvent::Usage(Usage {
+                input_tokens: 0,
+                output_tokens: output,
+            }))
         }
         "message_stop" => Some(ProviderEvent::Done),
         "error" => {
@@ -102,7 +112,11 @@ impl AnthropicProvider {
 
 #[async_trait]
 impl Provider for AnthropicProvider {
-    async fn stream(&self, req: &crate::CompletionRequest, sink: mpsc::Sender<ProviderEvent>) -> Result<()> {
+    async fn stream(
+        &self,
+        req: &crate::CompletionRequest,
+        sink: mpsc::Sender<ProviderEvent>,
+    ) -> Result<()> {
         let resp = self
             .client
             .post(format!("{}/v1/messages", self.base_url))
@@ -116,7 +130,9 @@ impl Provider for AnthropicProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            let _ = sink.send(ProviderEvent::Error(format!("HTTP {status}: {text}"))).await;
+            let _ = sink
+                .send(ProviderEvent::Error(format!("HTTP {status}: {text}")))
+                .await;
             return Ok(());
         }
 
@@ -155,23 +171,23 @@ mod tests {
         let req = CompletionRequest {
             model: "claude-sonnet-4-6".into(),
             system: None,
-            messages: vec![
-                Message::user("hi"),
-                Message::assistant("hello"),
-            ],
+            messages: vec![Message::user("hi"), Message::assistant("hello")],
             max_tokens: 1024,
             tools: vec![],
         };
         let body = request_body(&req);
-        assert_eq!(body, json!({
-            "model": "claude-sonnet-4-6",
-            "max_tokens": 1024,
-            "stream": true,
-            "messages": [
-                { "role": "user", "content": "hi" },
-                { "role": "assistant", "content": "hello" },
-            ],
-        }));
+        assert_eq!(
+            body,
+            json!({
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1024,
+                "stream": true,
+                "messages": [
+                    { "role": "user", "content": "hi" },
+                    { "role": "assistant", "content": "hello" },
+                ],
+            })
+        );
     }
 
     #[test]
@@ -190,39 +206,65 @@ mod tests {
     #[test]
     fn parses_text_delta() {
         let data = r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
-        assert_eq!(parse_event("content_block_delta", data), Some(ProviderEvent::TextDelta("Hello".into())));
+        assert_eq!(
+            parse_event("content_block_delta", data),
+            Some(ProviderEvent::TextDelta("Hello".into()))
+        );
     }
 
     #[test]
     fn parses_message_stop_as_done() {
-        assert_eq!(parse_event("message_stop", r#"{"type":"message_stop"}"#), Some(ProviderEvent::Done));
+        assert_eq!(
+            parse_event("message_stop", r#"{"type":"message_stop"}"#),
+            Some(ProviderEvent::Done)
+        );
     }
 
     #[test]
     fn parses_message_delta_usage() {
         let data = r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}"#;
-        assert_eq!(parse_event("message_delta", data),
-            Some(ProviderEvent::Usage(Usage { input_tokens: 0, output_tokens: 12 })));
+        assert_eq!(
+            parse_event("message_delta", data),
+            Some(ProviderEvent::Usage(Usage {
+                input_tokens: 0,
+                output_tokens: 12
+            }))
+        );
     }
 
     #[test]
     fn parses_message_start_input_usage() {
-        let data = r#"{"type":"message_start","message":{"usage":{"input_tokens":7,"output_tokens":1}}}"#;
-        assert_eq!(parse_event("message_start", data),
-            Some(ProviderEvent::Usage(Usage { input_tokens: 7, output_tokens: 0 })));
+        let data =
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":7,"output_tokens":1}}}"#;
+        assert_eq!(
+            parse_event("message_start", data),
+            Some(ProviderEvent::Usage(Usage {
+                input_tokens: 7,
+                output_tokens: 0
+            }))
+        );
     }
 
     #[test]
     fn parses_error() {
         let data = r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
-        assert_eq!(parse_event("error", data), Some(ProviderEvent::Error("Overloaded".into())));
+        assert_eq!(
+            parse_event("error", data),
+            Some(ProviderEvent::Error("Overloaded".into()))
+        );
     }
 
     #[test]
     fn ignores_unhandled_frames() {
         assert_eq!(parse_event("ping", "{}"), None);
-        assert_eq!(parse_event("content_block_start", r#"{"type":"content_block_start"}"#), None);
-        assert_eq!(parse_event("content_block_stop", r#"{"type":"content_block_stop"}"#), None);
+        assert_eq!(
+            parse_event("content_block_start", r#"{"type":"content_block_start"}"#),
+            None
+        );
+        assert_eq!(
+            parse_event("content_block_stop", r#"{"type":"content_block_stop"}"#),
+            None
+        );
     }
 
     #[test]

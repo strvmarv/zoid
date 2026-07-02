@@ -32,7 +32,9 @@ pub fn parse_command(raw: &str) -> Command {
         "context" => Command::OpenDrawer(DrawerId::Context),
         "new" => Command::NewSession,
         "rename" => Command::RenameSession(String::new()),
-        s if s.starts_with("rename ") => Command::RenameSession(s["rename ".len()..].trim().to_string()),
+        s if s.starts_with("rename ") => {
+            Command::RenameSession(s["rename ".len()..].trim().to_string())
+        }
         rest if rest == "delegate" || rest.starts_with("delegate ") => {
             Command::Delegate(rest.strip_prefix("delegate").unwrap().trim().to_string())
         }
@@ -54,8 +56,14 @@ mod tests {
     #[test]
     fn parses_drawer_toggle_commands() {
         assert_eq!(parse_command(":repo"), Command::OpenDrawer(DrawerId::Repo));
-        assert_eq!(parse_command(":session"), Command::OpenDrawer(DrawerId::Session));
-        assert_eq!(parse_command(":context"), Command::OpenDrawer(DrawerId::Context));
+        assert_eq!(
+            parse_command(":session"),
+            Command::OpenDrawer(DrawerId::Session)
+        );
+        assert_eq!(
+            parse_command(":context"),
+            Command::OpenDrawer(DrawerId::Context)
+        );
     }
 
     #[test]
@@ -65,7 +73,10 @@ mod tests {
 
     #[test]
     fn parses_delegate_with_task() {
-        assert_eq!(parse_command(":delegate add a test for parse()"), Command::Delegate("add a test for parse()".into()));
+        assert_eq!(
+            parse_command(":delegate add a test for parse()"),
+            Command::Delegate("add a test for parse()".into())
+        );
         assert_eq!(parse_command(":delegate"), Command::Delegate(String::new()));
     }
 
@@ -73,7 +84,13 @@ mod tests {
     fn parses_session_commands() {
         assert_eq!(parse_command(":new"), Command::NewSession);
         assert_eq!(parse_command("new"), Command::NewSession);
-        assert_eq!(parse_command(":rename"), Command::RenameSession(String::new()));
-        assert_eq!(parse_command(":rename fix login"), Command::RenameSession("fix login".into()));
+        assert_eq!(
+            parse_command(":rename"),
+            Command::RenameSession(String::new())
+        );
+        assert_eq!(
+            parse_command(":rename fix login"),
+            Command::RenameSession("fix login".into())
+        );
     }
 }

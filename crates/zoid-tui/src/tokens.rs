@@ -17,24 +17,24 @@ pub mod glyph {
     pub const WARNING: char = '⚠';
     pub const COLLAPSED: char = '▸';
     pub const EXPANDED: char = '▾';
-    pub const CONTEXT: char = '⑤';      // context-economy ⑤ motif
-    pub const MODE_SWITCH: char = '⇢';  // palette: switch mode
-    pub const UNDO: char = '⤺';         // palette: undo (post-v1)
-    pub const OPEN: char = '▤';         // palette: open file
-    pub const EVICT: char = '✕';        // palette: evict cold
-    pub const SETTINGS: char = '◆';     // palette: settings/quit
-    pub const RECIPE: char = '▷';       // palette: run recipe (post-v1)
-    pub const HEAT_FULL: char = '█';   // ⑤ heat bar — hot cell (Ⓡ4)
-    pub const HEAT_SHADE: char = '░';  // ⑤ heat bar — empty cell (Ⓡ4)
+    pub const CONTEXT: char = '⑤'; // context-economy ⑤ motif
+    pub const MODE_SWITCH: char = '⇢'; // palette: switch mode
+    pub const UNDO: char = '⤺'; // palette: undo (post-v1)
+    pub const OPEN: char = '▤'; // palette: open file
+    pub const EVICT: char = '✕'; // palette: evict cold
+    pub const SETTINGS: char = '◆'; // palette: settings/quit
+    pub const RECIPE: char = '▷'; // palette: run recipe (post-v1)
+    pub const HEAT_FULL: char = '█'; // ⑤ heat bar — hot cell (Ⓡ4)
+    pub const HEAT_SHADE: char = '░'; // ⑤ heat bar — empty cell (Ⓡ4)
     pub const SPARK: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█']; // churn sparkline ramp
-    pub const PIN: char = '●';         // ⑤ pinned-item marker
-    pub const ELLIPSIS: char = '…';     // collapsed-body marker (① collapse-to-signatures)
-    pub const IDLE: char = '●';        // title-bar activity — waiting for the user (§2.2)
-    pub const BULLET: char = '•';      // markdown unordered-list marker (§3.5)
-    pub const QUOTE_BAR: char = '│';   // markdown blockquote bar (§3.5)
-    pub const NEW: char = '+';         // palette: new session
-    pub const RESUME: char = '↺';      // palette: resume session
-    pub const RENAME: char = '✎';      // palette: rename session
+    pub const PIN: char = '●'; // ⑤ pinned-item marker
+    pub const ELLIPSIS: char = '…'; // collapsed-body marker (① collapse-to-signatures)
+    pub const IDLE: char = '●'; // title-bar activity — waiting for the user (§2.2)
+    pub const BULLET: char = '•'; // markdown unordered-list marker (§3.5)
+    pub const QUOTE_BAR: char = '│'; // markdown blockquote bar (§3.5)
+    pub const NEW: char = '+'; // palette: new session
+    pub const RESUME: char = '↺'; // palette: resume session
+    pub const RENAME: char = '✎'; // palette: rename session
 }
 
 /// Colors (visual-language table, spec §16 / docs/ux/README.md).
@@ -57,7 +57,7 @@ pub mod color {
     pub const HEAT_COLD: Color = DIM;
 
     // repo drawer changes line — reuses the status palette (§16: uniform language).
-    pub const ADDED: Color = OK;      // +added lines
+    pub const ADDED: Color = OK; // +added lines
     pub const REMOVED: Color = ERROR; // -removed lines
 
     // Ⓡ3 tree-sitter syntax palette (spec §16 / docs/ux/README.md, verbatim).

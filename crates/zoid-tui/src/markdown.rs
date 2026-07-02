@@ -182,8 +182,10 @@ impl Builder {
                     }
                     _ => format!("{} ", glyph::BULLET),
                 };
-                self.cur
-                    .push(Span::styled(format!("{indent}{marker}"), Style::new().fg(color::DIM)));
+                self.cur.push(Span::styled(
+                    format!("{indent}{marker}"),
+                    Style::new().fg(color::DIM),
+                ));
             }
             Tag::CodeBlock(kind) => {
                 self.flush();
@@ -255,20 +257,29 @@ mod tests {
     use ratatui::style::Modifier;
 
     fn spans(lines: &[ratatui::text::Line<'static>]) -> Vec<(String, ratatui::style::Style)> {
-        lines.iter().flat_map(|l| l.spans.iter().map(|s| (s.content.to_string(), s.style))).collect()
+        lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| (s.content.to_string(), s.style)))
+            .collect()
     }
 
     #[test]
     fn plain_prose_is_one_txt_line() {
         let lines = render_markdown("just a sentence.");
         assert_eq!(lines.len(), 1);
-        assert!(lines[0].spans.iter().all(|s| s.style.fg == Some(color::TXT)));
+        assert!(lines[0]
+            .spans
+            .iter()
+            .all(|s| s.style.fg == Some(color::TXT)));
     }
 
     #[test]
     fn heading_is_accent_bold() {
         let lines = render_markdown("# Title");
-        let (_, style) = spans(&lines).into_iter().find(|(t, _)| t.contains("Title")).unwrap();
+        let (_, style) = spans(&lines)
+            .into_iter()
+            .find(|(t, _)| t.contains("Title"))
+            .unwrap();
         assert_eq!(style.fg, Some(color::CHAT_ACCENT));
         assert!(style.add_modifier.contains(Modifier::BOLD));
     }
@@ -277,74 +288,111 @@ mod tests {
     fn bold_and_inline_code_are_styled() {
         let lines = render_markdown("a **b** `c`");
         let s = spans(&lines);
-        assert!(s.iter().any(|(t, st)| t == "b" && st.add_modifier.contains(Modifier::BOLD)));
-        assert!(s.iter().any(|(t, st)| t == "c" && st.fg == Some(color::MD_CODE)));
+        assert!(s
+            .iter()
+            .any(|(t, st)| t == "b" && st.add_modifier.contains(Modifier::BOLD)));
+        assert!(s
+            .iter()
+            .any(|(t, st)| t == "c" && st.fg == Some(color::MD_CODE)));
     }
 
     #[test]
     fn list_items_render_with_bullets() {
         let lines = render_markdown("- one\n- two");
         assert_eq!(lines.len(), 2);
-        let text: Vec<String> = lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect();
-        assert!(text.iter().any(|t: &String| t.contains(glyph::BULLET) && t.contains("one")));
+        let text: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(text
+            .iter()
+            .any(|t: &String| t.contains(glyph::BULLET) && t.contains("one")));
     }
 
     #[test]
     fn fenced_code_is_highlighted_by_language() {
         let lines = render_markdown("```rust\nfn x() {}\n```");
-        let has_kw = lines.iter().any(|l| l.spans.iter().any(|s| s.style.fg == Some(color::SYN_KEYWORD)));
+        let has_kw = lines.iter().any(|l| {
+            l.spans
+                .iter()
+                .any(|s| s.style.fg == Some(color::SYN_KEYWORD))
+        });
         assert!(has_kw, "a rust fence must be syntax-highlighted");
     }
 
     #[test]
     fn unknown_fence_is_plain_text() {
         let lines = render_markdown("```\nplain body\n```");
-        assert!(lines.iter().all(|l| l.spans.iter().all(|s| s.style.fg == Some(color::TXT))));
+        assert!(lines
+            .iter()
+            .all(|l| l.spans.iter().all(|s| s.style.fg == Some(color::TXT))));
     }
 
     #[test]
     fn fenced_code_in_blockquote_keeps_quote_bar() {
         let lines = render_markdown("> ```rust\n> fn x() {}\n> ```");
         // every rendered code line must carry the quote bar prefix
-        assert!(lines.iter().all(|l| l.spans.first()
-            .map(|s| s.content.contains(glyph::QUOTE_BAR))
-            .unwrap_or(false)),
-            "blockquote fence lines must start with the quote bar");
+        assert!(
+            lines.iter().all(|l| l
+                .spans
+                .first()
+                .map(|s| s.content.contains(glyph::QUOTE_BAR))
+                .unwrap_or(false)),
+            "blockquote fence lines must start with the quote bar"
+        );
     }
 
     #[test]
     fn fenced_code_in_list_is_indented() {
         let lines = render_markdown("- item\n\n  ```rust\n  fn x() {}\n  ```");
         // at least one code line is indented (leading spaces) under the list
-        assert!(lines.iter().any(|l| l.spans.first()
-            .map(|s| s.content.starts_with(' '))
-            .unwrap_or(false)),
-            "list fence lines must be indented under the item");
+        assert!(
+            lines.iter().any(|l| l
+                .spans
+                .first()
+                .map(|s| s.content.starts_with(' '))
+                .unwrap_or(false)),
+            "list fence lines must be indented under the item"
+        );
     }
 
     #[test]
     fn link_text_is_md_link_underlined() {
         let lines = render_markdown("see [docs](http://x)");
         let s = spans(&lines);
-        assert!(s.iter().any(|(t, st)| t.contains("docs")
-            && st.fg == Some(color::MD_LINK)
-            && st.add_modifier.contains(ratatui::style::Modifier::UNDERLINED)),
-            "link text must render in MD_LINK, underlined");
+        assert!(
+            s.iter().any(|(t, st)| t.contains("docs")
+                && st.fg == Some(color::MD_LINK)
+                && st
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::UNDERLINED)),
+            "link text must render in MD_LINK, underlined"
+        );
     }
 
     #[test]
     fn inline_code_inside_link_is_md_code_not_md_link() {
         let lines = render_markdown("[`c`](http://x)");
         let s = spans(&lines);
-        assert!(s.iter().any(|(t, st)| t == "c" && st.fg == Some(color::MD_CODE)),
-            "inline code inside a link must render in MD_CODE, not MD_LINK");
+        assert!(
+            s.iter()
+                .any(|(t, st)| t == "c" && st.fg == Some(color::MD_CODE)),
+            "inline code inside a link must render in MD_CODE, not MD_LINK"
+        );
     }
 
     #[test]
     fn heading_inside_blockquote_is_accent_bold_not_dim() {
         let lines = render_markdown("> # Title");
-        let (_, style) = spans(&lines).into_iter().find(|(t, _)| t.contains("Title")).unwrap();
-        assert_eq!(style.fg, Some(color::CHAT_ACCENT), "heading fg must beat blockquote dim");
+        let (_, style) = spans(&lines)
+            .into_iter()
+            .find(|(t, _)| t.contains("Title"))
+            .unwrap();
+        assert_eq!(
+            style.fg,
+            Some(color::CHAT_ACCENT),
+            "heading fg must beat blockquote dim"
+        );
         assert!(style.add_modifier.contains(Modifier::BOLD));
     }
 
@@ -352,7 +400,10 @@ mod tests {
     fn strikethrough_is_crossed_out() {
         let lines = render_markdown("~~struck~~");
         let s = spans(&lines);
-        assert!(s.iter().any(|(t, st)| t == "struck" && st.add_modifier.contains(Modifier::CROSSED_OUT)),
-            "strikethrough text must carry CROSSED_OUT");
+        assert!(
+            s.iter()
+                .any(|(t, st)| t == "struck" && st.add_modifier.contains(Modifier::CROSSED_OUT)),
+            "strikethrough text must carry CROSSED_OUT"
+        );
     }
 }

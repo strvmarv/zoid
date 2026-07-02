@@ -14,7 +14,11 @@ pub struct ContextPolicy {
 
 impl Default for ContextPolicy {
     fn default() -> Self {
-        Self { token_ceiling: None, auto_evict_cold: true, compact_threshold: None }
+        Self {
+            token_ceiling: None,
+            auto_evict_cold: true,
+            compact_threshold: None,
+        }
     }
 }
 
@@ -66,7 +70,12 @@ pub fn assemble_context(window: &ContextWindow, policy: &ContextPolicy) -> Conte
     }
 
     let tokens = included.iter().map(|i| i.tokens).sum();
-    ContextSelection { included, excluded, tokens, compacted }
+    ContextSelection {
+        included,
+        excluded,
+        tokens,
+        compacted,
+    }
 }
 
 #[cfg(test)]
@@ -87,7 +96,10 @@ mod tests {
     }
     fn window(items: Vec<ContextItem>) -> ContextWindow {
         let total = items.iter().map(|i| i.tokens).sum();
-        ContextWindow { items, total_tokens: total }
+        ContextWindow {
+            items,
+            total_tokens: total,
+        }
     }
 
     #[test]
@@ -110,7 +122,10 @@ mod tests {
         let w = window(vec![item("e", 10, Heat::Hot, false, true)]);
         let s = assemble_context(
             &w,
-            &ContextPolicy { auto_evict_cold: false, ..Default::default() },
+            &ContextPolicy {
+                auto_evict_cold: false,
+                ..Default::default()
+            },
         );
         assert!(s.included.is_empty());
         assert_eq!(s.excluded.len(), 1);
@@ -125,7 +140,11 @@ mod tests {
         ]);
         let s = assemble_context(
             &w,
-            &ContextPolicy { token_ceiling: Some(100), auto_evict_cold: false, ..Default::default() },
+            &ContextPolicy {
+                token_ceiling: Some(100),
+                auto_evict_cold: false,
+                ..Default::default()
+            },
         );
         let keys: Vec<&str> = s.included.iter().map(|i| i.key.as_str()).collect();
         assert!(keys.contains(&"big-pinned")); // pinned kept even over ceiling
@@ -141,7 +160,11 @@ mod tests {
         ]);
         let s = assemble_context(
             &w,
-            &ContextPolicy { compact_threshold: Some(100), auto_evict_cold: false, ..Default::default() },
+            &ContextPolicy {
+                compact_threshold: Some(100),
+                auto_evict_cold: false,
+                ..Default::default()
+            },
         );
         assert!(s.compacted);
         assert!(s.included.iter().all(|i| i.key != "cold")); // compaction forced cold-evict

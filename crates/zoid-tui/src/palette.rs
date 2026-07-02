@@ -27,24 +27,115 @@ pub fn all_items(mode: Mode) -> Vec<PaletteItem> {
     };
     vec![
         // session — leads the palette (matches palette.html).
-        PaletteItem { group: "session".to_string(), icon: glyph::NEW, label: "New session", hint: "fresh thread + clean context budget", keybind: ":new", command: Some(Command::NewSession) },
-        PaletteItem { group: "session".to_string(), icon: glyph::RESUME, label: "Resume session…", hint: "this repo, most-recent first", keybind: "⏎", command: Some(Command::ResumeSessionPicker) },
-        PaletteItem { group: "session".to_string(), icon: glyph::RENAME, label: "Rename session…", hint: "rename the current thread", keybind: ":rename", command: Some(Command::RenameSession(String::new())) },
-        PaletteItem { group: "mode".to_string(), icon: glyph::MODE_SWITCH, label: mode_label, hint: "continue this conversation into the loop", keybind: "⇧Tab", command: Some(mode_cmd) },
+        PaletteItem {
+            group: "session".to_string(),
+            icon: glyph::NEW,
+            label: "New session",
+            hint: "fresh thread + clean context budget",
+            keybind: ":new",
+            command: Some(Command::NewSession),
+        },
+        PaletteItem {
+            group: "session".to_string(),
+            icon: glyph::RESUME,
+            label: "Resume session…",
+            hint: "this repo, most-recent first",
+            keybind: "⏎",
+            command: Some(Command::ResumeSessionPicker),
+        },
+        PaletteItem {
+            group: "session".to_string(),
+            icon: glyph::RENAME,
+            label: "Rename session…",
+            hint: "rename the current thread",
+            keybind: ":rename",
+            command: Some(Command::RenameSession(String::new())),
+        },
+        PaletteItem {
+            group: "mode".to_string(),
+            icon: glyph::MODE_SWITCH,
+            label: mode_label,
+            hint: "continue this conversation into the loop",
+            keybind: "⇧Tab",
+            command: Some(mode_cmd),
+        },
         // branch group — post-v1, disabled/dimmed
-        PaletteItem { group: format!("branch {} · post-v1", glyph::BRANCH), icon: glyph::BRANCH, label: "Fork from here", hint: "new branch at this turn", keybind: ":fork", command: None },
-        PaletteItem { group: format!("branch {} · post-v1", glyph::BRANCH), icon: glyph::UNDO, label: "Undo last turn", hint: "move head back", keybind: "u", command: None },
+        PaletteItem {
+            group: format!("branch {} · post-v1", glyph::BRANCH),
+            icon: glyph::BRANCH,
+            label: "Fork from here",
+            hint: "new branch at this turn",
+            keybind: ":fork",
+            command: None,
+        },
+        PaletteItem {
+            group: format!("branch {} · post-v1", glyph::BRANCH),
+            icon: glyph::UNDO,
+            label: "Undo last turn",
+            hint: "move head back",
+            keybind: "u",
+            command: None,
+        },
         // navigate
-        PaletteItem { group: "navigate".to_string(), icon: glyph::COLLAPSED, label: "Toggle repo drawer", hint: "repo · branch · changes", keybind: "", command: Some(Command::OpenDrawer(DrawerId::Repo)) },
-        PaletteItem { group: "navigate".to_string(), icon: glyph::COLLAPSED, label: "Toggle session drawer", hint: "name · model · cost · cwd", keybind: "", command: Some(Command::OpenDrawer(DrawerId::Session)) },
-        PaletteItem { group: "navigate".to_string(), icon: glyph::CONTEXT, label: "Toggle context drawer", hint: "tokens · heat · churn", keybind: "", command: Some(Command::OpenDrawer(DrawerId::Context)) },
+        PaletteItem {
+            group: "navigate".to_string(),
+            icon: glyph::COLLAPSED,
+            label: "Toggle repo drawer",
+            hint: "repo · branch · changes",
+            keybind: "",
+            command: Some(Command::OpenDrawer(DrawerId::Repo)),
+        },
+        PaletteItem {
+            group: "navigate".to_string(),
+            icon: glyph::COLLAPSED,
+            label: "Toggle session drawer",
+            hint: "name · model · cost · cwd",
+            keybind: "",
+            command: Some(Command::OpenDrawer(DrawerId::Session)),
+        },
+        PaletteItem {
+            group: "navigate".to_string(),
+            icon: glyph::CONTEXT,
+            label: "Toggle context drawer",
+            hint: "tokens · heat · churn",
+            keybind: "",
+            command: Some(Command::OpenDrawer(DrawerId::Context)),
+        },
         // context ⑤ — placeholder (real actions land P3), disabled for now
-        PaletteItem { group: format!("context {} · P3", glyph::CONTEXT), icon: glyph::EDIT, label: "Pin file to context", hint: "lands in P3", keybind: "", command: None },
-        PaletteItem { group: format!("context {} · P3", glyph::CONTEXT), icon: glyph::EVICT, label: "Evict cold items", hint: "lands in P3", keybind: "", command: None },
+        PaletteItem {
+            group: format!("context {} · P3", glyph::CONTEXT),
+            icon: glyph::EDIT,
+            label: "Pin file to context",
+            hint: "lands in P3",
+            keybind: "",
+            command: None,
+        },
+        PaletteItem {
+            group: format!("context {} · P3", glyph::CONTEXT),
+            icon: glyph::EVICT,
+            label: "Evict cold items",
+            hint: "lands in P3",
+            keybind: "",
+            command: None,
+        },
         // settings
-        PaletteItem { group: "settings".to_string(), icon: glyph::SETTINGS, label: "Quit zoid", hint: "exit", keybind: "^C", command: Some(Command::Quit) },
+        PaletteItem {
+            group: "settings".to_string(),
+            icon: glyph::SETTINGS,
+            label: "Quit zoid",
+            hint: "exit",
+            keybind: "^C",
+            command: Some(Command::Quit),
+        },
         // recipes — post-v1
-        PaletteItem { group: "recipes · post-v1".to_string(), icon: glyph::RECIPE, label: "Run recipe…", hint: "post-v1", keybind: "", command: None },
+        PaletteItem {
+            group: "recipes · post-v1".to_string(),
+            icon: glyph::RECIPE,
+            label: "Run recipe…",
+            hint: "post-v1",
+            keybind: "",
+            command: None,
+        },
     ]
 }
 
@@ -147,7 +238,8 @@ mod tests {
     #[test]
     fn navigate_group_targets_new_drawers() {
         let items = all_items(Mode::Chat);
-        let nav: Vec<&Command> = items.iter()
+        let nav: Vec<&Command> = items
+            .iter()
             .filter(|i| i.group == "navigate")
             .filter_map(|i| i.command.as_ref())
             .collect();
@@ -161,11 +253,20 @@ mod tests {
         let items = all_items(Mode::Chat);
         // The session group leads the palette (matches palette.html).
         assert_eq!(items[0].group, "session");
-        let labels: Vec<&str> = items.iter().filter(|i| i.group == "session").map(|i| i.label).collect();
-        assert_eq!(labels, vec!["New session", "Resume session…", "Rename session…"]);
+        let labels: Vec<&str> = items
+            .iter()
+            .filter(|i| i.group == "session")
+            .map(|i| i.label)
+            .collect();
+        assert_eq!(
+            labels,
+            vec!["New session", "Resume session…", "Rename session…"]
+        );
         // All three are selectable (have commands).
         for l in ["New session", "Resume session…", "Rename session…"] {
-            assert!(selectable_matches(&items, l).iter().any(|&i| items[i].label == l));
+            assert!(selectable_matches(&items, l)
+                .iter()
+                .any(|&i| items[i].label == l));
         }
     }
 }

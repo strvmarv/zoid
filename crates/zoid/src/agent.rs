@@ -38,7 +38,11 @@ pub struct TurnConfig {
 
 /// The orchestrator (Chat) turn config: main branch, process cwd, Chat prompt.
 pub fn chat_turn_config() -> TurnConfig {
-    TurnConfig { system: SYSTEM_PROMPT.to_string(), cwd: PathBuf::from("."), branch: BranchId::default() }
+    TurnConfig {
+        system: SYSTEM_PROMPT.to_string(),
+        cwd: PathBuf::from("."),
+        branch: BranchId::default(),
+    }
 }
 
 /// Max tool rounds per user message before the loop force-ends (safety leash).
@@ -61,7 +65,9 @@ pub fn tool_specs(tools: &[Box<dyn Tool>]) -> Vec<ToolSpec> {
 fn map_msg(m: ChatMsg) -> Message {
     match m {
         ChatMsg::User { text, .. } => Message::user(text),
-        ChatMsg::Assistant { text, tool_calls, .. } => Message {
+        ChatMsg::Assistant {
+            text, tool_calls, ..
+        } => Message {
             role: zoid_provider::MsgRole::Assistant,
             content: text,
             tool_calls: tool_calls
@@ -85,7 +91,12 @@ fn map_msg(m: ChatMsg) -> Message {
 }
 
 /// Build a completion request from the current event log.
-pub fn build_request(events: &[Event], model: &str, tools: &[Box<dyn Tool>], system: &str) -> CompletionRequest {
+pub fn build_request(
+    events: &[Event],
+    model: &str,
+    tools: &[Box<dyn Tool>],
+    system: &str,
+) -> CompletionRequest {
     CompletionRequest {
         model: model.to_string(),
         system: Some(system.to_string()),
@@ -121,7 +132,10 @@ pub async fn run_agent_turn(
     session_id: Ulid,
     now: fn() -> i64,
 ) -> Result<Vec<Event>> {
-    let result = run_turn_inner(&config, provider, tools, session, events, model, &ui, session_id, now).await;
+    let result = run_turn_inner(
+        &config, provider, tools, session, events, model, &ui, session_id, now,
+    )
+    .await;
     // Best-effort: if the receiver is already gone we still return the inner result.
     let _ = ui.send(AgentUpdate::TurnComplete).await;
     result
@@ -161,8 +175,16 @@ async fn run_turn_inner(
         while let Some(pe) = prx.recv().await {
             match pe {
                 ProviderEvent::TextDelta(s) => {
-                    emit(&session, &mut events, ui, &config.branch, EventKind::ModelDelta { text: s }, session_id, now)
-                        .await?;
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::ModelDelta { text: s },
+                        session_id,
+                        now,
+                    )
+                    .await?;
                 }
                 ProviderEvent::ToolCall(tc) => {
                     emit(
@@ -191,7 +213,9 @@ async fn run_turn_inner(
                         &mut events,
                         ui,
                         &config.branch,
-                        EventKind::AssistantMessage { text: format!("{WARN_GLYPH} {msg}") },
+                        EventKind::AssistantMessage {
+                            text: format!("{WARN_GLYPH} {msg}"),
+                        },
                         session_id,
                         now,
                     )

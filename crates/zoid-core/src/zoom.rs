@@ -19,7 +19,10 @@ const HEADLINE_MAX: usize = 60;
 fn trim_headline(s: &str) -> String {
     let one_line = s.lines().next().unwrap_or("").trim();
     if one_line.chars().count() > HEADLINE_MAX {
-        let head: String = one_line.chars().take(HEADLINE_MAX.saturating_sub(1)).collect();
+        let head: String = one_line
+            .chars()
+            .take(HEADLINE_MAX.saturating_sub(1))
+            .collect();
         // Raw '…' literal is intentional here, not a drift from zoid-tui's
         // glyph::ELLIPSIS token: zoid-core cannot depend on zoid-tui (dep
         // direction is core -> tui, never the reverse), so this crate can't
@@ -50,7 +53,9 @@ pub fn digests(msgs: &[ChatMsg]) -> Vec<TurnDigest> {
                     has_error: false,
                 });
             }
-            ChatMsg::Assistant { text, tool_calls, .. } => {
+            ChatMsg::Assistant {
+                text, tool_calls, ..
+            } => {
                 let d = cur.get_or_insert_with(|| TurnDigest {
                     headline: trim_headline(text),
                     tools: 0,
@@ -61,7 +66,10 @@ pub fn digests(msgs: &[ChatMsg]) -> Vec<TurnDigest> {
                     d.headline = trim_headline(text);
                 }
                 d.tools += tool_calls.len();
-                d.files += tool_calls.iter().filter(|c| tool_path(&c.args).is_some()).count();
+                d.files += tool_calls
+                    .iter()
+                    .filter(|c| tool_path(&c.args).is_some())
+                    .count();
             }
             ChatMsg::ToolResult { is_error, .. } => {
                 let d = cur.get_or_insert_with(|| TurnDigest {
@@ -99,13 +107,20 @@ mod tests {
     use proptest::prelude::*;
 
     fn call(name: &str, args: &str) -> ToolCallRef {
-        ToolCallRef { id: String::new(), name: name.into(), args: args.into() }
+        ToolCallRef {
+            id: String::new(),
+            name: name.into(),
+            args: args.into(),
+        }
     }
 
     #[test]
     fn one_digest_per_turn_with_counts() {
         let msgs = vec![
-            ChatMsg::User { text: "fix the parser bug".into(), ts: 0 },
+            ChatMsg::User {
+                text: "fix the parser bug".into(),
+                ts: 0,
+            },
             ChatMsg::Assistant {
                 text: "looking".into(),
                 tool_calls: vec![
@@ -114,9 +129,24 @@ mod tests {
                 ],
                 ts: 0,
             },
-            ChatMsg::ToolResult { id: String::new(), name: "read_file".into(), output: "fn parse() {}".into(), is_error: false, ts: 0 },
-            ChatMsg::ToolResult { id: String::new(), name: "shell".into(), output: "boom".into(), is_error: true, ts: 0 },
-            ChatMsg::User { text: "thanks".into(), ts: 0 },
+            ChatMsg::ToolResult {
+                id: String::new(),
+                name: "read_file".into(),
+                output: "fn parse() {}".into(),
+                is_error: false,
+                ts: 0,
+            },
+            ChatMsg::ToolResult {
+                id: String::new(),
+                name: "shell".into(),
+                output: "boom".into(),
+                is_error: true,
+                ts: 0,
+            },
+            ChatMsg::User {
+                text: "thanks".into(),
+                ts: 0,
+            },
         ];
         let d = digests(&msgs);
         assert_eq!(d.len(), 2);
@@ -134,22 +164,38 @@ mod tests {
         // A failed delegation folds into the current turn and marks it errored so
         // the Summary digest matches the ⚠ shown at Detail; a successful one does not.
         let d = digests(&[
-            ChatMsg::User { text: "delegate this".into(), ts: 0 },
-            ChatMsg::Delegated { summary: "could not finish".into(), ok: false },
+            ChatMsg::User {
+                text: "delegate this".into(),
+                ts: 0,
+            },
+            ChatMsg::Delegated {
+                summary: "could not finish".into(),
+                ok: false,
+            },
         ]);
         assert_eq!(d.len(), 1);
         assert!(d[0].has_error, "failed delegation → digest has_error");
 
         let ok = digests(&[
-            ChatMsg::User { text: "delegate this".into(), ts: 0 },
-            ChatMsg::Delegated { summary: "done".into(), ok: true },
+            ChatMsg::User {
+                text: "delegate this".into(),
+                ts: 0,
+            },
+            ChatMsg::Delegated {
+                summary: "done".into(),
+                ok: true,
+            },
         ]);
         assert!(!ok[0].has_error, "successful delegation → no error");
     }
 
     #[test]
     fn assistant_led_log_starts_a_turn() {
-        let msgs = vec![ChatMsg::Assistant { text: "hello there".into(), tool_calls: vec![], ts: 0 }];
+        let msgs = vec![ChatMsg::Assistant {
+            text: "hello there".into(),
+            tool_calls: vec![],
+            ts: 0,
+        }];
         let d = digests(&msgs);
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].headline, "hello there");

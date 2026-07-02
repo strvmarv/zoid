@@ -48,7 +48,14 @@ pub fn selectable_objects(msgs: &[ChatMsg]) -> Vec<Obj> {
     let mut latest_output: HashMap<String, String> = HashMap::new();
 
     for m in msgs {
-        if let ChatMsg::ToolResult { id, name, output, is_error, .. } = m {
+        if let ChatMsg::ToolResult {
+            id,
+            name,
+            output,
+            is_error,
+            ..
+        } = m
+        {
             if *is_error {
                 errors.push(Obj {
                     kind: ObjectKind::Error,
@@ -117,16 +124,47 @@ mod tests {
     use zoid_core::projection::{ChatMsg, ToolCallRef};
 
     fn call(id: &str, args: &str) -> ToolCallRef {
-        ToolCallRef { id: id.into(), name: "read_file".into(), args: args.into() }
+        ToolCallRef {
+            id: id.into(),
+            name: "read_file".into(),
+            args: args.into(),
+        }
     }
 
     fn seeded() -> Vec<ChatMsg> {
         vec![
-            ChatMsg::User { text: "read the ast".into(), ts: 0 },
-            ChatMsg::Assistant { text: String::new(), tool_calls: vec![call("c1", r#"{"path":"src/ast.rs"}"#)], ts: 0 },
-            ChatMsg::ToolResult { id: "c1".into(), name: "read_file".into(), output: "fn parse() {}\nstruct Ast {}\n".into(), is_error: false, ts: 0 },
-            ChatMsg::Assistant { text: String::new(), tool_calls: vec![ToolCallRef { id: "c2".into(), name: "shell".into(), args: r#"{"command":"cargo test"}"#.into() }], ts: 0 },
-            ChatMsg::ToolResult { id: "c2".into(), name: "shell".into(), output: "FAILED\n[exit 1]".into(), is_error: true, ts: 0 },
+            ChatMsg::User {
+                text: "read the ast".into(),
+                ts: 0,
+            },
+            ChatMsg::Assistant {
+                text: String::new(),
+                tool_calls: vec![call("c1", r#"{"path":"src/ast.rs"}"#)],
+                ts: 0,
+            },
+            ChatMsg::ToolResult {
+                id: "c1".into(),
+                name: "read_file".into(),
+                output: "fn parse() {}\nstruct Ast {}\n".into(),
+                is_error: false,
+                ts: 0,
+            },
+            ChatMsg::Assistant {
+                text: String::new(),
+                tool_calls: vec![ToolCallRef {
+                    id: "c2".into(),
+                    name: "shell".into(),
+                    args: r#"{"command":"cargo test"}"#.into(),
+                }],
+                ts: 0,
+            },
+            ChatMsg::ToolResult {
+                id: "c2".into(),
+                name: "shell".into(),
+                output: "FAILED\n[exit 1]".into(),
+                is_error: true,
+                ts: 0,
+            },
         ]
     }
 
@@ -134,10 +172,16 @@ mod tests {
     fn extracts_file_symbol_and_error_objects() {
         let objs = selectable_objects(&seeded());
         // a File object for src/ast.rs
-        assert!(objs.iter().any(|o| o.kind == ObjectKind::File && o.target == "src/ast.rs"));
+        assert!(objs
+            .iter()
+            .any(|o| o.kind == ObjectKind::File && o.target == "src/ast.rs"));
         // Symbol objects parse, scoped to the file
-        assert!(objs.iter().any(|o| o.kind == ObjectKind::Symbol && o.target == "parse" && o.context == "src/ast.rs"));
-        assert!(objs.iter().any(|o| o.kind == ObjectKind::Symbol && o.target == "Ast"));
+        assert!(objs.iter().any(|o| o.kind == ObjectKind::Symbol
+            && o.target == "parse"
+            && o.context == "src/ast.rs"));
+        assert!(objs
+            .iter()
+            .any(|o| o.kind == ObjectKind::Symbol && o.target == "Ast"));
         // an Error object for the failed shell call
         assert!(objs.iter().any(|o| o.kind == ObjectKind::Error));
     }
@@ -150,8 +194,22 @@ mod tests {
     #[test]
     fn non_file_tool_results_make_no_file_object() {
         let msgs = vec![
-            ChatMsg::Assistant { text: String::new(), tool_calls: vec![ToolCallRef { id: "c1".into(), name: "shell".into(), args: r#"{"command":"ls"}"#.into() }], ts: 0 },
-            ChatMsg::ToolResult { id: "c1".into(), name: "shell".into(), output: "a\nb".into(), is_error: false, ts: 0 },
+            ChatMsg::Assistant {
+                text: String::new(),
+                tool_calls: vec![ToolCallRef {
+                    id: "c1".into(),
+                    name: "shell".into(),
+                    args: r#"{"command":"ls"}"#.into(),
+                }],
+                ts: 0,
+            },
+            ChatMsg::ToolResult {
+                id: "c1".into(),
+                name: "shell".into(),
+                output: "a\nb".into(),
+                is_error: false,
+                ts: 0,
+            },
         ];
         let objs = selectable_objects(&msgs);
         assert!(objs.iter().all(|o| o.kind != ObjectKind::File));
@@ -176,10 +234,20 @@ mod tests {
         assert!(p.contains("parse"));
         assert!(p.contains("src/ast.rs"));
 
-        let file = Obj { kind: ObjectKind::File, label: "src/ast.rs".into(), target: "src/ast.rs".into(), context: String::new() };
+        let file = Obj {
+            kind: ObjectKind::File,
+            label: "src/ast.rs".into(),
+            target: "src/ast.rs".into(),
+            context: String::new(),
+        };
         assert!(verb_prompt("summarize", &file).contains("src/ast.rs"));
 
-        let err = Obj { kind: ObjectKind::Error, label: "error: shell".into(), target: "FAILED".into(), context: String::new() };
+        let err = Obj {
+            kind: ObjectKind::Error,
+            label: "error: shell".into(),
+            target: "FAILED".into(),
+            context: String::new(),
+        };
         assert!(verb_prompt("fix", &err).to_lowercase().contains("fix"));
     }
 
@@ -188,14 +256,46 @@ mod tests {
         // read → (edit) → re-read of the same path: one File object, and symbols
         // come once from the LATEST content (not first+latest stacked).
         let msgs = vec![
-            ChatMsg::Assistant { text: String::new(), tool_calls: vec![call("c1", r#"{"path":"src/ast.rs"}"#)], ts: 0 },
-            ChatMsg::ToolResult { id: "c1".into(), name: "read_file".into(), output: "fn old() {}\n".into(), is_error: false, ts: 0 },
-            ChatMsg::Assistant { text: String::new(), tool_calls: vec![call("c2", r#"{"path":"src/ast.rs"}"#)], ts: 0 },
-            ChatMsg::ToolResult { id: "c2".into(), name: "read_file".into(), output: "fn renamed() {}\n".into(), is_error: false, ts: 0 },
+            ChatMsg::Assistant {
+                text: String::new(),
+                tool_calls: vec![call("c1", r#"{"path":"src/ast.rs"}"#)],
+                ts: 0,
+            },
+            ChatMsg::ToolResult {
+                id: "c1".into(),
+                name: "read_file".into(),
+                output: "fn old() {}\n".into(),
+                is_error: false,
+                ts: 0,
+            },
+            ChatMsg::Assistant {
+                text: String::new(),
+                tool_calls: vec![call("c2", r#"{"path":"src/ast.rs"}"#)],
+                ts: 0,
+            },
+            ChatMsg::ToolResult {
+                id: "c2".into(),
+                name: "read_file".into(),
+                output: "fn renamed() {}\n".into(),
+                is_error: false,
+                ts: 0,
+            },
         ];
         let objs = selectable_objects(&msgs);
-        assert_eq!(objs.iter().filter(|o| o.kind == ObjectKind::File).count(), 1, "one File per path");
-        let syms: Vec<&str> = objs.iter().filter(|o| o.kind == ObjectKind::Symbol).map(|o| o.target.as_str()).collect();
-        assert_eq!(syms, vec!["renamed"], "symbols come once, from the latest read");
+        assert_eq!(
+            objs.iter().filter(|o| o.kind == ObjectKind::File).count(),
+            1,
+            "one File per path"
+        );
+        let syms: Vec<&str> = objs
+            .iter()
+            .filter(|o| o.kind == ObjectKind::Symbol)
+            .map(|o| o.target.as_str())
+            .collect();
+        assert_eq!(
+            syms,
+            vec!["renamed"],
+            "symbols come once, from the latest read"
+        );
     }
 }

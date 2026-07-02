@@ -27,24 +27,46 @@ pub enum MutationOp {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
-    UserMessage { text: String },
-    AssistantMessage { text: String },
-    ModelDelta { text: String },
+    UserMessage {
+        text: String,
+    },
+    AssistantMessage {
+        text: String,
+    },
+    ModelDelta {
+        text: String,
+    },
     /// A tool the model asked to call. `args` is the raw JSON arguments (stored
     /// as a string so `EventKind` keeps `Eq`).
-    ToolCall { id: String, name: String, args: String },
+    ToolCall {
+        id: String,
+        name: String,
+        args: String,
+    },
     /// The result of running a `ToolCall`. `output` is the tool's text output.
-    ToolResult { id: String, name: String, output: String, is_error: bool },
+    ToolResult {
+        id: String,
+        name: String,
+        output: String,
+        is_error: bool,
+    },
     /// A turn's token usage. The numbers live in `Event.tokens`; this variant
     /// is the carrier so the economy projections can sum real counts. Ignored
     /// by the conversation projection.
     Usage,
     /// A manual or automatic change to the context window, targeting a
     /// `ContextItem` by its stable `key`.
-    ContextMutation { item: String, op: MutationOp },
+    ContextMutation {
+        item: String,
+        op: MutationOp,
+    },
     /// A finished subagent's outcome, recorded on the MAIN branch. `branch`
     /// names the subagent's sub-branch; `summary` is its closing report.
-    DelegationResult { branch: String, summary: String, ok: bool },
+    DelegationResult {
+        branch: String,
+        summary: String,
+        ok: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,7 +82,15 @@ pub struct Event {
 
 impl Event {
     pub fn new(id: Ulid, parent: Option<Ulid>, ts: i64, kind: EventKind) -> Self {
-        Event { id, parent, branch: BranchId::default(), session_id: Ulid::from(0u128), ts, kind, tokens: None }
+        Event {
+            id,
+            parent,
+            branch: BranchId::default(),
+            session_id: Ulid::from(0u128),
+            ts,
+            kind,
+            tokens: None,
+        }
     }
 
     /// Tag this event with its owning session (bin wiring; core stays session-agnostic).
@@ -89,20 +119,38 @@ mod tests {
             branch: BranchId("feature".to_string()),
             session_id: Ulid::from(0u128),
             ts: 1_700_000_000,
-            kind: EventKind::AssistantMessage { text: "hello".into() },
-            tokens: Some(TokenStat { input: 1, output: 2, cached: 3 }),
+            kind: EventKind::AssistantMessage {
+                text: "hello".into(),
+            },
+            tokens: Some(TokenStat {
+                input: 1,
+                output: 2,
+                cached: 3,
+            }),
         };
         let json = serde_json::to_string(&ev).unwrap();
         let back: Event = serde_json::from_str(&json).unwrap();
         assert_eq!(ev, back);
         assert_eq!(back.parent, Some(parent));
-        assert_eq!(back.tokens, Some(TokenStat { input: 1, output: 2, cached: 3 }));
+        assert_eq!(
+            back.tokens,
+            Some(TokenStat {
+                input: 1,
+                output: 2,
+                cached: 3
+            })
+        );
     }
 
     #[test]
     fn event_new_defaults() {
         let id = Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
-        let ev = Event::new(id, None, 1_700_000_000, EventKind::UserMessage { text: "hi".into() });
+        let ev = Event::new(
+            id,
+            None,
+            1_700_000_000,
+            EventKind::UserMessage { text: "hi".into() },
+        );
         assert_eq!(ev.branch, BranchId::default());
         assert_eq!(ev.tokens, None);
         assert_eq!(ev.parent, None);
@@ -121,12 +169,27 @@ mod tests {
     #[test]
     fn tool_events_round_trip() {
         let id = Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
-        let call = Event::new(id, None, 1, EventKind::ToolCall {
-            id: "c1".into(), name: "read_file".into(), args: r#"{"path":"a"}"#.into(),
-        });
-        let res = Event::new(id, None, 2, EventKind::ToolResult {
-            id: "c1".into(), name: "read_file".into(), output: "data".into(), is_error: false,
-        });
+        let call = Event::new(
+            id,
+            None,
+            1,
+            EventKind::ToolCall {
+                id: "c1".into(),
+                name: "read_file".into(),
+                args: r#"{"path":"a"}"#.into(),
+            },
+        );
+        let res = Event::new(
+            id,
+            None,
+            2,
+            EventKind::ToolResult {
+                id: "c1".into(),
+                name: "read_file".into(),
+                output: "data".into(),
+                is_error: false,
+            },
+        );
         for ev in [call, res] {
             let json = serde_json::to_string(&ev).unwrap();
             let back: Event = serde_json::from_str(&json).unwrap();
@@ -138,13 +201,27 @@ mod tests {
     fn usage_and_mutation_round_trip() {
         let id = Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
         let usage = Event {
-            id, parent: None, branch: BranchId::default(), session_id: Ulid::from(0u128), ts: 5,
+            id,
+            parent: None,
+            branch: BranchId::default(),
+            session_id: Ulid::from(0u128),
+            ts: 5,
             kind: EventKind::Usage,
-            tokens: Some(TokenStat { input: 100, output: 40, cached: 10 }),
+            tokens: Some(TokenStat {
+                input: 100,
+                output: 40,
+                cached: 10,
+            }),
         };
-        let mutation = Event::new(id, None, 6, EventKind::ContextMutation {
-            item: "file:src/a.rs".into(), op: MutationOp::Pin,
-        });
+        let mutation = Event::new(
+            id,
+            None,
+            6,
+            EventKind::ContextMutation {
+                item: "file:src/a.rs".into(),
+                op: MutationOp::Pin,
+            },
+        );
         for ev in [usage, mutation] {
             let json = serde_json::to_string(&ev).unwrap();
             assert_eq!(ev, serde_json::from_str::<Event>(&json).unwrap());
@@ -153,9 +230,16 @@ mod tests {
 
     #[test]
     fn delegation_result_round_trips() {
-        let ev = Event::new(Ulid::new(), None, 0, EventKind::DelegationResult {
-            branch: "subagent:zz".into(), summary: "did it".into(), ok: false,
-        });
+        let ev = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::DelegationResult {
+                branch: "subagent:zz".into(),
+                summary: "did it".into(),
+                ok: false,
+            },
+        );
         let json = serde_json::to_string(&ev).unwrap();
         assert_eq!(ev, serde_json::from_str::<Event>(&json).unwrap());
     }

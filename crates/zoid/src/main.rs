@@ -24,8 +24,8 @@ use zoid::agent::{run_agent_turn, AgentUpdate};
 use zoid_core::event::{Event, EventKind};
 use zoid_core::projection::conversation;
 use zoid_core::session::SessionHandle;
-use zoid_provider::{default_model, default_provider};
 use zoid_provider::Provider;
+use zoid_provider::{default_model, default_provider};
 use zoid_tools::Tool;
 use zoid_tui::chat::ChatView;
 use zoid_tui::layout::compute;
@@ -80,11 +80,13 @@ fn import_legacy_if_present(
     if new_db.exists() || !legacy.exists() {
         return Ok(false);
     }
-    let events = zoid_core::store::load_legacy_events(legacy.to_str().context("legacy path not UTF-8")?)?;
+    let events =
+        zoid_core::store::load_legacy_events(legacy.to_str().context("legacy path not UTF-8")?)?;
     if let Some(dir) = new_db.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let store = zoid_core::store::EventStore::open(new_db.to_str().context("new db path not UTF-8")?)?;
+    let store =
+        zoid_core::store::EventStore::open(new_db.to_str().context("new db path not UTF-8")?)?;
     store.insert_session(session_id, name, root_path, ts, ts)?;
     for e in events {
         store.append(&e.with_session(session_id))?;
@@ -134,15 +136,23 @@ fn derive_session_name(first_user_msg: Option<&str>, ts_ms: i64, tz_offset_secs:
 /// Compact "N ago" from two epoch-millis stamps (e.g. "12m ago", "3h ago").
 fn fmt_since(then_ms: i64, now_ms: i64) -> String {
     let mins = (now_ms - then_ms).max(0) / 60_000;
-    if mins < 60 { format!("{mins}m ago") }
-    else if mins < 1440 { format!("{}h ago", mins / 60) }
-    else { format!("{}d ago", mins / 1440) }
+    if mins < 60 {
+        format!("{mins}m ago")
+    } else if mins < 1440 {
+        format!("{}h ago", mins / 60)
+    } else {
+        format!("{}d ago", mins / 1440)
+    }
 }
 
 /// Compact duration since `start_ms` (e.g. "12m", "1h3m").
 fn fmt_duration(start_ms: i64, now_ms: i64) -> String {
     let mins = (now_ms - start_ms).max(0) / 60_000;
-    if mins < 60 { format!("{mins}m") } else { format!("{}h{}m", mins / 60, mins % 60) }
+    if mins < 60 {
+        format!("{mins}m")
+    } else {
+        format!("{}h{}m", mins / 60, mins % 60)
+    }
 }
 
 /// Human provider label mirroring `zoid_provider::default_provider`'s selection:
@@ -164,7 +174,11 @@ fn provider_label() -> String {
 fn current_branch() -> String {
     std::fs::read_to_string(".git/HEAD")
         .ok()
-        .and_then(|s| s.trim().strip_prefix("ref: refs/heads/").map(|b| b.to_string()))
+        .and_then(|s| {
+            s.trim()
+                .strip_prefix("ref: refs/heads/")
+                .map(|b| b.to_string())
+        })
         .unwrap_or_else(|| "main".into())
 }
 
@@ -178,7 +192,9 @@ fn parse_numstat(out: &str) -> (usize, usize, usize) {
         let mut cols = line.split('\t');
         let a = cols.next().unwrap_or("-");
         let r = cols.next().unwrap_or("-");
-        if cols.next().is_none() { continue; } // no path → malformed, skip
+        if cols.next().is_none() {
+            continue;
+        } // no path → malformed, skip
         added += a.parse::<usize>().unwrap_or(0);
         removed += r.parse::<usize>().unwrap_or(0);
         files += 1;
@@ -190,7 +206,10 @@ fn parse_numstat(out: &str) -> (usize, usize, usize) {
 /// (staged). Best-effort — any failure yields zeros.
 fn git_status() -> (usize, usize, usize) {
     let run = |args: &[&str]| -> String {
-        std::process::Command::new("git").args(args).output().ok()
+        std::process::Command::new("git")
+            .args(args)
+            .output()
+            .ok()
             .filter(|o| o.status.success())
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
             .unwrap_or_default()
@@ -261,17 +280,25 @@ async fn main() -> Result<()> {
         boot_ts,
     );
 
-    let session = SessionHandle::spawn(path.to_str().context("session DB path is not valid UTF-8")?)?;
+    let session = SessionHandle::spawn(
+        path.to_str()
+            .context("session DB path is not valid UTF-8")?,
+    )?;
 
     // Auto-resume the most-recently-touched session for this repo, else create one.
-    let sessions = session.list_sessions(Some(root.clone())).await.unwrap_or_default();
+    let sessions = session
+        .list_sessions(Some(root.clone()))
+        .await
+        .unwrap_or_default();
     let (session_id, session_name, session_started_ms) = if let Some(s) = sessions.first() {
         session.touch_session(s.id, boot_ts).await.ok();
         (s.id, s.name.clone(), s.created_ts)
     } else {
         let id = Ulid::new();
         let name = derive_session_name(None, boot_ts, tz_offset_secs);
-        session.new_session(id, name.clone(), root.clone(), boot_ts).await?;
+        session
+            .new_session(id, name.clone(), root.clone(), boot_ts)
+            .await?;
         (id, name, boot_ts)
     };
     let events = session.snapshot_session(session_id).await?;
@@ -280,8 +307,13 @@ async fn main() -> Result<()> {
 
     let mut shell = zoid_tui::ShellState::new();
     shell.branch = current_branch();
-    shell.reduced_motion = std::env::var("ZOID_REDUCED_MOTION").map(|v| !v.is_empty()).unwrap_or(false);
-    shell.repo_name = Path::new(&root).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| root.clone());
+    shell.reduced_motion = std::env::var("ZOID_REDUCED_MOTION")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    shell.repo_name = Path::new(&root)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| root.clone());
     let (boot_added, boot_removed, boot_files) = git_status();
     shell.changes_added = boot_added;
     shell.changes_removed = boot_removed;
@@ -323,7 +355,10 @@ async fn main() -> Result<()> {
     if kbd_enhanced {
         // Best-effort: a failed push just means ⇧⏎ falls back to Alt+⏎ — it must
         // not skip the terminal restore below, so don't propagate with `?`.
-        let _ = execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
+        let _ = execute!(
+            out,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
     }
     let mut terminal = Terminal::new(CrosstermBackend::new(out))?;
 
@@ -334,7 +369,11 @@ async fn main() -> Result<()> {
         let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
     }
     let _ = disable_raw_mode();
-    let _ = execute!(terminal.backend_mut(), DisableMouseCapture, LeaveAlternateScreen);
+    let _ = execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    );
     let _ = terminal.show_cursor();
     result
 }
@@ -393,7 +432,12 @@ async fn run<B: ratatui::backend::Backend>(
                     if elapsed_ms < ZOOM_ANIM_MS && !app.shell.reduced_motion {
                         let total_lines = zoid_tui::chat::conversation_view(
                             &msgs,
-                            &ChatView { zoom: app.shell.zoom, caret_on: caret, reveal: None, tz_offset_secs: app.tz_offset_secs },
+                            &ChatView {
+                                zoom: app.shell.zoom,
+                                caret_on: caret,
+                                reveal: None,
+                                tz_offset_secs: app.tz_offset_secs,
+                            },
                             app.streaming,
                         )
                         .len();
@@ -409,8 +453,21 @@ async fn run<B: ratatui::backend::Backend>(
                 }
                 None => None,
             };
-            let view = ChatView { zoom: app.shell.zoom, caret_on: caret, reveal, tz_offset_secs: app.tz_offset_secs };
-            render_shell(f, &app.shell, &economy, &msgs, &app.textarea, app.streaming, &view);
+            let view = ChatView {
+                zoom: app.shell.zoom,
+                caret_on: caret,
+                reveal,
+                tz_offset_secs: app.tz_offset_secs,
+            };
+            render_shell(
+                f,
+                &app.shell,
+                &economy,
+                &msgs,
+                &app.textarea,
+                app.streaming,
+                &view,
+            );
         })?;
 
         tokio::select! {
@@ -494,7 +551,9 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             }
         }
         Action::CmdlineChar(c) => app.shell.cmdline.buffer.push(c),
-        Action::CmdlineBackspace => { app.shell.cmdline.buffer.pop(); }
+        Action::CmdlineBackspace => {
+            app.shell.cmdline.buffer.pop();
+        }
         Action::RunCommand(c) => {
             app.shell.close_overlay();
             return exec_command(app, c).await;
@@ -518,18 +577,31 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             }
         }
         Action::Newline => app.textarea.insert_newline(),
-        Action::Edit(key) => { app.textarea.input(key); }
+        Action::Edit(key) => {
+            app.textarea.input(key);
+        }
         Action::Submit => {
-            if app.streaming || app.delegating { return Ok(false); }
+            if app.streaming || app.delegating {
+                return Ok(false);
+            }
             let text = app.textarea.lines().join("\n");
-            if text.trim().is_empty() { return Ok(false); }
-            let first = !app.events.iter().any(|e| matches!(e.kind, EventKind::UserMessage { .. }));
+            if text.trim().is_empty() {
+                return Ok(false);
+            }
+            let first = !app
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::UserMessage { .. }));
             app.textarea = make_input(TextArea::default());
             app.shell.status_hint = None;
-            app.record(EventKind::UserMessage { text: text.clone() }).await?;
+            app.record(EventKind::UserMessage { text: text.clone() })
+                .await?;
             if first {
                 let name = derive_session_name(Some(&text), now_ms(), app.tz_offset_secs);
-                app.session.rename_session(app.session_id, name.clone()).await.ok();
+                app.session
+                    .rename_session(app.session_id, name.clone())
+                    .await
+                    .ok();
                 app.shell.session_name = name;
             }
             app.streaming = true;
@@ -544,7 +616,8 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::ObjectMove(d) => {
             let n = zoid_tui::objects::selectable_objects(&conversation(&app.events)).len();
-            app.shell.objects.obj_selected = zoid_tui::palette::nav(app.shell.objects.obj_selected, d, n);
+            app.shell.objects.obj_selected =
+                zoid_tui::palette::nav(app.shell.objects.obj_selected, d, n);
         }
         Action::ObjectPick => {
             // Advance to the verb picker — but only if there's an object to act
@@ -561,8 +634,12 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::VerbMove(d) => {
             let objs = zoid_tui::objects::selectable_objects(&conversation(&app.events));
             let sel = zoid_tui::palette::nav(app.shell.objects.obj_selected, 0, objs.len());
-            let n = objs.get(sel).map(|o| zoid_tui::objects::verbs_for(o.kind).len()).unwrap_or(0);
-            app.shell.objects.verb_selected = zoid_tui::palette::nav(app.shell.objects.verb_selected, d, n);
+            let n = objs
+                .get(sel)
+                .map(|o| zoid_tui::objects::verbs_for(o.kind).len())
+                .unwrap_or(0);
+            app.shell.objects.verb_selected =
+                zoid_tui::palette::nav(app.shell.objects.verb_selected, d, n);
         }
         Action::VerbPick => {
             let objs = zoid_tui::objects::selectable_objects(&conversation(&app.events));
@@ -594,8 +671,14 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 app.session_id = sid;
                 app.events = app.session.snapshot_session(sid).await.unwrap_or_default();
                 app.shell.conversation_scroll = 0;
-                if let Some(info) = app.session.list_sessions(Some(repo_root())).await
-                        .unwrap_or_default().into_iter().find(|s| s.id == sid) {
+                if let Some(info) = app
+                    .session
+                    .list_sessions(Some(repo_root()))
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|s| s.id == sid)
+                {
                     app.shell.session_name = info.name;
                     app.session_started_ms = info.created_ts;
                 }
@@ -611,8 +694,14 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
     use zoid_tui::command::Command;
     match cmd {
         Command::Quit => Ok(true),
-        Command::SwitchMode(m) => { app.shell.set_mode(m); Ok(false) }
-        Command::OpenDrawer(id) => { app.shell.open_drawer(id); Ok(false) }
+        Command::SwitchMode(m) => {
+            app.shell.set_mode(m);
+            Ok(false)
+        }
+        Command::OpenDrawer(id) => {
+            app.shell.open_drawer(id);
+            Ok(false)
+        }
         Command::NewSession => {
             if app.streaming || app.delegating {
                 app.shell.status_hint = Some("finish the current turn first".into());
@@ -622,7 +711,10 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             let id = Ulid::new();
             let ts = now_ms();
             let name = derive_session_name(None, ts, app.tz_offset_secs);
-            app.session.new_session(id, name.clone(), repo_root(), ts).await.ok();
+            app.session
+                .new_session(id, name.clone(), repo_root(), ts)
+                .await
+                .ok();
             app.session_id = id;
             app.shell.session_name = name;
             app.session_started_ms = ts;
@@ -636,13 +728,20 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
                 app.shell.overlay = zoid_tui::Overlay::CommandLine;
                 app.shell.cmdline.buffer = "rename ".into();
             } else {
-                app.session.rename_session(app.session_id, name.clone()).await.ok();
+                app.session
+                    .rename_session(app.session_id, name.clone())
+                    .await
+                    .ok();
                 app.shell.session_name = name;
             }
             Ok(false)
         }
         Command::ResumeSessionPicker => {
-            let list = app.session.list_sessions(Some(repo_root())).await.unwrap_or_default();
+            let list = app
+                .session
+                .list_sessions(Some(repo_root()))
+                .await
+                .unwrap_or_default();
             app.session_ids = list.iter().map(|s| s.id).collect();
             app.shell.sessions = list
                 .iter()
@@ -659,7 +758,10 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             app.shell.overlay = zoid_tui::Overlay::Sessions;
             Ok(false)
         }
-        Command::Delegate(task) => { start_delegation(app, task); Ok(false) }
+        Command::Delegate(task) => {
+            start_delegation(app, task);
+            Ok(false)
+        }
         Command::Unknown(_) => Ok(false),
     }
 }
@@ -697,7 +799,10 @@ fn start_delegation(app: &mut App, task: String) {
     } else {
         None // not a git repo: run in the process cwd, isolation not possible
     };
-    let cwd = wt.as_ref().map(|w| w.path().to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
+    let cwd = wt
+        .as_ref()
+        .map(|w| w.path().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
 
     let provider = app.provider.clone();
     let session = app.session.clone();
@@ -734,7 +839,11 @@ fn start_delegation(app: &mut App, task: String) {
             Ulid::new(),
             None,
             now_ms(),
-            EventKind::DelegationResult { branch, summary, ok },
+            EventKind::DelegationResult {
+                branch,
+                summary,
+                ok,
+            },
         )
         .with_session(session_id);
         let _ = session.append(ev.clone()).await;
@@ -789,14 +898,25 @@ mod tests {
     fn make_input_disables_cursor_line_underline() {
         // Sanity: the tui-textarea default underlines the cursor line.
         let default = TextArea::from(vec!["hello".to_string()]);
-        assert!(has_underline(&default), "default TextArea underlines the cursor line");
+        assert!(
+            has_underline(&default),
+            "default TextArea underlines the cursor line"
+        );
         // make_input turns it off.
         let plain = make_input(TextArea::from(vec!["hello".to_string()]));
-        assert!(!has_underline(&plain), "make_input must disable the cursor-line underline");
+        assert!(
+            !has_underline(&plain),
+            "make_input must disable the cursor-line underline"
+        );
     }
 
     fn env_of<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
-        move |k| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string())
+        move |k| {
+            pairs
+                .iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| v.to_string())
+        }
     }
 
     #[test]
@@ -833,17 +953,17 @@ mod tests {
     fn parses_numstat_sums_and_counts_files() {
         let out = "12\t3\tsrc/a.rs\n0\t5\tsrc/b.rs\n7\t0\tCargo.toml\n";
         assert_eq!(parse_numstat(out), (19, 8, 3)); // added=12+0+7, removed=3+5+0, files=3
-        // Binary files show `-\t-\tpath`; count the file, add zero lines.
+                                                    // Binary files show `-\t-\tpath`; count the file, add zero lines.
         assert_eq!(parse_numstat("-\t-\tlogo.png\n"), (0, 0, 1));
         assert_eq!(parse_numstat(""), (0, 0, 0));
     }
 
     #[test]
     fn imports_legacy_events_under_one_session_once() {
-        use zoid_core::event::EventKind;
-        use zoid_core::store::EventStore;
         use rusqlite::{params, Connection};
         use ulid::Ulid;
+        use zoid_core::event::EventKind;
+        use zoid_core::store::EventStore;
         let dir = tempfile::tempdir().unwrap();
         let legacy = dir.path().join("legacy.db");
         let newdb = dir.path().join("new.db");
@@ -864,8 +984,14 @@ mod tests {
             .unwrap();
             let id1 = Ulid::from(1u128);
             let id2 = Ulid::from(2u128);
-            let kind1 = serde_json::to_string(&EventKind::UserMessage { text: "old q".into() }).unwrap();
-            let kind2 = serde_json::to_string(&EventKind::AssistantMessage { text: "old a".into() }).unwrap();
+            let kind1 = serde_json::to_string(&EventKind::UserMessage {
+                text: "old q".into(),
+            })
+            .unwrap();
+            let kind2 = serde_json::to_string(&EventKind::AssistantMessage {
+                text: "old a".into(),
+            })
+            .unwrap();
             conn.execute(
                 "INSERT INTO events (id, parent, branch, ts, kind, tokens) VALUES (?1, NULL, ?2, ?3, ?4, NULL)",
                 params![id1.to_string(), "main", 1i64, kind1],
@@ -898,7 +1024,10 @@ mod tests {
         std::mem::forget(dir);
         let session = SessionHandle::spawn(db.to_str().unwrap()).unwrap();
         let session_id = Ulid::new();
-        session.new_session(session_id, "test".into(), "/repo".into(), 0).await.unwrap();
+        session
+            .new_session(session_id, "test".into(), "/repo".into(), 0)
+            .await
+            .unwrap();
         let (ui_tx, _ui_rx) = mpsc::channel::<AgentUpdate>(8);
         App {
             session,
@@ -934,11 +1063,19 @@ mod tests {
         app.delegating = true;
         app.textarea = make_input(TextArea::from(vec!["hello".to_string()]));
 
-        let quit = handle_action(&mut app, zoid_tui::route::Action::Submit).await.unwrap();
+        let quit = handle_action(&mut app, zoid_tui::route::Action::Submit)
+            .await
+            .unwrap();
 
         assert!(!quit, "Submit must not signal quit");
-        assert!(app.delegating, "delegating flag must be untouched by a blocked Submit");
-        assert!(!app.streaming, "streaming must stay false — no turn was spawned");
+        assert!(
+            app.delegating,
+            "delegating flag must be untouched by a blocked Submit"
+        );
+        assert!(
+            !app.streaming,
+            "streaming must stay false — no turn was spawned"
+        );
         assert!(
             app.events.is_empty(),
             "no UserMessage should be recorded while delegating"
@@ -960,17 +1097,31 @@ mod tests {
 
         // Seed a second session to switch to.
         let other_id = Ulid::new();
-        app.session.new_session(other_id, "other".into(), "/repo".into(), 0).await.unwrap();
+        app.session
+            .new_session(other_id, "other".into(), "/repo".into(), 0)
+            .await
+            .unwrap();
         app.session_ids = vec![other_id];
         app.shell.session_selected = 0;
 
         app.delegating = true;
-        let quit = handle_action(&mut app, zoid_tui::route::Action::SessionPick).await.unwrap();
+        let quit = handle_action(&mut app, zoid_tui::route::Action::SessionPick)
+            .await
+            .unwrap();
 
         assert!(!quit, "SessionPick must not signal quit");
-        assert_eq!(app.session_id, original_session_id, "session_id must not switch while delegating");
-        assert!(app.events.is_empty(), "events must not be swapped in while delegating");
-        assert!(app.delegating, "delegating flag must be untouched by a blocked SessionPick");
+        assert_eq!(
+            app.session_id, original_session_id,
+            "session_id must not switch while delegating"
+        );
+        assert!(
+            app.events.is_empty(),
+            "events must not be swapped in while delegating"
+        );
+        assert!(
+            app.delegating,
+            "delegating flag must be untouched by a blocked SessionPick"
+        );
         assert_eq!(
             app.shell.status_hint.as_deref(),
             Some("finish the current turn first"),
@@ -986,12 +1137,23 @@ mod tests {
         let original_session_id = app.session_id;
         app.delegating = true;
 
-        let quit = exec_command(&mut app, zoid_tui::command::Command::NewSession).await.unwrap();
+        let quit = exec_command(&mut app, zoid_tui::command::Command::NewSession)
+            .await
+            .unwrap();
 
         assert!(!quit, "NewSession must not signal quit");
-        assert_eq!(app.session_id, original_session_id, "session_id must not change while delegating");
-        assert!(app.events.is_empty(), "events must not be cleared/reset while delegating");
-        assert!(app.delegating, "delegating flag must be untouched by a blocked NewSession");
+        assert_eq!(
+            app.session_id, original_session_id,
+            "session_id must not change while delegating"
+        );
+        assert!(
+            app.events.is_empty(),
+            "events must not be cleared/reset while delegating"
+        );
+        assert!(
+            app.delegating,
+            "delegating flag must be untouched by a blocked NewSession"
+        );
         assert_eq!(
             app.shell.status_hint.as_deref(),
             Some("finish the current turn first"),

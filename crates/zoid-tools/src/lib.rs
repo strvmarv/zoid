@@ -22,10 +22,16 @@ pub struct ToolOutput {
 
 impl ToolOutput {
     pub fn ok(text: impl Into<String>) -> Self {
-        Self { text: text.into(), is_error: false }
+        Self {
+            text: text.into(),
+            is_error: false,
+        }
     }
     pub fn err(text: impl Into<String>) -> Self {
-        Self { text: text.into(), is_error: true }
+        Self {
+            text: text.into(),
+            is_error: true,
+        }
     }
 }
 
@@ -69,7 +75,11 @@ pub(crate) fn str_arg(args: &Value, key: &str) -> Result<String, ToolOutput> {
 /// relocation, NOT a security jail (spec §9: no path-jailing).
 pub(crate) fn resolve(cwd: &Path, path: &str) -> PathBuf {
     let p = Path::new(path);
-    if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) }
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        cwd.join(p)
+    }
 }
 
 #[cfg(test)]
@@ -103,8 +113,14 @@ mod tests {
     #[test]
     fn resolve_joins_relative_and_passes_absolute() {
         use std::path::Path;
-        assert_eq!(resolve(Path::new("/work"), "src/a.rs"), Path::new("/work/src/a.rs"));
-        assert_eq!(resolve(Path::new("/work"), "/etc/hosts"), Path::new("/etc/hosts"));
+        assert_eq!(
+            resolve(Path::new("/work"), "src/a.rs"),
+            Path::new("/work/src/a.rs")
+        );
+        assert_eq!(
+            resolve(Path::new("/work"), "/etc/hosts"),
+            Path::new("/etc/hosts")
+        );
     }
 
     #[test]

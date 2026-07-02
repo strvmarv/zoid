@@ -11,9 +11,22 @@ fn session_persists_and_replays_across_reopen() {
     let path = path.to_str().unwrap();
 
     // First session: append two turns.
-    let e1 = Event::new(Ulid::from(1u128), None, 10, EventKind::UserMessage { text: "hello".into() });
-    let e2 = Event::new(Ulid::from(2u128), Some(Ulid::from(1u128)), 20,
-        EventKind::AssistantMessage { text: "hi there".into() });
+    let e1 = Event::new(
+        Ulid::from(1u128),
+        None,
+        10,
+        EventKind::UserMessage {
+            text: "hello".into(),
+        },
+    );
+    let e2 = Event::new(
+        Ulid::from(2u128),
+        Some(Ulid::from(1u128)),
+        20,
+        EventKind::AssistantMessage {
+            text: "hi there".into(),
+        },
+    );
     {
         let store = EventStore::open(path).unwrap();
         store.append(&e1).unwrap();
@@ -29,8 +42,15 @@ fn session_persists_and_replays_across_reopen() {
     assert_eq!(
         msgs,
         vec![
-            ChatMsg::User { text: "hello".into(), ts: 10 },
-            ChatMsg::Assistant { text: "hi there".into(), tool_calls: vec![], ts: 20 },
+            ChatMsg::User {
+                text: "hello".into(),
+                ts: 10
+            },
+            ChatMsg::Assistant {
+                text: "hi there".into(),
+                tool_calls: vec![],
+                ts: 20
+            },
         ]
     );
 }

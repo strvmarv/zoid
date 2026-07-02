@@ -46,16 +46,21 @@ impl EventStore {
                 event.session_id.to_string(),
                 event.ts,
                 serde_json::to_string(&event.kind)?,
-                event.tokens.map(|t| serde_json::to_string(&t)).transpose()?,
+                event
+                    .tokens
+                    .map(|t| serde_json::to_string(&t))
+                    .transpose()?,
             ],
         )?;
         Ok(())
     }
 
-    const SELECT_COLS: &str =
-        "SELECT id, parent, branch, session_id, ts, kind, tokens FROM events";
+    const SELECT_COLS: &str = "SELECT id, parent, branch, session_id, ts, kind, tokens FROM events";
 
-    fn decode_rows(stmt: &mut rusqlite::Statement, params: impl rusqlite::Params) -> Result<Vec<Event>> {
+    fn decode_rows(
+        stmt: &mut rusqlite::Statement,
+        params: impl rusqlite::Params,
+    ) -> Result<Vec<Event>> {
         let raw = stmt.query_map(params, |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -85,17 +90,29 @@ impl EventStore {
 
     pub fn load_all(&self) -> Result<Vec<Event>> {
         // append order, not ULID order, so same-ms events replay deterministically
-        let mut stmt = self.conn.prepare(&format!("{} ORDER BY rowid ASC", Self::SELECT_COLS))?;
+        let mut stmt = self
+            .conn
+            .prepare(&format!("{} ORDER BY rowid ASC", Self::SELECT_COLS))?;
         Self::decode_rows(&mut stmt, [])
     }
 
     pub fn load_session(&self, session_id: Ulid) -> Result<Vec<Event>> {
         // append order, not ULID order, so same-ms events replay deterministically
-        let mut stmt = self.conn.prepare(&format!("{} WHERE session_id = ?1 ORDER BY rowid ASC", Self::SELECT_COLS))?;
+        let mut stmt = self.conn.prepare(&format!(
+            "{} WHERE session_id = ?1 ORDER BY rowid ASC",
+            Self::SELECT_COLS
+        ))?;
         Self::decode_rows(&mut stmt, params![session_id.to_string()])
     }
 
-    pub fn insert_session(&self, id: Ulid, name: &str, root_path: &str, created_ts: i64, last_touched_ts: i64) -> Result<()> {
+    pub fn insert_session(
+        &self,
+        id: Ulid,
+        name: &str,
+        root_path: &str,
+        created_ts: i64,
+        last_touched_ts: i64,
+    ) -> Result<()> {
         self.conn.execute(
             "INSERT INTO sessions (id, name, root_path, created_ts, last_touched_ts)
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -105,19 +122,25 @@ impl EventStore {
     }
 
     pub fn rename_session(&self, id: Ulid, name: &str) -> Result<()> {
-        self.conn.execute("UPDATE sessions SET name = ?2 WHERE id = ?1", params![id.to_string(), name])?;
+        self.conn.execute(
+            "UPDATE sessions SET name = ?2 WHERE id = ?1",
+            params![id.to_string(), name],
+        )?;
         Ok(())
     }
 
     pub fn touch_session(&self, id: Ulid, last_touched_ts: i64) -> Result<()> {
-        self.conn.execute("UPDATE sessions SET last_touched_ts = ?2 WHERE id = ?1",
-            params![id.to_string(), last_touched_ts])?;
+        self.conn.execute(
+            "UPDATE sessions SET last_touched_ts = ?2 WHERE id = ?1",
+            params![id.to_string(), last_touched_ts],
+        )?;
         Ok(())
     }
 
     pub fn list_session_rows(&self) -> Result<Vec<SessionRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, root_path, created_ts, last_touched_ts FROM sessions ORDER BY id ASC")?;
+            "SELECT id, name, root_path, created_ts, last_touched_ts FROM sessions ORDER BY id ASC",
+        )?;
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -130,7 +153,13 @@ impl EventStore {
         let mut out = Vec::new();
         for r in rows {
             let (id, name, root_path, created_ts, last_touched_ts) = r?;
-            out.push(SessionRow { id: id.parse()?, name, root_path, created_ts, last_touched_ts });
+            out.push(SessionRow {
+                id: id.parse()?,
+                name,
+                root_path,
+                created_ts,
+                last_touched_ts,
+            });
         }
         Ok(out)
     }
@@ -142,9 +171,8 @@ impl EventStore {
 pub fn load_legacy_events(path: &str) -> Result<Vec<Event>> {
     let conn = Connection::open(path)?;
     // append order, not ULID order, so same-ms events replay deterministically
-    let mut stmt = conn.prepare(
-        "SELECT id, parent, branch, ts, kind, tokens FROM events ORDER BY rowid ASC",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT id, parent, branch, ts, kind, tokens FROM events ORDER BY rowid ASC")?;
     let rows = stmt
         .query_map([], |row| {
             Ok((
@@ -181,9 +209,18 @@ mod tests {
     #[test]
     fn append_then_load_round_trips_in_order() {
         let store = EventStore::open(":memory:").unwrap();
-        let e1 = Event::new(Ulid::from(1u128), None, 10, EventKind::UserMessage { text: "q".into() });
-        let e2 = Event::new(Ulid::from(2u128), Some(Ulid::from(1u128)), 20,
-            EventKind::AssistantMessage { text: "a".into() });
+        let e1 = Event::new(
+            Ulid::from(1u128),
+            None,
+            10,
+            EventKind::UserMessage { text: "q".into() },
+        );
+        let e2 = Event::new(
+            Ulid::from(2u128),
+            Some(Ulid::from(1u128)),
+            20,
+            EventKind::AssistantMessage { text: "a".into() },
+        );
         store.append(&e1).unwrap();
         store.append(&e2).unwrap();
 
@@ -196,8 +233,20 @@ mod tests {
         let store = EventStore::open(":memory:").unwrap();
         let sa = Ulid::from(10u128);
         let sb = Ulid::from(20u128);
-        let a = Event::new(Ulid::from(1u128), None, 1, EventKind::UserMessage { text: "a".into() }).with_session(sa);
-        let b = Event::new(Ulid::from(2u128), None, 2, EventKind::UserMessage { text: "b".into() }).with_session(sb);
+        let a = Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage { text: "a".into() },
+        )
+        .with_session(sa);
+        let b = Event::new(
+            Ulid::from(2u128),
+            None,
+            2,
+            EventKind::UserMessage { text: "b".into() },
+        )
+        .with_session(sb);
         store.append(&a).unwrap();
         store.append(&b).unwrap();
         // load_all keeps every event, with session_id intact …
@@ -212,14 +261,22 @@ mod tests {
         use crate::sessions::SessionRow;
         let store = EventStore::open(":memory:").unwrap();
         let id = Ulid::from(1u128);
-        store.insert_session(id, "first", "/repo/a", 100, 100).unwrap();
+        store
+            .insert_session(id, "first", "/repo/a", 100, 100)
+            .unwrap();
         store.touch_session(id, 200).unwrap();
         store.rename_session(id, "renamed").unwrap();
         let rows = store.list_session_rows().unwrap();
-        assert_eq!(rows, vec![SessionRow {
-            id, name: "renamed".into(), root_path: "/repo/a".into(),
-            created_ts: 100, last_touched_ts: 200,
-        }]);
+        assert_eq!(
+            rows,
+            vec![SessionRow {
+                id,
+                name: "renamed".into(),
+                root_path: "/repo/a".into(),
+                created_ts: 100,
+                last_touched_ts: 200,
+            }]
+        );
     }
 
     #[test]
@@ -229,15 +286,40 @@ mod tests {
         // events in append order (via rowid), proving it does not rely on the
         // lexicographic ULID ordering.
         let store = EventStore::open(":memory:").unwrap();
-        let e3 = Event::new(Ulid::from(3u128), None, 10, EventKind::UserMessage { text: "first-appended".into() });
-        let e2 = Event::new(Ulid::from(2u128), None, 20, EventKind::UserMessage { text: "second-appended".into() });
-        let e1 = Event::new(Ulid::from(1u128), None, 30, EventKind::UserMessage { text: "third-appended".into() });
+        let e3 = Event::new(
+            Ulid::from(3u128),
+            None,
+            10,
+            EventKind::UserMessage {
+                text: "first-appended".into(),
+            },
+        );
+        let e2 = Event::new(
+            Ulid::from(2u128),
+            None,
+            20,
+            EventKind::UserMessage {
+                text: "second-appended".into(),
+            },
+        );
+        let e1 = Event::new(
+            Ulid::from(1u128),
+            None,
+            30,
+            EventKind::UserMessage {
+                text: "third-appended".into(),
+            },
+        );
         store.append(&e3).unwrap();
         store.append(&e2).unwrap();
         store.append(&e1).unwrap();
 
         let loaded = store.load_all().unwrap();
-        assert_eq!(loaded, vec![e3, e2, e1], "expected append order (3, 2, 1), not ULID order (1, 2, 3)");
+        assert_eq!(
+            loaded,
+            vec![e3, e2, e1],
+            "expected append order (3, 2, 1), not ULID order (1, 2, 3)"
+        );
     }
 
     #[test]
@@ -261,8 +343,14 @@ mod tests {
 
         let id1 = Ulid::from(1u128);
         let id2 = Ulid::from(2u128);
-        let kind1 = serde_json::to_string(&EventKind::UserMessage { text: "old q".into() }).unwrap();
-        let kind2 = serde_json::to_string(&EventKind::AssistantMessage { text: "old a".into() }).unwrap();
+        let kind1 = serde_json::to_string(&EventKind::UserMessage {
+            text: "old q".into(),
+        })
+        .unwrap();
+        let kind2 = serde_json::to_string(&EventKind::AssistantMessage {
+            text: "old a".into(),
+        })
+        .unwrap();
         conn.execute(
             "INSERT INTO events (id, parent, branch, ts, kind, tokens) VALUES (?1, NULL, ?2, ?3, ?4, NULL)",
             params![id1.to_string(), "main", 10i64, kind1],

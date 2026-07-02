@@ -32,8 +32,13 @@ pub fn create_worktree(repo_root: &Path, name: &str) -> Result<WorktreeGuard> {
         std::fs::create_dir_all(parent).context("create worktree parent dir")?;
     }
     let opts = WorktreeAddOptions::new();
-    repo.worktree(name, &path, Some(&opts)).with_context(|| format!("add worktree {name}"))?;
-    Ok(WorktreeGuard { name: name.to_string(), path, repo_root: repo_root.to_path_buf() })
+    repo.worktree(name, &path, Some(&opts))
+        .with_context(|| format!("add worktree {name}"))?;
+    Ok(WorktreeGuard {
+        name: name.to_string(),
+        path,
+        repo_root: repo_root.to_path_buf(),
+    })
 }
 
 impl Drop for WorktreeGuard {

@@ -1,27 +1,50 @@
 use ratatui::{backend::TestBackend, Terminal};
 use tui_textarea::TextArea;
+use zoid_core::assembler::ContextPolicy;
+use zoid_core::context::ContextWindow;
+use zoid_core::economy::{ChurnTimeline, TokenLedger};
 use zoid_core::projection::ChatMsg;
 use zoid_tui::chat::ChatView;
 use zoid_tui::render_shell;
 use zoid_tui::state::{Overlay, ShellState, Zoom};
 use zoid_tui::EconomyView;
-use zoid_core::context::ContextWindow;
-use zoid_core::economy::{ChurnTimeline, TokenLedger};
-use zoid_core::assembler::ContextPolicy;
 
 fn normal_view() -> ChatView {
-    ChatView { zoom: Zoom::Normal, caret_on: true, reveal: None, tz_offset_secs: 0 }
+    ChatView {
+        zoom: Zoom::Normal,
+        caret_on: true,
+        reveal: None,
+        tz_offset_secs: 0,
+    }
 }
 
 fn empty_economy() -> EconomyView {
-    EconomyView::build(&ContextWindow::default(), &ChurnTimeline::default(), &TokenLedger::default(), &ContextPolicy::default(), 0)
+    EconomyView::build(
+        &ContextWindow::default(),
+        &ChurnTimeline::default(),
+        &TokenLedger::default(),
+        &ContextPolicy::default(),
+        0,
+    )
 }
 
 fn draw(state: &ShellState, msgs: &[ChatMsg], w: u16, h: u16) -> String {
     let input = TextArea::default();
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| render_shell(f, state, &empty_economy(), msgs, &input, false, &normal_view())).unwrap();
+    terminal
+        .draw(|f| {
+            render_shell(
+                f,
+                state,
+                &empty_economy(),
+                msgs,
+                &input,
+                false,
+                &normal_view(),
+            )
+        })
+        .unwrap();
     terminal.backend().to_string()
 }
 
@@ -60,6 +83,9 @@ fn session_drawer_truncates_long_cwd() {
     s.cwd = "~/develop/projects/zoid/crates/zoid-tui/src/very/deep/nested/path".into();
     let out = draw(&s, &[], 100, 24);
     // The cwd never wraps — it is truncated with the §16 ellipsis.
-    assert!(out.contains('\u{2026}'), "long cwd should be truncated with an ellipsis");
+    assert!(
+        out.contains('\u{2026}'),
+        "long cwd should be truncated with an ellipsis"
+    );
     insta::assert_snapshot!(out);
 }

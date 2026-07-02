@@ -17,7 +17,10 @@ use zoid_tui::EconomyView;
 
 fn seeded() -> Vec<ChatMsg> {
     vec![
-        ChatMsg::User { text: "what's causing the 500?".into(), ts: 0 },
+        ChatMsg::User {
+            text: "what's causing the 500?".into(),
+            ts: 0,
+        },
         ChatMsg::Assistant {
             text: "an unwrapped lookup in the handler.".into(),
             tool_calls: vec![],
@@ -32,11 +35,27 @@ fn seeded_objects() -> Vec<ChatMsg> {
     vec![
         ChatMsg::Assistant {
             text: String::new(),
-            tool_calls: vec![ToolCallRef { id: "c1".into(), name: "read_file".into(), args: r#"{"path":"src/ast.rs"}"#.into() }],
+            tool_calls: vec![ToolCallRef {
+                id: "c1".into(),
+                name: "read_file".into(),
+                args: r#"{"path":"src/ast.rs"}"#.into(),
+            }],
             ts: 0,
         },
-        ChatMsg::ToolResult { id: "c1".into(), name: "read_file".into(), output: "fn parse() {}\nstruct Ast {}\n".into(), is_error: false, ts: 0 },
-        ChatMsg::ToolResult { id: "c2".into(), name: "shell".into(), output: "FAILED\n".into(), is_error: true, ts: 0 },
+        ChatMsg::ToolResult {
+            id: "c1".into(),
+            name: "read_file".into(),
+            output: "fn parse() {}\nstruct Ast {}\n".into(),
+            is_error: false,
+            ts: 0,
+        },
+        ChatMsg::ToolResult {
+            id: "c2".into(),
+            name: "shell".into(),
+            output: "FAILED\n".into(),
+            is_error: true,
+            ts: 0,
+        },
     ]
 }
 
@@ -68,24 +87,80 @@ fn seeded_economy() -> EconomyView {
     };
     let w = ContextWindow {
         items: vec![
-            it("tool:grep:c9", "grep", ItemKind::ToolResult, 6000, Heat::Hot, false),
-            it("file:schema.sql", "schema.sql", ItemKind::File, 5000, Heat::Cold, false),
-            it("file:users.rs", "users.rs", ItemKind::File, 4000, Heat::Hot, true),
-            it("msg:2", "ship it?", ItemKind::Message, 3000, Heat::Warm, false),
+            it(
+                "tool:grep:c9",
+                "grep",
+                ItemKind::ToolResult,
+                6000,
+                Heat::Hot,
+                false,
+            ),
+            it(
+                "file:schema.sql",
+                "schema.sql",
+                ItemKind::File,
+                5000,
+                Heat::Cold,
+                false,
+            ),
+            it(
+                "file:users.rs",
+                "users.rs",
+                ItemKind::File,
+                4000,
+                Heat::Hot,
+                true,
+            ),
+            it(
+                "msg:2",
+                "ship it?",
+                ItemKind::Message,
+                3000,
+                Heat::Warm,
+                false,
+            ),
         ],
         total_tokens: 18000,
     };
     let churn = ChurnTimeline {
         points: vec![
-            ChurnPoint { turn: 0, tokens: 10, resent_tokens: 0 },
-            ChurnPoint { turn: 1, tokens: 30, resent_tokens: 0 },
-            ChurnPoint { turn: 2, tokens: 12, resent_tokens: 0 },
-            ChurnPoint { turn: 3, tokens: 48, resent_tokens: 0 },
-            ChurnPoint { turn: 4, tokens: 12, resent_tokens: 0 },
+            ChurnPoint {
+                turn: 0,
+                tokens: 10,
+                resent_tokens: 0,
+            },
+            ChurnPoint {
+                turn: 1,
+                tokens: 30,
+                resent_tokens: 0,
+            },
+            ChurnPoint {
+                turn: 2,
+                tokens: 12,
+                resent_tokens: 0,
+            },
+            ChurnPoint {
+                turn: 3,
+                tokens: 48,
+                resent_tokens: 0,
+            },
+            ChurnPoint {
+                turn: 4,
+                tokens: 12,
+                resent_tokens: 0,
+            },
         ],
     };
-    let ledger = TokenLedger { input: 142_000, output: 0, cached: 0, total: 142_000 };
-    let policy = ContextPolicy { token_ceiling: Some(200_000), ..Default::default() };
+    let ledger = TokenLedger {
+        input: 142_000,
+        output: 0,
+        cached: 0,
+        total: 142_000,
+    };
+    let policy = ContextPolicy {
+        token_ceiling: Some(200_000),
+        ..Default::default()
+    };
     EconomyView::build(&w, &churn, &ledger, &policy, 0)
 }
 
@@ -144,7 +219,9 @@ fn main() {
         terminal
             .draw(|f| f.render_widget(ratatui::widgets::Paragraph::new(lines), f.area()))
             .unwrap();
-        let tens: String = (0..w).map(|c| if c % 10 == 0 { '|' } else { ' ' }).collect();
+        let tens: String = (0..w)
+            .map(|c| if c % 10 == 0 { '|' } else { ' ' })
+            .collect();
         println!("scene={name}  size={w}x{h}");
         println!("{tens}");
         print!("{}", terminal.backend());
@@ -155,13 +232,20 @@ fn main() {
     let input = TextArea::default();
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
-    let view = ChatView { zoom: state.zoom, caret_on: true, reveal: None, tz_offset_secs: 0 };
+    let view = ChatView {
+        zoom: state.zoom,
+        caret_on: true,
+        reveal: None,
+        tz_offset_secs: 0,
+    };
     terminal
         .draw(|f| render_shell(f, &state, &economy, &msgs, &input, false, &view))
         .unwrap();
 
     // A ruler makes column drift obvious at a glance.
-    let tens: String = (0..w).map(|c| if c % 10 == 0 { '|' } else { ' ' }).collect();
+    let tens: String = (0..w)
+        .map(|c| if c % 10 == 0 { '|' } else { ' ' })
+        .collect();
     println!("scene={name}  size={w}x{h}");
     println!("{tens}");
     print!("{}", terminal.backend());

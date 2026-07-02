@@ -78,20 +78,36 @@ pub fn parse_line(line: &str) -> Vec<ProviderEvent> {
     }
 
     let mut out = Vec::new();
-    if let Some(text) = v.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_str()) {
+    if let Some(text) = v
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+    {
         if !text.is_empty() {
             out.push(ProviderEvent::TextDelta(text.to_string()));
         }
     }
-    if let Some(calls) = v.get("message").and_then(|m| m.get("tool_calls")).and_then(|c| c.as_array()) {
+    if let Some(calls) = v
+        .get("message")
+        .and_then(|m| m.get("tool_calls"))
+        .and_then(|c| c.as_array())
+    {
         for call in calls {
             if let Some(func) = call.get("function") {
-                let name = func.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string();
+                let name = func
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or_default()
+                    .to_string();
                 if name.is_empty() {
                     continue;
                 }
                 let args = func.get("arguments").cloned().unwrap_or(Value::Null);
-                let id = call.get("id").and_then(|i| i.as_str()).unwrap_or_default().to_string();
+                let id = call
+                    .get("id")
+                    .and_then(|i| i.as_str())
+                    .unwrap_or_default()
+                    .to_string();
                 out.push(ProviderEvent::ToolCall(ToolCall { id, name, args }));
             }
         }
@@ -121,7 +137,11 @@ impl OllamaProvider {
 
 #[async_trait]
 impl Provider for OllamaProvider {
-    async fn stream(&self, req: &CompletionRequest, sink: mpsc::Sender<ProviderEvent>) -> Result<()> {
+    async fn stream(
+        &self,
+        req: &CompletionRequest,
+        sink: mpsc::Sender<ProviderEvent>,
+    ) -> Result<()> {
         let resp = self
             .client
             .post(format!("{}/api/chat", self.base_url))
@@ -134,7 +154,9 @@ impl Provider for OllamaProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            let _ = sink.send(ProviderEvent::Error(format!("HTTP {status}: {text}"))).await;
+            let _ = sink
+                .send(ProviderEvent::Error(format!("HTTP {status}: {text}")))
+                .await;
             return Ok(());
         }
 
@@ -192,23 +214,23 @@ mod tests {
         let req = CompletionRequest {
             model: "glm-5.2:cloud".into(),
             system: Some("be terse".into()),
-            messages: vec![
-                Message::user("hi"),
-                Message::assistant("hello"),
-            ],
+            messages: vec![Message::user("hi"), Message::assistant("hello")],
             max_tokens: 1024,
             tools: vec![],
         };
         let body = request_body(&req);
-        assert_eq!(body, json!({
-            "model": "glm-5.2:cloud",
-            "stream": true,
-            "messages": [
-                { "role": "system", "content": "be terse" },
-                { "role": "user", "content": "hi" },
-                { "role": "assistant", "content": "hello" },
-            ],
-        }));
+        assert_eq!(
+            body,
+            json!({
+                "model": "glm-5.2:cloud",
+                "stream": true,
+                "messages": [
+                    { "role": "system", "content": "be terse" },
+                    { "role": "user", "content": "hi" },
+                    { "role": "assistant", "content": "hello" },
+                ],
+            })
+        );
         // native body must NOT carry OpenAI-only fields
         assert!(body.get("max_tokens").is_none());
         assert!(body.get("stream_options").is_none());
@@ -217,12 +239,16 @@ mod tests {
     #[test]
     fn body_without_system_has_no_system_message() {
         let req = CompletionRequest {
-            model: "m".into(), system: None,
+            model: "m".into(),
+            system: None,
             messages: vec![Message::user("x")],
             max_tokens: 8,
             tools: vec![],
         };
-        assert_eq!(request_body(&req)["messages"], json!([{ "role": "user", "content": "x" }]));
+        assert_eq!(
+            request_body(&req)["messages"],
+            json!([{ "role": "user", "content": "x" }])
+        );
     }
 
     #[test]
@@ -235,7 +261,11 @@ mod tests {
                 Message {
                     role: MsgRole::Assistant,
                     content: "".into(),
-                    tool_calls: vec![ToolCall { id: "".into(), name: "read_file".into(), args: json!({"path": "foo"}) }],
+                    tool_calls: vec![ToolCall {
+                        id: "".into(),
+                        name: "read_file".into(),
+                        args: json!({"path": "foo"}),
+                    }],
                     tool_name: None,
                 },
                 Message::tool("read_file", "bar"),
@@ -248,23 +278,31 @@ mod tests {
             }],
         };
         let body = request_body(&req);
-        assert_eq!(body["tools"], json!([{
-            "type": "function",
-            "function": { "name": "read_file", "description": "read a file", "parameters": {"type": "object"} }
-        }]));
-        assert_eq!(body["messages"], json!([
-            { "role": "user", "content": "read foo" },
-            { "role": "assistant", "content": "", "tool_calls": [ { "function": { "name": "read_file", "arguments": {"path": "foo"} } } ] },
-            { "role": "tool", "content": "bar", "tool_name": "read_file" },
-        ]));
+        assert_eq!(
+            body["tools"],
+            json!([{
+                "type": "function",
+                "function": { "name": "read_file", "description": "read a file", "parameters": {"type": "object"} }
+            }])
+        );
+        assert_eq!(
+            body["messages"],
+            json!([
+                { "role": "user", "content": "read foo" },
+                { "role": "assistant", "content": "", "tool_calls": [ { "function": { "name": "read_file", "arguments": {"path": "foo"} } } ] },
+                { "role": "tool", "content": "bar", "tool_name": "read_file" },
+            ])
+        );
     }
 
     #[test]
     fn body_without_tools_omits_tools_key() {
         let req = CompletionRequest {
-            model: "m".into(), system: None,
+            model: "m".into(),
+            system: None,
             messages: vec![Message::user("x")],
-            max_tokens: 8, tools: vec![],
+            max_tokens: 8,
+            tools: vec![],
         };
         assert!(request_body(&req).get("tools").is_none());
     }
@@ -272,12 +310,16 @@ mod tests {
     #[test]
     fn parses_content_delta_line() {
         let line = r#"{"model":"glm-5.2:cloud","message":{"role":"assistant","content":"Hel"},"done":false}"#;
-        assert_eq!(parse_line(line), vec![ProviderEvent::TextDelta("Hel".into())]);
+        assert_eq!(
+            parse_line(line),
+            vec![ProviderEvent::TextDelta("Hel".into())]
+        );
     }
 
     #[test]
     fn thinking_only_line_yields_none() {
-        let line = r#"{"message":{"role":"assistant","content":"","thinking":"reasoning"},"done":false}"#;
+        let line =
+            r#"{"message":{"role":"assistant","content":"","thinking":"reasoning"},"done":false}"#;
         assert!(parse_line(line).is_empty());
     }
 
@@ -289,8 +331,10 @@ mod tests {
 
     #[test]
     fn error_line_yields_error() {
-        assert_eq!(parse_line(r#"{"error":"Unauthorized"}"#),
-            vec![ProviderEvent::Error("Unauthorized".into())]);
+        assert_eq!(
+            parse_line(r#"{"error":"Unauthorized"}"#),
+            vec![ProviderEvent::Error("Unauthorized".into())]
+        );
     }
 
     #[test]
@@ -305,13 +349,20 @@ mod tests {
         let line = r#"{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"read_file","arguments":{"path":"a.txt"}}}]},"done":false}"#;
         assert_eq!(
             parse_line(line),
-            vec![ProviderEvent::ToolCall(ToolCall { id: "".into(), name: "read_file".into(), args: json!({"path": "a.txt"}) })]
+            vec![ProviderEvent::ToolCall(ToolCall {
+                id: "".into(),
+                name: "read_file".into(),
+                args: json!({"path": "a.txt"})
+            })]
         );
     }
 
     #[test]
     fn parses_text_then_done_as_two_events() {
         let line = r#"{"message":{"role":"assistant","content":"hi"},"done":true}"#;
-        assert_eq!(parse_line(line), vec![ProviderEvent::TextDelta("hi".into()), ProviderEvent::Done]);
+        assert_eq!(
+            parse_line(line),
+            vec![ProviderEvent::TextDelta("hi".into()), ProviderEvent::Done]
+        );
     }
 }

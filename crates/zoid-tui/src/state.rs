@@ -140,9 +140,21 @@ impl ShellState {
     /// (repo/session/context all open, matching `docs/ux/chat-mode.html`).
     pub fn new() -> Self {
         let drawers = vec![
-            Drawer { id: DrawerId::Repo,    title: "repo".into(),    open: true },
-            Drawer { id: DrawerId::Session, title: "session".into(), open: true },
-            Drawer { id: DrawerId::Context, title: "context · tokens".into(), open: true },
+            Drawer {
+                id: DrawerId::Repo,
+                title: "repo".into(),
+                open: true,
+            },
+            Drawer {
+                id: DrawerId::Session,
+                title: "session".into(),
+                open: true,
+            },
+            Drawer {
+                id: DrawerId::Context,
+                title: "context · tokens".into(),
+                open: true,
+            },
         ];
         Self {
             mode: Mode::Chat,
@@ -265,7 +277,10 @@ mod tests {
         assert!(s.rail_visible);
         assert_eq!(s.branch, "main");
         let ids: Vec<DrawerId> = s.drawers.iter().map(|d| d.id).collect();
-        assert_eq!(ids, vec![DrawerId::Repo, DrawerId::Session, DrawerId::Context]);
+        assert_eq!(
+            ids,
+            vec![DrawerId::Repo, DrawerId::Session, DrawerId::Context]
+        );
         // All three expanded (mockup shows repo/session/context all `on`).
         assert!(s.drawer(DrawerId::Repo).unwrap().open);
         assert!(s.drawer(DrawerId::Session).unwrap().open);
@@ -315,7 +330,7 @@ mod tests {
         let mut s = ShellState::new();
         s.toggle_drawer(DrawerId::Session);
         assert!(!s.drawer(DrawerId::Session).unwrap().open); // was open by default; toggled closed
-        // open_drawer forces open (idempotent) and ensures the rail is visible.
+                                                             // open_drawer forces open (idempotent) and ensures the rail is visible.
         s.rail_visible = false;
         s.open_drawer(DrawerId::Repo);
         assert!(s.rail_visible);

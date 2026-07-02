@@ -7,9 +7,9 @@ pub mod anthropic;
 pub mod ollama;
 
 use anyhow::Result;
+use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
-use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,13 +31,28 @@ pub struct Message {
 
 impl Message {
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: MsgRole::User, content: content.into(), tool_calls: Vec::new(), tool_name: None }
+        Self {
+            role: MsgRole::User,
+            content: content.into(),
+            tool_calls: Vec::new(),
+            tool_name: None,
+        }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: MsgRole::Assistant, content: content.into(), tool_calls: Vec::new(), tool_name: None }
+        Self {
+            role: MsgRole::Assistant,
+            content: content.into(),
+            tool_calls: Vec::new(),
+            tool_name: None,
+        }
     }
     pub fn tool(name: impl Into<String>, content: impl Into<String>) -> Self {
-        Self { role: MsgRole::Tool, content: content.into(), tool_calls: Vec::new(), tool_name: Some(name.into()) }
+        Self {
+            role: MsgRole::Tool,
+            content: content.into(),
+            tool_calls: Vec::new(),
+            tool_name: Some(name.into()),
+        }
     }
 }
 
@@ -89,7 +104,11 @@ pub trait Provider: Send + Sync {
     /// `ProviderEvent`s into `sink`. Returns when the stream ends (the sink is
     /// dropped on return). Transport errors are reported as a final
     /// `ProviderEvent::Error` rather than an `Err` where possible.
-    async fn stream(&self, req: &CompletionRequest, sink: mpsc::Sender<ProviderEvent>) -> Result<()>;
+    async fn stream(
+        &self,
+        req: &CompletionRequest,
+        sink: mpsc::Sender<ProviderEvent>,
+    ) -> Result<()>;
 }
 
 /// A deterministic, offline provider that replays a scripted event list.
@@ -105,7 +124,11 @@ impl FakeProvider {
 
 #[async_trait]
 impl Provider for FakeProvider {
-    async fn stream(&self, _req: &CompletionRequest, sink: mpsc::Sender<ProviderEvent>) -> Result<()> {
+    async fn stream(
+        &self,
+        _req: &CompletionRequest,
+        sink: mpsc::Sender<ProviderEvent>,
+    ) -> Result<()> {
         for ev in &self.scripted {
             if sink.send(ev.clone()).await.is_err() {
                 break; // receiver gone
@@ -139,7 +162,10 @@ pub fn default_provider() -> Arc<dyn Provider> {
 /// The default model id matching the selected provider (overridden by
 /// `$ZOID_MODEL` in the binary).
 pub fn default_model() -> &'static str {
-    if std::env::var("OLLAMA_API_KEY").map(|k| !k.is_empty()).unwrap_or(false) {
+    if std::env::var("OLLAMA_API_KEY")
+        .map(|k| !k.is_empty())
+        .unwrap_or(false)
+    {
         ollama::DEFAULT_OLLAMA_MODEL
     } else {
         anthropic::DEFAULT_MODEL
@@ -172,7 +198,10 @@ mod tests {
         let script = vec![
             ProviderEvent::TextDelta("hel".into()),
             ProviderEvent::TextDelta("lo".into()),
-            ProviderEvent::Usage(Usage { input_tokens: 3, output_tokens: 2 }),
+            ProviderEvent::Usage(Usage {
+                input_tokens: 3,
+                output_tokens: 2,
+            }),
             ProviderEvent::Done,
         ];
         let provider = FakeProvider::new(script.clone());
@@ -236,7 +265,11 @@ mod tool_types_tests {
         });
         assert_eq!(
             ev,
-            ProviderEvent::ToolCall(ToolCall { id: "".into(), name: "read_file".into(), args: json!({"path": "a.txt"}) })
+            ProviderEvent::ToolCall(ToolCall {
+                id: "".into(),
+                name: "read_file".into(),
+                args: json!({"path": "a.txt"})
+            })
         );
     }
 }

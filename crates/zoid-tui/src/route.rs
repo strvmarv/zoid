@@ -113,7 +113,11 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
     match state.focus {
         Focus::Input => match (key.code, key.modifiers) {
             // ⇧⏎ (keyboard-enhancement flags on) or Alt+⏎ (fallback) → newline.
-            (KeyCode::Enter, m) if m.contains(KeyModifiers::ALT) || m.contains(KeyModifiers::SHIFT) => Action::Newline,
+            (KeyCode::Enter, m)
+                if m.contains(KeyModifiers::ALT) || m.contains(KeyModifiers::SHIFT) =>
+            {
+                Action::Newline
+            }
             (KeyCode::Enter, _) => Action::Submit,
             _ => Action::Edit(key),
         },
@@ -142,7 +146,9 @@ fn route_palette_key(key: KeyEvent) -> Action {
         KeyCode::Up => Action::PaletteMove(-1),
         KeyCode::Down => Action::PaletteMove(1),
         KeyCode::Backspace => Action::PaletteBackspace,
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => Action::PaletteChar(c),
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Action::PaletteChar(c)
+        }
         _ => Action::Noop,
     }
 }
@@ -152,7 +158,9 @@ fn route_cmdline_key(state: &ShellState, key: KeyEvent) -> Action {
         KeyCode::Esc => Action::CloseOverlay,
         KeyCode::Enter => Action::RunCommand(parse_command(&state.cmdline.buffer)),
         KeyCode::Backspace => Action::CmdlineBackspace,
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => Action::CmdlineChar(c),
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Action::CmdlineChar(c)
+        }
         _ => Action::Noop,
     }
 }
@@ -219,7 +227,9 @@ pub fn route_mouse(state: &ShellState, layout: &ShellLayout, m: MouseEvent) -> A
     }
     match m.kind {
         MouseEventKind::ScrollUp if m.modifiers.contains(KeyModifiers::CONTROL) => Action::ZoomIn,
-        MouseEventKind::ScrollDown if m.modifiers.contains(KeyModifiers::CONTROL) => Action::ZoomOut,
+        MouseEventKind::ScrollDown if m.modifiers.contains(KeyModifiers::CONTROL) => {
+            Action::ZoomOut
+        }
         MouseEventKind::ScrollDown => Action::ScrollConversation(1),
         MouseEventKind::ScrollUp => Action::ScrollConversation(-1),
         MouseEventKind::Down(MouseButton::Left) => match hit_test(layout, m.column, m.row) {
@@ -254,33 +264,63 @@ mod tests {
     #[test]
     fn ctrl_c_quits_and_ctrl_p_opens_palette() {
         let s = ShellState::new();
-        assert_eq!(route_key(&s, key(KeyCode::Char('c'), KeyModifiers::CONTROL)), Action::Quit);
-        assert_eq!(route_key(&s, key(KeyCode::Char('p'), KeyModifiers::CONTROL)), Action::OpenPalette);
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Action::Quit
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('p'), KeyModifiers::CONTROL)),
+            Action::OpenPalette
+        );
     }
 
     #[test]
     fn backtab_switches_mode_tab_cycles_focus() {
         let s = ShellState::new();
-        assert_eq!(route_key(&s, key(KeyCode::BackTab, KeyModifiers::NONE)), Action::SwitchMode);
-        assert_eq!(route_key(&s, key(KeyCode::Tab, KeyModifiers::NONE)), Action::FocusNext);
+        assert_eq!(
+            route_key(&s, key(KeyCode::BackTab, KeyModifiers::NONE)),
+            Action::SwitchMode
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Tab, KeyModifiers::NONE)),
+            Action::FocusNext
+        );
     }
 
     #[test]
     fn input_focus_edits_and_submits() {
         let s = ShellState::new(); // focus Input
-        assert_eq!(route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)), Action::Submit);
-        assert_eq!(route_key(&s, key(KeyCode::Enter, KeyModifiers::ALT)), Action::Newline);
-        assert_eq!(route_key(&s, key(KeyCode::Enter, KeyModifiers::SHIFT)), Action::Newline);
-        assert!(matches!(route_key(&s, key(KeyCode::Char('h'), KeyModifiers::NONE)), Action::Edit(_)));
+        assert_eq!(
+            route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)),
+            Action::Submit
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Enter, KeyModifiers::ALT)),
+            Action::Newline
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Enter, KeyModifiers::SHIFT)),
+            Action::Newline
+        );
+        assert!(matches!(
+            route_key(&s, key(KeyCode::Char('h'), KeyModifiers::NONE)),
+            Action::Edit(_)
+        ));
     }
 
     #[test]
     fn colon_opens_cmdline_only_when_not_input() {
         let mut s = ShellState::new();
         // focus Input → ':' is literal text
-        assert!(matches!(route_key(&s, key(KeyCode::Char(':'), KeyModifiers::NONE)), Action::Edit(_)));
+        assert!(matches!(
+            route_key(&s, key(KeyCode::Char(':'), KeyModifiers::NONE)),
+            Action::Edit(_)
+        ));
         s.focus = Focus::Conversation;
-        assert_eq!(route_key(&s, key(KeyCode::Char(':'), KeyModifiers::NONE)), Action::OpenCommandLine);
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char(':'), KeyModifiers::NONE)),
+            Action::OpenCommandLine
+        );
     }
 
     #[test]
@@ -288,13 +328,28 @@ mod tests {
         let mut s = ShellState::new();
         s.overlay = Overlay::Palette;
         // ^C no longer quits while palette is up — the CONTROL guard rejects it from the char arm → Noop
-        assert_eq!(route_key(&s, key(KeyCode::Char('c'), KeyModifiers::CONTROL)), Action::Noop);
-        assert_eq!(route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)), Action::CloseOverlay);
-        assert_eq!(route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)), Action::PaletteRun);
-        assert_eq!(route_key(&s, key(KeyCode::Char('x'), KeyModifiers::NONE)), Action::PaletteChar('x'));
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Action::Noop
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)),
+            Action::CloseOverlay
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)),
+            Action::PaletteRun
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('x'), KeyModifiers::NONE)),
+            Action::PaletteChar('x')
+        );
         // Same guard applies to CommandLine overlay.
         s.overlay = Overlay::CommandLine;
-        assert_eq!(route_key(&s, key(KeyCode::Char('c'), KeyModifiers::CONTROL)), Action::Noop);
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Action::Noop
+        );
     }
 
     #[test]
@@ -311,41 +366,116 @@ mod tests {
     #[test]
     fn hit_test_drawer_header_and_panes() {
         let s = ShellState::new();
-        let l = compute(Rect { x: 0, y: 0, width: 100, height: 24 }, &s);
-        let (id, r) = *l.drawer_headers.iter().find(|(id, _)| *id == DrawerId::Session).unwrap();
+        let l = compute(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 24,
+            },
+            &s,
+        );
+        let (id, r) = *l
+            .drawer_headers
+            .iter()
+            .find(|(id, _)| *id == DrawerId::Session)
+            .unwrap();
         assert_eq!(hit_test(&l, r.x, r.y), Target::DrawerHeader(id));
         assert_eq!(hit_test(&l, l.input.x, l.input.y), Target::Input);
-        assert_eq!(hit_test(&l, l.conversation.x, l.conversation.y), Target::Conversation);
+        assert_eq!(
+            hit_test(&l, l.conversation.x, l.conversation.y),
+            Target::Conversation
+        );
     }
 
     #[test]
     fn mouse_click_toggles_drawer_and_focuses() {
         let s = ShellState::new();
-        let l = compute(Rect { x: 0, y: 0, width: 100, height: 24 }, &s);
-        let (id, r) = *l.drawer_headers.iter().find(|(id, _)| *id == DrawerId::Session).unwrap();
-        let click = |c, row| MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: c, row, modifiers: KeyModifiers::NONE };
-        assert_eq!(route_mouse(&s, &l, click(r.x, r.y)), Action::ToggleDrawer(id));
-        assert_eq!(route_mouse(&s, &l, click(l.input.x, l.input.y)), Action::FocusRegion(Focus::Input));
+        let l = compute(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 24,
+            },
+            &s,
+        );
+        let (id, r) = *l
+            .drawer_headers
+            .iter()
+            .find(|(id, _)| *id == DrawerId::Session)
+            .unwrap();
+        let click = |c, row| MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: c,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(
+            route_mouse(&s, &l, click(r.x, r.y)),
+            Action::ToggleDrawer(id)
+        );
+        assert_eq!(
+            route_mouse(&s, &l, click(l.input.x, l.input.y)),
+            Action::FocusRegion(Focus::Input)
+        );
     }
 
     #[test]
     fn click_outside_overlay_dismisses() {
         let mut s = ShellState::new();
         s.overlay = Overlay::Palette;
-        let l = compute(Rect { x: 0, y: 0, width: 100, height: 24 }, &s);
-        let click = MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 0, row: 23, modifiers: KeyModifiers::NONE };
+        let l = compute(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 24,
+            },
+            &s,
+        );
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 23,
+            modifiers: KeyModifiers::NONE,
+        };
         assert_eq!(route_mouse(&s, &l, click), Action::CloseOverlay);
     }
 
     #[test]
     fn route_mouse_scroll_moves_conversation() {
         let s = ShellState::new();
-        let l = compute(Rect { x: 0, y: 0, width: 100, height: 24 }, &s);
-        let scroll_down = MouseEvent { kind: MouseEventKind::ScrollDown, column: 10, row: 10, modifiers: KeyModifiers::NONE };
-        let scroll_up = MouseEvent { kind: MouseEventKind::ScrollUp, column: 10, row: 10, modifiers: KeyModifiers::NONE };
+        let l = compute(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 24,
+            },
+            &s,
+        );
+        let scroll_down = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        let scroll_up = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
         // No overlay: scroll drives conversation.
-        assert_eq!(route_mouse(&s, &l, scroll_down), Action::ScrollConversation(1));
-        assert_eq!(route_mouse(&s, &l, scroll_up), Action::ScrollConversation(-1));
+        assert_eq!(
+            route_mouse(&s, &l, scroll_down),
+            Action::ScrollConversation(1)
+        );
+        assert_eq!(
+            route_mouse(&s, &l, scroll_up),
+            Action::ScrollConversation(-1)
+        );
         // With overlay up: scroll dismisses instead of leaking through to the conversation.
         let mut s2 = ShellState::new();
         s2.overlay = Overlay::Palette;
@@ -370,7 +500,10 @@ mod tests {
         let mut s = ShellState::new();
         s.mode = Mode::Build;
         // Esc in Build mode → SwitchMode (back to Chat).
-        assert_eq!(route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)), Action::SwitchMode);
+        assert_eq!(
+            route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)),
+            Action::SwitchMode
+        );
     }
 
     #[test]
@@ -378,67 +511,150 @@ mod tests {
         let mut s = ShellState::new(); // mode = Chat
         s.focus = Focus::Conversation;
         // Esc in Chat mode with Conversation focus → FocusRegion(Input) (unchanged).
-        assert_eq!(route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)), Action::FocusRegion(Focus::Input));
+        assert_eq!(
+            route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)),
+            Action::FocusRegion(Focus::Input)
+        );
     }
 
     #[test]
     fn zoom_keys_route_in_conversation_focus() {
         let mut s = ShellState::new();
         s.focus = Focus::Conversation;
-        assert_eq!(route_key(&s, key(KeyCode::Char('='), KeyModifiers::NONE)), Action::ZoomIn);
-        assert_eq!(route_key(&s, key(KeyCode::Char('+'), KeyModifiers::NONE)), Action::ZoomIn);
-        assert_eq!(route_key(&s, key(KeyCode::Char('-'), KeyModifiers::NONE)), Action::ZoomOut);
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('='), KeyModifiers::NONE)),
+            Action::ZoomIn
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('+'), KeyModifiers::NONE)),
+            Action::ZoomIn
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('-'), KeyModifiers::NONE)),
+            Action::ZoomOut
+        );
     }
 
     #[test]
     fn alt_zoom_routes_from_any_focus() {
         let mut s = ShellState::new();
         s.focus = Focus::Input; // typing in the message box, yet zoom still works
-        assert_eq!(route_key(&s, key(KeyCode::Char('='), KeyModifiers::ALT)), Action::ZoomIn);
-        assert_eq!(route_key(&s, key(KeyCode::Char('+'), KeyModifiers::ALT)), Action::ZoomIn);
-        assert_eq!(route_key(&s, key(KeyCode::Char('-'), KeyModifiers::ALT)), Action::ZoomOut);
-        assert_eq!(route_key(&s, key(KeyCode::Char('_'), KeyModifiers::ALT)), Action::ZoomOut);
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('='), KeyModifiers::ALT)),
+            Action::ZoomIn
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('+'), KeyModifiers::ALT)),
+            Action::ZoomIn
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('-'), KeyModifiers::ALT)),
+            Action::ZoomOut
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('_'), KeyModifiers::ALT)),
+            Action::ZoomOut
+        );
         // Alt+`+` may also carry SHIFT; still routes to zoom.
-        assert_eq!(route_key(&s, key(KeyCode::Char('+'), KeyModifiers::ALT | KeyModifiers::SHIFT)), Action::ZoomIn);
+        assert_eq!(
+            route_key(
+                &s,
+                key(KeyCode::Char('+'), KeyModifiers::ALT | KeyModifiers::SHIFT)
+            ),
+            Action::ZoomIn
+        );
         // Plain =/- in the input are still text, not zoom.
-        assert_eq!(route_key(&s, key(KeyCode::Char('='), KeyModifiers::NONE)), Action::Edit(key(KeyCode::Char('='), KeyModifiers::NONE)));
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('='), KeyModifiers::NONE)),
+            Action::Edit(key(KeyCode::Char('='), KeyModifiers::NONE))
+        );
     }
 
     #[test]
     fn ctrl_o_opens_object_overlay() {
         let s = ShellState::new();
-        assert_eq!(route_key(&s, key(KeyCode::Char('o'), KeyModifiers::CONTROL)), Action::OpenObjects);
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('o'), KeyModifiers::CONTROL)),
+            Action::OpenObjects
+        );
     }
 
     #[test]
     fn object_overlay_navigates_and_picks() {
         let mut s = ShellState::new();
         s.overlay = Overlay::Objects;
-        assert_eq!(route_key(&s, key(KeyCode::Down, KeyModifiers::NONE)), Action::ObjectMove(1));
-        assert_eq!(route_key(&s, key(KeyCode::Up, KeyModifiers::NONE)), Action::ObjectMove(-1));
-        assert_eq!(route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)), Action::ObjectPick);
-        assert_eq!(route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)), Action::CloseOverlay);
+        assert_eq!(
+            route_key(&s, key(KeyCode::Down, KeyModifiers::NONE)),
+            Action::ObjectMove(1)
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Up, KeyModifiers::NONE)),
+            Action::ObjectMove(-1)
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)),
+            Action::ObjectPick
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)),
+            Action::CloseOverlay
+        );
     }
 
     #[test]
     fn verb_overlay_navigates_and_picks() {
         let mut s = ShellState::new();
         s.overlay = Overlay::Verbs;
-        assert_eq!(route_key(&s, key(KeyCode::Down, KeyModifiers::NONE)), Action::VerbMove(1));
-        assert_eq!(route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)), Action::VerbPick);
+        assert_eq!(
+            route_key(&s, key(KeyCode::Down, KeyModifiers::NONE)),
+            Action::VerbMove(1)
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)),
+            Action::VerbPick
+        );
         // Esc steps BACK to the object picker, not all the way out.
-        assert_eq!(route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)), Action::VerbBack);
+        assert_eq!(
+            route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)),
+            Action::VerbBack
+        );
     }
 
     #[test]
     fn ctrl_scroll_zooms_plain_scroll_scrolls() {
         let s = ShellState::new();
-        let l = compute(Rect { x: 0, y: 0, width: 100, height: 24 }, &s);
-        let ev = |kind, mods| MouseEvent { kind, column: 10, row: 10, modifiers: mods };
+        let l = compute(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 24,
+            },
+            &s,
+        );
+        let ev = |kind, mods| MouseEvent {
+            kind,
+            column: 10,
+            row: 10,
+            modifiers: mods,
+        };
         // ctrl + scroll → zoom
-        assert_eq!(route_mouse(&s, &l, ev(MouseEventKind::ScrollUp, KeyModifiers::CONTROL)), Action::ZoomIn);
-        assert_eq!(route_mouse(&s, &l, ev(MouseEventKind::ScrollDown, KeyModifiers::CONTROL)), Action::ZoomOut);
+        assert_eq!(
+            route_mouse(&s, &l, ev(MouseEventKind::ScrollUp, KeyModifiers::CONTROL)),
+            Action::ZoomIn
+        );
+        assert_eq!(
+            route_mouse(
+                &s,
+                &l,
+                ev(MouseEventKind::ScrollDown, KeyModifiers::CONTROL)
+            ),
+            Action::ZoomOut
+        );
         // plain scroll → conversation scroll (unchanged)
-        assert_eq!(route_mouse(&s, &l, ev(MouseEventKind::ScrollDown, KeyModifiers::NONE)), Action::ScrollConversation(1));
+        assert_eq!(
+            route_mouse(&s, &l, ev(MouseEventKind::ScrollDown, KeyModifiers::NONE)),
+            Action::ScrollConversation(1)
+        );
     }
 }

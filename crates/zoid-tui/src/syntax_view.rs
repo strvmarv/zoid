@@ -120,6 +120,9 @@ mod tests {
     fn plaintext_renders_one_txt_span_per_line() {
         let lines = highlight_lines("hello\nworld\n", Language::PlainText);
         assert_eq!(lines.len(), 2);
-        assert!(lines[0].spans.iter().all(|s| s.style.fg == Some(color::TXT)));
+        assert!(lines[0]
+            .spans
+            .iter()
+            .all(|s| s.style.fg == Some(color::TXT)));
     }
 }

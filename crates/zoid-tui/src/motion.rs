@@ -57,7 +57,12 @@ pub fn reveal_count(total: usize, t: f32) -> usize {
 /// when no cap should apply (reduced-motion, zero duration, or finished — i.e.
 /// show the final frame). Keeps the animate-or-not decision out of the bin's
 /// impure draw closure so it is unit-testable (spec §13 determinism).
-pub fn zoom_reveal(total: usize, elapsed_ms: u64, anim_ms: u64, reduced_motion: bool) -> Option<usize> {
+pub fn zoom_reveal(
+    total: usize,
+    elapsed_ms: u64,
+    anim_ms: u64,
+    reduced_motion: bool,
+) -> Option<usize> {
     if reduced_motion || anim_ms == 0 || elapsed_ms >= anim_ms {
         return None;
     }
@@ -94,14 +99,31 @@ mod tests {
 
     #[test]
     fn anim_progress_and_reduced_motion() {
-        let a = Anim { elapsed_ms: 50, duration_ms: 100 };
+        let a = Anim {
+            elapsed_ms: 50,
+            duration_ms: 100,
+        };
         assert_eq!(a.progress(false), 0.5);
         // reduced-motion correctness: jumps to the end immediately
         assert_eq!(a.progress(true), 1.0);
         // zero duration never divides by zero
-        assert_eq!(Anim { elapsed_ms: 0, duration_ms: 0 }.progress(false), 1.0);
+        assert_eq!(
+            Anim {
+                elapsed_ms: 0,
+                duration_ms: 0
+            }
+            .progress(false),
+            1.0
+        );
         // past the end clamps
-        assert_eq!(Anim { elapsed_ms: 999, duration_ms: 100 }.progress(false), 1.0);
+        assert_eq!(
+            Anim {
+                elapsed_ms: 999,
+                duration_ms: 100
+            }
+            .progress(false),
+            1.0
+        );
     }
 
     #[test]
@@ -110,7 +132,7 @@ mod tests {
         assert_eq!(reveal_count(10, 1.0), 10);
         assert_eq!(reveal_count(10, -0.5), 0); // clamped
         assert_eq!(reveal_count(10, 2.0), 10); // clamped
-        // monotonic non-decreasing
+                                               // monotonic non-decreasing
         let mut prev = 0;
         for i in 0..=10 {
             let c = reveal_count(10, i as f32 / 10.0);
@@ -141,7 +163,7 @@ mod tests {
         assert!(!caret_on(500, 1000, false));
         assert!(!caret_on(999, 1000, false));
         assert!(caret_on(1000, 1000, false)); // wraps
-        // reduced-motion: steady on
+                                              // reduced-motion: steady on
         assert!(caret_on(500, 1000, true));
         // degenerate period: steady on
         assert!(caret_on(123, 0, false));

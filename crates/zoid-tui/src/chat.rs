@@ -17,24 +17,44 @@ use zoid_syntax::{fold_regions, FoldRegion, Language};
 
 /// Build the conversation lines (user/assistant turns + inline tool cards).
 /// Shared by `render_chat` and the modal `render_shell`.
-pub fn conversation_lines<'a>(msgs: &'a [ChatMsg], streaming: bool, caret_on: bool, tz_offset_secs: i32) -> Vec<Line<'a>> {
+pub fn conversation_lines<'a>(
+    msgs: &'a [ChatMsg],
+    streaming: bool,
+    caret_on: bool,
+    tz_offset_secs: i32,
+) -> Vec<Line<'a>> {
     let last = msgs.len().saturating_sub(1);
     if msgs.is_empty() {
-        return vec![Line::styled("  (no messages yet)", Style::new().fg(color::DIM))];
+        return vec![Line::styled(
+            "  (no messages yet)",
+            Style::new().fg(color::DIM),
+        )];
     }
     // Dim 24h `HH:MM ` stamp prefixing each user/assistant message row.
-    let stamp = |ts: i64| Span::styled(format!("{} ", crate::text::hhmm(ts, tz_offset_secs)), Style::new().fg(color::DIM));
+    let stamp = |ts: i64| {
+        Span::styled(
+            format!("{} ", crate::text::hhmm(ts, tz_offset_secs)),
+            Style::new().fg(color::DIM),
+        )
+    };
     let mut lines: Vec<Line> = Vec::new();
     for (i, m) in msgs.iter().enumerate() {
         match m {
             ChatMsg::User { text, ts } => {
                 let prefix = vec![
                     stamp(*ts),
-                    Span::styled(format!("{} ", glyph::USER_TURN), Style::new().fg(color::CHAT_ACCENT)),
+                    Span::styled(
+                        format!("{} ", glyph::USER_TURN),
+                        Style::new().fg(color::CHAT_ACCENT),
+                    ),
                 ];
                 push_message(&mut lines, prefix, crate::markdown::render_markdown(text));
             }
-            ChatMsg::Assistant { text, tool_calls, ts } => {
+            ChatMsg::Assistant {
+                text,
+                tool_calls,
+                ts,
+            } => {
                 let mut shown = text.clone();
                 if streaming && caret_on && i == last && tool_calls.is_empty() {
                     shown.push(glyph::CARET);
@@ -48,14 +68,28 @@ pub fn conversation_lines<'a>(msgs: &'a [ChatMsg], streaming: bool, caret_on: bo
                 }
                 for tc in tool_calls {
                     lines.push(Line::from(vec![
-                        Span::styled(format!("  {} ", glyph::EDIT), Style::new().fg(color::CHAT_ACCENT)),
+                        Span::styled(
+                            format!("  {} ", glyph::EDIT),
+                            Style::new().fg(color::CHAT_ACCENT),
+                        ),
                         Span::styled(tc.name.clone(), Style::new().fg(color::TXT).bold()),
-                        Span::styled(format!("({})", arg_summary(&tc.args)), Style::new().fg(color::DIM)),
-                        Span::styled(format!(" {} peek", glyph::RETURN), Style::new().fg(color::DIM)),
+                        Span::styled(
+                            format!("({})", arg_summary(&tc.args)),
+                            Style::new().fg(color::DIM),
+                        ),
+                        Span::styled(
+                            format!(" {} peek", glyph::RETURN),
+                            Style::new().fg(color::DIM),
+                        ),
                     ]));
                 }
             }
-            ChatMsg::ToolResult { name, output, is_error, .. } => {
+            ChatMsg::ToolResult {
+                name,
+                output,
+                is_error,
+                ..
+            } => {
                 let (mark, mark_color) = if *is_error {
                     (glyph::WARNING, color::ERROR)
                 } else {
@@ -64,11 +98,18 @@ pub fn conversation_lines<'a>(msgs: &'a [ChatMsg], streaming: bool, caret_on: bo
                 lines.push(Line::from(vec![
                     Span::styled(format!("  {mark} "), Style::new().fg(mark_color)),
                     Span::styled(name.clone(), Style::new().fg(color::DIM)),
-                    Span::styled(format!(" → {}", first_line(output)), Style::new().fg(color::DIM)),
+                    Span::styled(
+                        format!(" → {}", first_line(output)),
+                        Style::new().fg(color::DIM),
+                    ),
                 ]));
             }
             ChatMsg::Delegated { summary, ok } => {
-                let (mark, mark_color) = if *ok { (glyph::PASS, color::OK) } else { (glyph::WARNING, color::ERROR) };
+                let (mark, mark_color) = if *ok {
+                    (glyph::PASS, color::OK)
+                } else {
+                    (glyph::WARNING, color::ERROR)
+                };
                 lines.push(Line::from(vec![
                     // Purple label with the card background = the collapsed chip.
                     Span::styled(
@@ -76,7 +117,10 @@ pub fn conversation_lines<'a>(msgs: &'a [ChatMsg], streaming: bool, caret_on: bo
                         Style::new().fg(color::BRANCH).bg(color::DELEGATE_BG),
                     ),
                     Span::styled(format!("  {mark} "), Style::new().fg(mark_color)),
-                    Span::styled(format!("{} peek", glyph::RETURN), Style::new().fg(color::DIM)),
+                    Span::styled(
+                        format!("{} peek", glyph::RETURN),
+                        Style::new().fg(color::DIM),
+                    ),
                 ]));
             }
         }
@@ -140,15 +184,27 @@ fn digest_lines(ds: &[TurnDigest]) -> Vec<Line<'static>> {
     ds.iter()
         .map(|d| {
             let mut spans = vec![
-                Span::styled(format!("{} ", glyph::USER_TURN), Style::new().fg(color::CHAT_ACCENT)),
+                Span::styled(
+                    format!("{} ", glyph::USER_TURN),
+                    Style::new().fg(color::CHAT_ACCENT),
+                ),
                 // `.40` precision truncates to 40 chars; width 40 pads short ones —
                 // a HEADLINE_MAX(60) headline can't blow past the column and misalign
                 // the `~ Nt · Nf` field in the 140-col snapshot.
-                Span::styled(format!("{:<40.40} ", d.headline), Style::new().fg(color::TXT)),
-                Span::styled(format!("~ {}t · {}f", d.tools, d.files), Style::new().fg(color::DIM)),
+                Span::styled(
+                    format!("{:<40.40} ", d.headline),
+                    Style::new().fg(color::TXT),
+                ),
+                Span::styled(
+                    format!("~ {}t · {}f", d.tools, d.files),
+                    Style::new().fg(color::DIM),
+                ),
             ];
             if d.has_error {
-                spans.push(Span::styled(format!(" {}", glyph::WARNING), Style::new().fg(color::ERROR)));
+                spans.push(Span::styled(
+                    format!(" {}", glyph::WARNING),
+                    Style::new().fg(color::ERROR),
+                ));
             }
             Line::from(spans)
         })
@@ -175,19 +231,35 @@ fn detail_lines(msgs: &[ChatMsg], tz_offset_secs: i32) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
     for m in msgs {
         match m {
-            ChatMsg::ToolResult { id, name, output, is_error, .. } if !*is_error => {
+            ChatMsg::ToolResult {
+                id,
+                name,
+                output,
+                is_error,
+                ..
+            } if !*is_error => {
                 let header = Span::styled(
                     format!("  {} {}", glyph::PASS, name),
                     Style::new().fg(color::DIM),
                 );
                 out.push(Line::from(vec![header]));
-                let lang = id_path.get(id.as_str()).map(|p| Language::from_path(p)).unwrap_or(Language::PlainText);
+                let lang = id_path
+                    .get(id.as_str())
+                    .map(|p| Language::from_path(p))
+                    .unwrap_or(Language::PlainText);
                 out.extend(collapse_to_signatures(output, lang));
             }
             ChatMsg::Delegated { summary, ok } => {
-                let (mark, mark_color) = if *ok { (glyph::PASS, color::OK) } else { (glyph::WARNING, color::ERROR) };
+                let (mark, mark_color) = if *ok {
+                    (glyph::PASS, color::OK)
+                } else {
+                    (glyph::WARNING, color::ERROR)
+                };
                 out.push(Line::from(vec![
-                    Span::styled(format!("{} delegated ", glyph::EXPANDED), Style::new().fg(color::BRANCH).bg(color::DELEGATE_BG)),
+                    Span::styled(
+                        format!("{} delegated ", glyph::EXPANDED),
+                        Style::new().fg(color::BRANCH).bg(color::DELEGATE_BG),
+                    ),
                     Span::styled(format!("{mark}"), Style::new().fg(mark_color)),
                 ]));
                 // PLAN-1 seam: route the summary through Plan 1's markdown renderer.
@@ -197,7 +269,11 @@ fn detail_lines(msgs: &[ChatMsg], tz_offset_secs: i32) -> Vec<Line<'static>> {
                     out.push(Line::from(spans));
                 }
             }
-            other => out.extend(conversation_lines(std::slice::from_ref(other), false, true, tz_offset_secs).into_iter().map(own_line)),
+            other => out.extend(
+                conversation_lines(std::slice::from_ref(other), false, true, tz_offset_secs)
+                    .into_iter()
+                    .map(own_line),
+            ),
         }
     }
     out
@@ -216,7 +292,10 @@ pub(crate) fn collapse_to_signatures(source: &str, lang: Language) -> Vec<Line<'
     }
     // 0-based line index of a byte offset = count of '\n' before it.
     let line_of = |byte: usize| {
-        source[..byte.min(source.len())].bytes().filter(|&b| b == b'\n').count()
+        source[..byte.min(source.len())]
+            .bytes()
+            .filter(|&b| b == b'\n')
+            .count()
     };
     let is_leaf = |f: &FoldRegion, i: usize| {
         !folds
@@ -280,7 +359,10 @@ pub fn render_chat(frame: &mut Frame, msgs: &[ChatMsg], input: &TextArea<'_>, st
     let title = Line::from(vec![
         Span::styled(" zoid ", Style::new().fg(color::TXT).bold()),
         Span::styled("CHAT ", Style::new().fg(color::CHAT_ACCENT).bold()),
-        Span::styled(format!("{} main", glyph::BRANCH), Style::new().fg(color::BRANCH)),
+        Span::styled(
+            format!("{} main", glyph::BRANCH),
+            Style::new().fg(color::BRANCH),
+        ),
     ]);
     frame.render_widget(Paragraph::new(title), chunks[0]);
 
@@ -295,14 +377,21 @@ pub fn render_chat(frame: &mut Frame, msgs: &[ChatMsg], input: &TextArea<'_>, st
         .border_style(Style::new().fg(color::DIM))
         .title(Span::styled(" message ", Style::new().fg(color::DIM)));
     frame.render_widget(input_block, chunks[2]);
-    let inner = chunks[2].inner(ratatui::layout::Margin { horizontal: 1, vertical: 1 });
+    let inner = chunks[2].inner(ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
     frame.render_widget(input, inner);
 
     // Status bar.
     let status = Line::from(vec![
         Span::styled(" CHAT ", Style::new().fg(color::CHAT_ACCENT)),
         Span::styled(
-            format!("· {}Tab Build · {} send · ^C quit", glyph::SHIFT, glyph::RETURN),
+            format!(
+                "· {}Tab Build · {} send · ^C quit",
+                glyph::SHIFT,
+                glyph::RETURN
+            ),
             Style::new().fg(color::DIM),
         ),
     ]);
@@ -340,14 +429,21 @@ mod tests {
     #[test]
     fn caret_shows_only_when_streaming_and_caret_on() {
         use crate::tokens::glyph;
-        let msgs = vec![ChatMsg::Assistant { text: "hi".into(), tool_calls: vec![], ts: 0 }];
+        let msgs = vec![ChatMsg::Assistant {
+            text: "hi".into(),
+            tool_calls: vec![],
+            ts: 0,
+        }];
         let has_caret = |streaming, caret| {
             conversation_lines(&msgs, streaming, caret, 0)
                 .iter()
                 .any(|l| l.spans.iter().any(|s| s.content.contains(glyph::CARET)))
         };
         assert!(has_caret(true, true), "streaming + caret_on → caret shown");
-        assert!(!has_caret(true, false), "caret_on=false suppresses caret while streaming");
+        assert!(
+            !has_caret(true, false),
+            "caret_on=false suppresses caret while streaming"
+        );
         assert!(!has_caret(false, true), "not streaming → no caret");
     }
 
@@ -361,7 +457,10 @@ mod tests {
     // The body is multi-line so collapse-to-signatures (Task 3b) has something to fold.
     fn seeded() -> Vec<ChatMsg> {
         vec![
-            ChatMsg::User { text: "fix the parser bug".into(), ts: 0 },
+            ChatMsg::User {
+                text: "fix the parser bug".into(),
+                ts: 0,
+            },
             ChatMsg::Assistant {
                 text: "on it".into(),
                 tool_calls: vec![ToolCallRef {
@@ -378,12 +477,20 @@ mod tests {
                 is_error: false,
                 ts: 0,
             },
-            ChatMsg::User { text: "thanks".into(), ts: 0 },
+            ChatMsg::User {
+                text: "thanks".into(),
+                ts: 0,
+            },
         ]
     }
 
     fn view(zoom: Zoom) -> ChatView {
-        ChatView { zoom, caret_on: true, reveal: None, tz_offset_secs: 0 }
+        ChatView {
+            zoom,
+            caret_on: true,
+            reveal: None,
+            tz_offset_secs: 0,
+        }
     }
 
     #[test]
@@ -400,10 +507,15 @@ mod tests {
         // A keyword (`fn`/`let`) must carry the syntax keyword color — proves the
         // id→path→Rust resolution fired and highlighting actually ran, rather than
         // silently falling back to PlainText (which colors everything TXT).
-        let has_keyword_color = lines
-            .iter()
-            .any(|l| l.spans.iter().any(|s| s.style.fg == Some(color::SYN_KEYWORD)));
-        assert!(has_keyword_color, "Detail must highlight the Rust tool-result body");
+        let has_keyword_color = lines.iter().any(|l| {
+            l.spans
+                .iter()
+                .any(|s| s.style.fg == Some(color::SYN_KEYWORD))
+        });
+        assert!(
+            has_keyword_color,
+            "Detail must highlight the Rust tool-result body"
+        );
     }
 
     #[test]
@@ -412,11 +524,25 @@ mod tests {
         let lines = conversation_view(&seeded(), &view(Zoom::Detail), false);
         let text: Vec<String> = lines
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
             .collect();
-        assert!(text.iter().any(|t| t.contains("fn parse")), "signature line is kept");
-        assert!(text.iter().any(|t| t.contains(glyph::ELLIPSIS)), "body collapses to …");
-        assert!(!text.iter().any(|t| t.contains("let n = 42")), "body interior is elided");
+        assert!(
+            text.iter().any(|t| t.contains("fn parse")),
+            "signature line is kept"
+        );
+        assert!(
+            text.iter().any(|t| t.contains(glyph::ELLIPSIS)),
+            "body collapses to …"
+        );
+        assert!(
+            !text.iter().any(|t| t.contains("let n = 42")),
+            "body interior is elided"
+        );
     }
 
     #[test]
@@ -449,9 +575,13 @@ mod tests {
             .flat_map(|l| l.spans.iter().map(|s| (s.content.to_string(), s.style)))
             .collect();
         // bold inline text survived markdown
-        assert!(spans.iter().any(|(t, st)| t == "now" && st.add_modifier.contains(ratatui::style::Modifier::BOLD)));
+        assert!(spans
+            .iter()
+            .any(|(t, st)| t == "now" && st.add_modifier.contains(ratatui::style::Modifier::BOLD)));
         // the fenced rust block was syntax-highlighted
-        assert!(spans.iter().any(|(_, st)| st.fg == Some(color::SYN_KEYWORD)));
+        assert!(spans
+            .iter()
+            .any(|(_, st)| st.fg == Some(color::SYN_KEYWORD)));
         // the "zoid " role prefix still leads the first line
         assert!(spans.iter().any(|(t, _)| t == "zoid "));
     }
@@ -459,14 +589,25 @@ mod tests {
     #[test]
     fn delegated_card_renders_chevron_status_and_bg() {
         use crate::tokens::{color, glyph};
-        let msgs = vec![ChatMsg::Delegated { summary: "Added shared NotFound helper.".into(), ok: true }];
+        let msgs = vec![ChatMsg::Delegated {
+            summary: "Added shared NotFound helper.".into(),
+            ok: true,
+        }];
         let lines = conversation_lines(&msgs, false, true, 0);
-        let joined: String = lines.iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string())).collect();
-        assert!(joined.contains(glyph::COLLAPSED), "collapsed chevron ▸ present");
+        let joined: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(
+            joined.contains(glyph::COLLAPSED),
+            "collapsed chevron ▸ present"
+        );
         assert!(joined.contains("delegated"));
         assert!(joined.contains(glyph::PASS), "done status ✓ present");
         // The card label carries the delegate background (proves §16 token use).
-        assert!(lines.iter().any(|l| l.spans.iter().any(|s| s.style.bg == Some(color::DELEGATE_BG))));
+        assert!(lines.iter().any(|l| l
+            .spans
+            .iter()
+            .any(|s| s.style.bg == Some(color::DELEGATE_BG))));
     }
 }

@@ -7,13 +7,38 @@ use ulid::Ulid;
 
 /// Commands accepted by the single-writer store actor.
 enum Cmd {
-    Append { event: Box<Event>, reply: oneshot::Sender<Result<()>> },
-    Snapshot { reply: oneshot::Sender<Vec<Event>> },
-    SnapshotSession { session_id: Ulid, reply: oneshot::Sender<Vec<Event>> },
-    NewSession { id: Ulid, name: String, root_path: String, ts: i64, reply: oneshot::Sender<Result<()>> },
-    RenameSession { id: Ulid, name: String, reply: oneshot::Sender<Result<()>> },
-    TouchSession { id: Ulid, ts: i64, reply: oneshot::Sender<Result<()>> },
-    ListSessions { root_filter: Option<String>, reply: oneshot::Sender<Result<Vec<SessionInfo>>> },
+    Append {
+        event: Box<Event>,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    Snapshot {
+        reply: oneshot::Sender<Vec<Event>>,
+    },
+    SnapshotSession {
+        session_id: Ulid,
+        reply: oneshot::Sender<Vec<Event>>,
+    },
+    NewSession {
+        id: Ulid,
+        name: String,
+        root_path: String,
+        ts: i64,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    RenameSession {
+        id: Ulid,
+        name: String,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    TouchSession {
+        id: Ulid,
+        ts: i64,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    ListSessions {
+        root_filter: Option<String>,
+        reply: oneshot::Sender<Result<Vec<SessionInfo>>>,
+    },
 }
 
 /// A cloneable handle to the single-writer event-store actor (spec §4.1).
@@ -48,7 +73,13 @@ impl SessionHandle {
                     Cmd::SnapshotSession { session_id, reply } => {
                         let _ = reply.send(store.load_session(session_id).unwrap_or_default());
                     }
-                    Cmd::NewSession { id, name, root_path, ts, reply } => {
+                    Cmd::NewSession {
+                        id,
+                        name,
+                        root_path,
+                        ts,
+                        reply,
+                    } => {
                         let _ = reply.send(store.insert_session(id, &name, &root_path, ts, ts));
                     }
                     Cmd::RenameSession { id, name, reply } => {
@@ -61,7 +92,11 @@ impl SessionHandle {
                         let out = (|| {
                             let rows = store.list_session_rows()?;
                             let events = store.load_all()?;
-                            anyhow::Ok(crate::sessions::session_list(&rows, &events, root_filter.as_deref()))
+                            anyhow::Ok(crate::sessions::session_list(
+                                &rows,
+                                &events,
+                                root_filter.as_deref(),
+                            ))
                         })();
                         let _ = reply.send(out);
                     }
@@ -75,10 +110,14 @@ impl SessionHandle {
     pub async fn append(&self, event: Event) -> Result<()> {
         let (reply, rx) = oneshot::channel();
         self.tx
-            .send(Cmd::Append { event: Box::new(event), reply })
+            .send(Cmd::Append {
+                event: Box::new(event),
+                reply,
+            })
             .await
             .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
-        rx.await.map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
     }
 
     /// An ordered, immutable snapshot of the full log.
@@ -88,7 +127,8 @@ impl SessionHandle {
             .send(Cmd::Snapshot { reply })
             .await
             .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
-        rx.await.map_err(|_| anyhow::anyhow!("session actor dropped reply"))
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))
     }
 
     /// An ordered, immutable snapshot of one session's events.
@@ -98,17 +138,31 @@ impl SessionHandle {
             .send(Cmd::SnapshotSession { session_id, reply })
             .await
             .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
-        rx.await.map_err(|_| anyhow::anyhow!("session actor dropped reply"))
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))
     }
 
     /// Create a new session row.
-    pub async fn new_session(&self, id: Ulid, name: String, root_path: String, ts: i64) -> Result<()> {
+    pub async fn new_session(
+        &self,
+        id: Ulid,
+        name: String,
+        root_path: String,
+        ts: i64,
+    ) -> Result<()> {
         let (reply, rx) = oneshot::channel();
         self.tx
-            .send(Cmd::NewSession { id, name, root_path, ts, reply })
+            .send(Cmd::NewSession {
+                id,
+                name,
+                root_path,
+                ts,
+                reply,
+            })
             .await
             .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
-        rx.await.map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
     }
 
     /// Rename an existing session.
@@ -118,7 +172,8 @@ impl SessionHandle {
             .send(Cmd::RenameSession { id, name, reply })
             .await
             .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
-        rx.await.map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
     }
 
     /// Bump a session's `last_touched_ts`.
@@ -128,7 +183,8 @@ impl SessionHandle {
             .send(Cmd::TouchSession { id, ts, reply })
             .await
             .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
-        rx.await.map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
     }
 
     /// List sessions (optionally filtered by root path) for the resume picker.
@@ -138,7 +194,8 @@ impl SessionHandle {
             .send(Cmd::ListSessions { root_filter, reply })
             .await
             .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
-        rx.await.map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
     }
 }
 
@@ -150,9 +207,18 @@ mod tests {
     #[tokio::test]
     async fn appends_then_snapshots_in_order() {
         let handle = SessionHandle::spawn(":memory:").unwrap();
-        let e1 = Event::new(Ulid::from(1u128), None, 10, EventKind::UserMessage { text: "q".into() });
-        let e2 = Event::new(Ulid::from(2u128), Some(Ulid::from(1u128)), 20,
-            EventKind::ModelDelta { text: "a".into() });
+        let e1 = Event::new(
+            Ulid::from(1u128),
+            None,
+            10,
+            EventKind::UserMessage { text: "q".into() },
+        );
+        let e2 = Event::new(
+            Ulid::from(2u128),
+            Some(Ulid::from(1u128)),
+            20,
+            EventKind::ModelDelta { text: "a".into() },
+        );
         handle.append(e1.clone()).await.unwrap();
         handle.append(e2.clone()).await.unwrap();
 
@@ -163,7 +229,12 @@ mod tests {
     #[tokio::test]
     async fn clone_shares_the_same_actor() {
         let handle = SessionHandle::spawn(":memory:").unwrap();
-        let e1 = Event::new(Ulid::from(1u128), None, 1, EventKind::UserMessage { text: "x".into() });
+        let e1 = Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage { text: "x".into() },
+        );
         handle.clone().append(e1.clone()).await.unwrap();
         let snap = handle.snapshot().await.unwrap();
         assert_eq!(snap, vec![e1]);
@@ -173,11 +244,22 @@ mod tests {
     async fn actor_partitions_sessions_and_lists_them() {
         let handle = SessionHandle::spawn(":memory:").unwrap();
         let sa = Ulid::from(1u128);
-        handle.new_session(sa, "alpha".into(), "/repo".into(), 100).await.unwrap();
-        handle.append(
-            Event::new(Ulid::from(9u128), None, 5, EventKind::UserMessage { text: "hi".into() })
+        handle
+            .new_session(sa, "alpha".into(), "/repo".into(), 100)
+            .await
+            .unwrap();
+        handle
+            .append(
+                Event::new(
+                    Ulid::from(9u128),
+                    None,
+                    5,
+                    EventKind::UserMessage { text: "hi".into() },
+                )
                 .with_session(sa),
-        ).await.unwrap();
+            )
+            .await
+            .unwrap();
         // session-scoped snapshot returns only sa's events
         let snap = handle.snapshot_session(sa).await.unwrap();
         assert_eq!(snap.len(), 1);

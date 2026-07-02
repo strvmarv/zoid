@@ -21,10 +21,19 @@ struct ScriptedProvider {
 
 #[async_trait]
 impl Provider for ScriptedProvider {
-    async fn stream(&self, req: &CompletionRequest, sink: mpsc::Sender<ProviderEvent>) -> anyhow::Result<()> {
+    async fn stream(
+        &self,
+        req: &CompletionRequest,
+        sink: mpsc::Sender<ProviderEvent>,
+    ) -> anyhow::Result<()> {
         // Capture request and pop next script without holding either lock across .await.
         self.requests.lock().unwrap().push(req.clone());
-        let script = self.turns.lock().unwrap().pop_front().unwrap_or_else(|| vec![ProviderEvent::Done]);
+        let script = self
+            .turns
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| vec![ProviderEvent::Done]);
         for ev in script {
             if sink.send(ev).await.is_err() {
                 break;
@@ -66,7 +75,14 @@ async fn agent_loop_runs_tool_then_finishes() {
     let session = SessionHandle::spawn(":memory:").unwrap();
     // Use a fixed epoch-0 ULID so the seed always sorts before any Ulid::new()
     // generated inside run_agent_turn (which uses the current wall-clock time).
-    let seed = vec![Event::new(ulid::Ulid::from(1u128), None, 0, EventKind::UserMessage { text: "write hi".into() })];
+    let seed = vec![Event::new(
+        ulid::Ulid::from(1u128),
+        None,
+        0,
+        EventKind::UserMessage {
+            text: "write hi".into(),
+        },
+    )];
     session.append(seed[0].clone()).await.unwrap();
 
     let (tx, mut rx) = mpsc::channel(64);
@@ -105,13 +121,27 @@ async fn agent_loop_runs_tool_then_finishes() {
     let log = session.snapshot().await.unwrap();
     let kinds: Vec<&EventKind> = log.iter().map(|e| &e.kind).collect();
     assert!(matches!(kinds[0], EventKind::UserMessage { .. }));
-    assert!(kinds.iter().any(|k| matches!(k, EventKind::ToolCall { name, .. } if name == "write_file")));
-    assert!(kinds.iter().any(|k| matches!(k, EventKind::ToolResult { is_error: false, .. })));
-    assert!(kinds.iter().any(|k| matches!(k, EventKind::ModelDelta { text } if text == "done")));
+    assert!(kinds
+        .iter()
+        .any(|k| matches!(k, EventKind::ToolCall { name, .. } if name == "write_file")));
+    assert!(kinds.iter().any(|k| matches!(
+        k,
+        EventKind::ToolResult {
+            is_error: false,
+            ..
+        }
+    )));
+    assert!(kinds
+        .iter()
+        .any(|k| matches!(k, EventKind::ModelDelta { text } if text == "done")));
 
     // The second request must include a Tool message, proving the tool result was fed back.
     let captured = provider.requests.lock().unwrap();
-    assert_eq!(captured.len(), 2, "expected exactly 2 provider requests (tool-call turn + follow-up)");
+    assert_eq!(
+        captured.len(),
+        2,
+        "expected exactly 2 provider requests (tool-call turn + follow-up)"
+    );
     assert!(
         captured[1].messages.iter().any(|m| m.role == MsgRole::Tool),
         "second request must contain a MsgRole::Tool message (tool result fed back to model)"
@@ -130,7 +160,12 @@ async fn agent_loop_returns_ok_and_emits_turn_complete_on_error_event() {
 
     let tools = Arc::new(zoid_tools::registry());
     let session = SessionHandle::spawn(":memory:").unwrap();
-    let seed = vec![Event::new(ulid::Ulid::new(), None, 0, EventKind::UserMessage { text: "go".into() })];
+    let seed = vec![Event::new(
+        ulid::Ulid::new(),
+        None,
+        0,
+        EventKind::UserMessage { text: "go".into() },
+    )];
     session.append(seed[0].clone()).await.unwrap();
 
     let (tx, mut rx) = mpsc::channel(64);
@@ -157,10 +192,16 @@ async fn agent_loop_returns_ok_and_emits_turn_complete_on_error_event() {
         fixed_now,
     )
     .await;
-    assert!(result.is_ok(), "run_agent_turn must return Ok(events) on a provider Error event");
+    assert!(
+        result.is_ok(),
+        "run_agent_turn must return Ok(events) on a provider Error event"
+    );
 
     let complete = drain.await.unwrap();
-    assert!(complete, "TurnComplete must be emitted even on the error path");
+    assert!(
+        complete,
+        "TurnComplete must be emitted even on the error path"
+    );
 
     // The event log must contain an AssistantMessage whose text includes the error string.
     let log = session.snapshot().await.unwrap();

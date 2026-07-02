@@ -54,7 +54,11 @@ pub fn build_subagent_request(
     let contents = file_contents(events);
 
     let mut ctx = String::new();
-    for item in selection.included.iter().filter(|i| i.kind == ItemKind::File) {
+    for item in selection
+        .included
+        .iter()
+        .filter(|i| i.kind == ItemKind::File)
+    {
         if let Some(c) = contents.get(&item.key) {
             ctx.push_str(&format!("\n// {}\n{}\n", item.label, c));
         }
@@ -111,26 +115,60 @@ pub async fn run_subagent(
     let model = profile.model.clone().unwrap_or(default_model);
 
     // Only the tools this profile allows (fresh registry, filtered by allow-list).
-    let tools: Arc<Vec<Box<dyn Tool>>> =
-        Arc::new(zoid_tools::registry().into_iter().filter(|t| profile.allows(t.name())).collect());
+    let tools: Arc<Vec<Box<dyn Tool>>> = Arc::new(
+        zoid_tools::registry()
+            .into_iter()
+            .filter(|t| profile.allows(t.name()))
+            .collect(),
+    );
 
     // The constructed prompt (task + relevant code) becomes the seed user turn.
-    let req = build_subagent_request(task, context_events, &subagent_policy(), profile, &model, &tools);
+    let req = build_subagent_request(
+        task,
+        context_events,
+        &subagent_policy(),
+        profile,
+        &model,
+        &tools,
+    );
     let prompt = req.messages[0].content.clone();
-    let mut seed =
-        Event::new(Ulid::new(), None, now(), EventKind::UserMessage { text: prompt }).with_session(session_id);
+    let mut seed = Event::new(
+        Ulid::new(),
+        None,
+        now(),
+        EventKind::UserMessage { text: prompt },
+    )
+    .with_session(session_id);
     seed.branch = branch.clone();
     session.append(seed.clone()).await?;
 
-    let config = TurnConfig { system: profile.system_prompt.clone(), cwd, branch: branch.clone() };
-    let produced =
-        run_agent_turn(config, provider, tools, session, vec![seed], model, ui, session_id, now).await?;
+    let config = TurnConfig {
+        system: profile.system_prompt.clone(),
+        cwd,
+        branch: branch.clone(),
+    };
+    let produced = run_agent_turn(
+        config,
+        provider,
+        tools,
+        session,
+        vec![seed],
+        model,
+        ui,
+        session_id,
+        now,
+    )
+    .await?;
 
     // Distill: last non-empty assistant text = summary; an emitted ⚠ = not ok.
     // `conversation()` is branch-aware (Task D1) and skips non-main events, but
     // this subagent's own turn lives entirely on `branch` — rebase a filtered
     // copy onto the default branch so the fold sees it.
-    let mut branch_events: Vec<Event> = produced.iter().filter(|e| e.branch == branch).cloned().collect();
+    let mut branch_events: Vec<Event> = produced
+        .iter()
+        .filter(|e| e.branch == branch)
+        .cloned()
+        .collect();
     for e in &mut branch_events {
         e.branch = BranchId::default();
     }
@@ -144,59 +182,105 @@ pub async fn run_subagent(
         .unwrap_or_default();
     let ok = !summary.starts_with(WARN_GLYPH);
 
-    Ok(SubagentResult { branch: branch.0, summary, ok })
+    Ok(SubagentResult {
+        branch: branch.0,
+        summary,
+        ok,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ulid::Ulid;
     use zoid_core::agent_profile::AgentProfile;
     use zoid_core::event::{Event, EventKind};
-    use ulid::Ulid;
 
-    fn ev(kind: EventKind) -> Event { Event::new(Ulid::new(), None, 0, kind) }
+    fn ev(kind: EventKind) -> Event {
+        Event::new(Ulid::new(), None, 0, kind)
+    }
     fn call(id: &str, path: &str) -> Event {
-        ev(EventKind::ToolCall { id: id.into(), name: "read_file".into(), args: format!(r#"{{"path":"{path}"}}"#) })
+        ev(EventKind::ToolCall {
+            id: id.into(),
+            name: "read_file".into(),
+            args: format!(r#"{{"path":"{path}"}}"#),
+        })
     }
     fn result(id: &str, out: &str) -> Event {
-        ev(EventKind::ToolResult { id: id.into(), name: "read_file".into(), output: out.into(), is_error: false })
+        ev(EventKind::ToolResult {
+            id: id.into(),
+            name: "read_file".into(),
+            output: out.into(),
+            is_error: false,
+        })
     }
 
     #[test]
     fn request_carries_task_and_relevant_file_never_history() {
         let evs = vec![
-            ev(EventKind::UserMessage { text: "secret chat history".into() }),
+            ev(EventKind::UserMessage {
+                text: "secret chat history".into(),
+            }),
             call("c1", "src/ast.rs"),
             result("c1", "fn parse() {}"),
         ];
         let profile = AgentProfile::builtin();
         let tools = zoid_tools::registry();
-        let req = build_subagent_request("refactor parse()", &evs, &subagent_policy(), &profile, "glm", &tools);
+        let req = build_subagent_request(
+            "refactor parse()",
+            &evs,
+            &subagent_policy(),
+            &profile,
+            "glm",
+            &tools,
+        );
 
         assert_eq!(req.model, "glm");
         assert_eq!(req.system.as_deref(), Some(profile.system_prompt.as_str()));
-        assert_eq!(req.messages.len(), 1, "subagent gets ONE constructed user message");
+        assert_eq!(
+            req.messages.len(),
+            1,
+            "subagent gets ONE constructed user message"
+        );
         let body = &req.messages[0].content;
         assert!(body.contains("refactor parse()"), "task present");
-        assert!(body.contains("fn parse() {}"), "relevant file content present");
+        assert!(
+            body.contains("fn parse() {}"),
+            "relevant file content present"
+        );
         assert!(body.contains("src/ast.rs"), "file labeled by path");
         // THE SUPERPOWERS INVARIANT: never the session transcript.
-        assert!(!body.contains("secret chat history"), "session history excluded (spec §4.4/§5.4)");
+        assert!(
+            !body.contains("secret chat history"),
+            "session history excluded (spec §4.4/§5.4)"
+        );
         assert!(!req.tools.is_empty(), "tools advertised");
     }
 
     #[test]
     fn request_without_files_is_just_the_task() {
         let req = build_subagent_request(
-            "do a thing", &[], &subagent_policy(), &AgentProfile::builtin(), "glm", &zoid_tools::registry());
+            "do a thing",
+            &[],
+            &subagent_policy(),
+            &AgentProfile::builtin(),
+            "glm",
+            &zoid_tools::registry(),
+        );
         assert!(req.messages[0].content.contains("do a thing"));
     }
 
     #[test]
     fn subagent_policy_is_bounded_and_evicts_cold() {
         let p = subagent_policy();
-        assert!(p.auto_evict_cold, "cold items dropped from a subagent's context");
-        assert!(p.token_ceiling.is_some(), "subagent context is token-bounded");
+        assert!(
+            p.auto_evict_cold,
+            "cold items dropped from a subagent's context"
+        );
+        assert!(
+            p.token_ceiling.is_some(),
+            "subagent context is token-bounded"
+        );
     }
 
     #[tokio::test]
@@ -208,7 +292,10 @@ mod tests {
 
         let provider = Arc::new(FakeProvider::new(vec![
             ProviderEvent::TextDelta("Refactored parse() into two functions.".into()),
-            ProviderEvent::Usage(Usage { input_tokens: 200, output_tokens: 30 }),
+            ProviderEvent::Usage(Usage {
+                input_tokens: 200,
+                output_tokens: 30,
+            }),
             ProviderEvent::Done,
         ]));
         let session = SessionHandle::spawn(":memory:").unwrap();
@@ -231,7 +318,10 @@ mod tests {
         .unwrap();
 
         assert!(res.ok, "no error emitted → ok");
-        assert!(res.summary.contains("Refactored parse()"), "summary = subagent's final text");
+        assert!(
+            res.summary.contains("Refactored parse()"),
+            "summary = subagent's final text"
+        );
         assert!(res.branch.starts_with("subagent:"));
         // The subagent's work is persisted on ITS OWN branch.
         let snap = session.snapshot().await.unwrap();
