@@ -164,7 +164,10 @@ implementation backed by the store + key file.)
   to repo override · `esc` back. Footer always shows the active write target.
 - **Edit affordance:** inline-in-place edit buffer (may revisit a bottom input
   line after dogfooding). Text/number fields accept typed input; bools toggle;
-  enum-ish fields (provider) cycle.
+  **`provider` cycles a fixed known set** (`ollama`, `anthropic`) with
+  `←→`/`space`. **`model` is free-text** for now — a per-provider model *cycle*
+  waits on the model registry (`2026-07-01-model-registry.md`); until it exists
+  there is no authoritative list to offer, so typed entry is the honest choice.
 - **Rendering:** lives in `zoid-tui` (`render.rs` + a `config_view` model), state
   in `state.rs`, routing in `route.rs`, all glyphs/colors via `tokens.rs`.
 
@@ -211,4 +214,6 @@ config-driven and active.
 ## 9. Open (tune during dogfooding)
 
 - Section-switch keys (`←→` vs `Tab`) and inline vs bottom-line edit.
-- Whether `provider` should be a free field or a fixed cycle of known providers.
+- **`model` stays free-text** until the model registry lands, at which point it
+  becomes a per-provider cycle/pick. (`provider` already cycles the fixed known
+  set — decided.)
