@@ -92,6 +92,7 @@ mod tests {
             heat,
             pinned,
             evicted,
+            compacted: false,
         }
     }
     fn window(items: Vec<ContextItem>) -> ContextWindow {
