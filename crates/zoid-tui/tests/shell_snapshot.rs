@@ -849,6 +849,49 @@ fn config_overlay_provider_picker_selection_and_planned_styles() {
     );
 }
 
+/// Config overlay (Task 9): graceful degradation below the 160×40 baseline.
+/// At a narrower width the sections rail + fields still render, but three
+/// columns (rail 22 + fields 40 + picker 20 = 82 cols min, checked against
+/// the inner body width i.e. terminal width minus the 2-cell outer border)
+/// no longer fit side-by-side, so the open provider picker floats as a
+/// rounded overlay card on top of the fields column instead of squeezing
+/// into a sliver third column. 80 cols of terminal width (78 cols of inner
+/// body) is comfortably below the 82-col three-column minimum, so this
+/// exercises the degraded path. Never blank: sections rail, fields, and the
+/// overlaid picker card must all be visible.
+#[test]
+fn config_overlay_narrow_degrades() {
+    use zoid_core::config::{Config, Provenance, Source};
+    use zoid_core::secret::SecretStatus;
+    use zoid_tui::config_view::{build_sections, provider_options};
+    use zoid_tui::state::ConfigCol;
+
+    let mut s = ShellState::new();
+    s.overlay = Overlay::Config;
+    s.config_section = 0;
+    s.config_field = 0; // "provider" row
+    s.config_col = ConfigCol::Picker;
+    let cfg = Config::default();
+    let prov = Provenance {
+        provider: Source::Default,
+        base_url: Source::Default,
+        model: Source::Default,
+        context_ceiling: Source::Default,
+        auto_evict_cold: Source::Default,
+        compact_threshold_pct: Source::Default,
+        token_ceiling: Source::Default,
+        reduced_motion: Source::Default,
+    };
+    let ks = [
+        ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
+        ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
+    ];
+    let sections = build_sections(&cfg, &prov, &ks);
+    s.config_picker = provider_options(&cfg.provider);
+    s.config_picker_sel = 0;
+    insta::assert_snapshot!(draw_config(&s, &sections, 80, 24));
+}
+
 /// The `ask_user` question overlay (Task 11), pick mode: a centered card
 /// listing the model's choices plus the two synthetic "Other…"/"— let you
 /// decide —" rows, the first row (default `selected == 0`) highlighted with

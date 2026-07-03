@@ -688,17 +688,33 @@ pub fn render_config(
     let body = rows[0];
     let foot = rows[1];
 
-    // Column split: sections rail | fields | (picker, only if open).
+    // Column split: sections rail | fields | (picker, only if open and it fits
+    // as a third column). Below the three-column minimum the picker instead
+    // renders as a floating overlay card on top of the fields column (see
+    // below) so every row stays legible instead of squeezing to nothing.
+    const RAIL_W: u16 = 22;
+    const FIELDS_W: u16 = 40;
+    const PICKER_MIN: u16 = 20;
     let picker_open = state.config_picker_open();
-    let constraints: Vec<Constraint> = if picker_open {
-        vec![Constraint::Length(22), Constraint::Length(40), Constraint::Min(20)]
+    let three_col_fits = body.width >= RAIL_W + FIELDS_W + PICKER_MIN;
+    let cols = if picker_open && three_col_fits {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(RAIL_W),
+                Constraint::Length(FIELDS_W),
+                Constraint::Min(PICKER_MIN),
+            ])
+            .split(body)
     } else {
-        vec![Constraint::Length(22), Constraint::Min(30)]
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(RAIL_W.min(body.width / 3).max(8)),
+                Constraint::Min(20),
+            ])
+            .split(body)
     };
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints(constraints)
-        .split(body);
 
     // Column 1: sections rail.
     let mut nav: Vec<Line> = Vec::new();
@@ -760,25 +776,34 @@ pub fn render_config(
     }
     frame.render_widget(Paragraph::new(fields), cols[1]);
 
-    // Column 3: contextual picker (only when open).
-    if picker_open {
-        let pw = cols[2].width as usize;
-        let mut pick: Vec<Line> = Vec::new();
-        for (i, o) in state.config_picker.iter().enumerate() {
-            let sel = i == state.config_picker_sel && state.config_col == crate::state::ConfigCol::Picker;
-            let dot = if o.is_current { glyph::COLLAPSED } else { ' ' };
-            let base = format!(" {dot} {}  {}", o.label, o.detail);
-            let text = pad_to(&truncate(&base, pw.saturating_sub(1).max(1)), pw.saturating_sub(1).max(1));
-            let style = if !o.selectable {
-                Style::new().fg(color::DIM)
-            } else if sel {
-                Style::new().fg(color::TXT).bg(color::SEL_BG)
-            } else {
-                Style::new().fg(color::TXT)
-            };
-            pick.push(Line::from(Span::styled(text, style)));
-        }
+    // Column 3: contextual picker — only when open AND three columns fit.
+    // Below the fit threshold the picker renders as an overlay card instead
+    // (below), never in column 3, so it renders in exactly one place.
+    if picker_open && three_col_fits {
+        let active = state.config_col == crate::state::ConfigCol::Picker;
+        let pick = picker_lines(&state.config_picker, state.config_picker_sel, active, cols[2].width as usize);
         frame.render_widget(Paragraph::new(pick), cols[2]);
+    }
+
+    // Graceful degradation: when the picker is open but three columns don't
+    // fit, float it as a rounded sub-card over the fields column (col 2)
+    // instead of squeezing a third column to nothing. The picker is
+    // transient, so overlaying is acceptable and keeps every row legible.
+    if picker_open && !three_col_fits {
+        let over = crate::layout::centered(
+            cols[1],
+            cols[1].width.saturating_sub(2),
+            (state.config_picker.len() as u16 + 2).min(cols[1].height),
+        );
+        frame.render_widget(Clear, over);
+        let pblock = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(color::CHAT_ACCENT));
+        let pinner = pblock.inner(over);
+        frame.render_widget(pblock, over);
+        let pick = picker_lines(&state.config_picker, state.config_picker_sel, true, pinner.width as usize);
+        frame.render_widget(Paragraph::new(pick), pinner);
     }
 
     // Footer.
@@ -789,6 +814,39 @@ pub fn render_config(
         ))),
         foot,
     );
+}
+
+/// Build the styled option lines for the contextual config picker, shared by
+/// both places it can render: the Task-8 inline column-3 layout (three
+/// columns fit) and the Task-9 floating overlay card (they don't). Applies
+/// the current marker, `SEL_BG` on the selected row when `active`, `DIM` for
+/// non-selectable/`[planned]` rows, and truncates/pads each line to `width`.
+fn picker_lines(
+    picker: &[crate::config_view::PickOption],
+    sel: usize,
+    active: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
+    use crate::text::{pad_to, truncate};
+    let w = width.saturating_sub(1).max(1);
+    picker
+        .iter()
+        .enumerate()
+        .map(|(i, o)| {
+            let is_sel = active && i == sel;
+            let dot = if o.is_current { glyph::COLLAPSED } else { ' ' };
+            let base = format!(" {dot} {}  {}", o.label, o.detail);
+            let text = pad_to(&truncate(&base, w), w);
+            let style = if !o.selectable {
+                Style::new().fg(color::DIM)
+            } else if is_sel {
+                Style::new().fg(color::TXT).bg(color::SEL_BG)
+            } else {
+                Style::new().fg(color::TXT)
+            };
+            Line::from(Span::styled(text, style))
+        })
+        .collect()
 }
 
 /// The `ask_user` question overlay (Task 11): a centered, contained card —
