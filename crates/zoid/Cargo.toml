@@ -1,7 +1,8 @@
 [package]
 name = "zoid"
-version = "0.0.0"
+version.workspace = true
 edition.workspace = true
+repository.workspace = true
 
 [lib]
 name = "zoid"
@@ -30,9 +31,20 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 git2 = { workspace = true }
 # OSC 52 clipboard copy of code blocks (SSH-safe; no platform clipboard dep).
 base64 = "0.22"
+reqwest = { workspace = true }
+sha2 = "0.10"
+
+[target.'cfg(unix)'.dependencies]
+flate2 = "1"
+tar = "0.4"
+
+[target.'cfg(windows)'.dependencies]
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 async-trait = { workspace = true }
 rusqlite = { workspace = true }
 zoid-testkit = { path = "../zoid-testkit" }
+flate2 = "1"
+tar = "0.4"
