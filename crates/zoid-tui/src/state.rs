@@ -98,6 +98,14 @@ pub struct ShellState {
     /// new events stream in. Scrolling up detaches it; scrolling back to the
     /// bottom re-engages it.
     pub follow_tail: bool,
+    /// Whether a turn is in flight (streaming or delegating). Refreshed by the
+    /// bin each frame; the status bar shows an animated spinner while true and
+    /// the static idle glyph otherwise.
+    pub busy: bool,
+    /// Current activity-spinner frame glyph, refreshed by the bin each frame
+    /// from wall-clock elapsed. Defaults to a fixed frame so snapshot tests are
+    /// deterministic unless they opt into `busy`.
+    pub spinner: char,
     /// Current branch label for the Branch drawer (P2: read from `.git/HEAD`).
     pub branch: String,
     /// Repo directory name shown in the repo drawer header line.
@@ -201,6 +209,8 @@ impl ShellState {
             objects: ObjectState::default(),
             conversation_scroll: 0,
             follow_tail: true,
+            busy: false,
+            spinner: crate::tokens::glyph::SPINNER[0],
             branch: "main".into(),
             repo_name: String::new(),
             worktree: "(none)".into(),

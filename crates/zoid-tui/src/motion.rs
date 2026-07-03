@@ -47,6 +47,17 @@ pub fn caret_on(elapsed_ms: u64, period_ms: u64, reduced_motion: bool) -> bool {
     (elapsed_ms % period_ms) < period_ms / 2
 }
 
+/// Frame index into an `frames`-long activity spinner for `elapsed_ms`,
+/// advancing one frame every `frame_ms`. `reduced_motion` freezes it on frame 0
+/// (accessibility / no-animation preference), keeping the choice out of the
+/// impure draw closure so it stays unit-testable (spec §13 determinism).
+pub fn spinner_frame(elapsed_ms: u64, frame_ms: u64, frames: usize, reduced_motion: bool) -> usize {
+    if reduced_motion || frames == 0 || frame_ms == 0 {
+        return 0;
+    }
+    ((elapsed_ms / frame_ms) % frames as u64) as usize
+}
+
 /// Number of lines to show at eased progress `t` of a fold/unfold reveal.
 pub fn reveal_count(total: usize, t: f32) -> usize {
     let eased = ease_out_cubic(t);
@@ -124,6 +135,20 @@ mod tests {
             .progress(false),
             1.0
         );
+    }
+
+    #[test]
+    fn spinner_frame_cycles_and_respects_reduced_motion() {
+        // Advances one frame per frame_ms, wrapping at `frames`.
+        assert_eq!(spinner_frame(0, 80, 10, false), 0);
+        assert_eq!(spinner_frame(80, 80, 10, false), 1);
+        assert_eq!(spinner_frame(79, 80, 10, false), 0); // holds until the boundary
+        assert_eq!(spinner_frame(800, 80, 10, false), 0); // wraps after a full cycle
+        assert_eq!(spinner_frame(880, 80, 10, false), 1);
+        // Degenerate inputs and reduced-motion freeze on frame 0.
+        assert_eq!(spinner_frame(500, 80, 10, true), 0);
+        assert_eq!(spinner_frame(500, 0, 10, false), 0);
+        assert_eq!(spinner_frame(500, 80, 0, false), 0);
     }
 
     #[test]

@@ -630,13 +630,15 @@ fn markdown_message_frame() {
     insta::assert_snapshot!(format!("{:#?}", terminal.backend().buffer()));
 }
 
-/// The `streaming = true` title arm (`⠿ running` in CHAT_ACCENT) has no
-/// coverage elsewhere — every other shell snapshot renders with
-/// `streaming = false`. Buffer-Debug captures the title's fg so the
-/// CHAT_ACCENT styling is actually asserted, not just the glyph.
+/// The busy activity arm (spinner + `working` in CHAT_ACCENT) has no coverage
+/// elsewhere — every other shell snapshot renders idle. Buffer-Debug captures
+/// the indicator's fg so the CHAT_ACCENT styling is asserted, not just the
+/// glyph. `busy` drives the indicator now (not the streaming body flag); the
+/// default spinner frame keeps the snapshot deterministic.
 #[test]
 fn running_title_frame() {
-    let s = ShellState::new();
+    let mut s = ShellState::new();
+    s.busy = true;
     let input = TextArea::default();
     let backend = TestBackend::new(100, 24);
     let mut terminal = Terminal::new(backend).unwrap();

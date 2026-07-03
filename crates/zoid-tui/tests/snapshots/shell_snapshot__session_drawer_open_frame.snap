@@ -1,5 +1,6 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
+assertion_line: 251
 expression: "draw(&s, &seeded(), 100, 24)"
 ---
 "                                                                                                    "
@@ -25,4 +26,4 @@ expression: "draw(&s, &seeded(), 100, 24)"
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"
 "│                                                                                                  │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" CHAT  zoom normal · ^P palette                                                              ● idle "
+" CHAT  zoom normal · ^P palette                ● idle                                          zoid "

@@ -1,5 +1,6 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
+assertion_line: 702
 expression: "draw_delegated(100, 24)"
 ---
 Buffer {
@@ -28,7 +29,7 @@ Buffer {
         "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐",
         "│                                                                                                  │",
         "└──────────────────────────────────────────────────────────────────────────────────────────────────┘",
-        " CHAT  zoom normal · ^P palette                                                              ● idle ",
+        " CHAT  zoom normal · ^P palette                ● idle                                          zoid ",
     ],
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
@@ -114,6 +115,8 @@ Buffer {
         x: 0, y: 23, fg: Rgb(88, 166, 255), bg: Rgb(13, 42, 77), underline: Reset, modifier: NONE,
         x: 6, y: 23, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 31, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 93, y: 23, fg: Rgb(63, 185, 80), bg: Reset, underline: Reset, modifier: NONE,
+        x: 47, y: 23, fg: Rgb(63, 185, 80), bg: Reset, underline: Reset, modifier: NONE,
+        x: 53, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 95, y: 23, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
     ]
 }

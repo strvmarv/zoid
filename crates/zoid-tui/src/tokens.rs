@@ -29,6 +29,7 @@ pub mod glyph {
     pub const PIN: char = '●'; // ⑤ pinned-item marker
     pub const ELLIPSIS: char = '…'; // collapsed-body marker (① collapse-to-signatures)
     pub const IDLE: char = '●'; // title-bar activity — waiting for the user (§2.2)
+    pub const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']; // status-bar activity spinner — agent working (§2.2)
     pub const BULLET: char = '•'; // markdown unordered-list marker (§3.5)
     pub const QUOTE_BAR: char = '│'; // markdown blockquote bar (§3.5)
     pub const NEW: char = '+'; // palette: new session

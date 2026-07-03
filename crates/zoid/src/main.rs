@@ -810,6 +810,18 @@ async fn run<B: ratatui::backend::Backend>(
             app.shell.apply_follow(max_scroll);
         }
 
+        // Refresh the status-bar activity indicator: a turn is "working" while
+        // streaming or delegating. The spinner frame is wall-clock-derived here
+        // (kept out of the pure renderer for snapshot determinism); the motion
+        // tick below redraws at MOTION_FPS while busy so it actually animates.
+        app.shell.busy = app.streaming || app.delegating;
+        app.shell.spinner = zoid_tui::tokens::glyph::SPINNER[zoid_tui::motion::spinner_frame(
+            elapsed,
+            80,
+            zoid_tui::tokens::glyph::SPINNER.len(),
+            app.shell.reduced_motion,
+        )];
+
         if app.shell.overlay == zoid_tui::state::Overlay::Question {
             zoid::zlog!(
                 "main: drawing frame with Question overlay (question.is_some={})",
@@ -938,8 +950,9 @@ async fn run<B: ratatui::backend::Backend>(
                     }
                 }
             }
-            _ = motion_tick.tick(), if app.streaming || app.zoom_changed_at.is_some() => {
-                // Wake to redraw the blinking caret or the in-flight zoom reveal. Ticks
+            _ = motion_tick.tick(), if app.streaming || app.delegating || app.zoom_changed_at.is_some() => {
+                // Wake to redraw the blinking caret, the in-flight zoom reveal, or the
+                // activity spinner (which animates while streaming OR delegating). Ticks
                 // stay armed until `zoom_changed_at` is cleared (above, after a settled
                 // frame is painted), so the reveal always ends on a full-body frame
                 // rather than a truncated one. Idle + not-animating never ticks.

@@ -1,5 +1,6 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
+assertion_line: 276
 expression: out
 ---
 "                                                                                                    "
@@ -21,4 +22,4 @@ expression: out
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"
 "│                                                                                                  │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" CHAT  zoom normal · ^P palette                                                              ● idle "
+" CHAT  zoom normal · ^P palette                ● idle                                          zoid "

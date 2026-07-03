@@ -1,5 +1,6 @@
 ---
 source: crates/zoid-tui/tests/tasks_snapshot.rs
+assertion_line: 93
 expression: "draw(&s, &items)"
 ---
 "                                                                                                    "
@@ -33,4 +34,4 @@ expression: "draw(&s, &items)"
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"
 "│                                                                                                  │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" CHAT  zoom normal · ^P palette                                                              ● idle "
+" CHAT  zoom normal · ^P palette                ● idle                                          zoid "

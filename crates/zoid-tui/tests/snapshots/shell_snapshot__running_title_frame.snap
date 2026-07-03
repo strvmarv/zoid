@@ -1,5 +1,6 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
+assertion_line: 660
 expression: "format!(\"{:#?}\", terminal.backend().buffer())"
 ---
 Buffer {
@@ -28,7 +29,7 @@ Buffer {
         "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐",
         "│                                                                                                  │",
         "└──────────────────────────────────────────────────────────────────────────────────────────────────┘",
-        " CHAT  zoom normal · ^P palette                                                           ⠿ running ",
+        " CHAT  zoom normal · ^P palette              ⠋ working                                         zoid ",
     ],
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
@@ -113,6 +114,8 @@ Buffer {
         x: 0, y: 23, fg: Rgb(88, 166, 255), bg: Rgb(13, 42, 77), underline: Reset, modifier: NONE,
         x: 6, y: 23, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 31, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 90, y: 23, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
+        x: 45, y: 23, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 95, y: 23, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
     ]
 }

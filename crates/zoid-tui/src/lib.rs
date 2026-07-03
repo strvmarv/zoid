@@ -19,7 +19,7 @@ pub(crate) mod text;
 pub mod tokens;
 
 pub use economy_view::EconomyView;
-pub use motion::{caret_on, ease_out_cubic, reveal_count, zoom_reveal, Anim, MOTION_FPS};
+pub use motion::{caret_on, ease_out_cubic, reveal_count, spinner_frame, zoom_reveal, Anim, MOTION_FPS};
 pub use objects::{selectable_objects, Obj, ObjectKind};
 pub use render::render_shell;
 pub use state::{DrawerId, Focus, Mode, Overlay, ShellState};

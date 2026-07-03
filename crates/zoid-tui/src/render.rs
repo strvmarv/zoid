@@ -107,7 +107,7 @@ pub fn render_shell(
     }
 
     render_input(frame, input, layout.input);
-    render_status(frame, state, view, streaming, layout.status);
+    render_status(frame, state, view, layout.status);
 
     // Overlays last, over a cleared region.
     if state.overlay == Overlay::Palette {
@@ -173,14 +173,9 @@ fn render_input(frame: &mut Frame, input: &TextArea<'_>, area: Rect) {
     frame.render_widget(input, inner);
 }
 
-fn render_status(
-    frame: &mut Frame,
-    state: &ShellState,
-    view: &ChatView,
-    streaming: bool,
-    area: Rect,
-) {
-    let mut spans = match state.mode {
+fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: Rect) {
+    // Left segment: mode badge + hints.
+    let mut left = match state.mode {
         Mode::Chat => vec![
             Span::styled(
                 " CHAT ",
@@ -202,26 +197,48 @@ fn render_status(
     // Transient ④ hint (e.g. "queued · runs as a subagent in P5"), set by a
     // verb pick (P4d T4). Pure-renderer-readable since it lives on ShellState.
     if let Some(hint) = &state.status_hint {
-        spans.push(Span::styled(
+        left.push(Span::styled(
             format!(" · {hint}"),
             Style::new().fg(color::DIM),
         ));
     }
 
-    // Live activity indicator, right-aligned (spec §2.2): idle when waiting for
-    // the user, running while the agent streams or a tool runs.
-    let (icon, label, fg) = if streaming {
-        (glyph::STREAM, "running", color::CHAT_ACCENT)
+    // Center segment: live activity indicator (spec §2.2). Idle when waiting for
+    // the user; an animated spinner (frame supplied by the bin) while a turn is
+    // in flight — streaming OR delegating — so it's clear the agent is working
+    // and not hung.
+    let (icon, label, fg) = if state.busy {
+        (state.spinner, "working", color::CHAT_ACCENT)
     } else {
         (glyph::IDLE, "idle", color::OK)
     };
-    let right = format!("{icon} {label} ");
-    let left_w: usize = spans.iter().map(|s| s.content.width()).sum();
-    let pad = (area.width as usize).saturating_sub(left_w + right.width());
-    if pad > 0 {
-        spans.push(Span::styled(" ".repeat(pad), Style::new()));
+    let center = format!("{icon} {label}");
+
+    // Right segment: the wordmark, where the activity indicator used to live.
+    let right = "zoid ";
+
+    let w = area.width as usize;
+    let left_w: usize = left.iter().map(|s| s.content.width()).sum();
+    let center_w = center.width();
+    let right_w = right.width();
+
+    // Center the activity indicator in the bar and pin the wordmark to the right
+    // edge. Saturating math means a narrow terminal clips the padding (segments
+    // just abut) instead of panicking.
+    let center_start = w.saturating_sub(center_w) / 2;
+    let right_start = w.saturating_sub(right_w);
+
+    let mut spans = left;
+    let pad1 = center_start.saturating_sub(left_w);
+    if pad1 > 0 {
+        spans.push(Span::styled(" ".repeat(pad1), Style::new()));
     }
-    spans.push(Span::styled(right, Style::new().fg(fg)));
+    spans.push(Span::styled(center, Style::new().fg(fg)));
+    let pad2 = right_start.saturating_sub(left_w + pad1 + center_w);
+    if pad2 > 0 {
+        spans.push(Span::styled(" ".repeat(pad2), Style::new()));
+    }
+    spans.push(Span::styled(right, Style::new().fg(color::DIM)));
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
