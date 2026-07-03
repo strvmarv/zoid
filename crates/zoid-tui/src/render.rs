@@ -738,16 +738,25 @@ pub fn render_config(
             zoid_core::config::Source::Local => ("[local]", color::BRANCH),
             zoid_core::config::Source::Env => ("[env]", color::WARN),
         };
+        let warn = if r.env_shadowed {
+            format!(" {}", glyph::WARNING)
+        } else {
+            String::new()
+        };
         let marker = if cur { glyph::COLLAPSED } else { ' ' };
         let left = format!(" {marker} {}", pad_to(r.label, 12));
-        let fixed = left.width() + tag_txt.width();
+        let fixed = left.width() + tag_txt.width() + warn.width();
         let mid = field_w.saturating_sub(fixed).max(1);
         let val_shown = pad_to(&truncate(&val, mid), mid);
-        fields.push(Line::from(vec![
+        let mut spans = vec![
             Span::styled(left, Style::new().fg(if cur { color::CHAT_ACCENT } else { color::TXT })),
             Span::styled(val_shown, Style::new().fg(color::TXT)),
             Span::styled(tag_txt.to_string(), Style::new().fg(tag_col)),
-        ]));
+        ];
+        if !warn.is_empty() {
+            spans.push(Span::styled(warn, Style::new().fg(color::WARN)));
+        }
+        fields.push(Line::from(spans));
     }
     frame.render_widget(Paragraph::new(fields), cols[1]);
 
