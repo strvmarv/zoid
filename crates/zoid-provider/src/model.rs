@@ -119,10 +119,6 @@ pub fn selectable() -> impl Iterator<Item = &'static ProviderEntry> {
     PROVIDERS.iter().filter(|e| e.status == Status::Available)
 }
 
-/// TEMPORARY back-compat shim for config_view; removed in the settings redesign
-/// Task 4 once the picker replaces the provider Cycle field.
-pub const KNOWN_PROVIDERS: &[&str] = &["ollama-local", "ollama-cloud", "anthropic-api"];
-
 /// Capabilities for `model`, matched by family (case-insensitive), else DEFAULT.
 pub fn model_info(model: &str) -> ModelInfo {
     let m = model.to_ascii_lowercase();

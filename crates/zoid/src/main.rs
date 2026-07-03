@@ -1028,6 +1028,16 @@ fn write_config_file(
     Ok(())
 }
 
+/// The TOML write for `base_url` when a provider is selected: the registry
+/// default endpoint (HTTP transports), or `Unset` to clear it (Cli/Sdk have no
+/// URL). The user can still override afterward (which flips provenance to [user]).
+fn base_url_write_for(id: &str) -> zoid_core::config::TomlValue {
+    match zoid_provider::model::default_base_url(id) {
+        Some(u) => zoid_core::config::TomlValue::Str(u.to_string()),
+        None => zoid_core::config::TomlValue::Unset,
+    }
+}
+
 /// Persist a single TOML key (to the repo `./.zoid/config.toml` when `to_repo`,
 /// else the user-global `~/.config/zoid/config.toml`), then reload + re-render +
 /// live-apply. Config-write failures are non-fatal: logged, never a crash.
@@ -1348,59 +1358,91 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 }
             }
         }
-        Action::ConfigCycle(dir) => {
-            use zoid_core::config::TomlValue;
-            // Step an index by `dir` (±1) with wraparound in either direction.
-            let step = |i: usize, len: usize| -> usize {
-                if len == 0 {
-                    0
-                } else {
-                    (i as i32 + dir).rem_euclid(len as i32) as usize
-                }
-            };
-            if let Some((label, _kind)) = current_config_field(app) {
-                match label {
-                    "provider" => {
-                        let list = zoid_provider::model::KNOWN_PROVIDERS;
-                        let cur = app.config.provider.as_str();
-                        let next = match list.iter().position(|p| *p == cur) {
-                            Some(i) => list[step(i, list.len())],
-                            None => list[0],
-                        };
-                        apply_config_write(
-                            app,
-                            "provider",
-                            TomlValue::Str(next.to_string()),
-                            false,
-                        );
-                    }
-                    "model" => {
-                        let list = zoid_provider::model::models_for(&app.config.provider);
-                        if !list.is_empty() {
-                            let cur = app.config.model.as_str();
-                            let next = match list.iter().position(|m| *m == cur) {
-                                Some(i) => list[step(i, list.len())],
-                                None => list[0],
-                            };
-                            apply_config_write(
-                                app,
-                                "model",
-                                TomlValue::Str(next.to_string()),
-                                false,
-                            );
-                        }
-                    }
-                    _ => {}
+        Action::ConfigDrillOpen => {
+            use zoid_tui::state::ConfigCol;
+            if let Some((label, _)) = current_config_field(app) {
+                app.shell.config_picker = match label {
+                    "provider" => zoid_tui::config_view::provider_options(&app.config.provider),
+                    "model" => zoid_tui::config_view::model_options(
+                        &app.config.provider,
+                        &app.config.model,
+                    ),
+                    _ => Vec::new(),
+                };
+                if !app.shell.config_picker.is_empty() {
+                    // Cursor lands on the current value, else the first selectable row.
+                    app.shell.config_picker_sel = app
+                        .shell
+                        .config_picker
+                        .iter()
+                        .position(|o| o.is_current)
+                        .or_else(|| app.shell.config_picker.iter().position(|o| o.selectable))
+                        .unwrap_or(0);
+                    app.shell.config_col = ConfigCol::Picker;
                 }
             }
         }
-        // Picker drill/move/select/back stubs — Task 7 wires these up to
-        // ShellState::{config_col, config_picker, config_picker_sel,
-        // config_picker_open}; route_config_key (Task 6) already emits them.
-        Action::ConfigDrillOpen => {}
-        Action::ConfigPickerMove(_) => {}
-        Action::ConfigPickerSelect => {}
-        Action::ConfigPickerBack => {}
+        Action::ConfigPickerMove(d) => {
+            let picker = &app.shell.config_picker;
+            if !picker.is_empty() {
+                let n = picker.len() as i32;
+                let mut i = app.shell.config_picker_sel as i32;
+                for _ in 0..n {
+                    i = (i + d).rem_euclid(n);
+                    if picker[i as usize].selectable {
+                        break;
+                    }
+                }
+                app.shell.config_picker_sel = i as usize;
+            }
+        }
+        Action::ConfigPickerBack => {
+            use zoid_tui::state::ConfigCol;
+            app.shell.config_picker.clear();
+            app.shell.config_col = ConfigCol::Fields;
+        }
+        Action::ConfigPickerSelect => {
+            use zoid_core::config::TomlValue;
+            use zoid_tui::state::ConfigCol;
+            let chosen = app
+                .shell
+                .config_picker
+                .get(app.shell.config_picker_sel)
+                .filter(|o| o.selectable)
+                .map(|o| o.id.clone());
+            let label = current_config_field(app).map(|(l, _)| l).unwrap_or("");
+            if let Some(id) = chosen {
+                if label == "provider" {
+                    // Write provider, then seed base_url from the registry.
+                    apply_config_write(app, "provider", TomlValue::Str(id.clone()), false);
+                    apply_config_write(app, "base_url", base_url_write_for(&id), false);
+                    // Auto-advance to the model field and open its picker.
+                    app.shell.config_picker.clear();
+                    if let Some(mi) = app
+                        .shell
+                        .config_sections
+                        .get(app.shell.config_section)
+                        .and_then(|s| s.rows.iter().position(|r| r.label == "model"))
+                    {
+                        app.shell.config_field = mi;
+                    }
+                    app.shell.config_picker = zoid_tui::config_view::model_options(
+                        &app.config.provider,
+                        &app.config.model,
+                    );
+                    app.shell.config_picker_sel = 0;
+                    app.shell.config_col = if app.shell.config_picker.is_empty() {
+                        ConfigCol::Fields
+                    } else {
+                        ConfigCol::Picker
+                    };
+                } else if label == "model" {
+                    apply_config_write(app, "model", TomlValue::Str(id), false);
+                    app.shell.config_picker.clear();
+                    app.shell.config_col = ConfigCol::Fields;
+                }
+            }
+        }
         Action::ConfigSaveToRepo => {
             use zoid_tui::config_view::FieldKind;
             if let Some((label, kind)) = current_config_field(app) {
@@ -1843,6 +1885,24 @@ mod tests {
             Some(TomlValue::Int(80))
         );
         assert_eq!(value_from_buffer(&TomlTy::U8Pct, "xx"), None);
+    }
+
+    #[test]
+    fn base_url_write_seeds_registry_default_or_unsets() {
+        use zoid_core::config::TomlValue;
+        assert_eq!(
+            base_url_write_for("ollama-local"),
+            TomlValue::Str("http://localhost:11434".into())
+        );
+        assert_eq!(
+            base_url_write_for("ollama"),
+            TomlValue::Str("https://ollama.com".into())
+        ); // alias → cloud
+        assert_eq!(
+            base_url_write_for("anthropic-api"),
+            TomlValue::Str("https://api.anthropic.com".into())
+        );
+        assert_eq!(base_url_write_for("anthropic-cli"), TomlValue::Unset); // Cli → clear base_url
     }
 
     #[test]

@@ -58,7 +58,6 @@ pub enum Action {
     ConfigCommitEdit,
     ConfigCancelEdit,
     ConfigToggle,
-    ConfigCycle(i32),
     ConfigDrillOpen,
     ConfigPickerMove(i32),
     ConfigPickerSelect,
