@@ -86,6 +86,19 @@ pub fn parse_event(event_type: &str, data: &str) -> Option<ProviderEvent> {
     }
 }
 
+/// Extract model ids from an Anthropic `/v1/models` response body. Lenient.
+pub fn parse_anthropic_models(body: &str) -> Vec<String> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("data").and_then(|d| d.as_array()).cloned())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 use crate::Provider;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -171,6 +184,17 @@ impl Provider for AnthropicProvider {
             }
         }
         Ok(())
+    }
+
+    async fn list_models(&self) -> Result<Vec<String>> {
+        let resp = self
+            .client
+            .get(format!("{}/v1/models", self.base_url))
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .send()
+            .await?;
+        Ok(parse_anthropic_models(&resp.text().await?))
     }
 }
 
@@ -315,5 +339,15 @@ mod tests {
     #[test]
     fn malformed_data_yields_none_not_panic() {
         assert_eq!(parse_event("content_block_delta", "not json"), None);
+    }
+
+    #[test]
+    fn parses_anthropic_model_ids() {
+        let body = r#"{"data":[{"id":"claude-opus-4-8","type":"model"},{"id":"claude-sonnet-4-6"}]}"#;
+        assert_eq!(parse_anthropic_models(body), vec!["claude-opus-4-8", "claude-sonnet-4-6"]);
+    }
+    #[test]
+    fn anthropic_models_bad_is_empty() {
+        assert!(parse_anthropic_models("nope").is_empty());
     }
 }

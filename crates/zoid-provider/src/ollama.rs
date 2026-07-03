@@ -133,6 +133,20 @@ pub fn parse_line(line: &str) -> Vec<ProviderEvent> {
     out
 }
 
+/// Extract model names from an Ollama `/api/tags` response body. Lenient:
+/// unknown/!json → empty (the caller falls back to the registry list).
+pub fn parse_ollama_tags(body: &str) -> Vec<String> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("models").and_then(|m| m.as_array()).cloned())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.get("name").and_then(|n| n.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Streaming Ollama Cloud provider (native Chat API).
 pub struct OllamaProvider {
     api_key: String,
@@ -229,6 +243,16 @@ impl Provider for OllamaProvider {
             }
         }
         Ok(())
+    }
+
+    async fn list_models(&self) -> Result<Vec<String>> {
+        let resp = self
+            .client
+            .get(format!("{}/api/tags", self.base_url))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await?;
+        Ok(parse_ollama_tags(&resp.text().await?))
     }
 }
 
@@ -455,5 +479,16 @@ mod tests {
             parse_line(line),
             vec![ProviderEvent::TextDelta("hi".into()), ProviderEvent::Done]
         );
+    }
+
+    #[test]
+    fn parses_ollama_tags_names() {
+        let body = r#"{"models":[{"name":"glm-5.2:cloud"},{"name":"llama3.1:70b"}]}"#;
+        assert_eq!(parse_ollama_tags(body), vec!["glm-5.2:cloud", "llama3.1:70b"]);
+    }
+    #[test]
+    fn ollama_tags_empty_or_bad_is_empty() {
+        assert!(parse_ollama_tags("{}").is_empty());
+        assert!(parse_ollama_tags("not json").is_empty());
     }
 }

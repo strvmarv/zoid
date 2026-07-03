@@ -110,6 +110,11 @@ pub trait Provider: Send + Sync {
         req: &CompletionRequest,
         sink: mpsc::Sender<ProviderEvent>,
     ) -> Result<()>;
+
+    /// Fetch the provider's available model ids. Default: none (offline / seam).
+    async fn list_models(&self) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
 }
 
 /// A deterministic, offline provider that replays a scripted event list.
