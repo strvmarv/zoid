@@ -314,6 +314,7 @@ async fn run_turn_inner(
             }
 
             let kind = tools.iter().find(|t| t.name() == tc.name).map(|t| t.kind());
+            crate::zlog!("tool: name={:?} kind={:?}", tc.name, kind);
 
             match kind {
                 Some(zoid_tools::ToolKind::Emitting) if tc.name == "update_tasks" => {
@@ -383,18 +384,22 @@ async fn run_turn_inner(
                         .map(|a| {
                             a.iter()
                                 .filter_map(|c| c.as_str().map(String::from))
-                                .collect()
+                                .collect::<Vec<String>>()
                         })
                         .unwrap_or_default();
                     let (rtx, rrx) = oneshot::channel::<Answer>();
-                    let _ = ui
+                    crate::zlog!("ask_user: intercepted, sending AskUser (choices={})", choices.len());
+                    let sent = ui
                         .send(AgentUpdate::AskUser {
                             question,
                             choices,
                             reply: rtx,
                         })
                         .await;
-                    match rrx.await {
+                    crate::zlog!("ask_user: send result ok={}, awaiting reply", sent.is_ok());
+                    let ans = rrx.await;
+                    crate::zlog!("ask_user: reply received ok={}", ans.is_ok());
+                    match ans {
                         Ok(ans) => {
                             let output = match ans {
                                 Answer::Choice(s) | Answer::FreeText(s) => s,

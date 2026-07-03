@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod cli;
+pub mod dbglog;
 pub mod subagent;
 pub mod update;
 pub mod worktree;

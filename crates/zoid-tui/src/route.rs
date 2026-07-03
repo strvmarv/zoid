@@ -314,7 +314,19 @@ pub fn hit_test(layout: &ShellLayout, col: u16, row: u16) -> Target {
 }
 
 pub fn route_mouse(state: &ShellState, layout: &ShellLayout, m: MouseEvent) -> Action {
-    // Dismiss modal overlays on any click or scroll.
+    // The question overlay is a BLOCKING prompt (the agent turn is suspended
+    // awaiting its answer), not a transient palette. A stray scroll/click must
+    // NOT silently dismiss it — doing so orphans the reply channel and hangs the
+    // turn. Scroll navigates choices; other mouse input is ignored. Dismissal
+    // happens only via Enter (select) / Esc (abort).
+    if state.overlay == Overlay::Question {
+        return match m.kind {
+            MouseEventKind::ScrollDown => Action::QuestionMove(1),
+            MouseEventKind::ScrollUp => Action::QuestionMove(-1),
+            _ => Action::Noop,
+        };
+    }
+    // Other (transient) overlays dismiss on any click or scroll.
     if state.overlay != Overlay::None {
         return match m.kind {
             MouseEventKind::Down(MouseButton::Left)
@@ -539,6 +551,45 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         };
         assert_eq!(route_mouse(&s, &l, click), Action::CloseOverlay);
+    }
+
+    #[test]
+    fn question_overlay_is_not_dismissed_by_scroll_or_click() {
+        // A blocking ask_user prompt must survive stray scroll/click (which used
+        // to CloseOverlay → orphan the reply channel → hang the turn). Scroll
+        // navigates choices; a click is ignored.
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Question;
+        let l = compute(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 24,
+            },
+            &s,
+        );
+        let scroll_down = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(route_mouse(&s, &l, scroll_down), Action::QuestionMove(1));
+        let scroll_up = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(route_mouse(&s, &l, scroll_up), Action::QuestionMove(-1));
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(route_mouse(&s, &l, click), Action::Noop);
     }
 
     #[test]

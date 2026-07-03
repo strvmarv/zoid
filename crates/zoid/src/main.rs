@@ -730,6 +730,12 @@ async fn run<B: ratatui::backend::Backend>(
         // paints a truncated frame and the loop stops redrawing (stale until an
         // unrelated event wakes it).
         let mut frame_reveal_none = false;
+        if app.shell.overlay == zoid_tui::state::Overlay::Question {
+            zoid::zlog!(
+                "main: drawing frame with Question overlay (question.is_some={})",
+                app.shell.question.is_some()
+            );
+        }
         terminal.draw(|f| {
             // Projections come from the event-count-keyed cache (refreshed above),
             // so this closure does zero O(events) work on an ordinary frame. The
@@ -860,6 +866,10 @@ async fn run<B: ratatui::backend::Backend>(
                         choices,
                         reply,
                     } => {
+                        zoid::zlog!(
+                            "main: AskUser received, raising Question overlay (choices={})",
+                            choices.len()
+                        );
                         app.shell.question =
                             Some(zoid_tui::question::QuestionState::new(question, choices));
                         app.shell.overlay = zoid_tui::state::Overlay::Question;
@@ -1123,7 +1133,14 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             app.shell.overlay = Overlay::CommandLine;
             app.shell.cmdline = Default::default();
         }
-        Action::CloseOverlay => app.shell.close_overlay(),
+        Action::CloseOverlay => {
+            // Defense-in-depth: if a question overlay is closed via this generic
+            // path, drop the reply channel so the agent's ask_user aborts cleanly
+            // (records "[user aborted]") instead of hanging on an orphaned Sender.
+            // No-op when nothing is pending.
+            app.pending_answer = None;
+            app.shell.close_overlay();
+        }
         Action::ToggleDrawer(id) => app.shell.toggle_drawer(id),
         Action::PaletteMove(d) => {
             let items = zoid_tui::palette::all_items(app.shell.mode);
@@ -1156,6 +1173,12 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::ScrollConversation(d) => {
             let next = app.shell.conversation_scroll as i32 + d;
             app.shell.conversation_scroll = clamp_scroll(next, app.last_conv_max_scroll);
+            zoid::zlog!(
+                "scroll: d={} -> offset={} (max={})",
+                d,
+                app.shell.conversation_scroll,
+                app.last_conv_max_scroll
+            );
         }
         // Conversation clicks are resolved in the event loop (where the layout is
         // available) via `handle_conversation_click`; this arm keeps the match

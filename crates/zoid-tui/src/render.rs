@@ -840,7 +840,14 @@ pub fn render_question(frame: &mut Frame, area: Rect, q: &crate::question::Quest
                 } else {
                     Style::new().fg(color::TXT)
                 };
-                lines.push(Line::from(Span::styled(format!(" {r}"), style)));
+                // Wrap long choices so paragraph-length options are fully readable
+                // instead of clipped at the card edge (the bug that made choices
+                // look invisible). Continuation lines are indented for legibility;
+                // every wrapped line of the selected row carries the highlight.
+                for (j, wl) in wrap_plain(r, content_w.saturating_sub(1)).iter().enumerate() {
+                    let indent = if j == 0 { " " } else { "   " };
+                    lines.push(Line::from(Span::styled(format!("{indent}{wl}"), style)));
+                }
             }
         }
         QuestionMode::FreeText => {
