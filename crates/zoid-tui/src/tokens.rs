@@ -37,6 +37,7 @@ pub mod glyph {
     pub const MASK: char = '•'; // config screen: masked secret edit buffer
     pub const CODE_BAR: char = '▏'; // fenced-code container left rule (§3.5)
     pub const COPY: char = '⧉'; // code-block copy affordance (§3.5)
+    pub const COMPACT: char = '⊟'; // ⑤ compacted tool-result marker (ACM-1)
 }
 
 /// Colors (visual-language table, spec §16 / docs/ux/README.md).
@@ -171,5 +172,10 @@ mod tests {
         use ratatui::style::Color;
         // Card background from docs/ux/chat-mode.html `.chip` (#15101f).
         assert_eq!(color::DELEGATE_BG, Color::Rgb(0x15, 0x10, 0x1f));
+    }
+
+    #[test]
+    fn acm1_compact_token_present() {
+        assert_eq!(glyph::COMPACT, '⊟');
     }
 }

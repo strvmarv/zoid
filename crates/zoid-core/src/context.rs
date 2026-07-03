@@ -35,6 +35,9 @@ pub struct ContextItem {
     pub heat: Heat,
     pub pinned: bool,
     pub evicted: bool,
+    /// Set when a `ToolResultCompacted` event has folded over this item; its
+    /// `tokens` then reflect the summary size, not the original.
+    pub compacted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -209,22 +212,36 @@ pub fn context_window(events: &[Event]) -> ContextWindow {
                 heat: heat_of(a.refs, a.last_turn, last_turn_global),
                 pinned: false,
                 evicted: false,
+                compacted: false,
             }
         })
         .collect();
 
-    // Fold mutations (log order; last write wins per flag).
+    // Fold mutations + compactions (log order; last write wins per item).
     for e in events {
-        if let EventKind::ContextMutation { item, op } = &e.kind {
-            if let Some(it) = items.iter_mut().find(|i| &i.key == item) {
-                use crate::event::MutationOp::*;
-                match op {
-                    Pin => it.pinned = true,
-                    Unpin => it.pinned = false,
-                    Evict => it.evicted = true,
-                    Restore => it.evicted = false,
+        match &e.kind {
+            EventKind::ContextMutation { item, op } => {
+                if let Some(it) = items.iter_mut().find(|i| &i.key == item) {
+                    use crate::event::MutationOp::*;
+                    match op {
+                        Pin => it.pinned = true,
+                        Unpin => it.pinned = false,
+                        Evict => it.evicted = true,
+                        Restore => it.evicted = false,
+                    }
                 }
             }
+            EventKind::ToolResultCompacted { id, summary, .. } => {
+                // Item keys for non-file tool results are "tool:{name}:{id}".
+                if let Some(it) = items
+                    .iter_mut()
+                    .find(|i| i.kind == ItemKind::ToolResult && i.key.rsplit_once(':').map(|(_, x)| x) == Some(id.as_str()))
+                {
+                    it.tokens = crate::economy::estimate_tokens(summary);
+                    it.compacted = true;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -514,6 +531,23 @@ mod tests {
             !w.items.iter().any(|i| i.key == "file:sub/secret.rs"),
             "subagent-branch file excluded"
         );
+    }
+
+    #[test]
+    fn context_window_folds_tool_result_compaction() {
+        use crate::economy::estimate_tokens;
+        let big: String = (0..200).map(|i| format!("row {i}\n")).collect();
+        let summary = "row 0\n… (compacted: 199 more lines, ~700 tokens elided)".to_string();
+        let evs = vec![
+            Event::new(Ulid::new(), None, 0, EventKind::UserMessage { text: "go".into() }),
+            Event::new(Ulid::new(), None, 0, EventKind::ToolCall { id: "c1".into(), name: "search".into(), args: "{}".into() }),
+            Event::new(Ulid::new(), None, 0, EventKind::ToolResult { id: "c1".into(), name: "search".into(), output: big, is_error: false }),
+            Event::new(Ulid::new(), None, 0, EventKind::ToolResultCompacted { id: "c1".into(), summary: summary.clone(), original_tokens: 999 }),
+        ];
+        let w = context_window(&evs);
+        let it = w.items.iter().find(|i| i.key == "tool:search:c1").expect("tool item present");
+        assert!(it.compacted);
+        assert_eq!(it.tokens, estimate_tokens(&summary));
     }
 
     use proptest::prelude::*;

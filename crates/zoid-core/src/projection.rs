@@ -32,6 +32,9 @@ pub enum ChatMsg {
         name: String,
         output: String,
         is_error: bool,
+        /// Set when a `ToolResultCompacted` event replaced this result's body
+        /// with a summary. The transcript marks it; the live request carries it.
+        compacted: bool,
         ts: i64,
     },
     /// A folded subagent delegation — rendered as a collapsible card (① zoom).
@@ -45,6 +48,15 @@ pub enum ChatMsg {
 /// any `ToolCall`s before the next user/tool-result/assistant boundary collapses
 /// into one `Assistant` item; `ToolResult` events become their own items. Pure.
 pub fn conversation(events: &[Event]) -> Vec<ChatMsg> {
+    // ACM-1: a tool-result whose id has a later ToolResultCompacted is emitted
+    // as its summary (last write wins), both to the live request and the view.
+    let mut compacted: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for e in events {
+        if let EventKind::ToolResultCompacted { id, summary, .. } = &e.kind {
+            compacted.insert(id.as_str(), summary.as_str());
+        }
+    }
+
     let mut out: Vec<ChatMsg> = Vec::new();
     let mut text: Option<String> = None;
     let mut calls: Vec<ToolCallRef> = Vec::new();
@@ -109,11 +121,16 @@ pub fn conversation(events: &[Event]) -> Vec<ChatMsg> {
             } => {
                 // The assistant turn that made the call(s) ends here.
                 flush(&mut text, &mut calls, &mut turn_ts, &mut out);
+                let (output, was_compacted) = match compacted.get(id.as_str()) {
+                    Some(sum) => ((*sum).to_string(), true),
+                    None => (output.clone(), false),
+                };
                 out.push(ChatMsg::ToolResult {
                     id: id.clone(),
                     name: name.clone(),
-                    output: output.clone(),
+                    output,
                     is_error: *is_error,
+                    compacted: was_compacted,
                     ts: e.ts,
                 });
             }
@@ -124,8 +141,10 @@ pub fn conversation(events: &[Event]) -> Vec<ChatMsg> {
                     ok: *ok,
                 });
             }
-            EventKind::Usage | EventKind::ContextMutation { .. } => {
-                // Economy bookkeeping; not part of the conversation projection.
+            EventKind::Usage
+            | EventKind::ContextMutation { .. }
+            | EventKind::ToolResultCompacted { .. } => {
+                // Economy bookkeeping; folded elsewhere, not a raw conversation item.
             }
             EventKind::Tasks { .. } => {
                 // Rail-only snapshot; never inlined into the conversation transcript.
@@ -217,6 +236,7 @@ mod tests {
                     name: "read_file".into(),
                     output: "data".into(),
                     is_error: false,
+                    compacted: false,
                     ts: 0
                 },
                 ChatMsg::Assistant {
@@ -298,6 +318,7 @@ mod tests {
                 name: "shell".into(),
                 output: "boom\n[exit 1]".into(),
                 is_error: true,
+                compacted: false,
                 ts: 0,
             }
         );
@@ -416,6 +437,22 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn conversation_substitutes_compacted_summary() {
+        let evs = vec![
+            Event::new(Ulid::new(), None, 100, EventKind::UserMessage { text: "go".into() }),
+            Event::new(Ulid::new(), None, 200, EventKind::ToolResult { id: "c1".into(), name: "search".into(), output: "HUGE ORIGINAL OUTPUT".into(), is_error: false }),
+            Event::new(Ulid::new(), None, 300, EventKind::ToolResultCompacted { id: "c1".into(), summary: "tiny summary".into(), original_tokens: 500 }),
+        ];
+        let conv = conversation(&evs);
+        let tr = conv.iter().find_map(|m| match m {
+            ChatMsg::ToolResult { id, output, compacted, .. } if id == "c1" => Some((output.clone(), *compacted)),
+            _ => None,
+        }).expect("tool result present");
+        assert_eq!(tr.0, "tiny summary", "live request must carry the summary, not the dump");
+        assert!(tr.1, "must be flagged compacted for the transcript");
     }
 
     proptest! {

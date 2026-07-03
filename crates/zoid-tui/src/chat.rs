@@ -148,6 +148,7 @@ fn build_conversation(
                 name,
                 output,
                 is_error,
+                compacted,
                 ..
             } => {
                 let (mark, mark_color) = if *is_error {
@@ -155,14 +156,22 @@ fn build_conversation(
                 } else {
                     (glyph::PASS, color::OK)
                 };
-                lines.push(Line::from(vec![
-                    Span::styled(format!("  {mark} "), Style::new().fg(mark_color)),
-                    Span::styled(name.clone(), Style::new().fg(color::DIM)),
-                    Span::styled(
-                        format!(" → {}", first_line(output)),
+                let mut spans = vec![Span::styled(
+                    format!("  {mark} "),
+                    Style::new().fg(mark_color),
+                )];
+                if *compacted {
+                    spans.push(Span::styled(
+                        format!("{} compacted ", glyph::COMPACT),
                         Style::new().fg(color::DIM),
-                    ),
-                ]));
+                    ));
+                }
+                spans.push(Span::styled(name.clone(), Style::new().fg(color::DIM)));
+                spans.push(Span::styled(
+                    format!(" → {}", first_line(output)),
+                    Style::new().fg(color::DIM),
+                ));
+                lines.push(Line::from(spans));
             }
             ChatMsg::Delegated { summary, ok } => {
                 let (mark, mark_color) = if *ok {
@@ -500,12 +509,15 @@ fn detail_lines(msgs: &[ChatMsg], tz_offset_secs: i32, width: usize) -> Vec<Line
                 name,
                 output,
                 is_error,
+                compacted,
                 ..
             } if !*is_error => {
-                let header = Span::styled(
-                    format!("  {} {}", glyph::PASS, name),
-                    Style::new().fg(color::DIM),
-                );
+                let label = if *compacted {
+                    format!("  {} {} {}", glyph::PASS, name, glyph::COMPACT)
+                } else {
+                    format!("  {} {}", glyph::PASS, name)
+                };
+                let header = Span::styled(label, Style::new().fg(color::DIM));
                 out.push(Line::from(vec![header]));
                 let lang = id_path
                     .get(id.as_str())
@@ -731,6 +743,7 @@ mod tests {
                 name: "read_file".into(),
                 output: "fn parse(s: &str) -> u32 {\n    let n = 42;\n    n\n}\n".into(),
                 is_error: false,
+                compacted: false,
                 ts: 0,
             },
             ChatMsg::User {

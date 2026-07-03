@@ -2,6 +2,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use ulid::Ulid;
 use zoid::agent::{run_agent_turn, AgentUpdate};
+use zoid_core::assembler::ContextPolicy;
 use zoid_core::economy::token_ledger;
 use zoid_core::event::{Event, EventKind};
 use zoid_core::session::SessionHandle;
@@ -54,4 +55,62 @@ async fn turn_usage_lands_in_ledger() {
     assert_eq!(ledger.output, 18);
     assert_eq!(ledger.total, 138);
     assert!(events.iter().any(|e| matches!(e.kind, EventKind::Usage)));
+}
+
+#[tokio::test]
+async fn oversized_tool_result_is_compacted_when_over_threshold() {
+    // A shell command whose stdout is large/multi-line enough that its
+    // ToolResult blows past a tiny compaction threshold. `shell` (unlike
+    // `read_file`) has no path key, so its output stays an `ItemKind::ToolResult`
+    // (compactable) rather than folding into an `ItemKind::File` item.
+    let command = "for i in $(seq 1 2000); do echo \"line $i: filler text to pad out tokens\"; done";
+
+    // Provider script: one tool call to a shell-like tool, then a final message.
+    let provider = zoid_testkit::script(vec![
+        zoid_testkit::tool_call("shell", serde_json::json!({ "command": command })),
+        zoid_testkit::text("done"),
+        ProviderEvent::Done,
+    ]);
+
+    let session = SessionHandle::spawn(":memory:").unwrap();
+    let seed = vec![Event::new(
+        Ulid::new(),
+        None,
+        0,
+        EventKind::UserMessage {
+            text: "run the big command".into(),
+        },
+    )];
+    session.append(seed[0].clone()).await.unwrap();
+
+    let (tx, mut rx) = mpsc::channel::<AgentUpdate>(64);
+    let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+    let mut config = zoid::agent::chat_turn_config();
+    config.policy = ContextPolicy {
+        token_ceiling: None,
+        auto_evict_cold: false,
+        compact_threshold: Some(50), // tiny: the tool-result alone dwarfs this
+    };
+
+    let events = run_agent_turn(
+        config,
+        provider,
+        Arc::new(zoid_tools::registry()),
+        Arc::new(zoid_tools::AllowAll),
+        session.clone(),
+        seed,
+        "fake".into(),
+        tx,
+        Ulid::new(),
+        now,
+    )
+    .await
+    .unwrap();
+    let _ = drain.await;
+
+    let compacted = events
+        .iter()
+        .any(|e| matches!(e.kind, EventKind::ToolResultCompacted { .. }));
+    assert!(compacted, "a large tool-result over threshold must be compacted");
 }

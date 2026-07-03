@@ -3,6 +3,7 @@
 
 pub mod agent_profile;
 pub mod assembler;
+pub mod compaction;
 pub mod config;
 pub mod context;
 pub mod economy;

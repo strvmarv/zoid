@@ -35,6 +35,9 @@ pub struct TurnConfig {
     pub system: String,
     pub cwd: PathBuf,
     pub branch: BranchId,
+    /// Context-management policy for this turn. Chat gets it from `[economy]`;
+    /// subagents get `subagent_policy()`. Drives automatic tool-result compaction.
+    pub policy: zoid_core::assembler::ContextPolicy,
 }
 
 /// The orchestrator (Chat) turn config: main branch, process cwd, Chat prompt.
@@ -43,6 +46,7 @@ pub fn chat_turn_config() -> TurnConfig {
         system: SYSTEM_PROMPT.to_string(),
         cwd: PathBuf::from("."),
         branch: BranchId::default(),
+        policy: zoid_core::assembler::ContextPolicy::default(),
     }
 }
 
@@ -487,6 +491,7 @@ async fn run_turn_inner(
                 }
             }
         }
+        record_compactions(&session, &mut events, ui, config, session_id, now).await?;
         // loop: re-request with the tool results now in context
     }
 
@@ -504,6 +509,36 @@ async fn emit(
     now: fn() -> i64,
 ) -> Result<()> {
     emit_with_tokens(session, events, ui, branch, kind, None, session_id, now).await
+}
+
+/// Record `ToolResultCompacted` events for any tool-results the policy says
+/// should be compacted given the current log. Idempotent: `plan_compactions`
+/// skips already-compacted ids, so calling this each round is safe.
+async fn record_compactions(
+    session: &SessionHandle,
+    events: &mut Vec<Event>,
+    ui: &mpsc::Sender<AgentUpdate>,
+    config: &TurnConfig,
+    session_id: Ulid,
+    now: fn() -> i64,
+) -> Result<()> {
+    for c in zoid_core::compaction::plan_compactions(events, &config.policy) {
+        emit(
+            session,
+            events,
+            ui,
+            &config.branch,
+            EventKind::ToolResultCompacted {
+                id: c.id,
+                summary: c.summary,
+                original_tokens: c.original_tokens,
+            },
+            session_id,
+            now,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// Persist one event (optionally carrying token usage) and announce it to the
@@ -534,6 +569,7 @@ async fn emit_with_tokens(
 mod tests {
     use super::*;
     use zoid_core::event::BranchId;
+    use zoid_provider::MsgRole;
 
     #[test]
     fn chat_turn_config_is_main_branch_cwd_dot() {
@@ -547,5 +583,64 @@ mod tests {
     fn build_request_uses_the_given_system_prompt() {
         let req = build_request(&[], "m", &zoid_tools::registry(), "CUSTOM SYS");
         assert_eq!(req.system.as_deref(), Some("CUSTOM SYS"));
+    }
+
+    #[test]
+    fn build_request_carries_compacted_summary_into_live_messages() {
+        let ts = 1700000000i64;
+        let events = vec![
+            Event::new(
+                Ulid::new(),
+                None,
+                ts,
+                EventKind::UserMessage {
+                    text: "test".into(),
+                },
+            ),
+            Event::new(
+                Ulid::new(),
+                None,
+                ts,
+                EventKind::ToolCall {
+                    id: "c1".into(),
+                    name: "shell".into(),
+                    args: "{}".into(),
+                },
+            ),
+            Event::new(
+                Ulid::new(),
+                None,
+                ts,
+                EventKind::ToolResult {
+                    id: "c1".into(),
+                    name: "shell".into(),
+                    output: "HUGE ORIGINAL DUMP".into(),
+                    is_error: false,
+                },
+            ),
+            Event::new(
+                Ulid::new(),
+                None,
+                ts,
+                EventKind::ToolResultCompacted {
+                    id: "c1".into(),
+                    summary: "compacted summary".into(),
+                    original_tokens: 500,
+                },
+            ),
+        ];
+
+        let req = build_request(&events, "test-model", &zoid_tools::registry(), "SYS");
+
+        // Find the tool message in the built request
+        let tool_msg = req
+            .messages
+            .iter()
+            .find(|m| m.role == MsgRole::Tool && m.tool_name.as_deref() == Some("shell"))
+            .expect("tool message should be present");
+
+        // Assert the content is the compacted summary, not the original dump
+        assert_eq!(tool_msg.content, "compacted summary");
+        assert!(!tool_msg.content.contains("HUGE ORIGINAL DUMP"));
     }
 }

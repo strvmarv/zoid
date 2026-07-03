@@ -217,6 +217,7 @@ mod tests {
                     heat: Heat::Hot,
                     pinned: true,
                     evicted: false,
+                    compacted: false,
                 },
                 ContextItem {
                     key: "file:c.sql".into(),
@@ -226,6 +227,7 @@ mod tests {
                     heat: Heat::Cold,
                     pinned: false,
                     evicted: false,
+                    compacted: false,
                 },
             ],
             total_tokens: 9000,

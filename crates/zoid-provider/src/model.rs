@@ -28,12 +28,15 @@ pub fn models_for(provider: &str) -> &'static [&'static str] {
 /// Capabilities for `model`, matched by family (case-insensitive), else DEFAULT.
 pub fn model_info(model: &str) -> ModelInfo {
     let m = model.to_ascii_lowercase();
-    // Claude is a known 200k family; everything else (incl. GLM, whose exact
-    // window is a registry TODO) takes the 256k conservative default.
+    // Explicit per-family windows. Unknown models take a CONSERVATIVE default:
+    // under-estimating the window makes ACM compact a little early (safe);
+    // over-estimating risks never compacting and overflowing the real window.
     let context_window = if m.contains("claude") {
         200_000
-    } else {
+    } else if m.contains("glm") {
         256_000
+    } else {
+        32_000 // conservative default for unknown / small local models
     };
     ModelInfo {
         context_window,
@@ -47,11 +50,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn model_info_caps_by_family_else_default() {
+    fn model_info_windows_are_explicit_per_model() {
+        // Known models get their real window.
         assert_eq!(model_info("claude-sonnet-4-6").context_window, 200_000);
-        assert_eq!(model_info("CLAUDE-opus").context_window, 200_000);
+        assert_eq!(model_info("claude-opus-4-8").context_window, 200_000);
         assert_eq!(model_info("glm-5.2:cloud").context_window, 256_000);
-        assert_eq!(model_info("llama3.1:70b").context_window, 256_000);
+        // Case-insensitive family match still works.
+        assert_eq!(model_info("CLAUDE-sonnet-4-6").context_window, 200_000);
+        // Unknown models take the CONSERVATIVE (small) default, never an
+        // optimistic large one — an over-high window makes ACM under-compact.
+        assert_eq!(model_info("some-tiny-local:8b").context_window, 32_000);
         assert!(model_info("anything").tools);
     }
 

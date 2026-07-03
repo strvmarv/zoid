@@ -19,7 +19,7 @@ The **visual source of truth** for zoid's TUI. The visual-language contract and 
 
 ## Visual language (authoritative — mirror in the Rust design-tokens module)
 
-**Glyphs:** `●` edit · `✓` pass/done · `◐` running · `☐` pending · `⠿` streaming · `⎇` branch · `⚠` conflict/overlap · `▸`/`▾` collapsed/expanded · `⛔` blocker · `▲` spike · `›` user turn · `▌` caret · `█`/`░` heat bar (Ⓡ4) · `▁▂▃▄▅▆▇█` sparkline ramp (Ⓡ4) · `●` pinned item · `…` collapsed body (Ⓡ3 collapse-to-signatures).
+**Glyphs:** `●` edit · `✓` pass/done · `◐` running · `☐` pending · `⠿` streaming · `⎇` branch · `⚠` conflict/overlap · `▸`/`▾` collapsed/expanded · `⛔` blocker · `▲` spike · `›` user turn · `▌` caret · `█`/`░` heat bar (Ⓡ4) · `▁▂▃▄▅▆▇█` sparkline ramp (Ⓡ4) · `●` pinned item · `…` collapsed body (Ⓡ3 collapse-to-signatures) · `⊟` compacted tool-result (ACM-1).
 
 **Mode accent colors:** Chat = blue (`#58a6ff`/`#79c0ff`) · Build = amber (`#e3b341`). (Finalize is Build's last step; it uses a green success accent `#5ddf9c` within Build.)
 

@@ -347,10 +347,9 @@ fn select_provider(
 /// resolved token `ceiling` — 0 disables compaction (`None`), else the
 /// absolute token count `ceiling * pct / 100`.
 ///
-/// Not yet wired into the live loop: the economy drawer is observe-only and no
-/// longer takes a policy, so this config→policy mapping (and its test) is
-/// retained as scaffolding for the deferred T10 manual-control work.
-#[allow(dead_code)]
+/// Feeds `spawn_turn`'s live `TurnConfig.policy` (ACM-1), so the agent loop
+/// actually records `ToolResultCompacted` events once `compact_threshold_pct`
+/// is set above 0; the default (0) leaves existing chat behavior unchanged.
 fn policy_from_config(
     econ: &zoid_core::config::EconomyConfig,
     ceiling: u64,
@@ -1039,8 +1038,8 @@ fn apply_config_write(
     app.prov = p;
     app.economy = app.config.economy;
     refresh_config_sections(app);
-    // Live-apply the bits the running UI caches (economy auto-applies per frame
-    // via policy_from_config(&app.economy, ...)).
+    // Live-apply the bits the running UI caches (economy auto-applies on the
+    // next turn via spawn_turn's policy_from_config(&app.economy, ...)).
     app.shell.reduced_motion = app.config.reduced_motion;
     // Live-apply the model (mirrors the startup logic that derives model/shell.model
     // from config) before recomputing ctx_ceiling, so the ceiling denominator and
@@ -1649,9 +1648,11 @@ fn spawn_turn(app: &App) {
     let model = app.model.clone();
     let ui = app.ui_tx.clone();
     let session_id = app.session_id;
+    let mut turn_config = zoid::agent::chat_turn_config();
+    turn_config.policy = policy_from_config(&app.economy, app.shell.ctx_ceiling);
     tokio::spawn(async move {
         let _ = run_agent_turn(
-            zoid::agent::chat_turn_config(),
+            turn_config,
             provider,
             tools,
             std::sync::Arc::new(zoid_tools::AllowAll),
