@@ -122,6 +122,8 @@ pub fn render_shell(
         if let Some(q) = &state.question {
             render_question(frame, frame.area(), q);
         }
+    } else if state.overlay == Overlay::ProviderSwitch {
+        render_provider_switch(frame, state, frame.area());
     }
     conv_max_scroll
 }
@@ -936,6 +938,126 @@ pub fn render_question(frame: &mut Frame, area: Rect, q: &crate::question::Quest
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The quick-switch (`Alt+P`) overlay (Task 11): a centered, contained card —
+/// same chrome as `render_question`/`render_config` (rounded border, cleared
+/// background) — with two side-by-side panes: providers (left) and models
+/// (right). Reuses `picker_lines` so styling (current marker, `SEL_BG` on the
+/// active pane's selection, `DIM` for planned/non-selectable rows) matches
+/// the settings picker exactly. Options are read from `state.switch_providers`
+/// / `state.switch_models` (seeded by the bin — this fn has no `app.config`
+/// access, only `&ShellState`). All glyphs/colors come from `tokens` (§16).
+const SWITCH_FOOTER: &str = "Left/Right pane · Up/Down move · Enter apply · Esc cancel";
+
+pub fn render_provider_switch(frame: &mut Frame, state: &ShellState, area: Rect) {
+    use crate::layout::centered;
+    use crate::state::SwitchPane;
+    use ratatui::layout::{Constraint, Direction, Layout};
+
+    frame.render_widget(Clear, area); // focus the card: clear the frame behind it
+
+    let pane_w: u16 = 28;
+    // Two panes + a 1-col gutter + 2-col border, widened if needed so the
+    // word-based footer (§16 token purity) never truncates.
+    let card_w = (pane_w * 2 + 3)
+        .max(SWITCH_FOOTER.width() as u16 + 3)
+        .min(area.width);
+    let rows_needed = state
+        .switch_providers
+        .len()
+        .max(state.switch_models.len()) as u16;
+    let card_h = (rows_needed + 2 /* header row + footer row */ + 2 /* border */)
+        .min(area.height);
+    let rect = centered(area, card_w, card_h);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(" zoid · quick switch ")
+        .border_style(Style::new().fg(color::CHAT_ACCENT));
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+
+    // Footer reserved at the bottom of the inner area; header row at the top.
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    let header = rows[0];
+    let body = rows[1];
+    let foot = rows[2];
+
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(pane_w),
+            Constraint::Length(1),
+            Constraint::Min(pane_w),
+        ])
+        .split(body);
+    let header_cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(pane_w),
+            Constraint::Length(1),
+            Constraint::Min(pane_w),
+        ])
+        .split(header);
+
+    let provider_active = state.switch_pane == SwitchPane::Provider;
+    let model_active = state.switch_pane == SwitchPane::Model;
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            " Provider",
+            Style::new().fg(if provider_active {
+                color::CHAT_ACCENT
+            } else {
+                color::DIM
+            }),
+        ))),
+        header_cols[0],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            " Model",
+            Style::new().fg(if model_active {
+                color::CHAT_ACCENT
+            } else {
+                color::DIM
+            }),
+        ))),
+        header_cols[2],
+    );
+
+    let provider_lines = picker_lines(
+        &state.switch_providers,
+        state.switch_provider_sel,
+        provider_active,
+        cols[0].width as usize,
+    );
+    frame.render_widget(Paragraph::new(provider_lines), cols[0]);
+
+    let model_lines = picker_lines(
+        &state.switch_models,
+        state.switch_model_sel,
+        model_active,
+        cols[2].width as usize,
+    );
+    frame.render_widget(Paragraph::new(model_lines), cols[2]);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!(" {SWITCH_FOOTER}"),
+            Style::new().fg(color::DIM),
+        ))),
+        foot,
+    );
 }
 
 /// Greedy word-wrap to at most `width` display columns per line (no hyphenation).

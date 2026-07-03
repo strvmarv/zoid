@@ -1518,11 +1518,103 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             app.shell.question = None;
             app.shell.overlay = zoid_tui::state::Overlay::None;
         }
-        Action::OpenProviderSwitch => {}
-        Action::SwitchPaneMove(_) => {}
-        Action::SwitchItemMove(_) => {}
-        Action::SwitchApply => {}
-        Action::SwitchCancel => {}
+        Action::OpenProviderSwitch => {
+            use zoid_tui::state::{Overlay, SwitchPane};
+            app.shell.overlay = Overlay::ProviderSwitch;
+            app.shell.switch_providers = zoid_tui::config_view::provider_options(&app.config.provider);
+            app.shell.switch_provider_sel = app
+                .shell
+                .switch_providers
+                .iter()
+                .position(|o| o.is_current)
+                .unwrap_or(0);
+            app.shell.switch_pane = SwitchPane::Provider;
+            app.shell.switch_model_sel = 0;
+            let highlighted_provider_id = app
+                .shell
+                .switch_providers
+                .get(app.shell.switch_provider_sel)
+                .map(|o| o.id.clone())
+                .unwrap_or_else(|| app.config.provider.clone());
+            app.shell.switch_models =
+                zoid_tui::config_view::model_options(&highlighted_provider_id, &app.config.model);
+        }
+        Action::SwitchPaneMove(_) => {
+            use zoid_tui::state::SwitchPane;
+            app.shell.switch_pane = match app.shell.switch_pane {
+                SwitchPane::Provider => SwitchPane::Model,
+                SwitchPane::Model => SwitchPane::Provider,
+            };
+        }
+        Action::SwitchItemMove(d) => {
+            use zoid_tui::state::SwitchPane;
+            match app.shell.switch_pane {
+                SwitchPane::Provider => {
+                    let list = &app.shell.switch_providers;
+                    if !list.is_empty() {
+                        let n = list.len() as i32;
+                        let mut i = app.shell.switch_provider_sel as i32;
+                        for _ in 0..n {
+                            i = (i + d).rem_euclid(n);
+                            if list[i as usize].selectable {
+                                break;
+                            }
+                        }
+                        app.shell.switch_provider_sel = i as usize;
+                        let highlighted_provider_id = app.shell.switch_providers
+                            [app.shell.switch_provider_sel]
+                            .id
+                            .clone();
+                        app.shell.switch_models = zoid_tui::config_view::model_options(
+                            &highlighted_provider_id,
+                            &app.config.model,
+                        );
+                        app.shell.switch_model_sel = 0;
+                    }
+                }
+                SwitchPane::Model => {
+                    let list = &app.shell.switch_models;
+                    if !list.is_empty() {
+                        let n = list.len() as i32;
+                        let mut i = app.shell.switch_model_sel as i32;
+                        for _ in 0..n {
+                            i = (i + d).rem_euclid(n);
+                            if list[i as usize].selectable {
+                                break;
+                            }
+                        }
+                        app.shell.switch_model_sel = i as usize;
+                    }
+                }
+            }
+        }
+        Action::SwitchApply => {
+            use zoid_core::config::TomlValue;
+            use zoid_tui::state::Overlay;
+            let provider_id = app
+                .shell
+                .switch_providers
+                .get(app.shell.switch_provider_sel)
+                .filter(|o| o.selectable)
+                .map(|o| o.id.clone());
+            let model_id = app
+                .shell
+                .switch_models
+                .get(app.shell.switch_model_sel)
+                .filter(|o| o.selectable)
+                .map(|o| o.id.clone());
+            if let Some(pid) = provider_id {
+                apply_config_write(app, "provider", TomlValue::Str(pid.clone()), false);
+                apply_config_write(app, "base_url", base_url_write_for(&pid), false);
+                if let Some(mid) = model_id {
+                    apply_config_write(app, "model", TomlValue::Str(mid), false);
+                }
+            }
+            app.shell.overlay = Overlay::None;
+        }
+        Action::SwitchCancel => {
+            app.shell.overlay = zoid_tui::state::Overlay::None;
+        }
         Action::Noop => {}
     }
     Ok(false)

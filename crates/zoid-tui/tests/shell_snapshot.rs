@@ -1012,3 +1012,32 @@ fn question_overlay_freetext_frame() {
     let q = QuestionState::new("Describe the bug", vec![]);
     insta::assert_snapshot!(draw_question(q, 100, 24));
 }
+
+/// Quick-switch (`Alt+P`) overlay (Task 11): a two-pane floating card —
+/// providers left (with a current-marker dot), models right — rendered via
+/// `render_provider_switch`, mirroring the config picker's `picker_lines`
+/// styling. Never blank: both panes and the word-based footer must render.
+#[test]
+fn provider_switch_card() {
+    use zoid_tui::config_view::{model_options, provider_options};
+    use zoid_tui::render::render_provider_switch;
+    use zoid_tui::state::SwitchPane;
+
+    let mut s = ShellState::new();
+    s.overlay = Overlay::ProviderSwitch;
+    s.switch_providers = provider_options("ollama-cloud");
+    s.switch_models = model_options("anthropic-api", "");
+    s.switch_provider_sel = 0;
+    s.switch_model_sel = 0;
+    s.switch_pane = SwitchPane::Provider;
+
+    let backend = TestBackend::new(160, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|f| {
+            let area = f.area();
+            render_provider_switch(f, &s, area);
+        })
+        .unwrap();
+    insta::assert_snapshot!(terminal.backend().to_string());
+}

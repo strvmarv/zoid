@@ -188,6 +188,12 @@ pub struct ShellState {
     pub switch_model_sel: usize,
     /// Focused pane in the quick-switch overlay (provider list vs model list).
     pub switch_pane: SwitchPane,
+    /// Provider options shown in the quick-switch overlay's left pane, seeded
+    /// by the bin on `OpenProviderSwitch`/pane moves (Task 11).
+    pub switch_providers: Vec<crate::config_view::PickOption>,
+    /// Model options shown in the quick-switch overlay's right pane, tracking
+    /// the highlighted provider (Task 11).
+    pub switch_models: Vec<crate::config_view::PickOption>,
 }
 
 impl ShellState {
@@ -259,6 +265,8 @@ impl ShellState {
             switch_provider_sel: 0,
             switch_model_sel: 0,
             switch_pane: SwitchPane::Provider,
+            switch_providers: Vec::new(),
+            switch_models: Vec::new(),
         }
     }
 
