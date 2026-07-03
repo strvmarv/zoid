@@ -375,6 +375,16 @@ fn select_provider(
     }
 }
 
+/// Spawn a background fetch of a provider's model list; the result is delivered
+/// as `AgentUpdate::ModelsFetched`. Non-fatal: any error → empty list (the
+/// picker keeps its static registry fallback).
+fn spawn_model_fetch(provider: Arc<dyn Provider>, ui_tx: mpsc::Sender<AgentUpdate>) {
+    tokio::spawn(async move {
+        let models = provider.list_models().await.unwrap_or_default();
+        let _ = ui_tx.send(AgentUpdate::ModelsFetched(models)).await;
+    });
+}
+
 /// Build the economy `ContextPolicy` (spec §7.2) from the loaded config's
 /// `[economy]` table, resolving `compact_threshold_pct` (0–100) against the
 /// resolved token `ceiling` — 0 disables compaction (`None`), else the
@@ -856,6 +866,9 @@ async fn run<B: ratatui::backend::Backend>(
                         app.shell.overlay = zoid_tui::state::Overlay::Question;
                         app.pending_answer = Some(reply);
                     }
+                    AgentUpdate::ModelsFetched(models) => {
+                        apply_models_fetched(app, models);
+                    }
                 }
             }
             _ = motion_tick.tick(), if app.streaming || app.zoom_changed_at.is_some() => {
@@ -1011,6 +1024,35 @@ fn current_config_field(app: &App) -> Option<(&'static str, zoid_tui::config_vie
         .get(app.shell.config_section)
         .and_then(|s| s.rows.get(app.shell.config_field))
         .map(|r| (r.label, r.kind.clone()))
+}
+
+/// Replace an OPEN model picker's options with a freshly-fetched live list.
+/// No-op if the list is empty (keep the static fallback) or a model picker
+/// isn't currently open (results arrived too late / focus moved).
+fn apply_models_fetched(app: &mut App, models: Vec<String>) {
+    if models.is_empty() || !app.shell.config_picker_open() {
+        return;
+    }
+    if current_config_field(app).map(|(l, _)| l) != Some("model") {
+        return;
+    }
+    let cur = app.config.model.clone();
+    app.shell.config_picker = models
+        .into_iter()
+        .map(|m| zoid_tui::config_view::PickOption {
+            is_current: m == cur,
+            id: m.clone(),
+            label: m,
+            detail: String::new(),
+            selectable: true,
+        })
+        .collect();
+    app.shell.config_picker_sel = app
+        .shell
+        .config_picker
+        .iter()
+        .position(|o| o.is_current)
+        .unwrap_or(0);
 }
 
 /// Rebuild the live config screen from the current config/provenance/secret
@@ -1400,6 +1442,9 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                         .unwrap_or(0);
                     app.shell.config_col = ConfigCol::Picker;
                 }
+                if label == "model" {
+                    spawn_model_fetch(app.provider.clone(), app.ui_tx.clone());
+                }
             }
         }
         Action::ConfigPickerMove(d) => {
@@ -1456,6 +1501,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                     } else {
                         ConfigCol::Picker
                     };
+                    spawn_model_fetch(app.provider.clone(), app.ui_tx.clone());
                 } else if label == "model" {
                     apply_config_write(app, "model", TomlValue::Str(id), false);
                     app.shell.config_picker.clear();
@@ -1541,7 +1587,8 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::OpenProviderSwitch => {
             use zoid_tui::state::{Overlay, SwitchPane};
             app.shell.overlay = Overlay::ProviderSwitch;
-            app.shell.switch_providers = zoid_tui::config_view::provider_options(&app.config.provider);
+            app.shell.switch_providers =
+                zoid_tui::config_view::provider_options(&app.config.provider);
             app.shell.switch_provider_sel = app
                 .shell
                 .switch_providers
@@ -2197,6 +2244,68 @@ mod tests {
             delegating: false,
             pending_answer: None,
         }
+    }
+
+    /// `apply_models_fetched` replaces the OPEN model picker's options with the
+    /// live list, seeding the selection cursor on the current model; an empty
+    /// fetch result is a no-op (the static registry fallback is kept).
+    #[tokio::test]
+    async fn apply_models_fetched_replaces_open_model_picker() {
+        let mut app = test_app().await;
+        refresh_config_sections(&mut app);
+        // Find the "model" row and park the cursor on it, then open its
+        // picker exactly as `Action::ConfigDrillOpen` would.
+        let (section, field) = app
+            .shell
+            .config_sections
+            .iter()
+            .enumerate()
+            .find_map(|(si, s)| {
+                s.rows
+                    .iter()
+                    .position(|r| r.label == "model")
+                    .map(|ri| (si, ri))
+            })
+            .expect("config sections must include a \"model\" row");
+        app.shell.config_section = section;
+        app.shell.config_field = field;
+        assert_eq!(current_config_field(&app).map(|(l, _)| l), Some("model"));
+        app.shell.config_picker =
+            zoid_tui::config_view::model_options(&app.config.provider, &app.config.model);
+        app.shell.config_col = zoid_tui::state::ConfigCol::Picker;
+        assert!(app.shell.config_picker_open());
+
+        // Happy path: a live fetch replaces the fallback list.
+        apply_models_fetched(&mut app, vec!["live-a".to_string(), "live-b".to_string()]);
+        assert_eq!(app.shell.config_picker.len(), 2);
+        assert_eq!(app.shell.config_picker[0].id, "live-a");
+        assert_eq!(app.shell.config_picker[1].id, "live-b");
+        assert!(app.shell.config_picker.iter().all(|o| o.selectable));
+
+        // Empty fetch result: fallback list is left untouched.
+        apply_models_fetched(&mut app, Vec::new());
+        assert_eq!(app.shell.config_picker.len(), 2);
+        assert_eq!(app.shell.config_picker[0].id, "live-a");
+        assert_eq!(app.shell.config_picker[1].id, "live-b");
+    }
+
+    /// A live fetch that lands after focus has moved off the model field (or
+    /// after the picker was closed) must not clobber whatever is on screen.
+    #[tokio::test]
+    async fn apply_models_fetched_ignored_when_model_picker_not_open() {
+        let mut app = test_app().await;
+        refresh_config_sections(&mut app);
+        // Cursor left on whatever the default field is (not drilled into a
+        // picker at all) — config_picker is empty, so config_picker_open() is
+        // false regardless of which row the cursor is on.
+        assert!(!app.shell.config_picker_open());
+
+        apply_models_fetched(&mut app, vec!["live-a".to_string()]);
+
+        assert!(
+            app.shell.config_picker.is_empty(),
+            "no picker was open; a stray fetch result must not open one"
+        );
     }
 
     /// Regression for the busy-guard bug: `Action::Submit` must be a no-op

@@ -73,6 +73,8 @@ pub enum AgentUpdate {
     },
     /// The turn is finished (model produced no further tool calls / cap / error).
     TurnComplete,
+    /// Live model list fetched for the config/quick-switch picker.
+    ModelsFetched(Vec<String>),
 }
 
 /// The tool specs to advertise to the provider.
