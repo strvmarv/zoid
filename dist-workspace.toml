@@ -22,3 +22,6 @@ create-release = false
 install-path = "CARGO_HOME"
 # Custom publish job: lands the Release in the public strvmarv/zoid-releases repo.
 publish-jobs = ["./publish-public"]
+# Never build a source tarball: source is private and must not leak into the
+# public strvmarv/zoid-releases repo.
+source-tarball = false

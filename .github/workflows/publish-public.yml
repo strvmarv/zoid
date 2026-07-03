@@ -6,6 +6,15 @@ name: publish-public
 # after the "host" job completes, passing the JSON dist-manifest via the `plan`
 # input and `secrets: inherit`.
 #
+# No checkout: `custom-publish-public` only gets `id-token: write` and
+# `packages: write` permissions (see release.yml — "publish jobs get escalated
+# permissions"), so `contents` is implicitly `none`. A checkout of the private
+# source repo would fail under those permissions. Release notes therefore come
+# from cargo-dist's own changelog parsing (CHANGELOG.md, verified via
+# `dist plan --output-format=json` to populate `announcement_changelog` with
+# the version's section text) passed through the `plan` input — no checkout
+# needed.
+#
 # Artifact handoff: cargo-dist does NOT hand built artifacts to custom publish
 # jobs through the `plan` input or any single named bundle. Every earlier job in
 # the SAME workflow run (build-local-artifacts, build-global-artifacts, host)
@@ -29,11 +38,6 @@ jobs:
   publish-public:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: recursive
-
       - name: Download built artifacts
         uses: actions/download-artifact@v8
         with:
@@ -45,15 +49,31 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
           TAG: ${{ github.ref_name }}
+          # Release notes come from cargo-dist's changelog parsing (CHANGELOG.md),
+          # threaded through the reusable workflow's `plan` input. Passed via env:
+          # (not interpolated into the shell script) to avoid shell-injection.
+          NOTES_BODY: ${{ fromJson(inputs.plan).announcement_changelog }}
         run: |
           set -euo pipefail
           # Drop dist's own bookkeeping manifests — only ship real release assets
           # (archives, sha256.sum, per-artifact .sha256, installer scripts).
           rm -f dist-artifacts/*dist-manifest.json
-          # Prefer a curated NOTES.md if present; else a minimal generated body.
-          if [ -f NOTES.md ]; then NOTES_ARG=(--notes-file NOTES.md); else NOTES_ARG=(--notes "zoid ${TAG}"); fi
+          # Belt-and-suspenders: dist-workspace.toml sets source-tarball = false so
+          # cargo-dist never builds source.tar.gz, but make sure none slips through
+          # regardless (the source repo is private and must not leak here).
+          rm -f dist-artifacts/source.tar.gz*
+
+          # Fail legibly rather than publishing an empty/broken release.
+          test -n "$(ls -A dist-artifacts 2>/dev/null)" || { echo "::error::no artifacts downloaded"; exit 1; }
+
+          if [ -n "${NOTES_BODY:-}" ]; then
+            printf '%s' "$NOTES_BODY" > notes.md
+          else
+            printf 'zoid %s' "$TAG" > notes.md
+          fi
+
           gh release create "$TAG" \
             --repo strvmarv/zoid-releases \
             --title "$TAG" \
-            "${NOTES_ARG[@]}" \
+            --notes-file notes.md \
             dist-artifacts/*

@@ -27,20 +27,37 @@ checksum-verified). No tokens live on user machines.
   uses) and runs `gh release create` against `strvmarv/zoid-releases`,
   authenticated with `RELEASES_REPO_TOKEN` (not the default `GITHUB_TOKEN`,
   which only has rights in the private repo).
+- `publish-public.yml` does **not** check out the private source repo. The
+  `custom-publish-public` job only gets `id-token: write` and
+  `packages: write` permissions (see the "publish jobs get escalated
+  permissions" comment in the generated `release.yml`), so `contents` is
+  implicitly `none` and a checkout would fail. Instead, release notes come
+  from cargo-dist's own changelog parsing of `CHANGELOG.md`: the reusable
+  workflow's `plan` input carries `announcement_changelog` (populated by dist
+  when it finds a matching `## <version>` section in `CHANGELOG.md`), and
+  `publish-public.yml` writes that straight to a notes file for
+  `gh release create --notes-file`.
+- `source-tarball = false` in `dist-workspace.toml` stops dist from building
+  `source.tar.gz` at all (it would otherwise leak the private source into the
+  public repo). `publish-public.yml` also strips any stray
+  `source.tar.gz*` before publishing as a belt-and-suspenders measure.
 
 ## Cut a release
 
 1. Bump the version: edit `[workspace.package] version` in the root `Cargo.toml`.
-2. Write release notes in `NOTES.md` by hand. Do NOT paste the private commit
-   log — this file becomes public (it is uploaded/read from the checkout in
-   `publish-public.yml`).
+2. Add a `## X.Y.Z` section to the top of `CHANGELOG.md` by hand with the
+   release notes. Do NOT paste the private commit log — this file becomes
+   public (dist reads it via its changelog parser and threads the matching
+   section through to the public release notes; no checkout of the private
+   repo happens). The version header must match the tag you're about to push
+   (e.g. `## 0.1.0` for tag `v0.1.0`) or dist won't find a section to use.
 3. Commit: `git commit -am "release: vX.Y.Z"`.
 4. Tag and push: `git tag vX.Y.Z && git push origin main --tags`.
 5. CI (`release.yml`) cross-compiles the three targets and the `publish-public`
    job creates the Release at `strvmarv/zoid-releases`.
 6. Verify: the public repo's Releases page shows three archives + `sha256.sum`
    (plus per-archive `.sha256` files and the `zoid-installer.sh` /
-   `zoid-installer.ps1` installer scripts).
+   `zoid-installer.ps1` installer scripts) and NO `source.tar.gz`.
 7. Smoke-test: on a machine with an older zoid, run `zoid update`.
 
 ## First-time install (new machine)
@@ -77,13 +94,37 @@ run by any subagent or CI job:
    ```
 4. **Push the smoke tag** to prove the end-to-end pipeline before a real
    release:
+
+   **Caveat — a `-test` tag is a prerelease and will give you a false-green
+   smoke test.** cargo-dist parses `v0.0.1-test` as SemVer prerelease
+   `0.0.1-test`, which sets `announcement_is_prerelease = true`. The
+   `custom-publish-public` job's `if:` condition is
+   `!announcement_is_prerelease || publish_prereleases`, so with the default
+   `publish-prereleases = false` (or unset) in `dist-workspace.toml`, the
+   `custom-publish-public` job is **skipped** — `release.yml` still goes
+   green, but the cross-repo publish path never actually runs, and
+   `strvmarv/zoid-releases` gets nothing. A green run is not proof the
+   pipeline works.
+
+   To make the smoke test meaningful, do ONE of the following:
+   - **Temporarily** set `publish-prereleases = true` in `[dist]` in
+     `dist-workspace.toml`, commit it, run the smoke tag, confirm the publish
+     job actually ran, then **revert this setting before tagging `v0.1.0`**
+     (a real release should not need it and leaving it on would let future
+     accidental prerelease tags publish too); or
+   - Use a non-prerelease smoke tag instead (e.g. `v0.0.1` — a bare
+     `major.minor.patch` with no `-suffix` is not a prerelease), so
+     `announcement_is_prerelease` is `false` and `custom-publish-public` runs
+     unconditionally.
+
    ```bash
    git tag v0.0.1-test && git push origin v0.0.1-test
    ```
-   Confirm: `release.yml` runs green; `publish-public` creates a
-   `v0.0.1-test` release on `strvmarv/zoid-releases` with the three archives +
-   `sha256.sum`. Then, from a build of this branch, `zoid update` (matching
-   `ZOID_TARGET`) upgrades to it.
+   Confirm: `release.yml` runs green; the `custom-publish-public` job actually
+   ran (not skipped) and creates a `v0.0.1-test` release on
+   `strvmarv/zoid-releases` with the three archives + `sha256.sum` (and no
+   `source.tar.gz`). Then, from a build of this branch, `zoid update`
+   (matching `ZOID_TARGET`) upgrades to it.
 5. **Clean up the smoke release and cut the real one**:
    ```bash
    gh release delete v0.0.1-test --repo strvmarv/zoid-releases --yes
