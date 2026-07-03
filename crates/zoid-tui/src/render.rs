@@ -680,7 +680,7 @@ pub fn render_config(
     frame.render_widget(block, area);
 
     // Footer line reserved at the bottom of the inner area.
-    let footer = "Tab section · ↑/↓ move · →/Enter drill · ←/Esc back";
+    let footer = "Tab section · Up/Down move · Enter drill · Esc back";
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
