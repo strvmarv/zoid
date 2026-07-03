@@ -569,6 +569,7 @@ async fn emit_with_tokens(
 mod tests {
     use super::*;
     use zoid_core::event::BranchId;
+    use zoid_provider::MsgRole;
 
     #[test]
     fn chat_turn_config_is_main_branch_cwd_dot() {
@@ -582,5 +583,64 @@ mod tests {
     fn build_request_uses_the_given_system_prompt() {
         let req = build_request(&[], "m", &zoid_tools::registry(), "CUSTOM SYS");
         assert_eq!(req.system.as_deref(), Some("CUSTOM SYS"));
+    }
+
+    #[test]
+    fn build_request_carries_compacted_summary_into_live_messages() {
+        let ts = 1700000000i64;
+        let events = vec![
+            Event::new(
+                Ulid::new(),
+                None,
+                ts,
+                EventKind::UserMessage {
+                    text: "test".into(),
+                },
+            ),
+            Event::new(
+                Ulid::new(),
+                None,
+                ts,
+                EventKind::ToolCall {
+                    id: "c1".into(),
+                    name: "shell".into(),
+                    args: "{}".into(),
+                },
+            ),
+            Event::new(
+                Ulid::new(),
+                None,
+                ts,
+                EventKind::ToolResult {
+                    id: "c1".into(),
+                    name: "shell".into(),
+                    output: "HUGE ORIGINAL DUMP".into(),
+                    is_error: false,
+                },
+            ),
+            Event::new(
+                Ulid::new(),
+                None,
+                ts,
+                EventKind::ToolResultCompacted {
+                    id: "c1".into(),
+                    summary: "compacted summary".into(),
+                    original_tokens: 500,
+                },
+            ),
+        ];
+
+        let req = build_request(&events, "test-model", &zoid_tools::registry(), "SYS");
+
+        // Find the tool message in the built request
+        let tool_msg = req
+            .messages
+            .iter()
+            .find(|m| m.role == MsgRole::Tool && m.tool_name.as_deref() == Some("shell"))
+            .expect("tool message should be present");
+
+        // Assert the content is the compacted summary, not the original dump
+        assert_eq!(tool_msg.content, "compacted summary");
+        assert!(!tool_msg.content.contains("HUGE ORIGINAL DUMP"));
     }
 }
