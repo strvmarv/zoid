@@ -36,6 +36,15 @@ impl Zoom {
     }
 }
 
+/// Which column has focus inside the config overlay. Sections are switched with
+/// Tab (not a focusable column); focus moves between the field list and the
+/// contextual picker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigCol {
+    Fields,
+    Picker,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Overlay {
     None,
@@ -151,6 +160,12 @@ pub struct ShellState {
     /// the bin once per frame from `Config` + `Provenance` + secret statuses
     /// (Task 12 wires population; empty here is a valid default).
     pub config_sections: Vec<crate::config_view::Section>,
+    /// Focused column in the config overlay (fields vs the drilled-open picker).
+    pub config_col: ConfigCol,
+    /// The open col-3 picker options; empty when no picker is drilled open.
+    pub config_picker: Vec<crate::config_view::PickOption>,
+    /// Highlighted row within the open picker.
+    pub config_picker_sel: usize,
     /// Name of the tool currently executing (in-flight indicator), or `None`.
     pub active_tool: Option<String>,
     /// The active `ask_user` question overlay's state, or `None` when no
@@ -220,6 +235,9 @@ impl ShellState {
             config_field: 0,
             config_edit: None,
             config_sections: Vec::new(),
+            config_col: ConfigCol::Fields,
+            config_picker: Vec::new(),
+            config_picker_sel: 0,
             active_tool: None,
             question: None,
         }
@@ -315,6 +333,11 @@ impl ShellState {
     /// Clear the in-flight spinner (its `ToolResult` arrived, or the turn ended).
     pub fn clear_active_tool(&mut self) {
         self.active_tool = None;
+    }
+
+    /// True when the col-3 contextual picker is drilled open.
+    pub fn config_picker_open(&self) -> bool {
+        !self.config_picker.is_empty()
     }
 }
 
@@ -492,5 +515,13 @@ mod tests {
         assert_eq!(s.active_tool.as_deref(), Some("shell"));
         s.clear_active_tool();
         assert_eq!(s.active_tool, None);
+    }
+
+    #[test]
+    fn config_picker_defaults_closed() {
+        let s = ShellState::new();
+        assert!(matches!(s.config_col, ConfigCol::Fields));
+        assert!(!s.config_picker_open());
+        assert_eq!(s.config_picker_sel, 0);
     }
 }
