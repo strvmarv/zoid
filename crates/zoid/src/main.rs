@@ -293,6 +293,20 @@ fn handle_conversation_click(app: &mut App, layout: &zoid_tui::layout::ShellLayo
     }
 }
 
+/// The base URL to hand a provider: an explicit non-blank config override wins,
+/// else the registry default for the (canonicalized) provider id, else empty
+/// (which `with_base_url` treats as "keep the built-in default").
+fn effective_base_url(config: &zoid_core::config::Config) -> String {
+    if let Some(u) = config.base_url.as_ref() {
+        if !u.trim().is_empty() {
+            return u.clone();
+        }
+    }
+    zoid_provider::model::default_base_url(&config.provider)
+        .map(str::to_string)
+        .unwrap_or_default()
+}
+
 /// Provider + credential from `config.provider` + the secret store (env wins
 /// inside `SecretStore::get`). No key found → fall back to the offline
 /// `FakeProvider` so the binary always runs; `provider_label` mirrors this
@@ -315,12 +329,11 @@ fn select_provider(
             s.get(name)
         })
     };
-    // `base_url` override (config §7.1). Empty/unset keeps the provider's
-    // built-in default — `with_base_url` ignores blank input — so we can pass it
-    // unconditionally. The offline `FakeProvider` fallback has no endpoint, so
-    // the override only applies on the keyed branches.
-    let base_url = config.base_url.clone().unwrap_or_default();
-    match config.provider.as_str() {
+    let base_url = effective_base_url(config);
+    let family = zoid_provider::model::entry(&config.provider)
+        .map(|e| e.family)
+        .unwrap_or("ollama");
+    match family {
         "anthropic" => match key_for("ANTHROPIC_API_KEY") {
             Some(k) => (
                 Arc::new(
@@ -2111,5 +2124,27 @@ mod tests {
             Some("finish the current turn first"),
             "blocked NewSession should surface the busy hint"
         );
+    }
+
+    #[test]
+    fn effective_base_url_prefers_override_then_registry() {
+        use zoid_core::config::Config;
+        // No override → registry default for the canonical id.
+        let mut c = Config::default(); // provider = "ollama" (legacy) → ollama-cloud
+        c.base_url = None;
+        assert_eq!(effective_base_url(&c), "https://ollama.com");
+
+        // Explicit local id, no override → local endpoint.
+        c.provider = "ollama-local".into();
+        c.base_url = None;
+        assert_eq!(effective_base_url(&c), "http://localhost:11434");
+
+        // Override wins over registry.
+        c.base_url = Some("http://127.0.0.1:1234".into());
+        assert_eq!(effective_base_url(&c), "http://127.0.0.1:1234");
+
+        // Blank override falls back to registry.
+        c.base_url = Some("   ".into());
+        assert_eq!(effective_base_url(&c), "http://localhost:11434");
     }
 }
