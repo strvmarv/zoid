@@ -47,6 +47,7 @@ fn draw_at(state: &ShellState, tasks: &[TaskItem], w: u16, h: u16) -> String {
                 &state,
                 &empty_economy(),
                 &msgs,
+                None,
                 tasks,
                 &input,
                 false,

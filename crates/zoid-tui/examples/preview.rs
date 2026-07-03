@@ -249,7 +249,7 @@ fn main() {
     };
     terminal
         .draw(|f| {
-            render_shell(f, &state, &economy, &msgs, &[], &input, false, &view);
+            render_shell(f, &state, &economy, &msgs, None, &[], &input, false, &view);
         })
         .unwrap();
 

@@ -27,6 +27,12 @@ pub fn render_shell(
     state: &ShellState,
     economy: &EconomyView,
     msgs: &[ChatMsg],
+    // The pre-rendered conversation body (full, `reveal == None`), when the caller
+    // has cached it (the hot path — `conversation_view` is the expensive wrap +
+    // syntax-highlight pass). `None` falls back to rendering it here, which keeps
+    // test/example call sites simple. Either way the zoom-reveal truncation + the
+    // in-flight tool spinner are applied here before scroll/paint.
+    body: Option<&[Line<'static>]>,
     tasks: &[zoid_core::tasks::TaskItem],
     input: &TextArea<'_>,
     streaming: bool,
@@ -56,7 +62,16 @@ pub fn render_shell(
                 horizontal: CONV_PAD,
                 vertical: 0,
             });
-            let mut body = conversation_view(msgs, view, streaming, text.width as usize);
+            // Cached full render (reveal == None) → apply the zoom-reveal
+            // truncation here (cheap take/clone, not a re-render). Without a cache
+            // (tests), render it via conversation_view, which applies reveal itself.
+            let mut body: Vec<Line<'static>> = match body {
+                Some(full) => match view.reveal {
+                    Some(n) => full.iter().take(n).cloned().collect(),
+                    None => full.to_vec(),
+                },
+                None => conversation_view(msgs, view, streaming, text.width as usize),
+            };
             // In-flight tool indicator: a dim spinner line below the last message,
             // above the input, shown while a Local tool call is running (cleared
             // once its `ToolResult` arrives or the turn completes). §16: glyph and

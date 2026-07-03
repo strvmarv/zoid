@@ -32,6 +32,7 @@ fn draw(state: &ShellState, msgs: &[ChatMsg], w: u16, h: u16) -> String {
                 state,
                 &empty_economy(),
                 msgs,
+                None,
                 &[],
                 &input,
                 false,

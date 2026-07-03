@@ -448,6 +448,47 @@ impl ProjectionCache {
     }
 }
 
+/// Inputs that determine the rendered conversation body. Scroll offset is NOT
+/// here — scrolling reuses the cached body — which is the whole point.
+#[derive(PartialEq, Eq)]
+struct BodyKey {
+    events_len: usize,
+    zoom: zoid_tui::state::Zoom,
+    width: usize,
+    streaming: bool,
+    /// Folded as `streaming && caret_on` — the caret only affects the body while
+    /// streaming, so an idle blink never invalidates the cache.
+    caret: bool,
+    tz: i32,
+}
+
+/// Cached `conversation_view` output (the expensive wrap + syntax-highlight
+/// pass), rebuilt only when a `BodyKey` input changes. A scroll-event burst then
+/// reuses these lines every frame instead of re-rendering the whole transcript,
+/// which is what made buffered scroll events drain at ~52ms each.
+#[derive(Default)]
+struct BodyCache {
+    key: Option<BodyKey>,
+    body: Vec<ratatui::text::Line<'static>>,
+}
+
+impl BodyCache {
+    /// Rebuild the body iff `key` changed; cheap no-op otherwise.
+    fn refresh(&mut self, key: BodyKey, msgs: &[zoid_core::projection::ChatMsg], width: usize) {
+        if self.key.as_ref() == Some(&key) {
+            return;
+        }
+        let view = ChatView {
+            zoom: key.zoom,
+            caret_on: key.caret,
+            reveal: None, // full body; reveal truncation is applied at paint time
+            tz_offset_secs: key.tz,
+        };
+        self.body = zoid_tui::chat::conversation_view(msgs, &view, key.streaming, width);
+        self.key = Some(key);
+    }
+}
+
 struct App {
     session: SessionHandle,
     session_id: Ulid,
@@ -474,6 +515,8 @@ struct App {
     started: std::time::Instant,
     /// Cached projections over the event log, refreshed only when it grows.
     proj: ProjectionCache,
+    /// Cached rendered conversation body; reused across scroll/typing frames.
+    body_cache: BodyCache,
     /// When the altitude last changed, for the fold/unfold reveal (Ⓡ2).
     zoom_changed_at: Option<std::time::Instant>,
     /// Max conversation scroll offset from the last rendered frame (body length −
@@ -627,6 +670,7 @@ async fn main() -> Result<()> {
         ui_tx,
         started: std::time::Instant::now(),
         proj: ProjectionCache::default(),
+        body_cache: BodyCache::default(),
         zoom_changed_at: None,
         last_conv_max_scroll: 0,
         tz_offset_secs,
@@ -730,6 +774,36 @@ async fn run<B: ratatui::backend::Backend>(
         // paints a truncated frame and the loop stops redrawing (stale until an
         // unrelated event wakes it).
         let mut frame_reveal_none = false;
+
+        // Build (or reuse) the rendered conversation body OUTSIDE the draw closure,
+        // keyed on the inputs that change the lines (events / zoom / width /
+        // streaming / caret) — NOT the scroll offset. A scroll-event burst then
+        // reuses these lines every frame instead of re-wrapping + re-highlighting
+        // the whole transcript (the ~52ms/frame cost behind the scroll storm).
+        let area = terminal
+            .size()
+            .map(|s| Rect { x: 0, y: 0, width: s.width, height: s.height })
+            .unwrap_or_default();
+        let body_w =
+            zoid_tui::layout::conv_text_width(compute(area, &app.shell).conversation.width) as usize;
+        let elapsed = app.started.elapsed().as_millis() as u64;
+        let caret = zoid_tui::motion::caret_on(elapsed, 1000, app.shell.reduced_motion);
+        let streaming = app.streaming;
+        let zoom = app.shell.zoom;
+        let tz = app.tz_offset_secs;
+        app.body_cache.refresh(
+            BodyKey {
+                events_len: app.events.len(),
+                zoom,
+                width: body_w,
+                streaming,
+                caret: streaming && caret,
+                tz,
+            },
+            &app.proj.msgs,
+            body_w,
+        );
+
         if app.shell.overlay == zoid_tui::state::Overlay::Question {
             zoid::zlog!(
                 "main: drawing frame with Question overlay (question.is_some={})",
@@ -737,40 +811,20 @@ async fn run<B: ratatui::backend::Backend>(
             );
         }
         terminal.draw(|f| {
-            // Projections come from the event-count-keyed cache (refreshed above),
-            // so this closure does zero O(events) work on an ordinary frame. The
-            // drawer is read-only/observability-only, so it needs only window + churn.
-            let msgs = &app.proj.msgs;
+            // The drawer is read-only/observability-only, so it needs only
+            // window + churn. All inputs come from caches — zero per-frame
+            // O(events) or re-render work on an ordinary frame.
             let economy = zoid_tui::EconomyView::build(&app.proj.window, &app.proj.churn, 0);
             let task_items = &app.proj.tasks;
-            let elapsed = app.started.elapsed().as_millis() as u64;
-            let caret = zoid_tui::motion::caret_on(elapsed, 1000, app.shell.reduced_motion);
-            // Measure total lines (which re-runs conversation_view — tree-sitter in
-            // Detail) ONLY while a zoom animation is actually in flight; on every
-            // ordinary frame `reveal` is None and we skip the second build entirely.
+            let body = &app.body_cache.body;
+            // Zoom-reveal count derives from the cached body length — no second
+            // conversation_view build. `reveal` is None on ordinary frames.
             let reveal = match app.zoom_changed_at {
                 Some(t0) => {
                     let elapsed_ms = t0.elapsed().as_millis() as u64;
                     if elapsed_ms < ZOOM_ANIM_MS && !app.shell.reduced_motion {
-                        // Wrap width must match render_shell's inset stream width so
-                        // the reveal line count matches what's actually drawn.
-                        let text_w = zoid_tui::layout::conv_text_width(
-                            compute(f.area(), &app.shell).conversation.width,
-                        ) as usize;
-                        let total_lines = zoid_tui::chat::conversation_view(
-                            msgs,
-                            &ChatView {
-                                zoom: app.shell.zoom,
-                                caret_on: caret,
-                                reveal: None,
-                                tz_offset_secs: app.tz_offset_secs,
-                            },
-                            app.streaming,
-                            text_w,
-                        )
-                        .len();
                         zoid_tui::motion::zoom_reveal(
-                            total_lines,
+                            body.len(),
                             elapsed_ms,
                             ZOOM_ANIM_MS,
                             app.shell.reduced_motion,
@@ -783,19 +837,20 @@ async fn run<B: ratatui::backend::Backend>(
             };
             frame_reveal_none = reveal.is_none();
             let view = ChatView {
-                zoom: app.shell.zoom,
+                zoom,
                 caret_on: caret,
                 reveal,
-                tz_offset_secs: app.tz_offset_secs,
+                tz_offset_secs: tz,
             };
             frame_conv_max = render_shell(
                 f,
                 &app.shell,
                 &economy,
-                msgs,
+                &app.proj.msgs,
+                Some(body),
                 task_items,
                 &app.textarea,
-                app.streaming,
+                streaming,
                 &view,
             );
         })?;
@@ -1292,9 +1347,10 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 app.session.touch_session(sid, now_ms()).await.ok();
                 app.session_id = sid;
                 app.events = app.session.snapshot_session(sid).await.unwrap_or_default();
-                // Wholesale event-log replacement: reset the projection cache so
-                // it can't serve the previous session's data at an equal length.
+                // Wholesale event-log replacement: reset the caches so they
+                // can't serve the previous session's data at an equal length.
                 app.proj = ProjectionCache::default();
+                app.body_cache = BodyCache::default();
                 app.shell.conversation_scroll = 0;
                 if let Some(info) = app
                     .session
@@ -1569,8 +1625,9 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             app.shell.session_name = name;
             app.session_started_ms = ts;
             app.events.clear();
-            // New session: reset the cache (clear() may leave the same length).
+            // New session: reset the caches (clear() may leave the same length).
             app.proj = ProjectionCache::default();
+            app.body_cache = BodyCache::default();
             app.shell.conversation_scroll = 0;
             Ok(false)
         }
@@ -2064,6 +2121,7 @@ mod tests {
             ui_tx,
             started: std::time::Instant::now(),
             proj: ProjectionCache::default(),
+            body_cache: BodyCache::default(),
             zoom_changed_at: None,
             last_conv_max_scroll: 0,
             tz_offset_secs: 0,
