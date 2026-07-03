@@ -524,6 +524,9 @@ struct App {
     /// scroll handler can clamp the STORED offset and never let it run away past
     /// the last line (which would make scroll-up appear dead).
     last_conv_max_scroll: u16,
+    /// The conversation rect from the last drawn frame, so `handle_action` (which
+    /// has no `terminal` in scope) can map a scrollbar drag row to an offset.
+    last_conv_rect: ratatui::layout::Rect,
     /// Local UTC offset (seconds) for message-row HH:MM stamps, sampled once.
     tz_offset_secs: i32,
     /// Epoch-millis the active session started (resumed session's `created_ts`,
@@ -673,6 +676,7 @@ async fn main() -> Result<()> {
         body_cache: BodyCache::default(),
         zoom_changed_at: None,
         last_conv_max_scroll: 0,
+        last_conv_rect: ratatui::layout::Rect::default(),
         tz_offset_secs,
         session_started_ms,
         session_ids: Vec::new(),
@@ -711,6 +715,20 @@ async fn main() -> Result<()> {
     );
     let _ = terminal.show_cursor();
     result
+}
+
+/// Map a screen row on the scrollbar to an absolute conversation offset and
+/// apply it (re-deriving tail-follow), using the last drawn frame's geometry.
+fn scrollbar_row_to_offset(app: &mut App, row: u16) {
+    let conv = app.last_conv_rect;
+    let track_h = conv.height;
+    if track_h <= 1 {
+        return;
+    }
+    let max = app.last_conv_max_scroll;
+    let rel = row.saturating_sub(conv.y).min(track_h - 1);
+    let offset = ((rel as u32 * max as u32 + (track_h as u32 - 1) / 2) / (track_h as u32 - 1)) as u16;
+    app.shell.scroll_to_offset(offset, max);
 }
 
 async fn run<B: ratatui::backend::Backend>(
@@ -809,6 +827,9 @@ async fn run<B: ratatui::backend::Backend>(
         if app.zoom_changed_at.is_none() {
             app.shell.apply_follow(max_scroll);
         }
+        // Remember the conversation rect for scrollbar drag row→offset mapping,
+        // which runs in `handle_action` (no `terminal`/layout in scope there).
+        app.last_conv_rect = layout.conversation;
 
         // Refresh the status-bar activity indicator: a turn is "working" while
         // streaming or delegating. The spinner frame is wall-clock-derived here
@@ -1253,6 +1274,12 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 app.last_conv_max_scroll
             );
         }
+        Action::ScrollbarGrab(row) => {
+            app.shell.scrollbar_drag = true;
+            scrollbar_row_to_offset(app, row);
+        }
+        Action::ScrollbarDrag(row) => scrollbar_row_to_offset(app, row),
+        Action::ScrollbarRelease => app.shell.scrollbar_drag = false,
         // Conversation clicks are resolved in the event loop (where the layout is
         // available) via `handle_conversation_click`; this arm keeps the match
         // exhaustive and never fires from the keyboard.
@@ -2134,6 +2161,7 @@ mod tests {
             body_cache: BodyCache::default(),
             zoom_changed_at: None,
             last_conv_max_scroll: 0,
+            last_conv_rect: ratatui::layout::Rect::default(),
             tz_offset_secs: 0,
             session_started_ms: 0,
             session_ids: Vec::new(),

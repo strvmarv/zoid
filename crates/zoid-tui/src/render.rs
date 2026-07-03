@@ -97,7 +97,28 @@ pub fn render_shell(
                 .min(u16::MAX as usize) as u16;
             conv_max_scroll = max_scroll;
             let scroll = state.conversation_scroll.min(max_scroll);
+            let content_len = body.len().min(u16::MAX as usize) as u16;
             frame.render_widget(Paragraph::new(body).scroll((scroll, 0)), text);
+
+            // Always-visible scrollbar in the rightmost gutter column of the
+            // conversation rect (CONV_PAD reserves it, so text never overlaps).
+            let track_h = layout.conversation.height;
+            if track_h > 0 && layout.conversation.width > 0 {
+                let bar_x = layout.conversation.right().saturating_sub(1);
+                let (thumb_start, thumb_len) =
+                    crate::scrollbar::scrollbar_thumb(scroll, max_scroll, track_h, content_len);
+                let buf = frame.buffer_mut();
+                for dy in 0..track_h {
+                    let y = layout.conversation.y + dy;
+                    let in_thumb = dy >= thumb_start && dy < thumb_start + thumb_len;
+                    let (ch, fg) = if in_thumb {
+                        (glyph::SCROLL_THUMB, color::CHAT_ACCENT)
+                    } else {
+                        (glyph::SCROLL_TRACK, color::DIM)
+                    };
+                    buf[(bar_x, y)].set_char(ch).set_style(Style::new().fg(fg));
+                }
+            }
         }
         Mode::Build => render_build_placeholder(frame, layout.conversation),
     }

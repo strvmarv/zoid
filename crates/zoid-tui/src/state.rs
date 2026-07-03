@@ -98,6 +98,10 @@ pub struct ShellState {
     /// new events stream in. Scrolling up detaches it; scrolling back to the
     /// bottom re-engages it.
     pub follow_tail: bool,
+    /// True while the user is dragging the scrollbar thumb. Cross-event memory so
+    /// the pure `route_mouse` can classify bare `Drag(Left)` events as scrollbar
+    /// drags. Set on grab, cleared on release.
+    pub scrollbar_drag: bool,
     /// Whether a turn is in flight (streaming or delegating). Refreshed by the
     /// bin each frame; the status bar shows an animated spinner while true and
     /// the static idle glyph otherwise.
@@ -209,6 +213,7 @@ impl ShellState {
             objects: ObjectState::default(),
             conversation_scroll: 0,
             follow_tail: true,
+            scrollbar_drag: false,
             busy: false,
             spinner: crate::tokens::glyph::SPINNER[0],
             branch: "main".into(),
@@ -329,6 +334,16 @@ impl ShellState {
     /// at the current altitude, supplied by the bin from the last drawn frame.
     pub fn scroll_conversation(&mut self, delta: i32, max_scroll: u16) {
         let next = (self.conversation_scroll as i32 + delta).clamp(0, max_scroll as i32) as u16;
+        self.conversation_scroll = next;
+        self.follow_tail = next >= max_scroll;
+    }
+
+    /// Set the conversation scroll to an absolute `offset` (clamped to
+    /// [0, max_scroll]) and re-derive tail-follow: landing at (or past) the
+    /// bottom re-engages follow, any position above it detaches. Used by the
+    /// scrollbar drag / track click.
+    pub fn scroll_to_offset(&mut self, offset: u16, max_scroll: u16) {
+        let next = offset.min(max_scroll);
         self.conversation_scroll = next;
         self.follow_tail = next >= max_scroll;
     }
@@ -553,6 +568,24 @@ mod tests {
         s.scroll_conversation(1000, 50);
         assert_eq!(s.conversation_scroll, 50);
         assert!(s.follow_tail);
+    }
+
+    #[test]
+    fn scroll_to_offset_clamps_and_toggles_follow() {
+        let mut s = ShellState::new();
+        // absolute jump above the bottom → detaches follow
+        s.scroll_to_offset(20, 100);
+        assert_eq!(s.conversation_scroll, 20);
+        assert!(!s.follow_tail);
+        // jump to (or past) the bottom → re-engages follow, clamps
+        s.scroll_to_offset(999, 100);
+        assert_eq!(s.conversation_scroll, 100);
+        assert!(s.follow_tail);
+    }
+
+    #[test]
+    fn scrollbar_drag_defaults_false() {
+        assert!(!ShellState::new().scrollbar_drag);
     }
 
     #[test]

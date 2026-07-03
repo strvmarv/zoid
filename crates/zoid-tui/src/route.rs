@@ -33,6 +33,12 @@ pub enum Action {
     /// Run the command line buffer (parsed into a `Command`).
     RunCommand(Command),
     ScrollConversation(i32),
+    /// Left-button press landed on the scrollbar at this screen row (begin drag).
+    ScrollbarGrab(u16),
+    /// Scrollbar drag in progress; the thumb should track this screen row.
+    ScrollbarDrag(u16),
+    /// Scrollbar drag ended (button released).
+    ScrollbarRelease,
     /// A left-click landed in the conversation at this screen row. The bin
     /// focuses the conversation and, if the row falls on a code block, copies it.
     ConversationClick(u16),
@@ -74,6 +80,7 @@ pub enum Target {
     Conversation,
     Input,
     DrawerHeader(DrawerId),
+    Scrollbar,
     None,
 }
 
@@ -307,6 +314,12 @@ pub fn hit_test(layout: &ShellLayout, col: u16, row: u16) -> Target {
     if in_rect(layout.input, col, row) {
         return Target::Input;
     }
+    // The scrollbar occupies the rightmost column of the conversation rect.
+    if in_rect(layout.conversation, col, row)
+        && col == layout.conversation.right().saturating_sub(1)
+    {
+        return Target::Scrollbar;
+    }
     if in_rect(layout.conversation, col, row) {
         return Target::Conversation;
     }
@@ -342,9 +355,14 @@ pub fn route_mouse(state: &ShellState, layout: &ShellLayout, m: MouseEvent) -> A
         }
         MouseEventKind::ScrollDown => Action::ScrollConversation(1),
         MouseEventKind::ScrollUp => Action::ScrollConversation(-1),
+        MouseEventKind::Drag(MouseButton::Left) if state.scrollbar_drag => {
+            Action::ScrollbarDrag(m.row)
+        }
+        MouseEventKind::Up(MouseButton::Left) if state.scrollbar_drag => Action::ScrollbarRelease,
         MouseEventKind::Down(MouseButton::Left) => match hit_test(layout, m.column, m.row) {
             Target::DrawerHeader(id) => Action::ToggleDrawer(id),
             Target::Input => Action::FocusRegion(Focus::Input),
+            Target::Scrollbar => Action::ScrollbarGrab(m.row),
             Target::Conversation => Action::ConversationClick(m.row),
             Target::None => Action::Noop,
         },
@@ -529,6 +547,50 @@ mod tests {
             route_mouse(&s, &l, click(l.input.x, l.input.y)),
             Action::FocusRegion(Focus::Input)
         );
+    }
+
+    fn test_layout(w: u16, h: u16) -> ShellLayout {
+        compute(Rect { x: 0, y: 0, width: w, height: h }, &ShellState::new())
+    }
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE }
+    }
+
+    #[test]
+    fn hit_test_detects_scrollbar_column() {
+        let layout = test_layout(100, 24);
+        let conv = layout.conversation;
+        let bar_x = conv.right() - 1;
+        assert_eq!(hit_test(&layout, bar_x, conv.y + 1), Target::Scrollbar);
+        // one column left of the bar is still the conversation
+        assert_eq!(hit_test(&layout, bar_x - 1, conv.y + 1), Target::Conversation);
+    }
+
+    #[test]
+    fn scrollbar_grab_then_drag_then_release() {
+        let mut s = ShellState::new();
+        let layout = test_layout(100, 24);
+        let bar_x = layout.conversation.right() - 1;
+        let row = layout.conversation.y + 5;
+        // grab on the bar
+        let a = route_mouse(&s, &layout, mouse(MouseEventKind::Down(MouseButton::Left), bar_x, row));
+        assert!(matches!(a, Action::ScrollbarGrab(r) if r == row));
+        // once dragging, a bare Drag(Left) anywhere is a scrollbar drag
+        s.scrollbar_drag = true;
+        let a = route_mouse(&s, &layout, mouse(MouseEventKind::Drag(MouseButton::Left), 3, row + 2));
+        assert!(matches!(a, Action::ScrollbarDrag(r) if r == row + 2));
+        // release
+        let a = route_mouse(&s, &layout, mouse(MouseEventKind::Up(MouseButton::Left), 3, row));
+        assert!(matches!(a, Action::ScrollbarRelease));
+    }
+
+    #[test]
+    fn drag_without_grab_is_ignored() {
+        let s = ShellState::new(); // scrollbar_drag == false
+        let layout = test_layout(100, 24);
+        let a = route_mouse(&s, &layout, mouse(MouseEventKind::Drag(MouseButton::Left), 3, 5));
+        assert_eq!(a, Action::Noop);
     }
 
     #[test]

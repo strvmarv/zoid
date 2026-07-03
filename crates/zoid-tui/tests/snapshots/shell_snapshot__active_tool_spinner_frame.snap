@@ -4,25 +4,25 @@ assertion_line: 172
 expression: "draw(&s, &seeded(), 100, 24)"
 ---
 "                                                                                                    "
-"  00:00 › what's causing the 500?                       ╭ ▾ repo ─────────────────────────────────╮ "
-"                                                        │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
-"  00:00 zoid an unwrapped lookup in the handler.        ╰─────────────────────────────────────────╯ "
-"  ◐ running · shell …                                                                               "
-"                                                        ╭ ▾ session ──────────────────────────────╮ "
-"                                                        │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
-"                                                        │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
-"                                                        │⌚ dur 0m   tok 0                        │ " Hidden by multi-width symbols: [(58, " ")]
-"                                                        │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
-"                                                        ╰─────────────────────────────────────────╯ "
-"                                                                                                    "
-"                                                        ╭ ▾ context · tokens ─────────────────────╮ "
-"                                                        │churn                              cache │ "
-"                                                        ╰─────────────────────────────────────────╯ "
-"                                                                                                    "
-"                                                        ╭ ▾ tasks ────────────────────────────────╮ "
-"                                                        │no tasks                                 │ "
-"                                                        ╰─────────────────────────────────────────╯ "
-"                                                                                                    "
+"  00:00 › what's causing the 500?                     █ ╭ ▾ repo ─────────────────────────────────╮ "
+"                                                      █ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
+"  00:00 zoid an unwrapped lookup in the handler.      █ ╰─────────────────────────────────────────╯ "
+"                                                      █                                             "
+"  ◐ running · shell …                                 █ ╭ ▾ session ──────────────────────────────╮ "
+"                                                      █ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ │⌚ dur 0m   tok 0                        │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ ╰─────────────────────────────────────────╯ "
+"                                                      █                                             "
+"                                                      █ ╭ ▾ context · tokens ─────────────────────╮ "
+"                                                      █ │churn                              cache │ "
+"                                                      █ ╰─────────────────────────────────────────╯ "
+"                                                      █                                             "
+"                                                      █ ╭ ▾ tasks ────────────────────────────────╮ "
+"                                                      █ │no tasks                                 │ "
+"                                                      █ ╰─────────────────────────────────────────╯ "
+"                                                      █                                             "
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"
 "│                                                                                                  │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"

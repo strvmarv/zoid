@@ -477,6 +477,13 @@ pub fn conversation_view_indexed(
     };
     if let Some(n) = view.reveal {
         lines.truncate(n);
+    } else {
+        // One trailing blank line so the last message clears the message box
+        // (visual breathing room at the bottom of the pane). It's part of the
+        // body, so max_scroll and tail-follow see it: pinned to the bottom the
+        // blank is the last row and the newest message sits one line above the
+        // input. Skipped during a reveal (top-anchored, no bottom to pad).
+        lines.push(Line::from(""));
     }
     (lines, starts)
 }
@@ -848,8 +855,8 @@ mod tests {
     #[test]
     fn summary_collapses_to_one_line_per_turn() {
         let lines = conversation_view(&seeded(), &view(Zoom::Summary), false, 80);
-        // two turns → two digest lines
-        assert_eq!(lines.len(), 2);
+        // two turns → two digest lines, plus one trailing breathing-room blank
+        assert_eq!(lines.len(), 3);
     }
 
     #[test]
@@ -902,7 +909,8 @@ mod tests {
         let msgs = seeded();
         let normal = conversation_view(&msgs, &view(Zoom::Normal), false, 80);
         let baseline = conversation_lines(&msgs, false, true, 0, 80);
-        assert_eq!(normal.len(), baseline.len());
+        // conversation_view appends one trailing breathing-room blank line.
+        assert_eq!(normal.len(), baseline.len() + 1);
     }
 
     #[test]
