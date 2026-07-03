@@ -134,6 +134,7 @@ mod tests {
                 name: "read_file".into(),
                 output: "fn parse() {}".into(),
                 is_error: false,
+                compacted: false,
                 ts: 0,
             },
             ChatMsg::ToolResult {
@@ -141,6 +142,7 @@ mod tests {
                 name: "shell".into(),
                 output: "boom".into(),
                 is_error: true,
+                compacted: false,
                 ts: 0,
             },
             ChatMsg::User {
