@@ -721,6 +721,42 @@ fn config_overlay_frame() {
     insta::assert_snapshot!(draw_config(&s, &sections, 100, 24));
 }
 
+/// Config overlay (Task 8): full-screen three-column layout — sections rail |
+/// active section's fields | contextual picker — with the provider picker open
+/// on the `provider` field (col 3 populated from `config_view::provider_options`).
+#[test]
+fn config_overlay_provider_picker() {
+    use zoid_core::config::{Config, Provenance, Source};
+    use zoid_core::secret::SecretStatus;
+    use zoid_tui::config_view::{build_sections, provider_options};
+    use zoid_tui::state::ConfigCol;
+
+    let mut s = ShellState::new();
+    s.overlay = Overlay::Config;
+    s.config_section = 0;
+    s.config_field = 0; // "provider" row
+    s.config_col = ConfigCol::Picker;
+    let cfg = Config::default();
+    let prov = Provenance {
+        provider: Source::Default,
+        base_url: Source::Default,
+        model: Source::Default,
+        context_ceiling: Source::Default,
+        auto_evict_cold: Source::Default,
+        compact_threshold_pct: Source::Default,
+        token_ceiling: Source::Default,
+        reduced_motion: Source::Default,
+    };
+    let ks = [
+        ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
+        ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
+    ];
+    let sections = build_sections(&cfg, &prov, &ks);
+    s.config_picker = provider_options(&cfg.provider);
+    s.config_picker_sel = 0;
+    insta::assert_snapshot!(draw_config(&s, &sections, 160, 40));
+}
+
 /// The `ask_user` question overlay (Task 11), pick mode: a centered card
 /// listing the model's choices plus the two synthetic "Other…"/"— let you
 /// decide —" rows, the first row (default `selected == 0`) highlighted with

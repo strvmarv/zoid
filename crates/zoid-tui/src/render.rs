@@ -116,7 +116,7 @@ pub fn render_shell(
             render_sessions_overlay(frame, state, p);
         }
     } else if state.overlay == Overlay::Config {
-        // render_config centers its own card within the given area.
+        // render_config draws a full-frame three-column card (sections | fields | picker).
         render_config(frame, state, &state.config_sections, frame.area());
     } else if state.overlay == Overlay::Question {
         if let Some(q) = &state.question {
@@ -647,58 +647,79 @@ fn render_sessions_overlay(frame: &mut Frame, state: &ShellState, area: Rect) {
     );
 }
 
-/// The config overlay (Task 11): a contained, centered "zoid · settings" card.
-/// Single column — the section list (active marked), then the active section's
-/// rows (label, current value or the in-progress edit buffer + caret, and a
-/// right-aligned provenance tag with a `⚠` when an env var shadows the field),
-/// then a footer keybinding hint. Sized to its content and centered so a few
-/// short fields don't leave a vast empty screen. `area` is the full frame.
+/// The config overlay (Task 8): a full-frame "zoid · settings" three-column
+/// layout — col 1 the sections rail (active marked), col 2 the active
+/// section's fields (label, current value or the in-progress edit buffer +
+/// caret, and a right-aligned provenance tag), col 3 the contextual picker
+/// (provider / model), rendered only while `state.config_picker_open()`.
+/// A footer keybinding hint is reserved at the bottom of the card. `area` is
+/// the full frame.
 pub fn render_config(
     frame: &mut Frame,
     state: &ShellState,
     sections: &[crate::config_view::Section],
     area: Rect,
 ) {
-    use crate::layout::centered;
+    use crate::config_view::FieldKind;
     use crate::text::{pad_to, truncate};
+    use ratatui::layout::{Constraint, Direction, Layout};
 
-    frame.render_widget(Clear, area); // focus the card: clear the frame behind it
+    frame.render_widget(Clear, area);
     if sections.is_empty() {
         return;
     }
     let active = state.config_section.min(sections.len() - 1);
-    // Words, not arrow glyphs, keep the footer within §16 (no untokenized glyphs).
-    let footer = "Tab section · Left/Right change · Enter edit · Esc close";
 
-    // Content width: fit the footer and the widest section title, with a floor,
-    // plus one column of left indent, capped to the frame. Field rows are padded/
-    // truncated to this width so the provenance tag always lands at the card edge.
-    let title_w = sections
-        .iter()
-        .map(|s| s.title.width() + 2)
-        .max()
-        .unwrap_or(0);
-    let inner_w = (footer.width().max(title_w).max(40) + 1)
-        .min(area.width.saturating_sub(2) as usize)
-        .max(8);
+    // Outer full-frame card.
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(" zoid · settings ")
+        .border_style(Style::new().fg(color::CHAT_ACCENT));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
-    let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from("")); // top breathing room
+    // Footer line reserved at the bottom of the inner area.
+    let footer = "Tab section · ↑/↓ move · →/Enter drill · ←/Esc back";
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+    let body = rows[0];
+    let foot = rows[1];
+
+    // Column split: sections rail | fields | (picker, only if open).
+    let picker_open = state.config_picker_open();
+    let constraints: Vec<Constraint> = if picker_open {
+        vec![Constraint::Length(22), Constraint::Length(40), Constraint::Min(20)]
+    } else {
+        vec![Constraint::Length(22), Constraint::Min(30)]
+    };
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(constraints)
+        .split(body);
+
+    // Column 1: sections rail.
+    let mut nav: Vec<Line> = Vec::new();
     for (i, s) in sections.iter().enumerate() {
         let on = i == active;
         let marker = if on { glyph::COLLAPSED } else { ' ' };
-        lines.push(Line::from(Span::styled(
+        nav.push(Line::from(Span::styled(
             format!(" {marker} {}", s.title),
             Style::new().fg(if on { color::CHAT_ACCENT } else { color::DIM }),
         )));
     }
-    lines.push(Line::from(""));
+    frame.render_widget(Paragraph::new(nav), cols[0]);
 
+    // Column 2: fields of the active section.
+    let field_w = cols[1].width as usize;
+    let mut fields: Vec<Line> = Vec::new();
     for (i, r) in sections[active].rows.iter().enumerate() {
-        let cur = i == state.config_field;
-        let val = if cur {
+        let cur = i == state.config_field && state.config_col == crate::state::ConfigCol::Fields;
+        let val = if i == state.config_field {
             if let Some(buf) = &state.config_edit {
-                let shown = if matches!(r.kind, crate::config_view::FieldKind::Secret) {
+                let shown = if matches!(r.kind, FieldKind::Secret) {
                     glyph::MASK.to_string().repeat(buf.chars().count())
                 } else {
                     buf.clone()
@@ -717,50 +738,48 @@ pub fn render_config(
             zoid_core::config::Source::Local => ("[local]", color::BRANCH),
             zoid_core::config::Source::Env => ("[env]", color::WARN),
         };
-        let warn = if r.env_shadowed {
-            format!(" {}", glyph::WARNING)
-        } else {
-            String::new()
-        };
-        // Cursor marker + label on the left; value stretched (display-width padded)
-        // so the tag lands at the card's right edge.
         let marker = if cur { glyph::COLLAPSED } else { ' ' };
-        let left = format!(" {marker} {}", pad_to(r.label, 14));
-        let fixed = left.width() + tag_txt.width() + warn.width();
-        let mid = inner_w.saturating_sub(fixed).max(1);
+        let left = format!(" {marker} {}", pad_to(r.label, 12));
+        let fixed = left.width() + tag_txt.width();
+        let mid = field_w.saturating_sub(fixed).max(1);
         let val_shown = pad_to(&truncate(&val, mid), mid);
-        let mut spans = vec![
-            Span::styled(
-                left,
-                Style::new().fg(if cur { color::CHAT_ACCENT } else { color::TXT }),
-            ),
+        fields.push(Line::from(vec![
+            Span::styled(left, Style::new().fg(if cur { color::CHAT_ACCENT } else { color::TXT })),
             Span::styled(val_shown, Style::new().fg(color::TXT)),
             Span::styled(tag_txt.to_string(), Style::new().fg(tag_col)),
-        ];
-        if !warn.is_empty() {
-            spans.push(Span::styled(warn, Style::new().fg(color::WARN)));
-        }
-        lines.push(Line::from(spans));
+        ]));
     }
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        format!(" {footer}"),
-        Style::new().fg(color::DIM),
-    )));
+    frame.render_widget(Paragraph::new(fields), cols[1]);
 
-    // Card = content + border, centered; content is already 1-space indented.
-    let card_w = inner_w as u16 + 2;
-    let card_h = (lines.len() as u16 + 2).min(area.height);
-    let rect = centered(area, card_w, card_h);
-    // (the full-frame Clear above already wiped the card region)
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .title(" zoid · settings ")
-        .border_style(Style::new().fg(color::CHAT_ACCENT));
-    let inner = block.inner(rect);
-    frame.render_widget(block, rect);
-    frame.render_widget(Paragraph::new(lines), inner);
+    // Column 3: contextual picker (only when open).
+    if picker_open {
+        let pw = cols[2].width as usize;
+        let mut pick: Vec<Line> = Vec::new();
+        for (i, o) in state.config_picker.iter().enumerate() {
+            let sel = i == state.config_picker_sel && state.config_col == crate::state::ConfigCol::Picker;
+            let dot = if o.is_current { glyph::COLLAPSED } else { ' ' };
+            let base = format!(" {dot} {}  {}", o.label, o.detail);
+            let text = pad_to(&truncate(&base, pw.saturating_sub(1).max(1)), pw.saturating_sub(1).max(1));
+            let style = if !o.selectable {
+                Style::new().fg(color::DIM)
+            } else if sel {
+                Style::new().fg(color::TXT).bg(color::SEL_BG)
+            } else {
+                Style::new().fg(color::TXT)
+            };
+            pick.push(Line::from(Span::styled(text, style)));
+        }
+        frame.render_widget(Paragraph::new(pick), cols[2]);
+    }
+
+    // Footer.
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!(" {footer}"),
+            Style::new().fg(color::DIM),
+        ))),
+        foot,
+    );
 }
 
 /// The `ask_user` question overlay (Task 11): a centered, contained card —
