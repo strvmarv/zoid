@@ -670,6 +670,9 @@ async fn run<B: ratatui::backend::Backend>(
             // (not cached on ShellState) so it rehydrates on session resume, matching
             // how `economy`/`msgs` are threaded above.
             let task_items = zoid_core::tasks::tasks(&app.events);
+            // Layout hint so the rail can grow the Tasks drawer to fit the list
+            // (a count, not the list itself — content still rendered from events).
+            app.shell.tasks_len = task_items.len() as u16;
             let elapsed = app.started.elapsed().as_millis() as u64;
             let caret = zoid_tui::motion::caret_on(elapsed, 1000, app.shell.reduced_motion);
             // Measure total lines (which re-runs conversation_view — tree-sitter in

@@ -116,6 +116,11 @@ pub struct ShellState {
     /// Line count of the message input, sampled by the bin each frame so
     /// `layout::compute` can grow/shrink the box (spec §2.2). Default 1 (resting).
     pub input_rows: u16,
+    /// Number of items the Tasks rail drawer would show, sampled by the bin each
+    /// frame from `tasks(&events)` so `layout::compute` can grow the drawer to fit
+    /// a longer list (rehydrate-safe: this is a layout hint, not the task list —
+    /// the rendered content still comes from the event log). Default 0 ("no tasks").
+    pub tasks_len: u16,
     /// Display rows for the resume-session picker (bin-formatted, most-recent-first).
     pub sessions: Vec<String>,
     /// Highlighted row in the resume-session picker.
@@ -200,6 +205,7 @@ impl ShellState {
             zoom: Zoom::Normal,
             status_hint: None,
             input_rows: 1,
+            tasks_len: 0,
             sessions: Vec::new(),
             session_selected: 0,
             session_name: String::new(),
