@@ -470,6 +470,9 @@ struct BodyKey {
 struct BodyCache {
     key: Option<BodyKey>,
     body: Vec<ratatui::text::Line<'static>>,
+    /// Per-message start-line indices for the cached body (length == msgs.len()),
+    /// used to re-anchor the viewport to the top message across a zoom change.
+    msg_starts: Vec<usize>,
 }
 
 impl BodyCache {
@@ -484,7 +487,10 @@ impl BodyCache {
             reveal: None, // full body; reveal truncation is applied at paint time
             tz_offset_secs: key.tz,
         };
-        self.body = zoid_tui::chat::conversation_view(msgs, &view, key.streaming, width);
+        let (body, starts) =
+            zoid_tui::chat::conversation_view_indexed(msgs, &view, key.streaming, width);
+        self.body = body;
+        self.msg_starts = starts;
         self.key = Some(key);
     }
 }
@@ -527,6 +533,10 @@ struct App {
     /// The conversation rect from the last drawn frame, so `handle_action` (which
     /// has no `terminal` in scope) can map a scrollbar drag row to an offset.
     last_conv_rect: ratatui::layout::Rect,
+    /// Message index to re-anchor to the top of the viewport after a zoom change
+    /// (captured from the old altitude before zooming, applied once the new
+    /// altitude's body is built). None when no zoom is pending.
+    pending_zoom_anchor: Option<usize>,
     /// Local UTC offset (seconds) for message-row HH:MM stamps, sampled once.
     tz_offset_secs: i32,
     /// Epoch-millis the active session started (resumed session's `created_ts`,
@@ -677,6 +687,7 @@ async fn main() -> Result<()> {
         zoom_changed_at: None,
         last_conv_max_scroll: 0,
         last_conv_rect: ratatui::layout::Rect::default(),
+        pending_zoom_anchor: None,
         tz_offset_secs,
         session_started_ms,
         session_ids: Vec::new(),
@@ -816,14 +827,21 @@ async fn run<B: ratatui::backend::Backend>(
 
         // Tail-follow: when engaged, pin the viewport to the latest line before
         // drawing — this is what makes the view show the latest output on startup
-        // and follow new events (including live streaming) as they append. Skipped
-        // during the zoom animation, which is top-anchored by the reveal. max_scroll
-        // mirrors render's clamp: body length (+ the in-flight tool line) minus the
-        // visible conversation height.
+        // and follow new events (including live streaming) as they append. Applied
+        // after the cross-zoom anchor below, so following the tail wins over the
+        // anchor. max_scroll mirrors render's clamp: body length (+ the in-flight
+        // tool line) minus the visible conversation height.
         let active_extra = usize::from(app.shell.active_tool.is_some());
         let max_scroll = (app.body_cache.body.len() + active_extra)
             .saturating_sub(layout.conversation.height as usize)
             .min(u16::MAX as usize) as u16;
+        // Re-anchor after a zoom: map the captured message back to its line at the
+        // new altitude. Runs before the draw (body/msg_starts now reflect the new
+        // altitude), so the transient reset-to-0 from zoom_in/out never paints.
+        if let Some(anchor) = app.pending_zoom_anchor.take() {
+            let line = zoid_tui::line_of_msg(&app.body_cache.msg_starts, anchor);
+            app.shell.conversation_scroll = (line.min(u16::MAX as usize) as u16).min(max_scroll);
+        }
         if app.zoom_changed_at.is_none() {
             app.shell.apply_follow(max_scroll);
         }
@@ -972,11 +990,11 @@ async fn run<B: ratatui::backend::Backend>(
                 }
             }
             _ = motion_tick.tick(), if app.streaming || app.delegating || app.zoom_changed_at.is_some() => {
-                // Wake to redraw the blinking caret, the in-flight zoom reveal, or the
-                // activity spinner (which animates while streaming OR delegating). Ticks
-                // stay armed until `zoom_changed_at` is cleared (above, after a settled
-                // frame is painted), so the reveal always ends on a full-body frame
-                // rather than a truncated one. Idle + not-animating never ticks.
+                // Wake to redraw the blinking caret or the activity spinner (which
+                // animates while streaming OR delegating). Zoom is instant now (the
+                // reveal animation was retired for cross-zoom anchoring), so
+                // `zoom_changed_at` stays None; the guard is left in place harmlessly.
+                // Idle + not-streaming never ticks.
             }
         }
     }
@@ -1286,19 +1304,27 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::ConversationClick(_) => {}
         Action::ZoomIn => {
             let before = app.shell.zoom;
-            app.shell.zoom_in(); // re-anchors conversation_scroll on a real change
-            // The zoom reveal animates from the TOP, which fights tail-following.
-            // When pinned to the latest line, skip it: `apply_follow` re-pins to the
-            // bottom on the next frame, so the zoom is instant and stays on the tail.
-            if app.shell.zoom != before && !app.shell.follow_tail {
-                app.zoom_changed_at = Some(std::time::Instant::now());
+            // Anchor to the message at the top of the viewport BEFORE zooming, so
+            // the reading position survives the altitude change (applied in the
+            // pre-draw block once the new-altitude body is built).
+            let anchor = zoid_tui::msg_at_line(
+                &app.body_cache.msg_starts,
+                app.shell.conversation_scroll as usize,
+            );
+            app.shell.zoom_in(); // re-anchors conversation_scroll to 0 on a real change
+            if app.shell.zoom != before {
+                app.pending_zoom_anchor = Some(anchor);
             }
         }
         Action::ZoomOut => {
             let before = app.shell.zoom;
+            let anchor = zoid_tui::msg_at_line(
+                &app.body_cache.msg_starts,
+                app.shell.conversation_scroll as usize,
+            );
             app.shell.zoom_out();
-            if app.shell.zoom != before && !app.shell.follow_tail {
-                app.zoom_changed_at = Some(std::time::Instant::now());
+            if app.shell.zoom != before {
+                app.pending_zoom_anchor = Some(anchor);
             }
         }
         Action::Newline => app.textarea.insert_newline(),
@@ -1851,6 +1877,17 @@ mod tests {
     use ratatui::{backend::TestBackend, style::Modifier, Terminal};
     use tui_textarea::TextArea;
 
+    #[test]
+    fn zoom_anchor_maps_top_message_across_altitudes() {
+        // Detail body: msgs start at lines [0, 6, 14]; viewport top at line 7 → msg 1.
+        let detail_starts = [0usize, 6, 14];
+        let anchor = zoid_tui::msg_at_line(&detail_starts, 7);
+        assert_eq!(anchor, 1);
+        // Summary body: same msgs collapse → msg 1 lives on line 0.
+        let summary_starts = [0usize, 0, 1];
+        assert_eq!(zoid_tui::line_of_msg(&summary_starts, anchor), 0);
+    }
+
     /// Render the textarea into a scratch buffer and report whether any cell
     /// carries the UNDERLINED modifier (tui-textarea's default cursor line).
     fn has_underline(ta: &TextArea<'static>) -> bool {
@@ -2162,6 +2199,7 @@ mod tests {
             zoom_changed_at: None,
             last_conv_max_scroll: 0,
             last_conv_rect: ratatui::layout::Rect::default(),
+            pending_zoom_anchor: None,
             tz_offset_secs: 0,
             session_started_ms: 0,
             session_ids: Vec::new(),
