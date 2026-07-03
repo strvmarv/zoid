@@ -307,6 +307,13 @@ fn effective_base_url(config: &zoid_core::config::Config) -> String {
         .unwrap_or_default()
 }
 
+/// Whether a provider id needs an API key to be usable. Local Ollama (localhost)
+/// does not; all remote HTTP flavors do. Keyed off the registry, not the string.
+#[allow(dead_code)]
+fn entry_requires_key(id: &str) -> bool {
+    id != "ollama-local"
+}
+
 /// Provider + credential from `config.provider` + the secret store (env wins
 /// inside `SecretStore::get`). No key found → fall back to the offline
 /// `FakeProvider` so the binary always runs; `provider_label` mirrors this
@@ -329,6 +336,15 @@ fn select_provider(
             s.get(name)
         })
     };
+    // ollama-local: usable without a key (localhost, no auth). Construct directly.
+    if zoid_provider::model::canonical_id(&config.provider) == "ollama-local" {
+        let base_url = effective_base_url(config);
+        return (
+            Arc::new(zoid_provider::ollama::OllamaProvider::new(String::new()).with_base_url(base_url)),
+            "ollama",
+            true, // no key required → treat as ready
+        );
+    }
     let base_url = effective_base_url(config);
     let family = zoid_provider::model::entry(&config.provider)
         .map(|e| e.family)
@@ -2310,5 +2326,22 @@ mod tests {
         // Blank override falls back to registry.
         c.base_url = Some("   ".into());
         assert_eq!(effective_base_url(&c), "http://localhost:11434");
+    }
+
+    #[test]
+    fn ollama_local_needs_no_key() {
+        // ollama-local is usable with no OLLAMA_API_KEY (localhost, no auth).
+        assert!(entry_requires_key("ollama-local") == false);
+        assert!(entry_requires_key("ollama-cloud"));
+        assert!(entry_requires_key("anthropic-api"));
+    }
+
+    #[test]
+    fn select_provider_ollama_local_is_ready_without_key() {
+        let mut config = zoid_core::config::Config::default();
+        config.provider = "ollama-local".to_string();
+        let (_provider, name, has_key) = select_provider(&config, &None);
+        assert_eq!(name, "ollama");
+        assert!(has_key, "ollama-local must be usable (ready) with no key");
     }
 }
