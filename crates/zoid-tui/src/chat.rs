@@ -38,7 +38,7 @@ pub fn conversation_lines(
     width: usize,
 ) -> Vec<Line<'static>> {
     let mut hits = Vec::new();
-    build_conversation(msgs, streaming, caret_on, tz_offset_secs, width, &mut hits)
+    build_conversation(msgs, streaming, caret_on, tz_offset_secs, width, &mut hits, &mut Vec::new())
 }
 
 /// The clickable code-block map (line ranges + source) for the same inputs
@@ -52,7 +52,7 @@ pub fn code_hits(
     width: usize,
 ) -> Vec<CodeHit> {
     let mut hits = Vec::new();
-    build_conversation(msgs, streaming, caret_on, tz_offset_secs, width, &mut hits);
+    build_conversation(msgs, streaming, caret_on, tz_offset_secs, width, &mut hits, &mut Vec::new());
     hits
 }
 
@@ -63,6 +63,7 @@ fn build_conversation(
     tz_offset_secs: i32,
     width: usize,
     hits: &mut Vec<CodeHit>,
+    msg_starts: &mut Vec<usize>,
 ) -> Vec<Line<'static>> {
     let last = msgs.len().saturating_sub(1);
     if msgs.is_empty() {
@@ -85,6 +86,9 @@ fn build_conversation(
     // text can never desync — including when a message bails to plain text.
     let mut code_ranges: Vec<(usize, usize, String)> = Vec::new();
     for (i, m) in msgs.iter().enumerate() {
+        // Record where each message's block begins (before its leading blank),
+        // so a viewport-top line maps back to a message for cross-zoom anchoring.
+        msg_starts.push(lines.len());
         match m {
             ChatMsg::User { text, ts } => {
                 blank_between_turns(&mut lines);
@@ -439,17 +443,60 @@ pub fn conversation_view(
     streaming: bool,
     width: usize,
 ) -> Vec<Line<'static>> {
+    conversation_view_indexed(msgs, view, streaming, width).0
+}
+
+/// Like `conversation_view`, but also returns `msg_starts` (length msgs.len()):
+/// the body line where each message's block begins at this altitude. Used for
+/// cross-zoom position anchoring.
+pub fn conversation_view_indexed(
+    msgs: &[ChatMsg],
+    view: &ChatView,
+    streaming: bool,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<usize>) {
+    let mut starts: Vec<usize> = Vec::new();
     let mut lines: Vec<Line<'static>> = match view.zoom {
-        Zoom::Summary => digest_lines(&digests(msgs)),
-        Zoom::Normal => {
-            conversation_lines(msgs, streaming, view.caret_on, view.tz_offset_secs, width)
+        Zoom::Summary => {
+            starts = summary_msg_starts(msgs);
+            digest_lines(&digests(msgs))
         }
-        Zoom::Detail => detail_lines(msgs, view.tz_offset_secs, width),
+        Zoom::Normal => {
+            let mut hits = Vec::new();
+            build_conversation(
+                msgs,
+                streaming,
+                view.caret_on,
+                view.tz_offset_secs,
+                width,
+                &mut hits,
+                &mut starts,
+            )
+        }
+        Zoom::Detail => detail_lines(msgs, view.tz_offset_secs, width, &mut starts),
     };
     if let Some(n) = view.reveal {
         lines.truncate(n);
     }
-    lines
+    (lines, starts)
+}
+
+/// Per-message digest-line index for the Summary altitude, mirroring the turn
+/// grouping in `zoom::digests`: a new turn begins at each `User` message, and a
+/// leading non-user message opens turn 0. Result length == msgs.len(), entry i =
+/// the digest line index (0-based) message i is folded into.
+fn summary_msg_starts(msgs: &[ChatMsg]) -> Vec<usize> {
+    let mut starts = Vec::with_capacity(msgs.len());
+    let mut turn: i64 = -1;
+    for m in msgs {
+        match m {
+            ChatMsg::User { .. } => turn += 1,
+            _ if turn == -1 => turn = 0, // leading non-user opens turn 0
+            _ => {}
+        }
+        starts.push(turn.max(0) as usize);
+    }
+    starts
 }
 
 /// One digest line per turn: `› {headline}   ~ {tools}t · {files}f [⚠]`.
@@ -487,7 +534,12 @@ fn digest_lines(ds: &[TurnDigest]) -> Vec<Line<'static>> {
 /// Detail altitude: the normal view, but file tool-results are rendered with
 /// syntax highlighting (Ⓡ3, P4a). The file's language is inferred from the
 /// originating tool call's path (correlated by id).
-fn detail_lines(msgs: &[ChatMsg], tz_offset_secs: i32, width: usize) -> Vec<Line<'static>> {
+fn detail_lines(
+    msgs: &[ChatMsg],
+    tz_offset_secs: i32,
+    width: usize,
+    msg_starts: &mut Vec<usize>,
+) -> Vec<Line<'static>> {
     use std::collections::HashMap;
     // id → file path, from assistant tool calls.
     let mut id_path: HashMap<&str, String> = HashMap::new();
@@ -503,6 +555,9 @@ fn detail_lines(msgs: &[ChatMsg], tz_offset_secs: i32, width: usize) -> Vec<Line
 
     let mut out: Vec<Line<'static>> = Vec::new();
     for m in msgs {
+        // Record each message's start line for cross-zoom anchoring (see
+        // `build_conversation`); length ends up == msgs.len().
+        msg_starts.push(out.len());
         match m {
             ChatMsg::ToolResult {
                 id,
@@ -759,6 +814,34 @@ mod tests {
             caret_on: true,
             reveal: None,
             tz_offset_secs: 0,
+        }
+    }
+
+    #[test]
+    fn conversation_view_indexed_starts_len_matches_msgs_at_each_zoom() {
+        let msgs = vec![
+            ChatMsg::User { text: "first question".into(), ts: 0 },
+            ChatMsg::Assistant { text: "an answer".into(), tool_calls: vec![], ts: 0 },
+            ChatMsg::User { text: "second question".into(), ts: 0 },
+            ChatMsg::Assistant { text: "another answer".into(), tool_calls: vec![], ts: 0 },
+        ];
+        for zoom in [Zoom::Summary, Zoom::Normal, Zoom::Detail] {
+            let v = view(zoom);
+            let (lines, starts) = conversation_view_indexed(&msgs, &v, false, 80);
+            assert_eq!(starts.len(), msgs.len(), "one start per message at {zoom:?}");
+            assert!(
+                starts.windows(2).all(|w| w[0] <= w[1]),
+                "starts not monotonic at {zoom:?}: {starts:?}"
+            );
+            assert!(
+                starts.iter().all(|&s| s < lines.len().max(1)),
+                "start past body at {zoom:?}: {starts:?} vs {} lines",
+                lines.len()
+            );
+            if zoom == Zoom::Summary {
+                // two turns collapse: msgs 0&1 → line 0, msgs 2&3 → line 1
+                assert_eq!(starts, vec![0, 0, 1, 1]);
+            }
         }
     }
 
