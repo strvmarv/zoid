@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+Release-pipeline fix (no functional binary changes).
+- Public release notes now carry the full install instructions (shell + PowerShell one-liners and the download table) with download URLs pointed at the public releases repo.
+- First release to exercise the `zoid update` self-update client path (updating from 0.1.0).
+
 ## 0.1.0
 
 First distributed release.
