@@ -76,10 +76,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
           TAG: ${{ github.ref_name }}
-          # Release notes come from cargo-dist's changelog parsing (CHANGELOG.md),
-          # threaded through the reusable workflow's `plan` input. Passed via env:
-          # (not interpolated into the shell script) to avoid shell-injection.
-          NOTES_BODY: ${{ fromJson(inputs.plan).announcement_changelog }}
+          # Release notes: cargo-dist's FULL GitHub release body — changelog PLUS
+          # the auto-generated "Install" curl/powershell one-liners and the
+          # download table. (announcement_changelog is only the raw CHANGELOG
+          # section and drops the install instructions.) Its embedded download
+          # URLs point at the PRIVATE source repo, so they are rewritten to the
+          # public repo below — same substitution applied to the installer
+          # scripts. Passed via env (not interpolated into the shell script) to
+          # avoid shell-injection.
+          NOTES_BODY: ${{ fromJson(inputs.plan).announcement_github_body }}
         run: |
           set -euo pipefail
           # Drop dist's own bookkeeping manifests — only ship real release assets
@@ -95,6 +100,14 @@ jobs:
 
           if [ -n "${NOTES_BODY:-}" ]; then
             printf '%s' "$NOTES_BODY" > notes.md
+            # The dist-generated body bakes PRIVATE-repo download URLs into the
+            # install one-liners and the download table. Rewrite them to the
+            # public releases repo so anonymous installs don't 404 (identical
+            # substitution to the installer-script step above).
+            sed -i 's#strvmarv/zoid/releases#strvmarv/zoid-releases/releases#g' notes.md
+            if grep -q 'strvmarv/zoid/releases' notes.md; then
+              echo "::error::release notes still reference the private repo after rewrite"; exit 1
+            fi
           else
             printf 'zoid %s' "$TAG" > notes.md
           fi
