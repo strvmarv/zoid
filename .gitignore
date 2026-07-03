@@ -1,5 +1,6 @@
-# Brainstorming visual companion (local mockups; canonical UX lives in docs/ux/)
+# Local agent-tooling scratch (not part of the project source)
 .superpowers/
+.claude/
 
 # Rust build output
 /target
