@@ -47,6 +47,16 @@ pub enum Action {
     Submit,
     Newline,
     Edit(KeyEvent),
+    /// ⇧Delete in the message box: delete the whole current line.
+    InputDeleteLine,
+    /// ⇧Home in the message box: move the cursor to the very start of the buffer.
+    InputCursorTop,
+    /// ⇧End in the message box: move the cursor to the very end of the buffer.
+    InputCursorBottom,
+    /// ⇧Home in the conversation pane: jump the scroll to the top.
+    ScrollToTop,
+    /// ⇧End in the conversation pane: jump the scroll to the bottom (re-engages follow).
+    ScrollToBottom,
     OpenObjects,
     ObjectMove(i32),
     ObjectPick,
@@ -153,6 +163,13 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
                 Action::Newline
             }
             (KeyCode::Enter, _) => Action::Submit,
+            // Editing chords the message box needs beyond tui-textarea's defaults
+            // (§30): ⇧Delete drops the whole line, ⇧Home/⇧End jump to the buffer
+            // extremes. Guarded on SHIFT so a plain Delete/Home/End still reaches
+            // tui-textarea via Edit.
+            (KeyCode::Delete, m) if m.contains(KeyModifiers::SHIFT) => Action::InputDeleteLine,
+            (KeyCode::Home, m) if m.contains(KeyModifiers::SHIFT) => Action::InputCursorTop,
+            (KeyCode::End, m) if m.contains(KeyModifiers::SHIFT) => Action::InputCursorBottom,
             _ => Action::Edit(key),
         },
         Focus::Conversation => match key.code {
@@ -161,6 +178,10 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
             KeyCode::Char(':') => Action::OpenCommandLine,
             KeyCode::Char('j') | KeyCode::Down => Action::ScrollConversation(1),
             KeyCode::Char('k') | KeyCode::Up => Action::ScrollConversation(-1),
+            // ⇧Home/⇧End jump the scroll to the top/bottom of the transcript.
+            // ⇧Delete has no meaning in a read-only pane → the `_` arm's Noop.
+            KeyCode::Home if key.modifiers.contains(KeyModifiers::SHIFT) => Action::ScrollToTop,
+            KeyCode::End if key.modifiers.contains(KeyModifiers::SHIFT) => Action::ScrollToBottom,
             KeyCode::Esc => Action::FocusRegion(Focus::Input),
             _ => Action::Noop,
         },
@@ -434,6 +455,44 @@ mod tests {
             route_key(&s, key(KeyCode::Char('h'), KeyModifiers::NONE)),
             Action::Edit(_)
         ));
+    }
+
+    #[test]
+    fn shift_editing_chords_are_focus_contextual() {
+        let mut s = ShellState::new(); // focus Input
+        // Message box: ⇧Delete deletes the line, ⇧Home/⇧End jump the cursor.
+        assert_eq!(
+            route_key(&s, key(KeyCode::Delete, KeyModifiers::SHIFT)),
+            Action::InputDeleteLine
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Home, KeyModifiers::SHIFT)),
+            Action::InputCursorTop
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::End, KeyModifiers::SHIFT)),
+            Action::InputCursorBottom
+        );
+        // Without SHIFT they fall through to tui-textarea (Edit).
+        assert!(matches!(
+            route_key(&s, key(KeyCode::Home, KeyModifiers::NONE)),
+            Action::Edit(_)
+        ));
+
+        // Conversation pane: ⇧Home/⇧End scroll to the extremes, ⇧Delete is inert.
+        s.focus = Focus::Conversation;
+        assert_eq!(
+            route_key(&s, key(KeyCode::Home, KeyModifiers::SHIFT)),
+            Action::ScrollToTop
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::End, KeyModifiers::SHIFT)),
+            Action::ScrollToBottom
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Delete, KeyModifiers::SHIFT)),
+            Action::Noop
+        );
     }
 
     #[test]

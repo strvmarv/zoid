@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
-use tui_textarea::TextArea;
+use tui_textarea::{CursorMove, TextArea};
 use ulid::Ulid;
 
 use zoid::agent::{run_agent_turn, AgentUpdate};
@@ -173,6 +173,60 @@ fn make_input(textarea: TextArea<'static>) -> TextArea<'static> {
     let mut textarea = textarea;
     textarea.set_cursor_line_style(ratatui::style::Style::default());
     textarea
+}
+
+/// Delete the whole line the cursor sits on (§30, ⇧Delete). Column-independent
+/// (snaps to the line head first) and collapses the buffer by one row in every
+/// multi-line case, so a repeated ⇧Delete keeps eating lines upward.
+///
+/// The subtlety: `delete_line_by_end()` is not purely "clear to end of line" —
+/// on a line with nothing left to clear it *eagerly merges the next line up*
+/// (tui-textarea 0.7 textarea.rs:1206). Composing it with an unconditional
+/// second merge therefore double-deletes on empty lines. We branch on the line's
+/// emptiness (captured before mutating) and handle the three positions explicitly.
+fn input_delete_line(textarea: &mut TextArea<'static>) {
+    let (row, _) = textarea.cursor();
+    let n = textarea.lines().len();
+    let line_empty = textarea.lines()[row].is_empty();
+    textarea.move_cursor(CursorMove::Head);
+
+    if n == 1 {
+        // Sole line: clear its content in place, leaving an empty buffer.
+        if !line_empty {
+            textarea.delete_line_by_end();
+        }
+    } else if row + 1 < n {
+        // Not the last line: remove the row and pull the following line up.
+        if line_empty {
+            // Nothing to clear → delete_line_by_end merges the next line up itself.
+            textarea.delete_line_by_end();
+        } else {
+            // Clear the content (in place), then consume the trailing newline.
+            textarea.delete_line_by_end();
+            textarea.delete_next_char();
+        }
+    } else {
+        // Last line of many: clear its content, then delete the preceding
+        // newline so the row vanishes and the cursor lands on the prior line.
+        if !line_empty {
+            textarea.delete_line_by_end();
+        }
+        textarea.delete_newline();
+    }
+}
+
+/// Move the cursor to the very start of the buffer (§30, ⇧Home). `Top` keeps the
+/// column, so chase it with `Head` to guarantee (0, 0).
+fn input_cursor_top(textarea: &mut TextArea<'static>) {
+    textarea.move_cursor(CursorMove::Top);
+    textarea.move_cursor(CursorMove::Head);
+}
+
+/// Move the cursor to the very end of the buffer (§30, ⇧End). `Bottom` keeps the
+/// column, so chase it with `End` to land past the last character.
+fn input_cursor_bottom(textarea: &mut TextArea<'static>) {
+    textarea.move_cursor(CursorMove::Bottom);
+    textarea.move_cursor(CursorMove::End);
 }
 
 /// Canonical repo/cwd root as a string (best-effort absolute path).
@@ -1331,6 +1385,13 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::Edit(key) => {
             app.textarea.input(key);
         }
+        Action::InputDeleteLine => input_delete_line(&mut app.textarea),
+        Action::InputCursorTop => input_cursor_top(&mut app.textarea),
+        Action::InputCursorBottom => input_cursor_bottom(&mut app.textarea),
+        Action::ScrollToTop => app.shell.scroll_to_offset(0, app.last_conv_max_scroll),
+        Action::ScrollToBottom => app
+            .shell
+            .scroll_to_offset(app.last_conv_max_scroll, app.last_conv_max_scroll),
         Action::Submit => {
             if app.streaming || app.delegating {
                 return Ok(false);
@@ -1886,6 +1947,85 @@ mod tests {
         // Summary body: same msgs collapse → msg 1 lives on line 0.
         let summary_starts = [0usize, 0, 1];
         assert_eq!(zoid_tui::line_of_msg(&summary_starts, anchor), 0);
+    }
+
+    #[test]
+    fn input_delete_line_drops_the_cursor_line_regardless_of_column() {
+        let mut ta = TextArea::from(vec!["one".to_string(), "two".to_string(), "three".to_string()]);
+        // Land the cursor mid-word on the middle line.
+        ta.move_cursor(CursorMove::Down);
+        ta.move_cursor(CursorMove::Forward);
+        ta.move_cursor(CursorMove::Forward);
+        input_delete_line(&mut ta);
+        assert_eq!(ta.lines(), &["one".to_string(), "three".to_string()]);
+        // The following line pulled up to the head of where the deleted line was.
+        assert_eq!(ta.cursor(), (1, 0));
+    }
+
+    #[test]
+    fn input_delete_line_on_sole_line_leaves_empty_buffer() {
+        let mut ta = TextArea::from(vec!["only".to_string()]);
+        input_delete_line(&mut ta);
+        assert_eq!(ta.lines(), &["".to_string()]);
+    }
+
+    #[test]
+    fn input_delete_line_on_blank_line_removes_only_that_row() {
+        // Regression: delete_line_by_end merges the next line up on its own for an
+        // empty line, so a second merge used to eat the leading char of "three".
+        let mut ta = TextArea::from(vec![
+            "one".to_string(),
+            "".to_string(),
+            "three".to_string(),
+        ]);
+        ta.move_cursor(CursorMove::Down); // onto the blank line
+        input_delete_line(&mut ta);
+        assert_eq!(ta.lines(), &["one".to_string(), "three".to_string()]);
+        assert_eq!(ta.cursor(), (1, 0));
+    }
+
+    #[test]
+    fn input_delete_line_between_two_blanks_removes_one_blank() {
+        // Regression: two consecutive blanks used to collapse together.
+        let mut ta = TextArea::from(vec![
+            "one".to_string(),
+            "".to_string(),
+            "".to_string(),
+            "two".to_string(),
+        ]);
+        ta.move_cursor(CursorMove::Down); // first blank
+        input_delete_line(&mut ta);
+        assert_eq!(
+            ta.lines(),
+            &["one".to_string(), "".to_string(), "two".to_string()]
+        );
+    }
+
+    #[test]
+    fn input_delete_line_on_last_line_collapses_the_buffer() {
+        // Deleting the last line must remove the row (not leave an empty slot),
+        // consistent with deleting any other line.
+        let mut ta = TextArea::from(vec![
+            "one".to_string(),
+            "two".to_string(),
+            "three".to_string(),
+        ]);
+        ta.move_cursor(CursorMove::Bottom); // onto "three"
+        input_delete_line(&mut ta);
+        assert_eq!(ta.lines(), &["one".to_string(), "two".to_string()]);
+        assert_eq!(ta.cursor(), (1, 3)); // end of the new last line
+    }
+
+    #[test]
+    fn input_cursor_top_and_bottom_reach_buffer_extremes() {
+        let mut ta = TextArea::from(vec!["ab".to_string(), "cd".to_string(), "ef".to_string()]);
+        // Start somewhere in the middle.
+        ta.move_cursor(CursorMove::Down);
+        ta.move_cursor(CursorMove::End);
+        input_cursor_top(&mut ta);
+        assert_eq!(ta.cursor(), (0, 0));
+        input_cursor_bottom(&mut ta);
+        assert_eq!(ta.cursor(), (2, 2)); // last line, past the final char
     }
 
     /// Render the textarea into a scratch buffer and report whether any cell
