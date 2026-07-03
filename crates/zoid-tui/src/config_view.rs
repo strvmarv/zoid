@@ -3,15 +3,69 @@
 
 use zoid_core::config::{Config, Provenance, Source};
 use zoid_core::secret::SecretStatus;
+use zoid_provider::model::{self, Status, Transport};
 
-/// How a config field is edited/displayed (text, uint, bool, provider cycle, or write-only secret).
+/// How a config field is edited/displayed (text, uint, bool, picker, or write-only secret).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FieldKind {
     Text,
     Uint,
     Bool,
-    Cycle(&'static [&'static str]),
+    /// Opens the col-3 contextual picker (provider / model).
+    Pick,
     Secret,
+}
+
+/// One row in the col-3 picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PickOption {
+    pub id: String,
+    pub label: String,
+    pub detail: String,
+    pub selectable: bool,
+    pub is_current: bool,
+}
+
+/// The provider picker options (all registry entries; `[planned]` shown but
+/// not selectable), each annotated with its transport endpoint/command.
+pub fn provider_options(current_id: &str) -> Vec<PickOption> {
+    let cur = model::canonical_id(current_id);
+    model::PROVIDERS
+        .iter()
+        .map(|e| {
+            let (kind, endpoint) = match e.transport {
+                Transport::Http { default_base_url } => ("http", default_base_url.to_string()),
+                Transport::Cli { default_command } => ("cli", default_command.to_string()),
+                Transport::Sdk => ("sdk", "—".to_string()),
+            };
+            let planned = e.status == Status::Planned;
+            let mut detail = format!("{kind}  {endpoint}");
+            if planned {
+                detail.push_str("  planned");
+            }
+            PickOption {
+                id: e.id.to_string(),
+                label: e.display.to_string(),
+                detail,
+                selectable: !planned,
+                is_current: e.id == cur,
+            }
+        })
+        .collect()
+}
+
+/// The model picker options for a provider (registry convenience list).
+pub fn model_options(provider_id: &str, current_model: &str) -> Vec<PickOption> {
+    model::models_for(provider_id)
+        .iter()
+        .map(|m| PickOption {
+            id: (*m).to_string(),
+            label: (*m).to_string(),
+            detail: String::new(),
+            selectable: true,
+            is_current: *m == current_model,
+        })
+        .collect()
 }
 
 /// One rendered config row: label, current value, edit kind, provenance source, and whether an env var shadows it.
@@ -47,33 +101,42 @@ pub fn build_sections(
     };
     let opt = |o: &Option<u64>| o.map(|n| n.to_string()).unwrap_or_else(|| "(none)".into());
 
+    let active = model::entry(&cfg.provider);
+    let connection_row = match active.map(|e| e.transport) {
+        Some(Transport::Cli { .. }) => FieldRow {
+            label: "command",
+            value: cfg.base_url.clone().unwrap_or_default(), // reuses base_url slot until CLI impl adds `command`
+            kind: FieldKind::Text,
+            source: prov.base_url,
+            env_shadowed: prov.base_url == Source::Env,
+        },
+        // Http (and Sdk, which simply shows an empty base_url) → base_url row.
+        _ => FieldRow {
+            label: "base_url",
+            value: cfg.base_url.clone().unwrap_or_default(),
+            kind: FieldKind::Text,
+            source: prov.base_url,
+            env_shadowed: prov.base_url == Source::Env,
+        },
+    };
     let provider_model = Section {
         title: "Provider & Model".into(),
         rows: vec![
             FieldRow {
                 label: "provider",
                 value: cfg.provider.clone(),
-                kind: FieldKind::Cycle(zoid_provider::model::KNOWN_PROVIDERS),
+                kind: FieldKind::Pick,
                 source: prov.provider,
                 env_shadowed: prov.provider == Source::Env,
             },
-            // model is free-text (Ollama runs arbitrary tags) with a
-            // registry-backed cycle layered on in routing (Task 12): a cycle key
-            // steps through models_for(cfg.provider); typing overrides freely.
             FieldRow {
                 label: "model",
                 value: cfg.model.clone(),
-                kind: FieldKind::Text,
+                kind: FieldKind::Pick,
                 source: prov.model,
                 env_shadowed: prov.model == Source::Env,
             },
-            FieldRow {
-                label: "base_url",
-                value: cfg.base_url.clone().unwrap_or_default(),
-                kind: FieldKind::Text,
-                source: prov.base_url,
-                env_shadowed: prov.base_url == Source::Env,
-            },
+            connection_row,
         ],
     };
     let economy = Section {
@@ -187,5 +250,50 @@ mod tests {
         let sec = sections.iter().find(|s| s.title == "Secrets").unwrap();
         assert!(sec.rows[0].env_shadowed); // OLLAMA set from env
         assert_eq!(sec.rows[1].value, "not set");
+    }
+
+    #[test]
+    fn provider_options_annotate_endpoints_and_mark_planned() {
+        let opts = provider_options("ollama-cloud");
+        let cloud = opts.iter().find(|o| o.id == "ollama-cloud").unwrap();
+        assert!(cloud.is_current);
+        assert!(cloud.selectable);
+        assert!(cloud.detail.contains("https://ollama.com"));
+
+        let cli = opts.iter().find(|o| o.id == "anthropic-cli").unwrap();
+        assert!(!cli.selectable); // planned
+        assert!(cli.detail.contains("claude")); // command shown as its endpoint
+        assert!(cli.label.contains("planned") || cli.detail.contains("planned"));
+    }
+
+    #[test]
+    fn model_options_list_registry_models() {
+        let opts = model_options("anthropic-api", "claude-opus-4-8");
+        assert!(opts.iter().any(|o| o.id == "claude-sonnet-4-6" && o.selectable));
+        let cur = opts.iter().find(|o| o.id == "claude-opus-4-8").unwrap();
+        assert!(cur.is_current);
+    }
+
+    #[test]
+    fn provider_and_model_rows_are_pick_kind() {
+        let cfg = Config::default();
+        let prov = Provenance {
+            provider: Source::Default,
+            base_url: Source::Default,
+            model: Source::Default,
+            context_ceiling: Source::Default,
+            auto_evict_cold: Source::Default,
+            compact_threshold_pct: Source::Default,
+            token_ceiling: Source::Default,
+            reduced_motion: Source::Default,
+        };
+        let sections = build_sections(&cfg, &prov, &[]);
+        let pm = &sections[0];
+        assert_eq!(pm.rows[0].label, "provider");
+        assert!(matches!(pm.rows[0].kind, FieldKind::Pick));
+        assert_eq!(pm.rows[1].label, "model");
+        assert!(matches!(pm.rows[1].kind, FieldKind::Pick));
+        // Active provider is HTTP → connection row is base_url.
+        assert_eq!(pm.rows[2].label, "base_url");
     }
 }

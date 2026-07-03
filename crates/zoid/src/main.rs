@@ -1767,7 +1767,7 @@ mod tests {
         );
         // provider / model → string TOML keys.
         assert_eq!(
-            field_target("provider", &FieldKind::Cycle(&[])),
+            field_target("provider", &FieldKind::Pick),
             Some(FieldTarget::Toml {
                 key: "provider",
                 ty: TomlTy::Str

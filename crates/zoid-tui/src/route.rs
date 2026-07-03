@@ -276,7 +276,7 @@ fn route_config_key(state: &ShellState, key: KeyEvent) -> Action {
 fn config_value_change(kind: &Option<FieldKind>, is_model_field: bool, dir: i32) -> Action {
     if matches!(kind, Some(FieldKind::Bool)) {
         Action::ConfigToggle
-    } else if is_model_field || matches!(kind, Some(FieldKind::Cycle(_))) {
+    } else if is_model_field {
         Action::ConfigCycle(dir)
     } else {
         Action::Noop
@@ -799,24 +799,26 @@ mod tests {
             Action::ConfigToggle
         ));
 
-        // Cycle field: Left/Right step the choice list in each direction.
+        // Pick field (provider): Left/Right are inert pre-Task-6 (the picker
+        // opens via Enter; Task 6 rewires Left/Right for in-place stepping if
+        // any). This only pins today's compiled behavior post-Cycle-removal.
         s.config_sections = vec![Section {
             title: "Provider & Model".into(),
             rows: vec![FieldRow {
                 label: "provider",
                 value: "ollama".into(),
-                kind: FieldKind::Cycle(&["ollama", "anthropic"]),
+                kind: FieldKind::Pick,
                 source: Source::Default,
                 env_shadowed: false,
             }],
         }];
         assert!(matches!(
             route_key(&s, key(KeyCode::Right, KeyModifiers::NONE)),
-            Action::ConfigCycle(1)
+            Action::Noop
         ));
         assert!(matches!(
             route_key(&s, key(KeyCode::Left, KeyModifiers::NONE)),
-            Action::ConfigCycle(-1)
+            Action::Noop
         ));
 
         // Once editing, char/esc route into the edit buffer, not navigation.
