@@ -713,15 +713,6 @@ async fn main() -> Result<()> {
     result
 }
 
-/// Clamp a proposed conversation scroll offset into `[0, max]`. `max` is the last
-/// rendered frame's max offset (body length − viewport height). Clamping the
-/// STORED offset — not just the drawn one — keeps it from running away past the
-/// last line, which would otherwise make scroll-up appear dead until the overshoot
-/// unwinds keypress by keypress.
-fn clamp_scroll(next: i32, max: u16) -> u16 {
-    next.clamp(0, max as i32) as u16
-}
-
 async fn run<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
@@ -784,8 +775,9 @@ async fn run<B: ratatui::backend::Backend>(
             .size()
             .map(|s| Rect { x: 0, y: 0, width: s.width, height: s.height })
             .unwrap_or_default();
+        let layout = compute(area, &app.shell);
         let body_w =
-            zoid_tui::layout::conv_text_width(compute(area, &app.shell).conversation.width) as usize;
+            zoid_tui::layout::conv_text_width(layout.conversation.width) as usize;
         let elapsed = app.started.elapsed().as_millis() as u64;
         let caret = zoid_tui::motion::caret_on(elapsed, 1000, app.shell.reduced_motion);
         let streaming = app.streaming;
@@ -803,6 +795,20 @@ async fn run<B: ratatui::backend::Backend>(
             &app.proj.msgs,
             body_w,
         );
+
+        // Tail-follow: when engaged, pin the viewport to the latest line before
+        // drawing — this is what makes the view show the latest output on startup
+        // and follow new events (including live streaming) as they append. Skipped
+        // during the zoom animation, which is top-anchored by the reveal. max_scroll
+        // mirrors render's clamp: body length (+ the in-flight tool line) minus the
+        // visible conversation height.
+        let active_extra = usize::from(app.shell.active_tool.is_some());
+        let max_scroll = (app.body_cache.body.len() + active_extra)
+            .saturating_sub(layout.conversation.height as usize)
+            .min(u16::MAX as usize) as u16;
+        if app.zoom_changed_at.is_none() {
+            app.shell.apply_follow(max_scroll);
+        }
 
         if app.shell.overlay == zoid_tui::state::Overlay::Question {
             zoid::zlog!(
@@ -1226,8 +1232,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             return exec_command(app, c).await;
         }
         Action::ScrollConversation(d) => {
-            let next = app.shell.conversation_scroll as i32 + d;
-            app.shell.conversation_scroll = clamp_scroll(next, app.last_conv_max_scroll);
+            app.shell.scroll_conversation(d, app.last_conv_max_scroll);
             zoid::zlog!(
                 "scroll: d={} -> offset={} (max={})",
                 d,
@@ -1242,14 +1247,17 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::ZoomIn => {
             let before = app.shell.zoom;
             app.shell.zoom_in(); // re-anchors conversation_scroll on a real change
-            if app.shell.zoom != before {
+            // The zoom reveal animates from the TOP, which fights tail-following.
+            // When pinned to the latest line, skip it: `apply_follow` re-pins to the
+            // bottom on the next frame, so the zoom is instant and stays on the tail.
+            if app.shell.zoom != before && !app.shell.follow_tail {
                 app.zoom_changed_at = Some(std::time::Instant::now());
             }
         }
         Action::ZoomOut => {
             let before = app.shell.zoom;
             app.shell.zoom_out();
-            if app.shell.zoom != before {
+            if app.shell.zoom != before && !app.shell.follow_tail {
                 app.zoom_changed_at = Some(std::time::Instant::now());
             }
         }
@@ -1352,6 +1360,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 app.proj = ProjectionCache::default();
                 app.body_cache = BodyCache::default();
                 app.shell.conversation_scroll = 0;
+                app.shell.follow_tail = true; // jump to the latest of the loaded session
                 if let Some(info) = app
                     .session
                     .list_sessions(Some(repo_root()))
@@ -1629,6 +1638,7 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             app.proj = ProjectionCache::default();
             app.body_cache = BodyCache::default();
             app.shell.conversation_scroll = 0;
+            app.shell.follow_tail = true; // new session starts pinned to the latest
             Ok(false)
         }
         Command::RenameSession(name) => {
@@ -1857,19 +1867,6 @@ mod tests {
             ..econ
         };
         assert_eq!(policy_from_config(&econ0, 200_000).compact_threshold, None);
-    }
-
-    #[test]
-    fn clamp_scroll_bounds_offset() {
-        // floors at 0 (can't scroll above the top)
-        assert_eq!(clamp_scroll(-5, 40), 0);
-        // ordinary in-range move
-        assert_eq!(clamp_scroll(12, 40), 12);
-        // caps at max — the key fix: over-scroll can't store a runaway offset that
-        // makes later scroll-up appear dead.
-        assert_eq!(clamp_scroll(500, 40), 40);
-        // max 0 (body fits the viewport) pins to the top
-        assert_eq!(clamp_scroll(9, 0), 0);
     }
 
     #[test]

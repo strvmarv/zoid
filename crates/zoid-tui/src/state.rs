@@ -93,6 +93,11 @@ pub struct ShellState {
     pub cmdline: CmdlineState,
     pub objects: ObjectState,
     pub conversation_scroll: u16,
+    /// Tail-follow: when true the bin pins `conversation_scroll` to the last
+    /// line every frame, so the view shows the latest output on startup and as
+    /// new events stream in. Scrolling up detaches it; scrolling back to the
+    /// bottom re-engages it.
+    pub follow_tail: bool,
     /// Current branch label for the Branch drawer (P2: read from `.git/HEAD`).
     pub branch: String,
     /// Repo directory name shown in the repo drawer header line.
@@ -195,6 +200,7 @@ impl ShellState {
             cmdline: CmdlineState::default(),
             objects: ObjectState::default(),
             conversation_scroll: 0,
+            follow_tail: true,
             branch: "main".into(),
             repo_name: String::new(),
             worktree: "(none)".into(),
@@ -305,6 +311,25 @@ impl ShellState {
             self.conversation_scroll = 0;
         }
         self.zoom = next;
+    }
+
+    /// Apply a scroll delta to the conversation, clamped to `[0, max_scroll]`,
+    /// and update tail-follow: landing at (or past) the bottom re-engages follow;
+    /// any position above the bottom detaches it. `max_scroll` is the max offset
+    /// at the current altitude, supplied by the bin from the last drawn frame.
+    pub fn scroll_conversation(&mut self, delta: i32, max_scroll: u16) {
+        let next = (self.conversation_scroll as i32 + delta).clamp(0, max_scroll as i32) as u16;
+        self.conversation_scroll = next;
+        self.follow_tail = next >= max_scroll;
+    }
+
+    /// When following the tail, pin the offset to the latest line. Called by the
+    /// bin before each draw (skipped during the zoom animation, which is
+    /// top-anchored). No-op when the user has scrolled up (detached).
+    pub fn apply_follow(&mut self, max_scroll: u16) {
+        if self.follow_tail {
+            self.conversation_scroll = max_scroll;
+        }
     }
 
     /// Show the in-flight spinner for a tool that has just started running.
@@ -481,6 +506,58 @@ mod tests {
         assert_eq!(
             s.conversation_scroll, 17,
             "a saturating no-op zoom keypress preserves scroll"
+        );
+    }
+
+    #[test]
+    fn new_sessions_follow_the_tail_by_default() {
+        assert!(
+            ShellState::new().follow_tail,
+            "a fresh session should show the latest output (scroll-to-latest on startup)"
+        );
+    }
+
+    #[test]
+    fn scrolling_up_detaches_follow_and_returning_to_bottom_reengages() {
+        let mut s = ShellState::new();
+        s.conversation_scroll = 100; // pinned to the bottom
+        // Scroll up one line → detaches from the tail.
+        s.scroll_conversation(-1, 100);
+        assert_eq!(s.conversation_scroll, 99);
+        assert!(!s.follow_tail, "scrolling up off the bottom detaches follow");
+        // Scroll back down to the bottom → re-engages.
+        s.scroll_conversation(1, 100);
+        assert_eq!(s.conversation_scroll, 100);
+        assert!(s.follow_tail, "returning to the bottom re-engages follow");
+    }
+
+    #[test]
+    fn scroll_clamps_and_a_downward_overshoot_at_bottom_keeps_following() {
+        let mut s = ShellState::new();
+        s.conversation_scroll = 5;
+        // Overshoot the top: clamps to 0, detached (0 < max).
+        s.scroll_conversation(-100, 50);
+        assert_eq!(s.conversation_scroll, 0);
+        assert!(!s.follow_tail);
+        // Overshoot the bottom: clamps to max, re-engaged.
+        s.scroll_conversation(1000, 50);
+        assert_eq!(s.conversation_scroll, 50);
+        assert!(s.follow_tail);
+    }
+
+    #[test]
+    fn apply_follow_pins_only_when_following() {
+        let mut s = ShellState::new();
+        s.follow_tail = true;
+        s.apply_follow(276);
+        assert_eq!(s.conversation_scroll, 276, "following pins to the tail");
+
+        s.follow_tail = false;
+        s.conversation_scroll = 50;
+        s.apply_follow(276);
+        assert_eq!(
+            s.conversation_scroll, 50,
+            "a detached view is left where the user parked it"
         );
     }
 
