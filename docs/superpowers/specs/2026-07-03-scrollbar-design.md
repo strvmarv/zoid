@@ -136,7 +136,9 @@ under the same `BodyKey`.
 /// 0 when `starts` is empty or `line` precedes the first start.
 pub fn msg_at_line(starts: &[usize], line: usize) -> usize
 
-/// First body line of message `idx`; clamps to the last start (or 0 when empty).
+/// First body line of message `idx`; returns 0 when `idx` is out of range or
+/// `starts` is empty (in practice `idx` is always in range: `starts.len() ==
+/// msgs.len()` at every altitude).
 pub fn line_of_msg(starts: &[usize], idx: usize) -> usize
 ```
 
