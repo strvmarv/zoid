@@ -1556,6 +1556,13 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                     // Write provider, then seed base_url from the registry.
                     apply_config_write(app, "provider", TomlValue::Str(id.clone()), false);
                     apply_config_write(app, "base_url", base_url_write_for(&id), false);
+                    // Clear the model on a provider change (spec §4.3): the old
+                    // model almost never belongs to the new provider, and leaving
+                    // it would persist an incompatible provider+model pair if the
+                    // user backs out of the model picker below. Unset → empty →
+                    // the runtime falls back to the new provider's default_model()
+                    // until the user picks one from the (auto-opened) picker.
+                    apply_config_write(app, "model", TomlValue::Unset, false);
                     // Key gate: if this provider needs a key we don't have, prompt first.
                     let needs_key = key_env_for(&id).filter(|env| {
                         use zoid_core::secret::{SecretStatus, SecretStore};
@@ -1769,6 +1776,11 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 apply_config_write(app, "base_url", base_url_write_for(&pid), false);
                 if let Some(mid) = model_id {
                     apply_config_write(app, "model", TomlValue::Str(mid), false);
+                } else {
+                    // No model chosen (e.g. ollama-local has no static model list):
+                    // clear any stale model so it can't outlive the provider change
+                    // (spec §4.3). Empty → new provider's default_model() at runtime.
+                    apply_config_write(app, "model", TomlValue::Unset, false);
                 }
             }
             app.shell.overlay = Overlay::None;
