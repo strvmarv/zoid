@@ -18,3 +18,5 @@ windows-archive = ".zip"
 # Don't create a Release in this private source repo; a future custom job
 # publishes to the public releases repo instead.
 create-release = false
+# Where the shell/PowerShell installer scripts install the binary.
+install-path = "CARGO_HOME"

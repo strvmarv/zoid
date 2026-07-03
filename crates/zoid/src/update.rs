@@ -49,8 +49,8 @@ pub fn asset_name(target: &str) -> String {
     }
 }
 
-/// Parse a `SHA256SUMS` file (coreutils format: "<hex>  <filename>") into a map
-/// of filename → lowercase hex digest. A leading '*' on the filename is stripped.
+/// Parse a coreutils-format checksums file ("<hex>  <filename>") into a map of
+/// filename → lowercase hex digest. A leading '*' on the filename is stripped.
 pub fn parse_sha256sums(text: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for line in text.lines() {
@@ -218,7 +218,7 @@ pub async fn run() -> Result<()> {
     let expected = parse_sha256sums(&sums)
         .get(&want)
         .cloned()
-        .ok_or_else(|| anyhow!("{want} missing from SHA256SUMS"))?;
+        .ok_or_else(|| anyhow!("{want} missing from {CHECKSUMS_ASSET}"))?;
     verify_sha256(&archive, &expected)
         .context("aborting: refusing to install an unverified binary")?;
 
