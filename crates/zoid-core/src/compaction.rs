@@ -2,7 +2,7 @@
 //! compactions. Pure — the agent loop records the results as events.
 
 use crate::assembler::ContextPolicy;
-use crate::context::{context_window, ItemKind};
+use crate::context::{context_window, tool_id_of, ItemKind};
 use crate::economy::estimate_tokens;
 use crate::event::{Event, EventKind};
 use std::collections::{HashMap, HashSet};
@@ -59,7 +59,7 @@ pub fn plan_compactions(events: &[Event], policy: &ContextPolicy) -> Vec<Compact
         if it.kind != ItemKind::ToolResult || it.pinned {
             continue;
         }
-        let Some((_, id)) = it.key.rsplit_once(':') else { continue };
+        let Some(id) = tool_id_of(&it.key) else { continue };
         if done.contains(id) {
             continue;
         }

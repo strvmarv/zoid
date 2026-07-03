@@ -104,6 +104,14 @@ fn flush_delta(
     }
 }
 
+/// Extract the tool-call id from a non-file context-item key.
+/// Non-file tool-result keys are formatted `"tool:{name}:{id}"` (see the
+/// `format!("tool:{name}:{id}")` in `context_window`), so the id is the segment
+/// after the final `:`. Returns `None` for keys with no `:` (never a tool key).
+pub fn tool_id_of(key: &str) -> Option<&str> {
+    key.rsplit_once(':').map(|(_, id)| id)
+}
+
 /// Project the MAIN branch's context window (spec §8 ⑤a). Subagent work lives
 /// on its own `subagent:<id>` branch (mirrors `conversation()` in
 /// `projection.rs`) and is not part of the main conversation's actual
@@ -235,7 +243,7 @@ pub fn context_window(events: &[Event]) -> ContextWindow {
                 // Item keys for non-file tool results are "tool:{name}:{id}".
                 if let Some(it) = items
                     .iter_mut()
-                    .find(|i| i.kind == ItemKind::ToolResult && i.key.rsplit_once(':').map(|(_, x)| x) == Some(id.as_str()))
+                    .find(|i| i.kind == ItemKind::ToolResult && tool_id_of(&i.key) == Some(id.as_str()))
                 {
                     it.tokens = crate::economy::estimate_tokens(summary);
                     it.compacted = true;
