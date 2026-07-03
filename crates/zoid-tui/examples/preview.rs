@@ -22,6 +22,25 @@ fn seeded() -> Vec<ChatMsg> {
             ts: 0,
         },
         ChatMsg::Assistant {
+            text: "searching for the failing lookup".into(),
+            tool_calls: vec![ToolCallRef {
+                id: "c1".into(),
+                name: "search".into(),
+                args: r#"{"query":"lookup"}"#.into(),
+            }],
+            ts: 0,
+        },
+        // ACM-1: a compacted tool-result — the ⊟ chip at Normal, the ⊟ header
+        // label at Detail (docs/ux/README.md visual-language table).
+        ChatMsg::ToolResult {
+            id: "c1".into(),
+            name: "search".into(),
+            output: "row 0\n… (compacted: 199 more lines, ~700 tokens elided)".into(),
+            is_error: false,
+            compacted: true,
+            ts: 0,
+        },
+        ChatMsg::Assistant {
             text: "an unwrapped lookup in the handler.".into(),
             tool_calls: vec![],
             ts: 0,

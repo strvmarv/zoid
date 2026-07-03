@@ -1,0 +1,16 @@
+---
+source: crates/zoid-tui/tests/chat_snapshot.rs
+expression: "draw_zoom(&compacted_msgs(), Zoom::Normal, 100)"
+---
+"00:00 › grep the repo for TODOs                                                                     "
+"                                                                                                    "
+"00:00 zoid searching                                                                                "
+"  ● search(query: TODO) ⏎ peek                                                                      "
+"  ✓ ⊟ compacted search → row 0                                                                      "
+"                                                                                                    "
+"00:00 zoid found a handful of TODOs.                                                                "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
