@@ -378,10 +378,19 @@ fn select_provider(
 /// Spawn a background fetch of a provider's model list; the result is delivered
 /// as `AgentUpdate::ModelsFetched`. Non-fatal: any error → empty list (the
 /// picker keeps its static registry fallback).
-fn spawn_model_fetch(provider: Arc<dyn Provider>, ui_tx: mpsc::Sender<AgentUpdate>) {
+fn spawn_model_fetch(
+    provider: Arc<dyn Provider>,
+    provider_id: String,
+    ui_tx: mpsc::Sender<AgentUpdate>,
+) {
     tokio::spawn(async move {
         let models = provider.list_models().await.unwrap_or_default();
-        let _ = ui_tx.send(AgentUpdate::ModelsFetched(models)).await;
+        let _ = ui_tx
+            .send(AgentUpdate::ModelsFetched {
+                provider: provider_id,
+                models,
+            })
+            .await;
     });
 }
 
@@ -866,8 +875,8 @@ async fn run<B: ratatui::backend::Backend>(
                         app.shell.overlay = zoid_tui::state::Overlay::Question;
                         app.pending_answer = Some(reply);
                     }
-                    AgentUpdate::ModelsFetched(models) => {
-                        apply_models_fetched(app, models);
+                    AgentUpdate::ModelsFetched { provider, models } => {
+                        apply_models_fetched(app, provider, models);
                     }
                 }
             }
@@ -1029,7 +1038,11 @@ fn current_config_field(app: &App) -> Option<(&'static str, zoid_tui::config_vie
 /// Replace an OPEN model picker's options with a freshly-fetched live list.
 /// No-op if the list is empty (keep the static fallback) or a model picker
 /// isn't currently open (results arrived too late / focus moved).
-fn apply_models_fetched(app: &mut App, models: Vec<String>) {
+fn apply_models_fetched(app: &mut App, provider: String, models: Vec<String>) {
+    // Drop a stale fetch: the user switched providers while this was in flight.
+    if provider != app.config.provider {
+        return;
+    }
     if models.is_empty() || !app.shell.config_picker_open() {
         return;
     }
@@ -1443,7 +1456,11 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                     app.shell.config_col = ConfigCol::Picker;
                 }
                 if label == "model" {
-                    spawn_model_fetch(app.provider.clone(), app.ui_tx.clone());
+                    spawn_model_fetch(
+                        app.provider.clone(),
+                        app.config.provider.clone(),
+                        app.ui_tx.clone(),
+                    );
                 }
             }
         }
@@ -1501,7 +1518,11 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                     } else {
                         ConfigCol::Picker
                     };
-                    spawn_model_fetch(app.provider.clone(), app.ui_tx.clone());
+                    spawn_model_fetch(
+                        app.provider.clone(),
+                        app.config.provider.clone(),
+                        app.ui_tx.clone(),
+                    );
                 } else if label == "model" {
                     apply_config_write(app, "model", TomlValue::Str(id), false);
                     app.shell.config_picker.clear();
@@ -2276,17 +2297,65 @@ mod tests {
         assert!(app.shell.config_picker_open());
 
         // Happy path: a live fetch replaces the fallback list.
-        apply_models_fetched(&mut app, vec!["live-a".to_string(), "live-b".to_string()]);
+        let provider_id = app.config.provider.clone();
+        apply_models_fetched(
+            &mut app,
+            provider_id.clone(),
+            vec!["live-a".to_string(), "live-b".to_string()],
+        );
         assert_eq!(app.shell.config_picker.len(), 2);
         assert_eq!(app.shell.config_picker[0].id, "live-a");
         assert_eq!(app.shell.config_picker[1].id, "live-b");
         assert!(app.shell.config_picker.iter().all(|o| o.selectable));
 
         // Empty fetch result: fallback list is left untouched.
-        apply_models_fetched(&mut app, Vec::new());
+        apply_models_fetched(&mut app, provider_id, Vec::new());
         assert_eq!(app.shell.config_picker.len(), 2);
         assert_eq!(app.shell.config_picker[0].id, "live-a");
         assert_eq!(app.shell.config_picker[1].id, "live-b");
+    }
+
+    /// A fetch tagged with a provider id that no longer matches
+    /// `app.config.provider` (the user switched providers while the fetch was
+    /// in flight) must be dropped entirely — the picker is left exactly as it
+    /// was, not overwritten with the stale provider's models.
+    #[tokio::test]
+    async fn stale_provider_fetch_is_dropped() {
+        let mut app = test_app().await;
+        refresh_config_sections(&mut app);
+        let (section, field) = app
+            .shell
+            .config_sections
+            .iter()
+            .enumerate()
+            .find_map(|(si, s)| {
+                s.rows
+                    .iter()
+                    .position(|r| r.label == "model")
+                    .map(|ri| (si, ri))
+            })
+            .expect("config sections must include a \"model\" row");
+        app.shell.config_section = section;
+        app.shell.config_field = field;
+        app.shell.config_picker =
+            zoid_tui::config_view::model_options(&app.config.provider, &app.config.model);
+        app.shell.config_col = zoid_tui::state::ConfigCol::Picker;
+        assert!(app.shell.config_picker_open());
+        let before = app.shell.config_picker.clone();
+        let before_sel = app.shell.config_picker_sel;
+
+        assert_ne!(app.config.provider, "some-other-provider");
+        apply_models_fetched(
+            &mut app,
+            "some-other-provider".to_string(),
+            vec!["stale-a".to_string(), "stale-b".to_string()],
+        );
+
+        assert_eq!(
+            app.shell.config_picker, before,
+            "a fetch tagged with a superseded provider id must not clobber the current picker"
+        );
+        assert_eq!(app.shell.config_picker_sel, before_sel);
     }
 
     /// A live fetch that lands after focus has moved off the model field (or
@@ -2300,7 +2369,8 @@ mod tests {
         // false regardless of which row the cursor is on.
         assert!(!app.shell.config_picker_open());
 
-        apply_models_fetched(&mut app, vec!["live-a".to_string()]);
+        let provider_id = app.config.provider.clone();
+        apply_models_fetched(&mut app, provider_id, vec!["live-a".to_string()]);
 
         assert!(
             app.shell.config_picker.is_empty(),

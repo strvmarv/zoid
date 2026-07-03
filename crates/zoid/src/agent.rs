@@ -73,8 +73,13 @@ pub enum AgentUpdate {
     },
     /// The turn is finished (model produced no further tool calls / cap / error).
     TurnComplete,
-    /// Live model list fetched for the config/quick-switch picker.
-    ModelsFetched(Vec<String>),
+    /// Live model list fetched for the config model picker, tagged with the
+    /// provider id it was fetched for so a stale (superseded) fetch can be
+    /// dropped instead of clobbering a newer provider's picker.
+    ModelsFetched {
+        provider: String,
+        models: Vec<String>,
+    },
 }
 
 /// The tool specs to advertise to the provider.
