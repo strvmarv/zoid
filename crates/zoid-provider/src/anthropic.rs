@@ -104,7 +104,9 @@ impl AnthropicProvider {
     pub fn new(api_key: String) -> Self {
         Self {
             api_key,
-            base_url: "https://api.anthropic.com".to_string(),
+            base_url: crate::model::default_base_url("anthropic-api")
+                .unwrap_or("https://api.anthropic.com")
+                .to_string(),
             client: reqwest::Client::new(),
         }
     }
