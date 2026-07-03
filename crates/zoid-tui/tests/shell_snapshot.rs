@@ -892,6 +892,85 @@ fn config_overlay_narrow_degrades() {
     insta::assert_snapshot!(draw_config(&s, &sections, 80, 24));
 }
 
+/// Code review fix for Task 9: the degraded overlay picker (rendered when the
+/// picker is open but three columns don't fit, e.g. 80x24) must only
+/// highlight its selected row when focus is actually on the picker
+/// (`ConfigCol::Picker`), matching the column-3 (non-degraded) behavior. A
+/// prior regression hardcoded `active = true` for the overlay, so it stayed
+/// highlighted even when focus moved to `ConfigCol::Fields`. Across the whole
+/// config render the only source of a `color::SEL_BG` cell background is the
+/// picker's selected row (rail/fields spans use fg only), so counting
+/// `SEL_BG` cells is a reliable oracle for "is the picker rendered as
+/// active."
+#[test]
+fn config_overlay_narrow_degrades_respects_focus() {
+    use zoid_core::config::{Config, Provenance, Source};
+    use zoid_core::secret::SecretStatus;
+    use zoid_tui::config_view::{build_sections, provider_options};
+    use zoid_tui::render::render_config;
+    use zoid_tui::state::ConfigCol;
+    use zoid_tui::tokens::color;
+
+    let cfg = Config::default();
+    let prov = Provenance {
+        provider: Source::Default,
+        base_url: Source::Default,
+        model: Source::Default,
+        context_ceiling: Source::Default,
+        auto_evict_cold: Source::Default,
+        compact_threshold_pct: Source::Default,
+        token_ceiling: Source::Default,
+        reduced_motion: Source::Default,
+    };
+    let ks = [
+        ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
+        ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
+    ];
+    let sections = build_sections(&cfg, &prov, &ks);
+
+    let sel_bg_count = |config_col: ConfigCol| {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Config;
+        s.config_section = 0;
+        s.config_field = 0; // "provider" row
+        s.config_col = config_col;
+        s.config_picker = provider_options(&cfg.provider);
+        s.config_picker_sel = 0;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                render_config(f, &s, &sections, area);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        buffer
+            .content()
+            .iter()
+            .filter(|c| c.bg == color::SEL_BG)
+            .count()
+    };
+
+    // Case A: focus is on the picker — the overlay's selected row IS
+    // highlighted.
+    let with_focus = sel_bg_count(ConfigCol::Picker);
+    assert!(
+        with_focus > 0,
+        "overlay picker must highlight its selected row when focus is on the picker"
+    );
+
+    // Case B: focus is on fields, but the picker is still open — the overlay
+    // must NOT highlight. This is the case that fails against the pre-fix
+    // hardcoded `true` and passes after the fix.
+    let without_focus = sel_bg_count(ConfigCol::Fields);
+    assert_eq!(
+        without_focus, 0,
+        "overlay picker must not highlight its selected row when focus is elsewhere"
+    );
+}
+
 /// The `ask_user` question overlay (Task 11), pick mode: a centered card
 /// listing the model's choices plus the two synthetic "Other…"/"— let you
 /// decide —" rows, the first row (default `selected == 0`) highlighted with

@@ -698,6 +698,7 @@ pub fn render_config(
     let picker_open = state.config_picker_open();
     let three_col_fits = body.width >= RAIL_W + FIELDS_W + PICKER_MIN;
     let cols = if picker_open && three_col_fits {
+        // (unchanged) three columns: rail | fields | picker
         Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -706,13 +707,23 @@ pub fn render_config(
                 Constraint::Min(PICKER_MIN),
             ])
             .split(body)
-    } else {
+    } else if picker_open {
+        // degraded: two columns (rail | fields); picker floats as an overlay
+        // card over the fields column below. Shrink the rail at very narrow
+        // widths so the fields column (and the card over it) keeps room.
         Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
                 Constraint::Length(RAIL_W.min(body.width / 3).max(8)),
                 Constraint::Min(20),
             ])
+            .split(body)
+    } else {
+        // picker closed: unchanged from before the settings redesign —
+        // fixed rail + fields fills the rest.
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(RAIL_W), Constraint::Min(30)])
             .split(body)
     };
 
@@ -802,7 +813,8 @@ pub fn render_config(
             .border_style(Style::new().fg(color::CHAT_ACCENT));
         let pinner = pblock.inner(over);
         frame.render_widget(pblock, over);
-        let pick = picker_lines(&state.config_picker, state.config_picker_sel, true, pinner.width as usize);
+        let active = state.config_col == crate::state::ConfigCol::Picker;
+        let pick = picker_lines(&state.config_picker, state.config_picker_sel, active, pinner.width as usize);
         frame.render_widget(Paragraph::new(pick), pinner);
     }
 
