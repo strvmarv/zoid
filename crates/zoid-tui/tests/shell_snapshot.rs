@@ -721,6 +721,44 @@ fn config_overlay_frame() {
     insta::assert_snapshot!(draw_config(&s, &sections, 100, 24));
 }
 
+/// API-key gate (Task 15): while `config_key_prompt` is set, the fields
+/// column shows a dedicated masked key-entry view instead of the normal
+/// per-row list — the literal secret text must never appear, only mask
+/// glyphs + caret.
+#[test]
+fn config_key_prompt_masks_entry() {
+    use zoid_core::config::{Config, Provenance, Source};
+    use zoid_core::secret::SecretStatus;
+    use zoid_tui::config_view::build_sections;
+
+    let mut s = ShellState::new();
+    s.overlay = Overlay::Config;
+    s.config_key_prompt = Some("ANTHROPIC_API_KEY");
+    s.config_edit = Some("sk-secret".to_string());
+    let cfg = Config::default();
+    let prov = Provenance {
+        provider: Source::Default,
+        base_url: Source::Default,
+        model: Source::Default,
+        context_ceiling: Source::Default,
+        auto_evict_cold: Source::Default,
+        compact_threshold_pct: Source::Default,
+        token_ceiling: Source::Default,
+        reduced_motion: Source::Default,
+    };
+    let ks = [
+        ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
+        ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
+    ];
+    let sections = build_sections(&cfg, &prov, &ks);
+    let snapshot = draw_config(&s, &sections, 160, 40);
+    assert!(
+        !snapshot.contains("sk-secret"),
+        "masked key prompt must not leak the literal secret text"
+    );
+    insta::assert_snapshot!(snapshot);
+}
+
 /// Config overlay (Task 8): full-screen three-column layout — sections rail |
 /// active section's fields | contextual picker — with the provider picker open
 /// on the `provider` field (col 3 populated from `config_view::provider_options`).

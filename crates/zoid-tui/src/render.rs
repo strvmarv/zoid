@@ -741,52 +741,81 @@ pub fn render_config(
     }
     frame.render_widget(Paragraph::new(nav), cols[0]);
 
-    // Column 2: fields of the active section.
+    // Column 2: fields of the active section — or, while the API-key gate is
+    // prompting, a dedicated masked key-entry view instead of the per-row list
+    // (the current field is the provider/model row, not a `FieldKind::Secret`
+    // row, so the normal per-row masking below wouldn't apply here).
     let field_w = cols[1].width as usize;
-    let mut fields: Vec<Line> = Vec::new();
-    for (i, r) in sections[active].rows.iter().enumerate() {
-        let cur = i == state.config_field && state.config_col == crate::state::ConfigCol::Fields;
-        let val = if i == state.config_field {
-            if let Some(buf) = &state.config_edit {
-                let shown = if matches!(r.kind, FieldKind::Secret) {
-                    glyph::MASK.to_string().repeat(buf.chars().count())
+    let fields: Vec<Line> = if let Some(env) = state.config_key_prompt {
+        let buf = state.config_edit.as_deref().unwrap_or("");
+        let masked = glyph::MASK.to_string().repeat(buf.chars().count());
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!(" Enter {env}"),
+                Style::new().fg(color::CHAT_ACCENT),
+            )),
+            Line::from(Span::styled(
+                format!("   {masked}{}", glyph::CARET),
+                Style::new().fg(color::TXT),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "   Enter save · Esc cancel",
+                Style::new().fg(color::DIM),
+            )),
+        ]
+    } else {
+        let mut fields: Vec<Line> = Vec::new();
+        for (i, r) in sections[active].rows.iter().enumerate() {
+            let cur =
+                i == state.config_field && state.config_col == crate::state::ConfigCol::Fields;
+            let val = if i == state.config_field {
+                if let Some(buf) = &state.config_edit {
+                    let shown = if matches!(r.kind, FieldKind::Secret) {
+                        glyph::MASK.to_string().repeat(buf.chars().count())
+                    } else {
+                        buf.clone()
+                    };
+                    format!("{shown}{}", glyph::CARET)
                 } else {
-                    buf.clone()
-                };
-                format!("{shown}{}", glyph::CARET)
+                    r.value.clone()
+                }
             } else {
                 r.value.clone()
+            };
+            let (tag_txt, tag_col) = match r.source {
+                zoid_core::config::Source::Default => ("[default]", color::DIM),
+                zoid_core::config::Source::UserGlobal => ("[user]", color::CHAT_ACCENT),
+                zoid_core::config::Source::Project => ("[repo]", color::BRANCH),
+                zoid_core::config::Source::Local => ("[local]", color::BRANCH),
+                zoid_core::config::Source::Env => ("[env]", color::WARN),
+            };
+            let warn = if r.env_shadowed {
+                format!(" {}", glyph::WARNING)
+            } else {
+                String::new()
+            };
+            let marker = if cur { glyph::COLLAPSED } else { ' ' };
+            let left = format!(" {marker} {}", pad_to(r.label, 12));
+            let fixed = left.width() + tag_txt.width() + warn.width();
+            let mid = field_w.saturating_sub(fixed).max(1);
+            let val_shown = pad_to(&truncate(&val, mid), mid);
+            let mut spans = vec![
+                Span::styled(
+                    left,
+                    Style::new().fg(if cur { color::CHAT_ACCENT } else { color::TXT }),
+                ),
+                Span::styled(val_shown, Style::new().fg(color::TXT)),
+                Span::styled(tag_txt.to_string(), Style::new().fg(tag_col)),
+            ];
+            if !warn.is_empty() {
+                spans.push(Span::styled(warn, Style::new().fg(color::WARN)));
             }
-        } else {
-            r.value.clone()
-        };
-        let (tag_txt, tag_col) = match r.source {
-            zoid_core::config::Source::Default => ("[default]", color::DIM),
-            zoid_core::config::Source::UserGlobal => ("[user]", color::CHAT_ACCENT),
-            zoid_core::config::Source::Project => ("[repo]", color::BRANCH),
-            zoid_core::config::Source::Local => ("[local]", color::BRANCH),
-            zoid_core::config::Source::Env => ("[env]", color::WARN),
-        };
-        let warn = if r.env_shadowed {
-            format!(" {}", glyph::WARNING)
-        } else {
-            String::new()
-        };
-        let marker = if cur { glyph::COLLAPSED } else { ' ' };
-        let left = format!(" {marker} {}", pad_to(r.label, 12));
-        let fixed = left.width() + tag_txt.width() + warn.width();
-        let mid = field_w.saturating_sub(fixed).max(1);
-        let val_shown = pad_to(&truncate(&val, mid), mid);
-        let mut spans = vec![
-            Span::styled(left, Style::new().fg(if cur { color::CHAT_ACCENT } else { color::TXT })),
-            Span::styled(val_shown, Style::new().fg(color::TXT)),
-            Span::styled(tag_txt.to_string(), Style::new().fg(tag_col)),
-        ];
-        if !warn.is_empty() {
-            spans.push(Span::styled(warn, Style::new().fg(color::WARN)));
+            fields.push(Line::from(spans));
         }
-        fields.push(Line::from(spans));
-    }
+        fields
+    };
     frame.render_widget(Paragraph::new(fields), cols[1]);
 
     // Column 3: contextual picker — only when open AND three columns fit.

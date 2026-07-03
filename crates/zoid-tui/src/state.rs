@@ -149,6 +149,11 @@ pub struct ShellState {
     pub model: String,
     /// Human provider label (e.g. "anthropic", "ollama") shown beside the model.
     pub provider: String,
+    /// The secret env name currently being entered via the masked key-prompt
+    /// (e.g. `"ANTHROPIC_API_KEY"`), or `None` when not prompting. Set when a
+    /// selected provider needs a key we don't have yet (Task 15 gate); cleared
+    /// on commit or cancel.
+    pub config_key_prompt: Option<&'static str>,
     /// Compact elapsed-time-in-session label (e.g. "12m", "1h3m").
     pub duration: String,
     /// Total tokens spent in the active session (session drawer "tok" line).
@@ -248,6 +253,7 @@ impl ShellState {
             session_name: String::new(),
             model: String::new(),
             provider: String::new(),
+            config_key_prompt: None,
             duration: "0m".into(),
             session_tokens: 0,
             ctx_used: 0,

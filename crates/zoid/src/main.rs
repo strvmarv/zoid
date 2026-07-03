@@ -316,6 +316,17 @@ fn entry_requires_key(id: &str) -> bool {
     id != "ollama-local"
 }
 
+/// The secret env name a provider id needs, or `None` if it needs no key.
+fn key_env_for(id: &str) -> Option<&'static str> {
+    if !entry_requires_key(id) {
+        return None;
+    }
+    match zoid_provider::model::entry(id).map(|e| e.family) {
+        Some("anthropic") => Some("ANTHROPIC_API_KEY"),
+        _ => Some("OLLAMA_API_KEY"),
+    }
+}
+
 /// Provider + credential from `config.provider` + the secret store (env wins
 /// inside `SecretStore::get`). No key found → fall back to the offline
 /// `FakeProvider` so the binary always runs; `provider_label` mirrors this
@@ -1389,8 +1400,49 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::ConfigCancelEdit => {
             app.shell.config_edit = None;
+            app.shell.config_key_prompt = None;
         }
         Action::ConfigCommitEdit => {
+            if let Some(env) = app.shell.config_key_prompt.take() {
+                if let (Some(s), Some(buf)) = (&app.secrets, app.shell.config_edit.clone()) {
+                    use zoid_core::secret::SecretStore;
+                    if let Err(e) = s.set(env, buf.trim()) {
+                        eprintln!("zoid: secret set failed for {env}: {e}");
+                    }
+                } else if app.secrets.is_none() {
+                    eprintln!("zoid: secret store unavailable; cannot set {env}");
+                }
+                app.shell.config_edit = None;
+                refresh_config_sections(app);
+                // Re-select with the new key (the key lives in the secret store, not
+                // config, so apply_config_write's auto-reselect never ran), then
+                // advance to the model picker + fetch.
+                let (provider, name, has_key) = select_provider(&app.config, &app.secrets);
+                app.provider = provider;
+                app.shell.provider = provider_label(name, has_key);
+                if let Some(mi) = app
+                    .shell
+                    .config_sections
+                    .get(app.shell.config_section)
+                    .and_then(|sec| sec.rows.iter().position(|r| r.label == "model"))
+                {
+                    app.shell.config_field = mi;
+                }
+                app.shell.config_picker =
+                    zoid_tui::config_view::model_options(&app.config.provider, &app.config.model);
+                app.shell.config_picker_sel = 0;
+                app.shell.config_col = if app.shell.config_picker.is_empty() {
+                    zoid_tui::state::ConfigCol::Fields
+                } else {
+                    zoid_tui::state::ConfigCol::Picker
+                };
+                spawn_model_fetch(
+                    app.provider.clone(),
+                    app.config.provider.clone(),
+                    app.ui_tx.clone(),
+                );
+                return Ok(false);
+            }
             if let (Some((label, kind)), Some(buffer)) =
                 (current_config_field(app), app.shell.config_edit.clone())
             {
@@ -1498,31 +1550,46 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                     // Write provider, then seed base_url from the registry.
                     apply_config_write(app, "provider", TomlValue::Str(id.clone()), false);
                     apply_config_write(app, "base_url", base_url_write_for(&id), false);
-                    // Auto-advance to the model field and open its picker.
-                    app.shell.config_picker.clear();
-                    if let Some(mi) = app
-                        .shell
-                        .config_sections
-                        .get(app.shell.config_section)
-                        .and_then(|s| s.rows.iter().position(|r| r.label == "model"))
-                    {
-                        app.shell.config_field = mi;
-                    }
-                    app.shell.config_picker = zoid_tui::config_view::model_options(
-                        &app.config.provider,
-                        &app.config.model,
-                    );
-                    app.shell.config_picker_sel = 0;
-                    app.shell.config_col = if app.shell.config_picker.is_empty() {
-                        ConfigCol::Fields
+                    // Key gate: if this provider needs a key we don't have, prompt first.
+                    let needs_key = key_env_for(&id).filter(|env| {
+                        use zoid_core::secret::{SecretStatus, SecretStore};
+                        app.secrets
+                            .as_ref()
+                            .map(|s| matches!(s.status(env), SecretStatus::NotSet))
+                            .unwrap_or(true)
+                    });
+                    if let Some(env) = needs_key {
+                        app.shell.config_key_prompt = Some(env);
+                        app.shell.config_edit = Some(String::new());
+                        app.shell.config_picker.clear();
+                        app.shell.config_col = ConfigCol::Fields;
                     } else {
-                        ConfigCol::Picker
-                    };
-                    spawn_model_fetch(
-                        app.provider.clone(),
-                        app.config.provider.clone(),
-                        app.ui_tx.clone(),
-                    );
+                        // Auto-advance to the model field and open its picker.
+                        app.shell.config_picker.clear();
+                        if let Some(mi) = app
+                            .shell
+                            .config_sections
+                            .get(app.shell.config_section)
+                            .and_then(|s| s.rows.iter().position(|r| r.label == "model"))
+                        {
+                            app.shell.config_field = mi;
+                        }
+                        app.shell.config_picker = zoid_tui::config_view::model_options(
+                            &app.config.provider,
+                            &app.config.model,
+                        );
+                        app.shell.config_picker_sel = 0;
+                        app.shell.config_col = if app.shell.config_picker.is_empty() {
+                            ConfigCol::Fields
+                        } else {
+                            ConfigCol::Picker
+                        };
+                        spawn_model_fetch(
+                            app.provider.clone(),
+                            app.config.provider.clone(),
+                            app.ui_tx.clone(),
+                        );
+                    }
                 } else if label == "model" {
                     apply_config_write(app, "model", TomlValue::Str(id), false);
                     app.shell.config_picker.clear();
@@ -2517,6 +2584,13 @@ mod tests {
         assert!(!entry_requires_key("ollama-local"));
         assert!(entry_requires_key("ollama-cloud"));
         assert!(entry_requires_key("anthropic-api"));
+    }
+
+    #[test]
+    fn key_env_for_family() {
+        assert_eq!(key_env_for("anthropic-api"), Some("ANTHROPIC_API_KEY"));
+        assert_eq!(key_env_for("ollama-cloud"), Some("OLLAMA_API_KEY"));
+        assert_eq!(key_env_for("ollama-local"), None); // no key needed
     }
 
     #[test]
