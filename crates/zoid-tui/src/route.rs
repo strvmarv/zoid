@@ -69,6 +69,11 @@ pub enum Action {
     QuestionChar(char),
     QuestionBackspace,
     QuestionAbort,
+    OpenProviderSwitch,
+    SwitchPaneMove(i32),
+    SwitchItemMove(i32),
+    SwitchApply,
+    SwitchCancel,
     Noop,
 }
 
@@ -106,6 +111,7 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
                 None => Action::Noop,
             };
         }
+        Overlay::ProviderSwitch => return route_provider_switch_key(state, key),
         Overlay::None => {}
     }
 
@@ -127,6 +133,9 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
     }
     if alt(&key, '-') || alt(&key, '_') {
         return Action::ZoomOut;
+    }
+    if alt(&key, 'p') {
+        return Action::OpenProviderSwitch;
     }
     match key.code {
         KeyCode::BackTab => return Action::SwitchMode,
@@ -211,6 +220,23 @@ fn route_sessions_key(key: KeyEvent) -> Action {
         KeyCode::Enter => Action::SessionPick,
         KeyCode::Up | KeyCode::Char('k') => Action::SessionMove(-1),
         KeyCode::Down | KeyCode::Char('j') => Action::SessionMove(1),
+        _ => Action::Noop,
+    }
+}
+
+/// Route keys while the quick-switch (`Alt+P`) overlay is up. Left/Right move
+/// between the provider and model panes; Up/Down move the highlighted row
+/// within the focused pane; Enter applies; Esc cancels. Task 11 renders the
+/// overlay and implements the apply/cancel side effects.
+fn route_provider_switch_key(_state: &ShellState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Left | KeyCode::Right => {
+            Action::SwitchPaneMove(if key.code == KeyCode::Left { -1 } else { 1 })
+        }
+        KeyCode::Up => Action::SwitchItemMove(-1),
+        KeyCode::Down => Action::SwitchItemMove(1),
+        KeyCode::Enter => Action::SwitchApply,
+        KeyCode::Esc => Action::SwitchCancel,
         _ => Action::Noop,
     }
 }
@@ -749,6 +775,13 @@ mod tests {
             route_key(&s, key(KeyCode::Char('='), KeyModifiers::NONE)),
             Action::Edit(key(KeyCode::Char('='), KeyModifiers::NONE))
         );
+    }
+
+    #[test]
+    fn alt_p_opens_provider_switch() {
+        let s = ShellState::new(); // overlay None, focus Input
+        let a = route_key(&s, KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT));
+        assert!(matches!(a, Action::OpenProviderSwitch));
     }
 
     #[test]

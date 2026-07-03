@@ -1518,6 +1518,11 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             app.shell.question = None;
             app.shell.overlay = zoid_tui::state::Overlay::None;
         }
+        Action::OpenProviderSwitch => {}
+        Action::SwitchPaneMove(_) => {}
+        Action::SwitchItemMove(_) => {}
+        Action::SwitchApply => {}
+        Action::SwitchCancel => {}
         Action::Noop => {}
     }
     Ok(false)

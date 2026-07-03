@@ -55,6 +55,15 @@ pub enum Overlay {
     Sessions,
     Config,
     Question,
+    ProviderSwitch,
+}
+
+/// Which pane has focus inside the quick-switch (`Alt+P`) overlay: the
+/// provider list or the model list (Task 11 renders/populates it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwitchPane {
+    Provider,
+    Model,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,6 +181,13 @@ pub struct ShellState {
     /// question is pending (Task 11 renders it; Task 9 populates it via
     /// `AgentUpdate::AskUser`).
     pub question: Option<crate::question::QuestionState>,
+    /// Highlighted row in the quick-switch overlay's provider list (Task 11
+    /// renders it; Task 10 only plumbs the state through).
+    pub switch_provider_sel: usize,
+    /// Highlighted row in the quick-switch overlay's model list.
+    pub switch_model_sel: usize,
+    /// Focused pane in the quick-switch overlay (provider list vs model list).
+    pub switch_pane: SwitchPane,
 }
 
 impl ShellState {
@@ -240,6 +256,9 @@ impl ShellState {
             config_picker_sel: 0,
             active_tool: None,
             question: None,
+            switch_provider_sel: 0,
+            switch_model_sel: 0,
+            switch_pane: SwitchPane::Provider,
         }
     }
 
