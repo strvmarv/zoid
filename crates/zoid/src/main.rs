@@ -308,7 +308,9 @@ fn effective_base_url(config: &zoid_core::config::Config) -> String {
 }
 
 /// Whether a provider id needs an API key to be usable. Local Ollama (localhost)
-/// does not; all remote HTTP flavors do. Keyed off the registry, not the string.
+/// does not; all remote HTTP flavors do. Hardcoded shortcut: `ollama-local` is
+/// the only keyless `Available` provider today. Revisit against the registry if
+/// `anthropic-cli`/`anthropic-sdk` (ambient auth, no API key) become selectable.
 #[allow(dead_code)]
 fn entry_requires_key(id: &str) -> bool {
     id != "ollama-local"
@@ -340,7 +342,9 @@ fn select_provider(
     if zoid_provider::model::canonical_id(&config.provider) == "ollama-local" {
         let base_url = effective_base_url(config);
         return (
-            Arc::new(zoid_provider::ollama::OllamaProvider::new(String::new()).with_base_url(base_url)),
+            Arc::new(
+                zoid_provider::ollama::OllamaProvider::new(String::new()).with_base_url(base_url),
+            ),
             "ollama",
             true, // no key required → treat as ready
         );
@@ -2331,7 +2335,7 @@ mod tests {
     #[test]
     fn ollama_local_needs_no_key() {
         // ollama-local is usable with no OLLAMA_API_KEY (localhost, no auth).
-        assert!(entry_requires_key("ollama-local") == false);
+        assert!(!entry_requires_key("ollama-local"));
         assert!(entry_requires_key("ollama-cloud"));
         assert!(entry_requires_key("anthropic-api"));
     }
