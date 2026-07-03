@@ -9,6 +9,10 @@ use std::path::Path;
 /// Public distribution repo that holds the GitHub Releases. Source stays private.
 const RELEASES_REPO: &str = "strvmarv/zoid-releases";
 
+/// cargo-dist publishes its unified checksums file under this name (coreutils
+/// `<hex>  <filename>` format). NOT `SHA256SUMS`.
+const CHECKSUMS_ASSET: &str = "sha256.sum";
+
 /// The build target triple, embedded by `build.rs`.
 pub fn build_target() -> &'static str {
     env!("ZOID_TARGET")
@@ -192,7 +196,8 @@ pub async fn run() -> Result<()> {
         })
     };
     let asset_url = find(&want).ok_or_else(|| anyhow!("no release asset for {target}"))?;
-    let sums_url = find("SHA256SUMS").ok_or_else(|| anyhow!("release has no SHA256SUMS"))?;
+    let sums_url = find(CHECKSUMS_ASSET)
+        .ok_or_else(|| anyhow!("release has no {CHECKSUMS_ASSET} checksums file"))?;
 
     println!("updating zoid {current} -> {latest} ({want})...");
     let archive = client
