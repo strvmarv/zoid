@@ -23,6 +23,8 @@ We want:
 - Real, selectable entries: `ollama-local`, `ollama-cloud`, `anthropic-api`.
 - **Transport-adaptive connection field** (`base_url` for HTTP, `command` for CLI) with registry-default **seeding** + `[user]` override, using the existing provenance model.
 - `anthropic-cli` and `anthropic-sdk` present as **`[planned]`** entries — visible, annotated, not selectable.
+- **Dynamic model discovery**: the model picker fetches the live model list from the provider (`Provider::list_models()` — Ollama `/api/tags`, Anthropic `/v1/models`); the registry `models` list is only a **fallback** (offline / pre-fetch / on error). No hardcoded model list is authoritative.
+- **API-key gate in the cascade**: selecting a provider whose transport requires a key when none is present prompts for the key (stored via the secret store) *before* fetching/selecting a model. `ollama-local` (localhost) requires no key.
 - **ALT+P quick-switch**: the same picker component in a compact floating card, both provider + model visible, for fast mid-work switching.
 - Legacy config alias map so existing configs (`provider = "ollama"` / `"anthropic"`) keep working.
 
@@ -54,8 +56,10 @@ Column 3 is contextual: it shows **providers** when `provider` is focused and **
 
 ### 4.3 Provider & Model — cascade behavior
 - **Focus `provider` → Enter/Right**: pops the provider picker (col 3) listing all registry entries. Each row shows `id`, transport kind, and its endpoint/command; `[planned]` entries render dim with a `[planned]` tag and are **skipped by cursor movement** (visible, not selectable). Current provider marked `●`.
-- **Select a provider (Enter on an available entry)**: sets `provider`, **seeds the connection field** (base_url or command) from the registry default tagged `[default]`, and **auto-advances focus to `model`**, popping the models picker in col 3. No default *model* is guessed — `model` shows `— choose`.
-- **Focus `model` directly**: pops the models picker (`models_for(provider)`) with no need to touch provider first. Selecting sets `model`.
+- **Select a provider (Enter on an available entry)**: sets `provider`, **seeds the connection field** (base_url or command) from the registry default tagged `[default]`. Then:
+  1. **Key gate** — if the entry's transport requires an API key (Http remote / Anthropic) and none is present (`select_provider` returns `has_key == false`), the cascade prompts for the key with a masked entry; on submit it is stored via the secret store and `select_provider` re-runs. `ollama-local` skips this (no key).
+  2. **Fetch + auto-advance** — focus auto-advances to `model`; the model picker opens showing the registry **fallback** list immediately and spawns `Provider::list_models()`; when the live list arrives it replaces the fallback. No default *model* is guessed — `model` shows `— choose`.
+- **Focus `model` directly**: opens the model picker with no need to touch provider first — same live-fetch-over-fallback behavior. Selecting sets `model`.
 - **Left/Esc** in a picker collapses column 3 back to the field list.
 
 ### 4.4 Registry model (`zoid-provider/src/model.rs`)
@@ -124,6 +128,20 @@ Quick-switch: `Alt+P` open · `←/→` pane · `↑/↓` move · `Enter` apply 
 - If width is too narrow for three columns, column 3 (the picker) renders as a **floating sub-card overlaying column 2** rather than shrinking to nothing — the picker is transient, so overlaying is acceptable and keeps every row legible.
 - The sections rail has a minimum width; below it, section titles abbreviate before the layout blanks. Never render an empty/borderless frame.
 
+### 4.10 Dynamic model discovery
+The registry `models` list is a **fallback**, never the source of truth. When a model picker opens (settings or ALT+P), the model list is fetched live from the provider:
+- New provider seam: `async fn list_models(&self) -> anyhow::Result<Vec<String>>` on the `Provider` trait (default impl returns `Vec::new()` so `FakeProvider` and future providers compile).
+  - **Ollama** (`ollama-local` + `ollama-cloud`): `GET {base_url}/api/tags` (Bearer key when present) → `{"models":[{"name":…}]}` → collect `name`s.
+  - **Anthropic** (`anthropic-api`): `GET {base_url}/v1/models` (with `x-api-key` + `anthropic-version`) → collect model `id`s.
+- The fetch is async and rides the existing UI channel: a new `AgentUpdate::ModelsFetched(Vec<String>)` variant. Opening a model picker (a) shows the registry fallback immediately and (b) spawns a task that calls `list_models()` on the active provider and sends `ModelsFetched`. The main loop, on receipt, replaces the open model picker's options with the live list (keeping the fallback if the fetch returned empty or errored — errors are logged, never fatal).
+- The picker header shows a transient `fetching…` marker until the live list arrives; on error it silently keeps the fallback.
+
+### 4.11 API-key gate in the cascade
+A live fetch needs the key, so selecting a key-requiring provider inserts a key step before the model fetch:
+- After a provider is selected and `base_url` seeded, `select_provider` runs (via the existing `apply_config_write` reload). If it reports `has_key == false` **and** the entry's transport requires a key (all HTTP-remote / Anthropic entries; `ollama-local` does not), the cascade enters a **key-entry** state: a masked inline prompt for the entry's key env name (`OLLAMA_API_KEY` for the ollama family, `ANTHROPIC_API_KEY` for anthropic).
+- On submit, the value is written via the secret store (`SecretStore::set`), `select_provider` re-runs, and the cascade proceeds to the model fetch. On Esc, the cascade backs out to the field list (provider is still set; no model fetched).
+- `ollama-local` requires no key: it skips straight from provider-select to the model fetch. This also requires `select_provider` to construct the ollama provider **without** a key when the resolved entry is `ollama-local` (today it falls back to the offline `FakeProvider` when `OLLAMA_API_KEY` is unset).
+
 ## 5. Affected code
 
 - `zoid-provider/src/model.rs` — new `Transport`/`Status`/`ProviderEntry`; entry table; canonical-id accessors (`entries()`, `entry(id)`, `models_for(id)`, `default_connection(id)`); legacy alias resolution. `model_info` unchanged here (the context-window hardening is the separate ACM step-0).
@@ -134,6 +152,9 @@ Quick-switch: `Alt+P` open · `←/→` pane · `↑/↓` move · `Enter` apply 
 - `zoid-tui/src/render.rs` — rewrite `render_config` from a single Paragraph into a three-column `Layout` render; new `render_provider_switch` for the ALT+P card; a shared picker-column/pane helper used by both.
 - `zoid-tui/src/route.rs` — expand `route_config_key` for column focus + drill/back + picker selection (replaces blind `ConfigCycle`); add `Alt+P` → open quick-switch and its key routing.
 - `zoid-tui/src/lib.rs` / `main.rs` — wire the new overlay + actions (open quick-switch, commit provider/model, seed connection field).
+- `zoid-provider/src/lib.rs` — add `Provider::list_models()` (default `Ok(vec![])`); `ollama.rs`/`anthropic.rs` implement it (`/api/tags`, `/v1/models`); `select_provider` (`main.rs`) constructs `ollama-local` without a key.
+- `zoid/src/agent.rs` — `AgentUpdate::ModelsFetched(Vec<String>)`; `main.rs:791` `ui_rx` arm applies it to an open model picker; picker-open spawns the fetch task.
+- Key-gate reuses the existing secret store (`SecretStore::set/get/status`) and the masked inline-edit buffer.
 
 ## 6. Testing
 - `model.rs` unit tests: entry table integrity, `models_for`/`default_connection` per id, legacy alias resolution (`ollama`→`ollama-cloud`, `anthropic`→`anthropic-api`), `[planned]` entries excluded from selectable iteration.

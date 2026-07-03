@@ -17,6 +17,9 @@
 - Registry is the single source of truth for default endpoints; provider constructors read from it.
 - All UI glyphs/colors come from `tokens` (§16 token purity) — no untokenized literals in render code.
 - Never add a `Co-Authored-By` / co-author trailer to commit messages (user global rule).
+- Registry `models` lists are a **fallback only** — the model picker fetches the live list via `Provider::list_models()` (Ollama `/api/tags`, Anthropic `/v1/models`); no hardcoded model list is authoritative.
+- Selecting a key-requiring provider with no key present prompts for the key (stored via the secret store) BEFORE fetching models. `ollama-local` requires no key.
+- Model-list fetch failures are logged, never fatal — the picker keeps the fallback list.
 - OUT of scope: implementing the `anthropic-cli` subprocess provider and `anthropic-sdk` (seam + `[planned]` entries only).
 
 ---
@@ -1373,7 +1376,428 @@ git commit -m "feat(quick-switch): render Alt+P two-pane card + apply provider/m
 
 ---
 
-### Task 12: Full-suite green + fmt/clippy + changelog
+## Phase 6 — Dynamic model discovery + API-key gate
+
+> Layers live model fetching over the static-fallback picker built in Phases 1–5. After these tasks the registry `models` lists are only shown offline / before a fetch / on error.
+
+### Task 12: `Provider::list_models()` seam + Ollama/Anthropic implementations
+
+**Files:**
+- Modify: `crates/zoid-provider/src/lib.rs` (`Provider` trait — add defaulted method)
+- Modify: `crates/zoid-provider/src/ollama.rs` (impl `/api/tags` + a pure parse fn)
+- Modify: `crates/zoid-provider/src/anthropic.rs` (impl `/v1/models` + a pure parse fn)
+
+**Interfaces:**
+- Produces: `async fn list_models(&self) -> anyhow::Result<Vec<String>>` on `Provider` (default `Ok(Vec::new())`); pure parsers `parse_ollama_tags(&str) -> Vec<String>` and `parse_anthropic_models(&str) -> Vec<String>`.
+
+- [ ] **Step 1: Write the failing parser tests**
+
+Add to `crates/zoid-provider/src/ollama.rs` tests:
+
+```rust
+    #[test]
+    fn parses_ollama_tags_names() {
+        let body = r#"{"models":[{"name":"glm-5.2:cloud"},{"name":"llama3.1:70b"}]}"#;
+        assert_eq!(parse_ollama_tags(body), vec!["glm-5.2:cloud", "llama3.1:70b"]);
+    }
+    #[test]
+    fn ollama_tags_empty_or_bad_is_empty() {
+        assert!(parse_ollama_tags("{}").is_empty());
+        assert!(parse_ollama_tags("not json").is_empty());
+    }
+```
+
+Add to `crates/zoid-provider/src/anthropic.rs` tests:
+
+```rust
+    #[test]
+    fn parses_anthropic_model_ids() {
+        let body = r#"{"data":[{"id":"claude-opus-4-8","type":"model"},{"id":"claude-sonnet-4-6"}]}"#;
+        assert_eq!(parse_anthropic_models(body), vec!["claude-opus-4-8", "claude-sonnet-4-6"]);
+    }
+    #[test]
+    fn anthropic_models_bad_is_empty() {
+        assert!(parse_anthropic_models("nope").is_empty());
+    }
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `cargo test -p zoid-provider parses_ollama_tags_names parses_anthropic_model_ids`
+Expected: FAIL — parse fns not found.
+
+- [ ] **Step 3: Implement the pure parsers + trait method + HTTP impls**
+
+Add the trait method with a default in `crates/zoid-provider/src/lib.rs` inside `pub trait Provider` (after `stream`):
+
+```rust
+    /// Fetch the provider's available model ids. Default: none (offline / seam).
+    async fn list_models(&self) -> anyhow::Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+```
+
+In `crates/zoid-provider/src/ollama.rs`:
+
+```rust
+/// Extract model names from an Ollama `/api/tags` response body. Lenient:
+/// unknown/!json → empty (the caller falls back to the registry list).
+pub fn parse_ollama_tags(body: &str) -> Vec<String> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("models").and_then(|m| m.as_array()).cloned())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.get("name").and_then(|n| n.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+```
+
+Implement `list_models` for `OllamaProvider` (add to its `impl Provider` block; mirror the header/auth pattern of `stream`):
+
+```rust
+    async fn list_models(&self) -> anyhow::Result<Vec<String>> {
+        let resp = self
+            .client
+            .get(format!("{}/api/tags", self.base_url))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await?;
+        Ok(parse_ollama_tags(&resp.text().await?))
+    }
+```
+
+In `crates/zoid-provider/src/anthropic.rs`:
+
+```rust
+/// Extract model ids from an Anthropic `/v1/models` response body. Lenient.
+pub fn parse_anthropic_models(body: &str) -> Vec<String> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("data").and_then(|d| d.as_array()).cloned())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+```
+
+Implement `list_models` for `AnthropicProvider` (mirror `stream`'s `x-api-key` + `anthropic-version` headers):
+
+```rust
+    async fn list_models(&self) -> anyhow::Result<Vec<String>> {
+        let resp = self
+            .client
+            .get(format!("{}/v1/models", self.base_url))
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .send()
+            .await?;
+        Ok(parse_anthropic_models(&resp.text().await?))
+    }
+```
+
+> Implementer: confirm the exact field names of `self.client` / `self.api_key` in each struct (read the struct + `stream` impl) and match the auth headers `stream` already uses. If `anthropic-version` is defined as a const in the file, reuse it rather than re-literal.
+
+- [ ] **Step 4: Run to verify pass**
+
+Run: `cargo test -p zoid-provider`
+Expected: PASS (parsers green; existing tests unaffected — default trait method keeps `FakeProvider` compiling).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/zoid-provider/src/lib.rs crates/zoid-provider/src/ollama.rs crates/zoid-provider/src/anthropic.rs
+git commit -m "feat(provider): list_models() seam + Ollama /api/tags + Anthropic /v1/models"
+```
+
+---
+
+### Task 13: `select_provider` builds `ollama-local` without a key
+
+**Files:**
+- Modify: `crates/zoid/src/main.rs` (`select_provider`, ~lines 302–343 as rewritten in Task 3)
+
+**Interfaces:**
+- Consumes: `zoid_provider::model::entry` (Task 1)
+- Produces: for the `ollama-local` id (no key present), `select_provider` returns a real `OllamaProvider` (empty key, localhost base_url) with `has_key == true` (it needs no key to be usable), instead of the offline `FakeProvider`.
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `crates/zoid/src/main.rs` tests:
+
+```rust
+    #[test]
+    fn ollama_local_needs_no_key() {
+        // ollama-local is usable with no OLLAMA_API_KEY (localhost, no auth).
+        assert!(entry_requires_key("ollama-local") == false);
+        assert!(entry_requires_key("ollama-cloud"));
+        assert!(entry_requires_key("anthropic-api"));
+    }
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `cargo test -p zoid ollama_local_needs_no_key`
+Expected: FAIL — `entry_requires_key` not found.
+
+- [ ] **Step 3: Add `entry_requires_key` and branch `select_provider` on it**
+
+Add the helper in `crates/zoid/src/main.rs`:
+
+```rust
+/// Whether a provider id needs an API key to be usable. Local Ollama (localhost)
+/// does not; all remote HTTP flavors do. Keyed off the registry, not the string.
+fn entry_requires_key(id: &str) -> bool {
+    id != "ollama-local"
+}
+```
+
+In `select_provider`, before the `match family` block, add an early return for the no-key local case:
+
+```rust
+    // ollama-local: usable without a key (localhost, no auth). Construct directly.
+    if zoid_provider::model::canonical_id(&config.provider) == "ollama-local" {
+        let base_url = effective_base_url(config);
+        return (
+            Arc::new(zoid_provider::ollama::OllamaProvider::new(String::new()).with_base_url(base_url)),
+            "ollama",
+            true, // no key required → treat as ready
+        );
+    }
+```
+
+- [ ] **Step 4: Run to verify pass**
+
+Run: `cargo test -p zoid ollama_local_needs_no_key && cargo build`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/zoid/src/main.rs
+git commit -m "feat(provider): ollama-local constructs without a key (localhost)"
+```
+
+---
+
+### Task 14: `AgentUpdate::ModelsFetched` + fetch spawn on model-picker-open
+
+**Files:**
+- Modify: `crates/zoid/src/agent.rs` (`AgentUpdate` enum, ~line 61)
+- Modify: `crates/zoid/src/main.rs` (`ui_rx` recv arm ~line 791; the `ConfigDrillOpen`/`ConfigPickerSelect` model-open paths from Task 7)
+
+**Interfaces:**
+- Consumes: `Provider::list_models` (Task 12); the `ui_tx: mpsc::Sender<AgentUpdate>` the main loop already owns (same one `run_agent_turn` uses)
+- Produces: `AgentUpdate::ModelsFetched(Vec<String>)`; a helper `spawn_model_fetch(provider: Arc<dyn Provider>, ui_tx)`; the model-picker-open paths call it.
+
+- [ ] **Step 1: Add the variant + handler**
+
+In `crates/zoid/src/agent.rs`, add to `pub enum AgentUpdate`:
+
+```rust
+    /// Live model list fetched for the config/quick-switch picker.
+    ModelsFetched(Vec<String>),
+```
+
+In `crates/zoid/src/main.rs`, add a match arm in the `Some(update) = ui_rx.recv()` block (near line 791, alongside `AgentUpdate::Appended` etc.):
+
+```rust
+                    AgentUpdate::ModelsFetched(models) => {
+                        // Replace an OPEN model picker's options with the live list.
+                        // Ignore if empty (keep fallback) or if a model picker isn't open.
+                        if !models.is_empty() && app.shell.config_picker_open() {
+                            let on_model = current_config_field(app).map(|(l, _)| l) == Some("model");
+                            if on_model {
+                                let cur = app.config.model.clone();
+                                app.shell.config_picker = models
+                                    .into_iter()
+                                    .map(|m| zoid_tui::config_view::PickOption {
+                                        is_current: m == cur,
+                                        id: m.clone(),
+                                        label: m,
+                                        detail: String::new(),
+                                        selectable: true,
+                                    })
+                                    .collect();
+                                app.shell.config_picker_sel = app.shell.config_picker
+                                    .iter().position(|o| o.is_current).unwrap_or(0);
+                            }
+                        }
+                    }
+```
+
+- [ ] **Step 2: Add the spawn helper**
+
+Add to `crates/zoid/src/main.rs` (near `select_provider`). Use the same `ui_tx` clone pattern the code already uses to hand a sender to `run_agent_turn` (grep `ui_tx` / `ui.clone()` for the exact handle):
+
+```rust
+/// Spawn a background fetch of the active provider's model list; result is
+/// delivered as `AgentUpdate::ModelsFetched`. Non-fatal: errors → empty list
+/// (the picker keeps its fallback). 
+fn spawn_model_fetch(
+    provider: std::sync::Arc<dyn Provider>,
+    ui_tx: tokio::sync::mpsc::Sender<zoid_tui_agent_update_path>, // use the real AgentUpdate sender type in scope
+) {
+    tokio::spawn(async move {
+        let models = provider.list_models().await.unwrap_or_default();
+        let _ = ui_tx.send(zoid::agent::AgentUpdate::ModelsFetched(models)).await;
+    });
+}
+```
+
+> Implementer: the sender type is whatever `run_agent_turn` is passed (an `mpsc::Sender<AgentUpdate>`); `AgentUpdate` lives in this crate (`crate::agent::AgentUpdate`). Replace the placeholder type/path with the real ones from the surrounding code. `Provider` is already imported in `main.rs`.
+
+- [ ] **Step 3: Trigger the fetch when a model picker opens**
+
+In the Task 7 handlers (`ConfigDrillOpen` for the `model` field, and `ConfigPickerSelect` after a provider commit opens the model picker), after populating `app.shell.config_picker` with the fallback and setting `config_col = Picker`, add:
+
+```rust
+                    spawn_model_fetch(app.provider.clone(), ui_tx.clone());
+```
+
+(`ui_tx` is the sender in scope in `handle_action` / the event loop — thread it in if `handle_action` doesn't already receive it; grep how `AgentUpdate::Appended` is sent from within action handling for the existing handle.)
+
+- [ ] **Step 4: Build + manual smoke**
+
+Run: `cargo build && cargo test -p zoid`
+Expected: builds; existing tests green. (The live fetch is exercised by manual smoke — env `OLLAMA_API_KEY` set, open settings → model picker → observe the list populate from `/api/tags`.)
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/zoid/src/agent.rs crates/zoid/src/main.rs
+git commit -m "feat(config): live model fetch (AgentUpdate::ModelsFetched) refreshing the open picker"
+```
+
+---
+
+### Task 15: API-key gate in the cascade
+
+**Files:**
+- Modify: `crates/zoid-tui/src/state.rs` (a `config_key_prompt: Option<&'static str>` env-name field on `ShellState`)
+- Modify: `crates/zoid-tui/src/route.rs` (key-entry routing)
+- Modify: `crates/zoid/src/main.rs` (`ConfigPickerSelect` provider branch: gate before fetch; commit the key to the secret store)
+
+**Interfaces:**
+- Consumes: `entry_requires_key` (Task 13); `select_provider`'s `has_key` return; `SecretStore::set/status`; the masked inline-edit buffer (`config_edit` + `FieldKind::Secret` masking).
+- Produces: `ShellState.config_key_prompt: Option<&'static str>` (the env name being entered, e.g. `"OLLAMA_API_KEY"`); when `Some`, col 2 shows a masked key entry and `Enter` commits it to the secret store.
+
+- [ ] **Step 1: Write the failing test (gate decision)**
+
+Add to `crates/zoid/src/main.rs` tests:
+
+```rust
+    #[test]
+    fn key_env_for_family() {
+        assert_eq!(key_env_for("anthropic-api"), Some("ANTHROPIC_API_KEY"));
+        assert_eq!(key_env_for("ollama-cloud"), Some("OLLAMA_API_KEY"));
+        assert_eq!(key_env_for("ollama-local"), None); // no key needed
+    }
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `cargo test -p zoid key_env_for_family`
+Expected: FAIL — `key_env_for` not found.
+
+- [ ] **Step 3: Implement `key_env_for` + gate the provider-select path**
+
+Add to `crates/zoid/src/main.rs`:
+
+```rust
+/// The secret env name a provider id needs, or `None` if it needs no key.
+fn key_env_for(id: &str) -> Option<&'static str> {
+    if !entry_requires_key(id) {
+        return None;
+    }
+    match zoid_provider::model::entry(id).map(|e| e.family) {
+        Some("anthropic") => Some("ANTHROPIC_API_KEY"),
+        _ => Some("OLLAMA_API_KEY"),
+    }
+}
+```
+
+In the `ConfigPickerSelect` provider branch (Task 7), after `apply_config_write(app, "provider", …)` + `apply_config_write(app, "base_url", …)`, insert the gate before opening the model picker:
+
+```rust
+                    // Key gate: if this provider needs a key we don't have, prompt first.
+                    let needs = key_env_for(&id).filter(|env| {
+                        app.secrets.as_ref().map(|s| {
+                            use zoid_core::secret::SecretStore;
+                            matches!(s.status(env), zoid_core::secret::SecretStatus::NotSet)
+                        }).unwrap_or(true)
+                    });
+                    if let Some(env) = needs {
+                        app.shell.config_key_prompt = Some(env);
+                        app.shell.config_edit = Some(String::new());
+                        app.shell.config_picker.clear();
+                        app.shell.config_col = zoid_tui::state::ConfigCol::Fields;
+                    } else {
+                        // (existing auto-advance-to-model + spawn_model_fetch path)
+                    }
+```
+
+Move the existing "auto-advance to model + open picker + spawn fetch" code into the `else` branch.
+
+- [ ] **Step 4: Route + commit the key entry**
+
+In `route.rs route_config_key`, when `state.config_key_prompt.is_some()` and `config_edit.is_some()`, route `Enter → ConfigCommitEdit`, `Esc → ConfigCancelEdit`, chars/backspace as normal (the existing editing block already does this; just ensure the key-prompt state routes through it — it will, since `config_edit.is_some()`).
+
+In `main.rs`, extend `ConfigCommitEdit` (main.rs:1295): if `app.shell.config_key_prompt` is `Some(env)`, write the buffer to the secret store instead of TOML, clear the prompt, re-run selection, and advance to the model fetch:
+
+```rust
+            if let Some(env) = app.shell.config_key_prompt.take() {
+                if let (Some(s), Some(buf)) = (&app.secrets, app.shell.config_edit.clone()) {
+                    use zoid_core::secret::SecretStore;
+                    if let Err(e) = s.set(env, buf.trim()) {
+                        eprintln!("zoid: secret set failed for {env}: {e}");
+                    }
+                }
+                app.shell.config_edit = None;
+                refresh_config_sections(app);
+                // Re-select with the new key, then advance to model fetch.
+                let (provider, name, has_key) = select_provider(&app.config, &app.secrets);
+                app.provider = provider;
+                app.shell.provider = provider_label(name, has_key);
+                if let Some(mi) = app.shell.config_sections.get(app.shell.config_section)
+                    .and_then(|sec| sec.rows.iter().position(|r| r.label == "model")) {
+                    app.shell.config_field = mi;
+                }
+                app.shell.config_picker =
+                    zoid_tui::config_view::model_options(&app.config.provider, &app.config.model);
+                app.shell.config_picker_sel = 0;
+                app.shell.config_col = if app.shell.config_picker.is_empty() {
+                    zoid_tui::state::ConfigCol::Fields
+                } else {
+                    zoid_tui::state::ConfigCol::Picker
+                };
+                spawn_model_fetch(app.provider.clone(), ui_tx.clone());
+                return Ok(false); // handled; skip the normal edit-commit path below
+            }
+```
+
+Add `config_key_prompt: Option<&'static str>` to `ShellState` + `new()` default `None` (state.rs), and have `render_config` show a masked key-entry row (label = the env name, value masked) when `config_key_prompt.is_some()` — reuse the `FieldKind::Secret` masking already in the field renderer.
+
+- [ ] **Step 5: Build + manual smoke**
+
+Run: `cargo test -p zoid key_env_for_family && cargo build && cargo test`
+Expected: PASS. Manual smoke: unset `ANTHROPIC_API_KEY`, select `anthropic-api` → key prompt appears → enter key → model list fetches.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add crates/zoid-tui/src/state.rs crates/zoid-tui/src/route.rs crates/zoid-tui/src/render.rs crates/zoid/src/main.rs
+git commit -m "feat(config): API-key gate — prompt + store key before model fetch"
+```
+
+---
+
+### Task 16: Full-suite green + fmt/clippy + changelog
 
 **Files:**
 - Modify: `CHANGELOG.md`
@@ -1400,6 +1824,7 @@ Settings redesign.
 - Full-screen three-column settings (sections · fields · contextual picker) replacing the cramped card; baseline 160×40 with graceful degradation.
 - Visible provider/model picker (Miller-column cascade) replacing the blind cycle; selecting a provider seeds `base_url` from the registry and jumps to model selection.
 - Transport-aware provider registry: `ollama-local` / `ollama-cloud` split, `anthropic-api`, plus `[planned]` `anthropic-cli` / `anthropic-sdk` seam entries. Legacy `ollama`/`anthropic` ids alias to the new canonical ids.
+- Live model discovery: the model picker fetches available models from the provider (Ollama `/api/tags`, Anthropic `/v1/models`), falling back to the registry list offline. Selecting a key-requiring provider prompts for the API key before fetching.
 - `Alt+P` quick-switch overlay for changing provider + model mid-session.
 ```
 
@@ -1417,6 +1842,7 @@ git commit -m "chore(settings): full suite green, clippy/fmt clean, changelog"
 **Spec coverage:**
 - §4.1 full-screen shell → Task 8. §4.2 three columns → Tasks 8/9. §4.3 cascade (provider→auto-jump→model, direct model) → Tasks 6/7. §4.4 registry struct + ids + aliases + single-source endpoints → Tasks 1/2/3. §4.5 transport-adaptive connection field + seeding/provenance → Tasks 4/7. §4.6 other sections inline → preserved (Task 6 keeps Text/Uint/Bool/Secret inline). §4.7 ALT+P → Tasks 10/11. §4.8 keybindings → Tasks 6/10. §4.9 degradation → Task 9. Migration alias → Task 1. `[planned]` visible-not-selectable → Tasks 1/4/6 (skip logic) /7/8.
 - CLI `command` config storage is intentionally deferred with the CLI impl (spec §7); Task 4 renders the `command` label using the base_url slot so the seam shows, no new config field.
+- §4.10 dynamic model discovery → Tasks 12 (`list_models` seam + parsers) / 14 (`ModelsFetched` + fetch spawn). §4.11 API-key gate → Tasks 13 (`ollama-local` no-key) / 15 (key prompt + secret store). Registry `models` as fallback → Task 1 (list) + Task 14 (live overrides when non-empty).
 
 **Placeholder scan:** Persistence uses the real `apply_config_write(app, key, value, false)` (`main.rs:1021`) throughout Tasks 7/11 — no invented helper. The one deliberately-prose step is Task 11 Step 3 (`render_provider_switch`), which reuses the concrete per-option line-building from Task 8 (extract a shared `picker_lines(opts, sel, active) -> Vec<Line>` and call it from both renderers). All other steps carry complete code.
 
