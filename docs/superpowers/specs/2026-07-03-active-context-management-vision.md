@@ -150,6 +150,16 @@ behaves sanely without touching the core loop.
 Smallest-useful-first, highest-leverage-first. Each step either lets the agent
 *act* or lets the user *decide* — never "display more."
 
+0. **Harden per-model `context_window` (precursor).** ACM's ceiling and
+   compaction threshold are a *percent of the model's context window*, but
+   `model_info().context_window` is currently a string-match stub
+   (`contains("claude") → 200k, else 256k`). Replace it with a real per-model
+   lookup (known models + a safe conservative default), keeping the existing
+   `config.economy.context_ceiling` override. This is the **only** provider/model
+   work ACM needs — the model *picker* and *pricing* stay out of scope (the
+   picker has zero ACM coupling; pricing belongs to the long-term cost layer).
+   Rationale: a wrong (over-high) window makes ACM under-compact and risk real
+   overflow on small/local models; this makes the ceiling correct-by-construction.
 1. **Compact tool-results.** The biggest, safest token reclaim in a coding
    session: replace a 900-line `grep`/test dump with a dense summary
    (`328 matches across 12 files → …`). Quality up (less noise), cost down,
@@ -244,3 +254,6 @@ The vision is working when:
 - System-blob decomposition (long-term; System is one `Immutable` item for now).
 - Manual user commands to execute/customize curation (deferred, per prior
   decision — automation + observability first).
+- The model **picker** (interactive provider/model selection) and **pricing**
+  fields — the picker has no ACM coupling; pricing belongs to the long-term cost
+  layer. Only the narrow `context_window` hardening (§4 step 0) is in scope.
