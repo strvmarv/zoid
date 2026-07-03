@@ -45,6 +45,33 @@ jobs:
           path: dist-artifacts
           merge-multiple: true
 
+      - name: Point installer scripts at the public releases repo
+        # cargo-dist bakes the download base URL into the generated
+        # zoid-installer.sh / zoid-installer.ps1 from dist-workspace.toml's
+        # `repository = "https://github.com/strvmarv/zoid"` (the PRIVATE
+        # source repo). Those installer scripts get uploaded to the PUBLIC
+        # strvmarv/zoid-releases release below, so an anonymous first-install
+        # (`curl <installer-url> | sh`) would 404 against the private repo.
+        # Rewrite the embedded `strvmarv/zoid/releases` path (as found in the
+        # generated scripts: literal `https://github.com/strvmarv/zoid/releases/...`
+        # URLs and `${INSTALLER_BASE_URL}/strvmarv/zoid/releases/...` templated
+        # forms for GHE/custom-host overrides) to the public releases repo.
+        # Anchored on `/releases` so it can't over-match unrelated
+        # `"owner":"strvmarv"` receipt-JSON metadata also embedded in the scripts.
+        working-directory: dist-artifacts
+        run: |
+          set -euo pipefail
+          for f in zoid-installer.sh zoid-installer.ps1; do
+            if [ -f "$f" ]; then
+              sed -i 's#strvmarv/zoid/releases#strvmarv/zoid-releases/releases#g' "$f"
+              echo "rewrote $f"
+            fi
+          done
+          # Fail loudly if the private URL still appears anywhere in the installers
+          if grep -RIl 'strvmarv/zoid/releases' zoid-installer.* 2>/dev/null; then
+            echo "::error::installer still references the private repo after rewrite"; exit 1
+          fi
+
       - name: Publish release to public repo
         env:
           GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}

@@ -66,6 +66,17 @@ Use the installer from the latest release on `strvmarv/zoid-releases`
 (`zoid-installer.sh` on unix, `zoid-installer.ps1` on Windows). Afterwards,
 `zoid update` handles upgrades.
 
+**Installer URL rewrite:** cargo-dist bakes the installer scripts' download
+base URL from `dist-workspace.toml`'s `repository` setting, which points at
+the private `strvmarv/zoid` source repo. `publish-public.yml` rewrites that
+embedded URL to the public `strvmarv/zoid-releases` repo before uploading the
+scripts, so the documented `curl <installer-url> | sh` works anonymously. At
+smoke-test time, the maintainer must VERIFY this actually works end-to-end —
+run the real `curl <installer-url> | sh` (or the `.ps1` equivalent) against
+the smoke release and confirm it downloads and installs, since both the CI
+rewrite and a real public release with matching assets are required for it to
+succeed.
+
 ## Token rotation
 
 `RELEASES_REPO_TOKEN` (fine-grained PAT, Contents: Read and write on
