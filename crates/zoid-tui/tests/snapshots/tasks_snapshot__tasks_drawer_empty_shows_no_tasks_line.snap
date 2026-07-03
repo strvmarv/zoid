@@ -4,17 +4,17 @@ expression: "draw(&s, &[])"
 ---
 "                                                                                                    "
 "    (no messages yet)                                   ╭ ▾ repo ─────────────────────────────────╮ "
-"                                                        │repo   ⎇ main                            │ "
-"                                                        │worktree (none)                          │ "
-"                                                        │changes +0 -0 · 0 files                  │ "
+"                                                        │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                        │🔧 worktree (none)                       │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                        │📝 changes +0 -0 · 0 files               │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                        ╰─────────────────────────────────────────╯ "
 "                                                                                                    "
 "                                                        ╭ ▾ session ──────────────────────────────╮ "
-"                                                        │(unnamed)                                │ "
-"                                                        │ ·                                       │ "
-"                                                        │dur 0m   tok 0                           │ "
-"                                                        │ctx 0                                    │ "
-"                                                        │cwd                                      │ "
+"                                                        │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                        │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                        │⌚ dur 0m   tok 0                        │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                        │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                        │📁 cwd                                   │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                        ╰─────────────────────────────────────────╯ "
 "                                                                                                    "
 "                                                        ╭ ▾ context · tokens ─────────────────────╮ "

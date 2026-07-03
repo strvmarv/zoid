@@ -7,7 +7,7 @@ expression: out
 "│ ↺ Resume session…  this repo, most-recent first  ⏎  │ ╰─────────────────────────────────────────╯ "
 "│ ✎ Rename session…  rename the current thread  :renam│                                             "
 "│MODE                                                 │ ╭ ▾ session ──────────────────────────────╮ "
-"│ ⇢ Switch to Build  continue this conversation into t│ │(unnamed)                                │ "
+"│ ⇢ Switch to Build  continue this conversation into t│ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
 "│BRANCH ⎇                                             │ ╰─────────────────────────────────────────╯ "
 "│ ⎇ Fork from here  new branch at this turn  :fork    │                                             "
 "│ ⤺ Undo last turn  move head back  u                 │ ╭ ▾ context · tokens ─────────────────────╮ "

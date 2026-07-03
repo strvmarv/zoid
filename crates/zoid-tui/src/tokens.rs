@@ -38,6 +38,18 @@ pub mod glyph {
     pub const CODE_BAR: char = '▏'; // fenced-code container left rule (§3.5)
     pub const COPY: char = '⧉'; // code-block copy affordance (§3.5)
     pub const COMPACT: char = '⊟'; // ⑤ compacted tool-result marker (ACM-1)
+
+    // Repo drawer line-prefix emojis (§16) — visual markers for at-a-glance scanning.
+    pub const REPO_NAME: char = '📦';
+    pub const REPO_WORKTREE: char = '🔧';
+    pub const REPO_CHANGES: char = '📝';
+
+    // Session drawer line-prefix emojis (§16) — visual markers for at-a-glance scanning.
+    pub const SESS_NAME: char = '🟢';
+    pub const SESS_MODEL: char = '🤖';
+    pub const SESS_DURATION: char = '⌚';
+    pub const SESS_CONTEXT: char = '📊';
+    pub const SESS_CWD: char = '📁';
 }
 
 /// Colors (visual-language table, spec §16 / docs/ux/README.md).

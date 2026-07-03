@@ -4,14 +4,14 @@ expression: "draw(&s, &seeded(), 100, 24)"
 ---
 "                                                                                                    "
 "┌ › build ────────────────────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
-"│SESSION                                              │ │repo   ⎇ main                            │ "
+"│SESSION                                              │ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
 "│ + New session  fresh thread + clean context budget  │ ╰─────────────────────────────────────────╯ "
 "│ ↺ Resume session…  this repo, most-recent first  ⏎  │                                             "
 "│ ✎ Rename session…  rename the current thread  :renam│ ╭ ▾ session ──────────────────────────────╮ "
-"│MODE                                                 │ │(unnamed)                                │ "
-"│ ⇢ Switch to Build  continue this conversation into t│ │ ·                                       │ "
-"│BRANCH ⎇                                             │ │dur 0m   tok 0                           │ "
-"│ ⎇ Fork from here  new branch at this turn  :fork    │ │ctx 0                                    │ "
+"│MODE                                                 │ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
+"│ ⇢ Switch to Build  continue this conversation into t│ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
+"│BRANCH ⎇                                             │ │⌚ dur 0m   tok 0                        │ " Hidden by multi-width symbols: [(58, " ")]
+"│ ⎇ Fork from here  new branch at this turn  :fork    │ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
 "│ ⤺ Undo last turn  move head back  u                 │ ╰─────────────────────────────────────────╯ "
 "│CONTEXT                                              │                                             "
 "│ ● Pin file to context  coming soon                  │ ╭ ▾ context · tokens ─────────────────────╮ "

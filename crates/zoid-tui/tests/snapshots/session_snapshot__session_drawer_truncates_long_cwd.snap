@@ -4,17 +4,17 @@ expression: out
 ---
 "                                                                                                    "
 "    (no messages yet)                                   ╭ ▾ repo ─────────────────────────────────╮ "
-"                                                        │repo   ⎇ main                            │ "
-"                                                        │worktree (none)                          │ "
-"                                                        │changes +0 -0 · 0 files                  │ "
+"                                                        │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                        │🔧 worktree (none)                       │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                        │📝 changes +0 -0 · 0 files               │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                        ╰─────────────────────────────────────────╯ "
 "                                                                                                    "
 "                                                        ╭ ▾ session ──────────────────────────────╮ "
-"                                                        │fix 500 on GET /users                    │ "
-"                                                        │glm-5.2 · ollama                         │ "
-"                                                        │dur 12m   tok 58k                        │ "
-"                                                        │ctx 58k/200k ██░░░░░░                    │ "
-"                                                        │cwd ~/develop/projects/zoid/crates/zoid-…│ "
+"                                                        │🟢 fix 500 on GET /users                 │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                        │🤖 glm-5.2 · ollama                      │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                        │⌚ dur 12m   tok 58k                     │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                        │📊 ctx 58k/200k ██░░░░░░                 │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                        │📁 cwd ~/develop/projects/zoid/crates/zo…│ " Hidden by multi-width symbols: [(58, " ")]
 "                                                        ╰─────────────────────────────────────────╯ "
 "                                                                                                    "
 "                                                        ╭ ▾ context · tokens ─────────────────────╮ "

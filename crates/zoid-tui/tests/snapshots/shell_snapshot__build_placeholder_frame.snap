@@ -4,14 +4,14 @@ expression: "draw(&s, &[], 100, 24)"
 ---
 "                                                                                                    "
 "                                                        ╭ ▾ repo ─────────────────────────────────╮ "
-"  ◐ BUILD mode                                          │repo   ⎇ main                            │ "
+"  ◐ BUILD mode                                          │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
 "  The autonomous loop is coming soon.                   ╰─────────────────────────────────────────╯ "
 "  ⇧Tab / :chat → back to Chat                                                                       "
 "                                                        ╭ ▾ session ──────────────────────────────╮ "
-"                                                        │(unnamed)                                │ "
-"                                                        │ ·                                       │ "
-"                                                        │dur 0m   tok 0                           │ "
-"                                                        │ctx 0                                    │ "
+"                                                        │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                        │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                        │⌚ dur 0m   tok 0                        │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                        │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                        ╰─────────────────────────────────────────╯ "
 "                                                                                                    "
 "                                                        ╭ ▾ context · tokens ─────────────────────╮ "

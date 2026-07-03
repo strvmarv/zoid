@@ -346,6 +346,10 @@ fn render_repo_body(frame: &mut Frame, state: &ShellState, area: Rect) {
     };
     let lines = vec![
         Line::from(vec![
+            Span::styled(
+                format!("{} ", glyph::REPO_NAME),
+                Style::new().fg(color::TXT),
+            ),
             Span::styled(format!("{name}   "), Style::new().fg(color::TXT)),
             Span::styled(
                 format!("{} {}", glyph::BRANCH, state.branch),
@@ -353,10 +357,18 @@ fn render_repo_body(frame: &mut Frame, state: &ShellState, area: Rect) {
             ),
         ]),
         Line::from(vec![
+            Span::styled(
+                format!("{} ", glyph::REPO_WORKTREE),
+                Style::new().fg(color::DIM),
+            ),
             Span::styled("worktree ", Style::new().fg(color::DIM)),
             Span::styled(state.worktree.clone(), Style::new().fg(color::DIM)),
         ]),
         Line::from(vec![
+            Span::styled(
+                format!("{} ", glyph::REPO_CHANGES),
+                Style::new().fg(color::DIM),
+            ),
             Span::styled("changes ", Style::new().fg(color::DIM)),
             Span::styled(
                 format!("+{}", state.changes_added),
@@ -394,11 +406,21 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
         human_tokens(state.ctx_used)
     };
     let mut lines = vec![
-        Line::from(Span::styled(
-            truncate(name, area.width as usize),
-            Style::new().fg(color::TXT),
-        )),
         Line::from(vec![
+            Span::styled(
+                format!("{} ", glyph::SESS_NAME),
+                Style::new().fg(color::TXT),
+            ),
+            Span::styled(
+                truncate(name, (area.width as usize).saturating_sub(2)),
+                Style::new().fg(color::TXT),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                format!("{} ", glyph::SESS_MODEL),
+                Style::new().fg(color::CHAT_ACCENT),
+            ),
             Span::styled(state.model.clone(), Style::new().fg(color::CHAT_ACCENT)),
             Span::styled(
                 format!(" · {}", state.provider),
@@ -406,6 +428,10 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
             ),
         ]),
         Line::from(vec![
+            Span::styled(
+                format!("{} ", glyph::SESS_DURATION),
+                Style::new().fg(color::DIM),
+            ),
             Span::styled("dur ", Style::new().fg(color::DIM)),
             Span::styled(
                 format!("{}   ", state.duration),
@@ -418,9 +444,11 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
             ),
         ]),
         {
-            // ctx used/ceiling + a visual fill gauge coloured by how close the
-            // window is to its ceiling (green → warn → error).
             let mut spans = vec![
+                Span::styled(
+                    format!("{} ", glyph::SESS_CONTEXT),
+                    Style::new().fg(color::DIM),
+                ),
                 Span::styled("ctx ", Style::new().fg(color::DIM)),
                 Span::styled(format!("{ctx} "), Style::new().fg(color::TXT)),
             ];
@@ -440,9 +468,13 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
     ];
     // cwd: truncate to the drawer width, never wrap (paths get long).
     lines.push(Line::from(vec![
+        Span::styled(
+            format!("{} ", glyph::SESS_CWD),
+            Style::new().fg(color::DIM),
+        ),
         Span::styled("cwd ", Style::new().fg(color::DIM)),
         Span::styled(
-            truncate(&state.cwd, (area.width as usize).saturating_sub(4)),
+            truncate(&state.cwd, (area.width as usize).saturating_sub(7)),
             Style::new().fg(color::DIM),
         ),
     ]));
