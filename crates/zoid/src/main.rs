@@ -415,6 +415,39 @@ fn git_status() -> (usize, usize, usize) {
     (a1 + a2, r1 + r2, f1 + f2)
 }
 
+/// Cached projections over the append-only event log. Recomputed only when the
+/// event count changes — the log only ever grows, so its length uniquely
+/// identifies the projection inputs. This is the core render-loop optimization:
+/// without it, every keystroke and scroll tick rebuilt `conversation`,
+/// `context_window` (twice), `churn_timeline`, `tasks`, and `token_ledger` from
+/// the full log, so per-frame cost grew unbounded with session length.
+#[derive(Default)]
+struct ProjectionCache {
+    events_len: Option<usize>,
+    msgs: Vec<zoid_core::projection::ChatMsg>,
+    window: zoid_core::context::ContextWindow,
+    churn: zoid_core::economy::ChurnTimeline,
+    tasks: Vec<zoid_core::tasks::TaskItem>,
+    ledger_total: u64,
+}
+
+impl ProjectionCache {
+    /// Refresh all projections iff the event count changed; a cheap no-op
+    /// otherwise. Returns `true` when a recompute happened.
+    fn refresh(&mut self, events: &[Event]) -> bool {
+        if self.events_len == Some(events.len()) {
+            return false;
+        }
+        self.msgs = conversation(events);
+        self.window = zoid_core::context::context_window(events);
+        self.churn = zoid_core::economy::churn_timeline(events);
+        self.tasks = zoid_core::tasks::tasks(events);
+        self.ledger_total = zoid_core::economy::token_ledger(events).total;
+        self.events_len = Some(events.len());
+        true
+    }
+}
+
 struct App {
     session: SessionHandle,
     session_id: Ulid,
@@ -439,10 +472,8 @@ struct App {
     ui_tx: mpsc::Sender<AgentUpdate>,
     /// Monotonic clock start for motion timing (Ⓡ2).
     started: std::time::Instant,
-    /// Last time the repo drawer's git changes line was refreshed (cadence-gated
-    /// to ~1/sec so the event-driven run loop doesn't shell out to `git` on
-    /// every keystroke / streaming tick).
-    last_git_refresh: std::time::Instant,
+    /// Cached projections over the event log, refreshed only when it grows.
+    proj: ProjectionCache,
     /// When the altitude last changed, for the fold/unfold reveal (Ⓡ2).
     zoom_changed_at: Option<std::time::Instant>,
     /// Max conversation scroll offset from the last rendered frame (body length −
@@ -595,7 +626,7 @@ async fn main() -> Result<()> {
         shell,
         ui_tx,
         started: std::time::Instant::now(),
-        last_git_refresh: std::time::Instant::now(),
+        proj: ProjectionCache::default(),
         zoom_changed_at: None,
         last_conv_max_scroll: 0,
         tz_offset_secs,
@@ -658,18 +689,38 @@ async fn run<B: ratatui::backend::Backend>(
     let mut motion_tick = tokio::time::interval(tick_period);
     motion_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+    // Off-load `git status` to a background task so the subprocess never blocks
+    // the render loop (it previously ran synchronously on the loop every second,
+    // hitching typing/scrolling). The loop reads the latest value non-blocking.
+    let (git_tx, mut git_rx) = tokio::sync::watch::channel((0usize, 0usize, 0usize));
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+        loop {
+            tick.tick().await;
+            let r = tokio::task::spawn_blocking(git_status)
+                .await
+                .unwrap_or((0, 0, 0));
+            if git_tx.send(r).is_err() {
+                break; // receiver dropped — app is exiting
+            }
+        }
+    });
+
     loop {
-        if app.last_git_refresh.elapsed() >= std::time::Duration::from_secs(1) {
-            let (a, r, f) = git_status();
+        // Latest git status from the background watcher (non-blocking read).
+        {
+            let (a, r, f) = *git_rx.borrow_and_update();
             app.shell.changes_added = a;
             app.shell.changes_removed = r;
             app.shell.changes_files = f;
-            app.last_git_refresh = std::time::Instant::now();
         }
-        let ledger = zoid_core::economy::token_ledger(&app.events);
-        let window = zoid_core::context::context_window(&app.events);
-        app.shell.session_tokens = ledger.total;
-        app.shell.ctx_used = window.total_tokens;
+        // Refresh cached projections only when the event log grew (append-only),
+        // so typing / scrolling / zoom reuse them instead of rebuilding O(events)
+        // projections every frame.
+        app.proj.refresh(&app.events);
+        app.shell.session_tokens = app.proj.ledger_total;
+        app.shell.ctx_used = app.proj.window.total_tokens;
+        app.shell.tasks_len = app.proj.tasks.len() as u16;
         app.shell.duration = fmt_duration(app.session_started_ms, now_ms());
         app.shell.input_rows = app.textarea.lines().len().max(1) as u16;
         let mut frame_conv_max = 0u16;
@@ -680,20 +731,12 @@ async fn run<B: ratatui::backend::Backend>(
         // unrelated event wakes it).
         let mut frame_reveal_none = false;
         terminal.draw(|f| {
-            let msgs = conversation(&app.events);
-            let window = zoid_core::context::context_window(&app.events);
-            let churn = zoid_core::economy::churn_timeline(&app.events);
-            // T10 (manual control: shell.policy / shell.economy_selected) is DEFERRED
-            // post-P3 — the drawer is read-only/observability-only, so the view needs
-            // only the window + churn (no policy or ledger).
-            let economy = zoid_tui::EconomyView::build(&window, &churn, 0);
-            // Tasks drawer (Task 8): computed fresh from the event log every frame
-            // (not cached on ShellState) so it rehydrates on session resume, matching
-            // how `economy`/`msgs` are threaded above.
-            let task_items = zoid_core::tasks::tasks(&app.events);
-            // Layout hint so the rail can grow the Tasks drawer to fit the list
-            // (a count, not the list itself — content still rendered from events).
-            app.shell.tasks_len = task_items.len() as u16;
+            // Projections come from the event-count-keyed cache (refreshed above),
+            // so this closure does zero O(events) work on an ordinary frame. The
+            // drawer is read-only/observability-only, so it needs only window + churn.
+            let msgs = &app.proj.msgs;
+            let economy = zoid_tui::EconomyView::build(&app.proj.window, &app.proj.churn, 0);
+            let task_items = &app.proj.tasks;
             let elapsed = app.started.elapsed().as_millis() as u64;
             let caret = zoid_tui::motion::caret_on(elapsed, 1000, app.shell.reduced_motion);
             // Measure total lines (which re-runs conversation_view — tree-sitter in
@@ -709,7 +752,7 @@ async fn run<B: ratatui::backend::Backend>(
                             compute(f.area(), &app.shell).conversation.width,
                         ) as usize;
                         let total_lines = zoid_tui::chat::conversation_view(
-                            &msgs,
+                            msgs,
                             &ChatView {
                                 zoom: app.shell.zoom,
                                 caret_on: caret,
@@ -743,8 +786,8 @@ async fn run<B: ratatui::backend::Backend>(
                 f,
                 &app.shell,
                 &economy,
-                &msgs,
-                &task_items,
+                msgs,
+                task_items,
                 &app.textarea,
                 app.streaming,
                 &view,
@@ -1226,6 +1269,9 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 app.session.touch_session(sid, now_ms()).await.ok();
                 app.session_id = sid;
                 app.events = app.session.snapshot_session(sid).await.unwrap_or_default();
+                // Wholesale event-log replacement: reset the projection cache so
+                // it can't serve the previous session's data at an equal length.
+                app.proj = ProjectionCache::default();
                 app.shell.conversation_scroll = 0;
                 if let Some(info) = app
                     .session
@@ -1500,6 +1546,8 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             app.shell.session_name = name;
             app.session_started_ms = ts;
             app.events.clear();
+            // New session: reset the cache (clear() may leave the same length).
+            app.proj = ProjectionCache::default();
             app.shell.conversation_scroll = 0;
             Ok(false)
         }
@@ -1992,7 +2040,7 @@ mod tests {
             shell: zoid_tui::ShellState::new(),
             ui_tx,
             started: std::time::Instant::now(),
-            last_git_refresh: std::time::Instant::now(),
+            proj: ProjectionCache::default(),
             zoom_changed_at: None,
             last_conv_max_scroll: 0,
             tz_offset_secs: 0,
@@ -2001,6 +2049,31 @@ mod tests {
             delegating: false,
             pending_answer: None,
         }
+    }
+
+    #[test]
+    fn projection_cache_recomputes_only_on_len_change() {
+        use zoid_core::event::{Event, EventKind};
+        let mk = |t: &str| {
+            Event::new(
+                Ulid::new(),
+                None,
+                0,
+                EventKind::UserMessage { text: t.into() },
+            )
+        };
+        let mut cache = ProjectionCache::default();
+        let mut events = vec![mk("hello there friend")];
+        assert!(cache.refresh(&events), "first refresh always recomputes");
+        assert_eq!(cache.events_len, Some(1));
+        assert_eq!(cache.msgs.len(), 1);
+        // Same length → no recompute (the hot path: every keystroke / scroll).
+        assert!(!cache.refresh(&events), "unchanged length must be a no-op");
+        // Log grew → recompute.
+        events.push(mk("another substantive message"));
+        assert!(cache.refresh(&events), "a longer log must recompute");
+        assert_eq!(cache.events_len, Some(2));
+        assert_eq!(cache.msgs.len(), 2);
     }
 
     /// Regression for the busy-guard bug: `Action::Submit` must be a no-op
