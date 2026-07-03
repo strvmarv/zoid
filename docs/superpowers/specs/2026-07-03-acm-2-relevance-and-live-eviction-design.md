@@ -275,11 +275,26 @@ for it in &sel.excluded {
 }
 ```
 
-**The wire-in is already built.** `context_window` folds `Evict` events
-(`MutationOp::Evict` arm exists); `conversation()` — which `build_request` maps
-over — already skips evicted items. So making the projection honor eviction is
-the entire wire-in; **`build_request` needs no change.** Idempotent via an
-`already-evicted` set (same pattern as `plan_compactions`'s `done` set).
+**The wire-in.** `context_window` already folds `Evict` events onto items
+(`MutationOp::Evict` arm exists → `item.evicted = true`, feeds the drawer). But
+`conversation()` — which `build_request` maps over — currently **ignores**
+`ContextMutation` (it's in the skip arm; see `conversation_ignores_usage_and_mutation`).
+So the load-bearing wire-in is teaching `conversation()` to omit evicted items
+from the **live request**, mirroring how ACM-1 taught it to substitute compacted
+summaries:
+
+- Pre-scan events into a `HashSet<String>` of currently-evicted item keys,
+  folding `Evict`/`Restore` last-write-wins.
+- Rebuild the same `tool-id → path` `call_path` map `context_window` uses, so
+  each `ToolResult` event resolves to its context-window key (`file:{path}` when
+  the paired `ToolCall` had a `tool_path`, else `tool:{name}:{id}`).
+- Skip emitting a `ChatMsg::ToolResult` whose key is in the evicted set.
+
+To avoid the key-derivation logic drifting between `context_window` and
+`conversation()`, factor a shared `item_key_of(name, id, &call_path) → String`
+helper in `context.rs` and use it in both. `build_request` itself needs **no**
+change. Idempotent via an `already-evicted` set (same pattern as
+`plan_compactions`'s `done` set).
 
 Reversibility: `Restore` emits the inverse event; the projection re-includes the
 item on the next turn.
