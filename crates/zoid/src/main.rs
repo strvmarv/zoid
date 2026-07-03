@@ -1404,15 +1404,22 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::ConfigCommitEdit => {
             if let Some(env) = app.shell.config_key_prompt.take() {
-                if let (Some(s), Some(buf)) = (&app.secrets, app.shell.config_edit.clone()) {
+                let buf = app.shell.config_edit.take().unwrap_or_default();
+                let key = buf.trim();
+                if key.is_empty() {
+                    // Blank/whitespace commit: abort like Esc. Storing an empty
+                    // credential would falsely mark the provider "ready" (status
+                    // becomes Set) and suppress any future reprompt.
+                    return Ok(false);
+                }
+                if let Some(s) = &app.secrets {
                     use zoid_core::secret::SecretStore;
-                    if let Err(e) = s.set(env, buf.trim()) {
+                    if let Err(e) = s.set(env, key) {
                         eprintln!("zoid: secret set failed for {env}: {e}");
                     }
-                } else if app.secrets.is_none() {
+                } else {
                     eprintln!("zoid: secret store unavailable; cannot set {env}");
                 }
-                app.shell.config_edit = None;
                 refresh_config_sections(app);
                 // Re-select with the new key (the key lives in the secret store, not
                 // config, so apply_config_write's auto-reselect never ran), then
@@ -2553,6 +2560,31 @@ mod tests {
             app.shell.status_hint.as_deref(),
             Some("finish the current turn first"),
             "blocked NewSession should surface the busy hint"
+        );
+    }
+
+    #[tokio::test]
+    async fn blank_key_commit_does_not_store_or_ready() {
+        let mut app = test_app().await;
+        app.shell.config_key_prompt = Some("ANTHROPIC_API_KEY");
+        app.shell.config_edit = Some("   ".to_string());
+
+        let quit = handle_action(&mut app, zoid_tui::route::Action::ConfigCommitEdit)
+            .await
+            .unwrap();
+
+        assert!(!quit, "blank key commit must not signal quit");
+        assert!(
+            app.shell.config_key_prompt.is_none(),
+            "key prompt must be cleared/aborted"
+        );
+        assert!(
+            app.shell.config_edit.is_none(),
+            "edit buffer must be cleared/aborted"
+        );
+        assert!(
+            app.shell.config_picker.is_empty(),
+            "blank commit must not advance to the model picker"
         );
     }
 
