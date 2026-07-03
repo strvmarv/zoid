@@ -823,7 +823,12 @@ pub fn render_config(
     // (below), never in column 3, so it renders in exactly one place.
     if picker_open && three_col_fits {
         let active = state.config_col == crate::state::ConfigCol::Picker;
-        let pick = picker_lines(&state.config_picker, state.config_picker_sel, active, cols[2].width as usize);
+        let pick = picker_lines(
+            &state.config_picker,
+            state.config_picker_sel,
+            active,
+            cols[2].width as usize,
+        );
         frame.render_widget(Paragraph::new(pick), cols[2]);
     }
 
@@ -845,7 +850,12 @@ pub fn render_config(
         let pinner = pblock.inner(over);
         frame.render_widget(pblock, over);
         let active = state.config_col == crate::state::ConfigCol::Picker;
-        let pick = picker_lines(&state.config_picker, state.config_picker_sel, active, pinner.width as usize);
+        let pick = picker_lines(
+            &state.config_picker,
+            state.config_picker_sel,
+            active,
+            pinner.width as usize,
+        );
         frame.render_widget(Paragraph::new(pick), pinner);
     }
 
@@ -992,12 +1002,8 @@ pub fn render_provider_switch(frame: &mut Frame, state: &ShellState, area: Rect)
     let card_w = (pane_w * 2 + 3)
         .max(SWITCH_FOOTER.width() as u16 + 3)
         .min(area.width);
-    let rows_needed = state
-        .switch_providers
-        .len()
-        .max(state.switch_models.len()) as u16;
-    let card_h = (rows_needed + 2 /* header row + footer row */ + 2 /* border */)
-        .min(area.height);
+    let rows_needed = state.switch_providers.len().max(state.switch_models.len()) as u16;
+    let card_h = (rows_needed + 2 /* header row + footer row */ + 2/* border */).min(area.height);
     let rect = centered(area, card_w, card_h);
 
     let block = Block::default()

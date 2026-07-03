@@ -311,7 +311,6 @@ fn effective_base_url(config: &zoid_core::config::Config) -> String {
 /// does not; all remote HTTP flavors do. Hardcoded shortcut: `ollama-local` is
 /// the only keyless `Available` provider today. Revisit against the registry if
 /// `anthropic-cli`/`anthropic-sdk` (ambient auth, no API key) become selectable.
-#[allow(dead_code)]
 fn entry_requires_key(id: &str) -> bool {
     id != "ollama-local"
 }
@@ -2592,8 +2591,7 @@ mod tests {
     fn effective_base_url_prefers_override_then_registry() {
         use zoid_core::config::Config;
         // No override → registry default for the canonical id.
-        let mut c = Config::default(); // provider = "ollama" (legacy) → ollama-cloud
-        c.base_url = None;
+        let mut c = Config::default(); // provider = "ollama" (legacy) → ollama-cloud, base_url = None
         assert_eq!(effective_base_url(&c), "https://ollama.com");
 
         // Explicit local id, no override → local endpoint.
@@ -2627,8 +2625,10 @@ mod tests {
 
     #[test]
     fn select_provider_ollama_local_is_ready_without_key() {
-        let mut config = zoid_core::config::Config::default();
-        config.provider = "ollama-local".to_string();
+        let config = zoid_core::config::Config {
+            provider: "ollama-local".to_string(),
+            ..Default::default()
+        };
         let (_provider, name, has_key) = select_provider(&config, &None);
         assert_eq!(name, "ollama");
         assert!(has_key, "ollama-local must be usable (ready) with no key");

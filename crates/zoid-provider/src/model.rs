@@ -46,7 +46,9 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         id: "ollama-local",
         display: "ollama · local",
         family: "ollama",
-        transport: Transport::Http { default_base_url: "http://localhost:11434" },
+        transport: Transport::Http {
+            default_base_url: "http://localhost:11434",
+        },
         models: &[], // local tags are arbitrary; free-text entry
         status: Status::Available,
     },
@@ -54,7 +56,9 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         id: "ollama-cloud",
         display: "ollama · cloud",
         family: "ollama",
-        transport: Transport::Http { default_base_url: "https://ollama.com" },
+        transport: Transport::Http {
+            default_base_url: "https://ollama.com",
+        },
         models: &["glm-5.2:cloud"],
         status: Status::Available,
     },
@@ -62,7 +66,9 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         id: "anthropic-api",
         display: "anthropic · api key",
         family: "anthropic",
-        transport: Transport::Http { default_base_url: "https://api.anthropic.com" },
+        transport: Transport::Http {
+            default_base_url: "https://api.anthropic.com",
+        },
         models: &["claude-sonnet-4-6", "claude-opus-4-8"],
         status: Status::Available,
     },
@@ -70,7 +76,9 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         id: "anthropic-cli",
         display: "anthropic · Claude Code CLI",
         family: "anthropic",
-        transport: Transport::Cli { default_command: "claude" },
+        transport: Transport::Cli {
+            default_command: "claude",
+        },
         models: &["claude-sonnet-4-6", "claude-opus-4-8"],
         status: Status::Planned,
     },
@@ -162,13 +170,28 @@ mod tests {
         let e = entry("ollama").unwrap(); // legacy → ollama-cloud
         assert_eq!(e.id, "ollama-cloud");
         assert_eq!(e.family, "ollama");
-        assert_eq!(e.transport, Transport::Http { default_base_url: "https://ollama.com" });
+        assert_eq!(
+            e.transport,
+            Transport::Http {
+                default_base_url: "https://ollama.com"
+            }
+        );
 
         let local = entry("ollama-local").unwrap();
-        assert_eq!(local.transport, Transport::Http { default_base_url: "http://localhost:11434" });
+        assert_eq!(
+            local.transport,
+            Transport::Http {
+                default_base_url: "http://localhost:11434"
+            }
+        );
 
         let cli = entry("anthropic-cli").unwrap();
-        assert_eq!(cli.transport, Transport::Cli { default_command: "claude" });
+        assert_eq!(
+            cli.transport,
+            Transport::Cli {
+                default_command: "claude"
+            }
+        );
         assert_eq!(cli.status, Status::Planned);
     }
 
@@ -183,7 +206,10 @@ mod tests {
 
     #[test]
     fn default_base_url_only_for_http() {
-        assert_eq!(default_base_url("anthropic-api"), Some("https://api.anthropic.com"));
+        assert_eq!(
+            default_base_url("anthropic-api"),
+            Some("https://api.anthropic.com")
+        );
         assert_eq!(default_base_url("anthropic-cli"), None); // Cli has no url
         assert_eq!(default_base_url("anthropic-sdk"), None);
     }

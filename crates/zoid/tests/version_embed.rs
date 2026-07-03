@@ -8,7 +8,9 @@ fn workspace_version_is_semver() {
     let parts: Vec<&str> = v.split('.').collect();
     assert_eq!(parts.len(), 3, "expected MAJOR.MINOR.PATCH, got {v:?}");
     assert!(
-        parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())),
+        parts
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())),
         "non-numeric version part in {v:?}"
     );
 }

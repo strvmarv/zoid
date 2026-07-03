@@ -484,7 +484,10 @@ mod tests {
     #[test]
     fn parses_ollama_tags_names() {
         let body = r#"{"models":[{"name":"glm-5.2:cloud"},{"name":"llama3.1:70b"}]}"#;
-        assert_eq!(parse_ollama_tags(body), vec!["glm-5.2:cloud", "llama3.1:70b"]);
+        assert_eq!(
+            parse_ollama_tags(body),
+            vec!["glm-5.2:cloud", "llama3.1:70b"]
+        );
     }
     #[test]
     fn ollama_tags_empty_or_bad_is_empty() {

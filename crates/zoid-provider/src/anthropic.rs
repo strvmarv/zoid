@@ -343,8 +343,12 @@ mod tests {
 
     #[test]
     fn parses_anthropic_model_ids() {
-        let body = r#"{"data":[{"id":"claude-opus-4-8","type":"model"},{"id":"claude-sonnet-4-6"}]}"#;
-        assert_eq!(parse_anthropic_models(body), vec!["claude-opus-4-8", "claude-sonnet-4-6"]);
+        let body =
+            r#"{"data":[{"id":"claude-opus-4-8","type":"model"},{"id":"claude-sonnet-4-6"}]}"#;
+        assert_eq!(
+            parse_anthropic_models(body),
+            vec!["claude-opus-4-8", "claude-sonnet-4-6"]
+        );
     }
     #[test]
     fn anthropic_models_bad_is_empty() {
