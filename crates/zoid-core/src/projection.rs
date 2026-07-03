@@ -124,8 +124,10 @@ pub fn conversation(events: &[Event]) -> Vec<ChatMsg> {
                     ok: *ok,
                 });
             }
-            EventKind::Usage | EventKind::ContextMutation { .. } => {
-                // Economy bookkeeping; not part of the conversation projection.
+            EventKind::Usage
+            | EventKind::ContextMutation { .. }
+            | EventKind::ToolResultCompacted { .. } => {
+                // Economy bookkeeping; folded elsewhere, not a raw conversation item.
             }
             EventKind::Tasks { .. } => {
                 // Rail-only snapshot; never inlined into the conversation transcript.

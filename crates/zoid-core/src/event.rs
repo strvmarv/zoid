@@ -60,6 +60,15 @@ pub enum EventKind {
         item: String,
         op: MutationOp,
     },
+    /// An automatic context-management action: the tool-result with `id` was
+    /// compacted to `summary` in the live request. Append-only — the original
+    /// `ToolResult` event is retained, so this is reversible. `original_tokens`
+    /// is the pre-compaction estimate, kept for the audit view.
+    ToolResultCompacted {
+        id: String,
+        summary: String,
+        original_tokens: u64,
+    },
     /// A finished subagent's outcome, recorded on the MAIN branch. `branch`
     /// names the subagent's sub-branch; `summary` is its closing report.
     DelegationResult {
@@ -261,5 +270,18 @@ mod tests {
         let ev = ev.with_session(sid);
         let back: Event = serde_json::from_str(&serde_json::to_string(&ev).unwrap()).unwrap();
         assert_eq!(back.session_id, sid);
+    }
+
+    #[test]
+    fn tool_result_compacted_round_trips_through_serde() {
+        let k = EventKind::ToolResultCompacted {
+            id: "call_42".into(),
+            summary: "… (compacted: 300 more lines, ~2100 tokens elided)".into(),
+            original_tokens: 2200,
+        };
+        let ev = Event::new(Ulid::new(), None, 0, k.clone());
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.kind, k);
     }
 }
