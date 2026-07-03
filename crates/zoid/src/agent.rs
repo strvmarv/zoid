@@ -35,6 +35,9 @@ pub struct TurnConfig {
     pub system: String,
     pub cwd: PathBuf,
     pub branch: BranchId,
+    /// Context-management policy for this turn. Chat gets it from `[economy]`;
+    /// subagents get `subagent_policy()`. Drives automatic tool-result compaction.
+    pub policy: zoid_core::assembler::ContextPolicy,
 }
 
 /// The orchestrator (Chat) turn config: main branch, process cwd, Chat prompt.
@@ -43,6 +46,7 @@ pub fn chat_turn_config() -> TurnConfig {
         system: SYSTEM_PROMPT.to_string(),
         cwd: PathBuf::from("."),
         branch: BranchId::default(),
+        policy: zoid_core::assembler::ContextPolicy::default(),
     }
 }
 
@@ -487,6 +491,7 @@ async fn run_turn_inner(
                 }
             }
         }
+        record_compactions(&session, &mut events, ui, config, session_id, now).await?;
         // loop: re-request with the tool results now in context
     }
 
@@ -504,6 +509,36 @@ async fn emit(
     now: fn() -> i64,
 ) -> Result<()> {
     emit_with_tokens(session, events, ui, branch, kind, None, session_id, now).await
+}
+
+/// Record `ToolResultCompacted` events for any tool-results the policy says
+/// should be compacted given the current log. Idempotent: `plan_compactions`
+/// skips already-compacted ids, so calling this each round is safe.
+async fn record_compactions(
+    session: &SessionHandle,
+    events: &mut Vec<Event>,
+    ui: &mpsc::Sender<AgentUpdate>,
+    config: &TurnConfig,
+    session_id: Ulid,
+    now: fn() -> i64,
+) -> Result<()> {
+    for c in zoid_core::compaction::plan_compactions(events, &config.policy) {
+        emit(
+            session,
+            events,
+            ui,
+            &config.branch,
+            EventKind::ToolResultCompacted {
+                id: c.id,
+                summary: c.summary,
+                original_tokens: c.original_tokens,
+            },
+            session_id,
+            now,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// Persist one event (optionally carrying token usage) and announce it to the

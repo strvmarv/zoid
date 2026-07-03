@@ -147,6 +147,7 @@ pub async fn run_subagent(
         system: profile.system_prompt.clone(),
         cwd,
         branch: branch.clone(),
+        policy: subagent_policy(),
     };
     let produced = run_agent_turn(
         config,
