@@ -8,7 +8,7 @@ use crate::command::{parse_command, Command};
 use crate::config_view::FieldKind;
 use crate::layout::{in_rect, ShellLayout};
 use crate::palette::{all_items, nav, selectable_matches};
-use crate::state::{DrawerId, Focus, Mode, Overlay, ShellState};
+use crate::state::{ConfigCol, DrawerId, Focus, Mode, Overlay, ShellState};
 use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -59,6 +59,10 @@ pub enum Action {
     ConfigCancelEdit,
     ConfigToggle,
     ConfigCycle(i32),
+    ConfigDrillOpen,
+    ConfigPickerMove(i32),
+    ConfigPickerSelect,
+    ConfigPickerBack,
     ConfigSaveToRepo,
     ConfigClearSecret,
     QuestionMove(i32),
@@ -212,24 +216,29 @@ fn route_sessions_key(key: KeyEvent) -> Action {
     }
 }
 
-/// Route keys while the config overlay (Task 9's open path) is up. Editing a
-/// field's text buffer takes priority over navigation once `config_edit` is
-/// `Some` — the same buffer/commit/cancel shape as the palette/cmdline
-/// overlays, but scoped to a single field instead of the whole query/command.
+/// Route keys while the config overlay is up. Precedence:
+/// 1. The col-3 picker (open via `ConfigDrillOpen` on a `Pick` field) captures
+///    ↑/↓/Enter/←/Esc for movement/select/back while it's open.
+/// 2. An in-flight inline text edit buffer (Text/Uint/Secret fields) captures
+///    Enter/Esc/Backspace/Char — the same buffer/commit/cancel shape as the
+///    palette/cmdline overlays, scoped to a single field.
+/// 3. Otherwise, field-list navigation: Up/Down move fields, Tab/Shift+Tab
+///    switch sections, and Right/Enter act on the focused field (drill into a
+///    `Pick` field's picker, toggle a `Bool`, or begin editing Text/Uint).
 fn route_config_key(state: &ShellState, key: KeyEvent) -> Action {
-    let editing = state.config_edit.is_some();
-    let kind = state
-        .config_sections
-        .get(state.config_section)
-        .and_then(|s| s.rows.get(state.config_field))
-        .map(|r| r.kind.clone());
-    let is_model_field = state
-        .config_sections
-        .get(state.config_section)
-        .and_then(|s| s.rows.get(state.config_field))
-        .is_some_and(|r| r.label == "model");
+    // 1. Picker column captures keys while a Pick field is drilled open.
+    if state.config_col == ConfigCol::Picker && state.config_picker_open() {
+        return match key.code {
+            KeyCode::Up => Action::ConfigPickerMove(-1),
+            KeyCode::Down => Action::ConfigPickerMove(1),
+            KeyCode::Enter => Action::ConfigPickerSelect,
+            KeyCode::Left | KeyCode::Esc => Action::ConfigPickerBack,
+            _ => Action::Noop,
+        };
+    }
 
-    if editing {
+    // 2. Inline text edit buffer (Text/Uint/Secret fields).
+    if state.config_edit.is_some() {
         return match key.code {
             KeyCode::Enter => Action::ConfigCommitEdit,
             KeyCode::Esc => Action::ConfigCancelEdit,
@@ -239,25 +248,26 @@ fn route_config_key(state: &ShellState, key: KeyEvent) -> Action {
         };
     }
 
+    // 3. Field-list navigation.
+    let kind = state
+        .config_sections
+        .get(state.config_section)
+        .and_then(|s| s.rows.get(state.config_field))
+        .map(|r| r.kind.clone());
+
     match key.code {
-        // Up/Down move between fields in the active section; Tab/Shift+Tab switch
-        // the section (the "main items"); Left/Right change the focused field's
-        // value (toggle a bool, step a choice list). Text/number/secret fields
-        // still open an edit buffer with Enter.
         KeyCode::Up => Action::ConfigMoveField(-1),
         KeyCode::Down => Action::ConfigMoveField(1),
         KeyCode::Tab => Action::ConfigMoveSection(1),
         KeyCode::BackTab => Action::ConfigMoveSection(-1),
-        KeyCode::Left => config_value_change(&kind, is_model_field, -1),
-        KeyCode::Right => config_value_change(&kind, is_model_field, 1),
         KeyCode::Esc => Action::CloseOverlay,
-        KeyCode::Enter => {
-            if matches!(kind, Some(FieldKind::Bool)) {
-                Action::ConfigToggle
-            } else {
-                Action::ConfigBeginEdit
-            }
-        }
+        // Right/Enter act on the focused field.
+        KeyCode::Right | KeyCode::Enter => match kind {
+            Some(FieldKind::Pick) => Action::ConfigDrillOpen,
+            Some(FieldKind::Bool) => Action::ConfigToggle,
+            Some(FieldKind::Text) | Some(FieldKind::Uint) => Action::ConfigBeginEdit,
+            _ => Action::Noop,
+        },
         KeyCode::Char('r') => Action::ConfigSaveToRepo,
         KeyCode::Char('x') => {
             if matches!(kind, Some(FieldKind::Secret)) {
@@ -267,19 +277,6 @@ fn route_config_key(state: &ShellState, key: KeyEvent) -> Action {
             }
         }
         _ => Action::Noop,
-    }
-}
-
-/// Left/Right value change for the focused config field: toggle a bool, step a
-/// choice list (provider / the model free-text cycle) by `dir` (±1), or no-op for
-/// text/number/secret fields (those edit via Enter).
-fn config_value_change(kind: &Option<FieldKind>, is_model_field: bool, dir: i32) -> Action {
-    if matches!(kind, Some(FieldKind::Bool)) {
-        Action::ConfigToggle
-    } else if is_model_field {
-        Action::ConfigCycle(dir)
-    } else {
-        Action::Noop
     }
 }
 
@@ -357,6 +354,69 @@ mod tests {
 
     fn key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, mods)
+    }
+
+    fn pick_key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn state_on_provider() -> ShellState {
+        use crate::config_view::{FieldKind, FieldRow, Section};
+        use crate::state::Overlay;
+        use zoid_core::config::Source;
+
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Config;
+        s.config_sections = vec![Section {
+            title: "Provider & Model".into(),
+            rows: vec![FieldRow {
+                label: "provider",
+                value: "ollama-cloud".into(),
+                kind: FieldKind::Pick,
+                source: Source::Default,
+                env_shadowed: false,
+            }],
+        }];
+        s
+    }
+
+    #[test]
+    fn enter_on_pick_field_drills_open() {
+        let s = state_on_provider();
+        let a = route_config_key(&s, pick_key(KeyCode::Enter));
+        assert!(matches!(a, Action::ConfigDrillOpen));
+    }
+
+    #[test]
+    fn picker_open_routes_movement_and_select() {
+        use crate::config_view::PickOption;
+        use crate::state::ConfigCol;
+
+        let mut s = state_on_provider();
+        s.config_col = ConfigCol::Picker;
+        s.config_picker = vec![PickOption {
+            id: "ollama-local".into(),
+            label: "ollama · local".into(),
+            detail: String::new(),
+            selectable: true,
+            is_current: false,
+        }];
+        assert!(matches!(
+            route_config_key(&s, pick_key(KeyCode::Down)),
+            Action::ConfigPickerMove(1)
+        ));
+        assert!(matches!(
+            route_config_key(&s, pick_key(KeyCode::Enter)),
+            Action::ConfigPickerSelect
+        ));
+        assert!(matches!(
+            route_config_key(&s, pick_key(KeyCode::Esc)),
+            Action::ConfigPickerBack
+        ));
+        assert!(matches!(
+            route_config_key(&s, pick_key(KeyCode::Left)),
+            Action::ConfigPickerBack
+        ));
     }
 
     #[test]
@@ -785,23 +845,22 @@ mod tests {
         s.config_section = 0;
         s.config_field = 0;
 
-        // Bool field: Enter toggles, and so do Left/Right (value control).
+        // Bool field: Enter and Right both toggle (act-on-field); Left is inert
+        // (only Right/Enter act on the focused field now).
         assert!(matches!(
             route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)),
-            Action::ConfigToggle
-        ));
-        assert!(matches!(
-            route_key(&s, key(KeyCode::Left, KeyModifiers::NONE)),
             Action::ConfigToggle
         ));
         assert!(matches!(
             route_key(&s, key(KeyCode::Right, KeyModifiers::NONE)),
             Action::ConfigToggle
         ));
+        assert!(matches!(
+            route_key(&s, key(KeyCode::Left, KeyModifiers::NONE)),
+            Action::Noop
+        ));
 
-        // Pick field (provider): Left/Right are inert pre-Task-6 (the picker
-        // opens via Enter; Task 6 rewires Left/Right for in-place stepping if
-        // any). This only pins today's compiled behavior post-Cycle-removal.
+        // Pick field (provider): Right/Enter drill the picker open; Left is inert.
         s.config_sections = vec![Section {
             title: "Provider & Model".into(),
             rows: vec![FieldRow {
@@ -814,7 +873,11 @@ mod tests {
         }];
         assert!(matches!(
             route_key(&s, key(KeyCode::Right, KeyModifiers::NONE)),
-            Action::Noop
+            Action::ConfigDrillOpen
+        ));
+        assert!(matches!(
+            route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)),
+            Action::ConfigDrillOpen
         ));
         assert!(matches!(
             route_key(&s, key(KeyCode::Left, KeyModifiers::NONE)),

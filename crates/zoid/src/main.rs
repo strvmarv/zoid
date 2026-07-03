@@ -1394,6 +1394,13 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 }
             }
         }
+        // Picker drill/move/select/back stubs — Task 7 wires these up to
+        // ShellState::{config_col, config_picker, config_picker_sel,
+        // config_picker_open}; route_config_key (Task 6) already emits them.
+        Action::ConfigDrillOpen => {}
+        Action::ConfigPickerMove(_) => {}
+        Action::ConfigPickerSelect => {}
+        Action::ConfigPickerBack => {}
         Action::ConfigSaveToRepo => {
             use zoid_tui::config_view::FieldKind;
             if let Some((label, kind)) = current_config_field(app) {
