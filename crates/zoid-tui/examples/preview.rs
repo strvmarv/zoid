@@ -47,6 +47,7 @@ fn seeded_objects() -> Vec<ChatMsg> {
             name: "read_file".into(),
             output: "fn parse() {}\nstruct Ast {}\n".into(),
             is_error: false,
+            compacted: false,
             ts: 0,
         },
         ChatMsg::ToolResult {
@@ -54,6 +55,7 @@ fn seeded_objects() -> Vec<ChatMsg> {
             name: "shell".into(),
             output: "FAILED\n".into(),
             is_error: true,
+            compacted: false,
             ts: 0,
         },
     ]
@@ -76,6 +78,7 @@ fn seeded_economy() -> EconomyView {
         heat,
         pinned,
         evicted: false,
+        compacted: false,
     };
     let w = ContextWindow {
         items: vec![

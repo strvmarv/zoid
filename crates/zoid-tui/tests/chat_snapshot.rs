@@ -71,6 +71,7 @@ fn tool_call_and_result_frame() {
             name: "read_file".into(),
             output: "file body".into(),
             is_error: false,
+            compacted: false,
             ts: 0,
         },
         ChatMsg::Assistant {
@@ -103,6 +104,7 @@ fn tool_error_result_frame() {
             name: "shell".into(),
             output: "boom\n[exit 1]".into(),
             is_error: true,
+            compacted: false,
             ts: 0,
         },
         ChatMsg::Assistant {

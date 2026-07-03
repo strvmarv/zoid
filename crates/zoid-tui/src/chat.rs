@@ -731,6 +731,7 @@ mod tests {
                 name: "read_file".into(),
                 output: "fn parse(s: &str) -> u32 {\n    let n = 42;\n    n\n}\n".into(),
                 is_error: false,
+                compacted: false,
                 ts: 0,
             },
             ChatMsg::User {

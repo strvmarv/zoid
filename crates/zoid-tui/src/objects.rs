@@ -147,6 +147,7 @@ mod tests {
                 name: "read_file".into(),
                 output: "fn parse() {}\nstruct Ast {}\n".into(),
                 is_error: false,
+                compacted: false,
                 ts: 0,
             },
             ChatMsg::Assistant {
@@ -163,6 +164,7 @@ mod tests {
                 name: "shell".into(),
                 output: "FAILED\n[exit 1]".into(),
                 is_error: true,
+                compacted: false,
                 ts: 0,
             },
         ]
@@ -208,6 +210,7 @@ mod tests {
                 name: "shell".into(),
                 output: "a\nb".into(),
                 is_error: false,
+                compacted: false,
                 ts: 0,
             },
         ];
@@ -266,6 +269,7 @@ mod tests {
                 name: "read_file".into(),
                 output: "fn old() {}\n".into(),
                 is_error: false,
+                compacted: false,
                 ts: 0,
             },
             ChatMsg::Assistant {
@@ -278,6 +282,7 @@ mod tests {
                 name: "read_file".into(),
                 output: "fn renamed() {}\n".into(),
                 is_error: false,
+                compacted: false,
                 ts: 0,
             },
         ];

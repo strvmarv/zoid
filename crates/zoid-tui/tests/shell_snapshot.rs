@@ -79,6 +79,7 @@ fn seeded_economy() -> EconomyView {
         heat,
         pinned,
         evicted: false,
+        compacted: false,
     };
     // Items span kinds (ToolResult / File / Message), not files-only — mirrors
     // docs/ux/chat-mode.html and what context_window() actually produces in P3.
@@ -370,6 +371,7 @@ fn long_economy_label_truncates_with_ellipsis() {
             heat: Heat::Hot,
             pinned: false,
             evicted: false,
+            compacted: false,
         }],
         total_tokens: 9000,
     };
@@ -420,6 +422,7 @@ fn seeded_detail() -> Vec<ChatMsg> {
             name: "read_file".into(),
             output: "fn parse(s: &str) -> u32 {\n    let n = 42;\n    n\n}\n".into(),
             is_error: false,
+            compacted: false,
             ts: 0,
         },
     ]
@@ -495,6 +498,7 @@ fn seeded_objects() -> Vec<ChatMsg> {
             name: "read_file".into(),
             output: "fn parse() {}\nstruct Ast {}\n".into(),
             is_error: false,
+            compacted: false,
             ts: 0,
         },
         ChatMsg::ToolResult {
@@ -502,6 +506,7 @@ fn seeded_objects() -> Vec<ChatMsg> {
             name: "shell".into(),
             output: "FAILED\n".into(),
             is_error: true,
+            compacted: false,
             ts: 0,
         },
     ]
