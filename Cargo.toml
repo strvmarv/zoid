@@ -25,7 +25,11 @@ tui-textarea = "0.7"
 proptest = "1"
 insta = "1"
 tempfile = "3"
-git2 = "0.19"
+# default-features disabled: zoid uses git2 only for LOCAL repo introspection
+# (open/status/worktrees), never network git. The default `https`/`ssh`
+# transports drag in openssl-sys + libssh2-sys, which fail to cross-compile for
+# the static-musl release target. Dropping them keeps the musl build clean.
+git2 = { version = "0.19", default-features = false }
 toml = "0.8"
 chacha20poly1305 = "0.10"
 rand = "0.8"
