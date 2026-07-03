@@ -482,6 +482,28 @@ impl App {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    match zoid::cli::parse_args(std::env::args().skip(1)) {
+        zoid::cli::Cli::Version => {
+            println!("{}", zoid::cli::version_string());
+            return Ok(());
+        }
+        zoid::cli::Cli::Help => {
+            println!("{}", zoid::cli::help_text());
+            return Ok(());
+        }
+        zoid::cli::Cli::Update => {
+            return zoid::update::run().await;
+        }
+        zoid::cli::Cli::Unknown(arg) => {
+            eprintln!(
+                "zoid: unrecognized argument '{arg}'\n\n{}",
+                zoid::cli::help_text()
+            );
+            std::process::exit(2);
+        }
+        zoid::cli::Cli::Run => {}
+    }
+
     let path = db_path()?;
     let root = repo_root();
     // One-time legacy import (pre-release): ./.zoid/session.db → new global DB.

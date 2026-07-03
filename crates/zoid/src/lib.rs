@@ -2,6 +2,7 @@
 //! and exercised by integration tests against a fake provider (spec §13).
 
 pub mod agent;
+pub mod cli;
 pub mod subagent;
 pub mod update;
 pub mod worktree;
