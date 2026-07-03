@@ -20,3 +20,5 @@ windows-archive = ".zip"
 create-release = false
 # Where the shell/PowerShell installer scripts install the binary.
 install-path = "CARGO_HOME"
+# Custom publish job: lands the Release in the public strvmarv/zoid-releases repo.
+publish-jobs = ["./publish-public"]

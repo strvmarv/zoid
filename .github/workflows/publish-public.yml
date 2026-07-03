@@ -1,0 +1,59 @@
+name: publish-public
+
+# Invoked by cargo-dist's publish stage (dist-workspace.toml: publish-jobs =
+# ["./publish-public"]). cargo-dist calls this as a reusable workflow (a
+# `custom-publish-public` job in the dist-generated .github/workflows/release.yml)
+# after the "host" job completes, passing the JSON dist-manifest via the `plan`
+# input and `secrets: inherit`.
+#
+# Artifact handoff: cargo-dist does NOT hand built artifacts to custom publish
+# jobs through the `plan` input or any single named bundle. Every earlier job in
+# the SAME workflow run (build-local-artifacts, build-global-artifacts, host)
+# uploads its outputs via `actions/upload-artifact` under names prefixed
+# `artifacts-*` (e.g. `artifacts-build-local-<target>`, `artifacts-build-global`,
+# `artifacts-dist-manifest`). The dist-generated "host" job in this same
+# release.yml fetches them with:
+#   uses: actions/download-artifact@v8
+#   with: { pattern: artifacts-*, path: target/distrib/, merge-multiple: true }
+# This job mirrors that exact, empirically-confirmed mechanism (verified by
+# inspecting this repo's own `dist generate`-d release.yml) since it runs as
+# part of the same workflow run and those artifacts are still available.
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  publish-public:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Download built artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: artifacts-*
+          path: dist-artifacts
+          merge-multiple: true
+
+      - name: Publish release to public repo
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Drop dist's own bookkeeping manifests — only ship real release assets
+          # (archives, sha256.sum, per-artifact .sha256, installer scripts).
+          rm -f dist-artifacts/*dist-manifest.json
+          # Prefer a curated NOTES.md if present; else a minimal generated body.
+          if [ -f NOTES.md ]; then NOTES_ARG=(--notes-file NOTES.md); else NOTES_ARG=(--notes "zoid ${TAG}"); fi
+          gh release create "$TAG" \
+            --repo strvmarv/zoid-releases \
+            --title "$TAG" \
+            "${NOTES_ARG[@]}" \
+            dist-artifacts/*
