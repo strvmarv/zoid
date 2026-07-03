@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2
+
+Release-pipeline hardening (no functional binary changes).
+- The byproduct GitHub release in the private source repo is now auto-deleted after each release (its git tag is kept); anonymous users only ever see the public releases repo with working install URLs.
+
 ## 0.1.1
 
 Release-pipeline fix (no functional binary changes).
