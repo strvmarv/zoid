@@ -51,7 +51,7 @@ pub fn chat_turn_config() -> TurnConfig {
 }
 
 /// Max tool rounds per user message before the loop force-ends (safety leash).
-pub const MAX_TOOL_ITERATIONS: u32 = 25;
+pub const MAX_TOOL_ITERATIONS: u32 = 50;
 
 /// The user's answer to an `ask_user` prompt.
 pub enum Answer {
