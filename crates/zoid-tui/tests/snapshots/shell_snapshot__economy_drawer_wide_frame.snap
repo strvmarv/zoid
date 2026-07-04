@@ -10,7 +10,7 @@ expression: "draw_econ(&s, &seeded_economy(), &seeded(), 140, 24)"
 "                                                                                              █ ╭ ▾ session ──────────────────────────────╮ "
 "                                                                                              █ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(98, " ")]
 "                                                                                              █ │🤖  ·                                    │ " Hidden by multi-width symbols: [(98, " ")]
-"                                                                                              █ │⌚ dur 0m   tok 0   cac n/a              │ " Hidden by multi-width symbols: [(98, " ")]
+"                                                                                              █ │⌚ dur 0m   tok/cac 0                    │ " Hidden by multi-width symbols: [(98, " ")]
 "                                                                                              █ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(98, " ")]
 "                                                                                              █ ╰─────────────────────────────────────────╯ "
 "                                                                                              █                                             "

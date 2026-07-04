@@ -11,7 +11,7 @@ expression: "draw(&s, &items)"
 "                                                      █ ╭ ▾ session ──────────────────────────────╮ "
 "                                                      █ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
-"                                                      █ │⌚ dur 0m   tok 0   cac n/a              │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ │⌚ dur 0m   tok/cac 0                    │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ │📁 cwd                                   │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ ╰─────────────────────────────────────────╯ "

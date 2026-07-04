@@ -10,7 +10,7 @@ expression: "draw(&s, &seeded(), 100, 24)"
 "│ ✎ Rename session…  rename the current thread  :renam│ ╭ ▾ session ──────────────────────────────╮ "
 "│MODE                                                 │ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
 "│ ⇢ Switch to Build  continue this conversation into t│ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
-"│BRANCH ⎇                                             │ │⌚ dur 0m   tok 0   cac n/a              │ " Hidden by multi-width symbols: [(58, " ")]
+"│BRANCH ⎇                                             │ │⌚ dur 0m   tok/cac 0                    │ " Hidden by multi-width symbols: [(58, " ")]
 "│ ⎇ Fork from here  new branch at this turn  :fork    │ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
 "│ ⤺ Undo last turn  move head back  u                 │ ╰─────────────────────────────────────────╯ "
 "│CONTEXT                                              │                                             "

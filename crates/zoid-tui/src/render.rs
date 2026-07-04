@@ -511,20 +511,34 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
                 format!("{}   ", state.duration),
                 Style::new().fg(color::TXT),
             ),
-            Span::styled("tok ", Style::new().fg(color::DIM)),
             Span::styled(
-                format!("{}   ", human_tokens(state.session_tokens)),
-                Style::new().fg(color::TXT),
-            ),
-            Span::styled("cac ", Style::new().fg(color::DIM)),
-            Span::styled(
-                if state.cache_supported {
-                    human_tokens(state.cached_tokens)
-                } else {
-                    "n/a".to_string()
-                },
+                if state.cache_supported { "tok " } else { "tok/cac " },
                 Style::new().fg(color::DIM),
             ),
+            Span::styled(
+                format!(
+                    "{}   ",
+                    if state.cache_supported {
+                        human_tokens(state.session_tokens)
+                    } else {
+                        human_tokens(state.session_tokens + state.cached_tokens)
+                    }
+                ),
+                Style::new().fg(color::TXT),
+            ),
+            if state.cache_supported {
+                Span::styled("cac ", Style::new().fg(color::DIM))
+            } else {
+                Span::styled("", Style::new())
+            },
+            if state.cache_supported {
+                Span::styled(
+                    human_tokens(state.cached_tokens),
+                    Style::new().fg(color::TXT),
+                )
+            } else {
+                Span::styled("", Style::new())
+            },
         ]),
         {
             let mut spans = vec![
