@@ -28,7 +28,7 @@ pub const REPO_BODY_ROWS: u16 = 3;
 pub const SESSION_BODY_ROWS: u16 = 5;
 /// Context drawer body rows: items + the churn/cache sparkline line (the manual
 /// evict toggle and token-budget line were removed — observe-only drawer).
-pub const CONTEXT_BODY_ROWS: u16 = 5;
+pub const CONTEXT_BODY_ROWS: u16 = 7;
 /// Tasks drawer body rows: up to a handful of the model's current tasks.
 pub const TASKS_BODY_ROWS: u16 = 5;
 /// Message-box max content rows before it stops growing and scrolls internally

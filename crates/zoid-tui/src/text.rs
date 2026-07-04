@@ -34,6 +34,44 @@ pub(crate) fn truncate(s: &str, max: usize) -> String {
     out
 }
 
+/// Truncate the *beginning* of `s` to at most `max` display columns, keeping
+/// the end (where the most pertinent info lives, e.g. a file path's filename)
+/// and marking the cut with the §16 ellipsis glyph. Never splits a glyph;
+/// the result's display width is always `<= max`.
+pub(crate) fn truncate_start(s: &str, max: usize) -> String {
+    if UnicodeWidthStr::width(s) <= max {
+        return s.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let budget = max - 1; // reserve one column for the leading ellipsis
+    let total = UnicodeWidthStr::width(s);
+    let need_to_drop = total.saturating_sub(budget);
+    // Walk forward, dropping glyphs until we've shed enough display width.
+    let mut dropped = 0usize;
+    let mut rest = s;
+    for (i, ch) in s.char_indices() {
+        if dropped >= need_to_drop {
+            rest = &s[i..];
+            break;
+        }
+        dropped += UnicodeWidthChar::width(ch).unwrap_or(0);
+    }
+    // If the remaining text is still too wide (a wide glyph straddled the
+    // boundary), trim trailing glyphs until it fits.
+    let mut out = format!("{}{}", glyph::ELLIPSIS, rest);
+    while UnicodeWidthStr::width(out.as_str()) > max {
+        // Remove the last char and retry.
+        if let Some(_) = out.pop() {
+            // popped one char; re-check width
+        } else {
+            break;
+        }
+    }
+    out
+}
+
 /// Format an epoch-millis timestamp as 24-hour `HH:MM` (no date), shifted by
 /// `tz_offset_secs` (local UTC offset, supplied by the bin). Pure integer math —
 /// no timezone library, so snapshots stay reproducible by passing offset 0.
@@ -102,6 +140,40 @@ mod tests {
         let two = truncate("😀xyz", 2);
         assert!(UnicodeWidthStr::width(two.as_str()) <= 2);
         assert_eq!(two, glyph::ELLIPSIS.to_string());
+    }
+
+    #[test]
+    fn truncate_start_keeps_end() {
+        // "src/main.rs" is 11 cols; max 10 → budget 9 → drop 2 cols ("sr") → "…c/main.rs"
+        assert_eq!(truncate_start("src/main.rs", 10), "…c/main.rs");
+        assert_eq!(UnicodeWidthStr::width(truncate_start("src/main.rs", 10).as_str()), 10);
+        // Longer path: the filename at the end is preserved.
+        let long = "crates/zoid-tui/src/render.rs";
+        let out = truncate_start(long, 20);
+        assert!(out.ends_with("render.rs"));
+        assert!(out.starts_with(glyph::ELLIPSIS));
+    }
+
+    #[test]
+    fn truncate_start_short_string_untouched() {
+        assert_eq!(truncate_start("abc", 10), "abc");
+    }
+
+    #[test]
+    fn truncate_start_max_zero_is_empty() {
+        assert_eq!(truncate_start("abc", 0), "");
+    }
+
+    #[test]
+    fn truncate_start_respects_display_width() {
+        let s = "a/very/deeply/nested/path/file.rs";
+        for max in 1..=40 {
+            let out = truncate_start(s, max);
+            assert!(
+                UnicodeWidthStr::width(out.as_str()) <= max,
+                "truncate_start({s:?}, {max}) = {out:?} exceeded {max} cols"
+            );
+        }
     }
 
     #[test]

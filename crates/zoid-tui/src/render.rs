@@ -339,7 +339,7 @@ fn render_rail(
 
 fn render_economy_body(frame: &mut Frame, econ: &EconomyView, area: Rect, rail_focused: bool) {
     use crate::economy_view::{heat_bar, heat_color, tail};
-    use crate::text::{pad_to, truncate};
+    use crate::text::{pad_to, truncate_start};
     let mut lines: Vec<Line> = Vec::new();
     let max_rows = area.height.saturating_sub(1) as usize; // leave room for the churn/cache line
     let shown = econ.rows.iter().take(max_rows);
@@ -371,7 +371,7 @@ fn render_economy_body(frame: &mut Frame, econ: &EconomyView, area: Rect, rail_f
         } else {
             Style::new()
         };
-        let label = pad_to(&truncate(&r.label, label_budget), label_budget);
+        let label = pad_to(&truncate_start(&r.label, label_budget), label_budget);
         let mut spans = vec![
             Span::styled(
                 format!("{marker} {label} {:>tok_w$} ", r.tokens),

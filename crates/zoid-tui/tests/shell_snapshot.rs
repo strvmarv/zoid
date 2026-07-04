@@ -398,8 +398,12 @@ fn long_economy_label_truncates_with_ellipsis() {
         "long label must be truncated with the ellipsis glyph"
     );
     assert!(
-        !out.contains("OverflowTheRail"),
-        "the truncated tail must not render"
+        !out.contains("AVeryLongContextLabel"),
+        "the truncated head must not render"
+    );
+    assert!(
+        out.contains("OverflowTheRail"),
+        "the tail (most pertinent info) must be preserved"
     );
     assert!(
         out.contains("9k"),
