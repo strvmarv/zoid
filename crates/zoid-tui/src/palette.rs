@@ -270,7 +270,10 @@ mod tests {
 
     #[test]
     fn arg_kind_for_flags_only_parameterized_commands() {
-        assert_eq!(arg_kind_for(&Command::RenameSession(String::new())), Some(ArgKind::Rename));
+        assert_eq!(
+            arg_kind_for(&Command::RenameSession(String::new())),
+            Some(ArgKind::Rename)
+        );
         assert_eq!(arg_kind_for(&Command::ShowOverview), None);
         assert_eq!(arg_kind_for(&Command::Quit), None);
         assert_eq!(arg_kind_for(&Command::NewSession), None);
