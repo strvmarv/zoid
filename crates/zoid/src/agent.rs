@@ -672,6 +672,62 @@ async fn run_turn_inner(
                         }
                     }
                 }
+                Some(zoid_tools::ToolKind::Emitting) if tc.name == "recall" => {
+                    let query = tc
+                        .args
+                        .get("query")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let limit = tc.args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+                    let hits = session.recall(query, limit).await.unwrap_or_default();
+                    // Re-admit any currently-evicted originals so they re-enter the projection.
+                    let live_evicted = zoid_core::eviction::evicted_ids(&events);
+                    let readmit: Vec<Ulid> = hits
+                        .iter()
+                        .map(|e| e.id)
+                        .filter(|id| live_evicted.contains(id))
+                        .collect();
+                    if !readmit.is_empty() {
+                        emit(
+                            &session,
+                            &mut events,
+                            ui,
+                            &config.branch,
+                            EventKind::TurnsReadmitted { ids: readmit },
+                            session_id,
+                            now,
+                        )
+                        .await?;
+                    }
+                    let rendered = render_recalled(&hits);
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::ToolResult {
+                            id: tc.id,
+                            name: tc.name,
+                            output: if rendered.is_empty() {
+                                "[recall: no matches]".into()
+                            } else {
+                                rendered
+                            },
+                            is_error: false,
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                    tracing::info!(
+                        kind = "tool",
+                        name = "recall",
+                        ms = tool_start.elapsed().as_millis() as u64,
+                        ok = true,
+                        "tool executed"
+                    );
+                }
                 Some(zoid_tools::ToolKind::Interactive) if tc.name == "ask_user" => {
                     let question = tc
                         .args
@@ -856,6 +912,20 @@ async fn emit(
     now: fn() -> i64,
 ) -> Result<()> {
     emit_with_tokens(session, events, ui, branch, kind, None, session_id, now).await
+}
+
+/// Render recalled events into readable text for the recall tool-result.
+fn render_recalled(events: &[Event]) -> String {
+    let mut out = String::new();
+    for e in events {
+        match &e.kind {
+            EventKind::UserMessage { text } => out.push_str(&format!("[user] {text}\n")),
+            EventKind::AssistantMessage { text } => out.push_str(&format!("[assistant] {text}\n")),
+            EventKind::ToolResult { name, output, .. } => out.push_str(&format!("[{name}] {output}\n")),
+            _ => {}
+        }
+    }
+    out.trim_end().to_string()
 }
 
 /// Record `ToolResultCompacted` events for any tool-results the policy says
@@ -1293,5 +1363,41 @@ mod tests {
         assert!(!out.iter().any(|e| matches!(&e.kind, EventKind::AssistantMessage { text } if text.starts_with(WARN_GLYPH))), "context error must not surface");
         // … and the retry reached the second, successful stream.
         assert!(out.iter().any(|e| matches!(&e.kind, EventKind::ModelDelta { text } if text == "recovered")), "retry must reach the successful stream");
+    }
+
+    #[tokio::test]
+    async fn recall_tool_readmits_and_returns_content() {
+        use zoid_provider::{ProviderEvent, ToolCall};
+        use zoid_core::event::{Event, EventKind, EvictionMarker};
+        use zoid_core::projection::{conversation, ChatMsg};
+        use ulid::Ulid;
+        use serde_json::json;
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        // Seed: an evicted user turn (indexed in the store at append) + a recent turn + the marker.
+        let e1 = Event::new(Ulid::from(1u128), None, 1, EventKind::UserMessage { text: "configure the vector backend".into() });
+        let e2 = Event::new(Ulid::from(2u128), None, 2, EventKind::UserMessage { text: "recent question".into() });
+        let evicted = Event::new(Ulid::from(9u128), None, 9, EventKind::TurnsEvicted {
+            ids: vec![Ulid::from(1u128)], reclaimed_tokens: 10, marker: EvictionMarker { spans: vec![] },
+        });
+        for e in [&e1, &e2, &evicted] { session.append(e.clone()).await.unwrap(); }
+        let seed = vec![e1.clone(), e2.clone(), evicted.clone()];
+        // Initially the evicted turn is NOT in the projection.
+        assert!(!conversation(&seed).iter().any(|m| matches!(m, ChatMsg::User { text, .. } if text.contains("vector backend"))));
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![ProviderEvent::ToolCall(ToolCall { id: "r1".into(), name: "recall".into(), args: json!({"query": "vector"}) }), ProviderEvent::Done],
+            vec![ProviderEvent::TextDelta("thanks".into()), ProviderEvent::Done],
+        ]));
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin())));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let out = run_agent_turn(chat_turn_config(), provider, tools, std::sync::Arc::new(zoid_tools::AllowAll), session, seed, "m".into(), tx, Ulid::new(), || 0).await.unwrap();
+
+        // Re-admission event for the evicted id …
+        assert!(out.iter().any(|e| matches!(&e.kind, EventKind::TurnsReadmitted { ids } if ids.contains(&Ulid::from(1u128)))));
+        // … the recall ToolResult carries the retrieved content …
+        assert!(out.iter().any(|e| matches!(&e.kind, EventKind::ToolResult { name, output, .. } if name == "recall" && output.contains("vector backend"))));
+        // … and the turn is back in the projection.
+        assert!(conversation(&out).iter().any(|m| matches!(m, ChatMsg::User { text, .. } if text.contains("vector backend"))));
     }
 }

@@ -86,6 +86,7 @@ fn body_with_anchor(skill: &zoid_core::skill::Skill) -> String {
 pub fn chat_tools(skills: Arc<SkillRegistry>) -> Vec<Box<dyn Tool>> {
     let mut tools = zoid_tools::registry();
     tools.push(Box::new(InvokeSkillTool::new(skills)));
+    tools.push(Box::new(zoid_tools::recall::Recall));
     tools
 }
 
