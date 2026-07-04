@@ -3,7 +3,7 @@
 
 use crate::assembler::ContextPolicy;
 use crate::context::{context_window, tool_id_of, ItemKind};
-use crate::economy::estimate_tokens;
+use crate::economy::{estimate_tokens, tool_path};
 use crate::event::{Event, EventKind};
 use std::collections::{HashMap, HashSet};
 
@@ -65,6 +65,52 @@ pub fn plan_compactions(
         }
     }
 
+    // Map file paths to their latest tool-result id (for the done/already-compacted check).
+    let mut path_id_of: HashMap<String, String> = HashMap::new();
+    {
+        let mut call_path: HashMap<String, String> = HashMap::new();
+        for e in events {
+            match &e.kind {
+                EventKind::ToolCall { id, args, .. } => {
+                    if let Some(p) = tool_path(args) {
+                        call_path.insert(id.clone(), p);
+                    }
+                }
+                EventKind::ToolResult { id, .. } => {
+                    if let Some(p) = call_path.get(id) {
+                        path_id_of.insert(p.clone(), id.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Map file paths to their latest tool-result output (for File items whose
+    // key is "file:{path}", not "tool:{name}:{id}"). Correlates ToolCall args
+    // (which carry the path) to the paired ToolResult id → output.
+    let mut path_output_of: HashMap<String, &str> = HashMap::new();
+    {
+        let mut call_path: HashMap<String, String> = HashMap::new(); // tool id → path
+        for e in events {
+            match &e.kind {
+                EventKind::ToolCall { id, args, .. } => {
+                    if let Some(p) = tool_path(args) {
+                        call_path.insert(id.clone(), p);
+                    }
+                }
+                EventKind::ToolResult {
+                    id, output, is_error: false, ..
+                } => {
+                    if let Some(p) = call_path.get(id) {
+                        path_output_of.insert(p.clone(), output.as_str());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     let mut running = current;
     let mut out: Vec<Compaction> = Vec::new();
     for it in &window.items {
@@ -78,11 +124,29 @@ pub fn plan_compactions(
         let Some(id) = tool_id_of(&it.key) else {
             continue;
         };
-        if done.contains(id) {
+        // For File items, the tool call id is looked up from the path.
+        let tool_call_id = if it.kind == ItemKind::File {
+            path_id_of.get(id).map(|s| s.as_str())
+        } else {
+            Some(id)
+        };
+        // Check if already compacted.
+        if tool_call_id.is_some_and(|tid| done.contains(tid)) {
             continue;
         }
-        let Some(output) = output_of.get(id) else {
-            continue;
+        // For File items, `id` is the path (key is "file:{path}"); for
+        // ToolResult items, `id` is the tool call id (key is "tool:{name}:{id}").
+        let output = if it.kind == ItemKind::File {
+            path_output_of.get(id)
+        } else {
+            None
+        };
+        let output = match output {
+            Some(o) => *o,
+            None => match output_of.get(id) {
+                Some(o) => *o,
+                None => continue,
+            },
         };
         let summary = compact_tool_output(output, COMPACT_HEAD_LINES);
         let summary_tokens = estimate_tokens(&summary);
@@ -91,7 +155,7 @@ pub fn plan_compactions(
         }
         running -= it.tokens - summary_tokens;
         out.push(Compaction {
-            id: id.to_string(),
+            id: tool_call_id.unwrap_or(id).to_string(),
             summary,
             original_tokens: it.tokens,
         });
