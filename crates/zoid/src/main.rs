@@ -1979,9 +1979,12 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 }
             }
             zoid_tui::state::PaletteStage::Arg { kind, input } => {
-                // Empty argument is a no-op (cannot rename to empty); stay in Arg.
-                if !input.is_empty() {
-                    let cmd = kind.build(input);
+                // Blank argument (empty or whitespace-only) is a no-op — cannot
+                // rename to empty; stay in Arg. Trim so a padded entry stores a
+                // clean name.
+                let trimmed = input.trim();
+                if !trimmed.is_empty() {
+                    let cmd = kind.build(trimmed.to_string());
                     app.shell.close_overlay();
                     return exec_command(app, cmd).await;
                 }
