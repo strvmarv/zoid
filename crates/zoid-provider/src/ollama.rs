@@ -108,7 +108,7 @@ pub fn parse_line(line: &str) -> Vec<ProviderEvent> {
                 if name.is_empty() {
                     continue;
                 }
-                let args = func.get("arguments").cloned().unwrap_or(Value::Null);
+                let args = coerce_tool_args(func.get("arguments"));
                 let id = call
                     .get("id")
                     .and_then(|i| i.as_str())
@@ -119,25 +119,47 @@ pub fn parse_line(line: &str) -> Vec<ProviderEvent> {
         }
     }
     // Token accounting: the native /api/chat final frame carries
-    // `prompt_eval_count` (input tokens) and `eval_count` (output tokens). Emit
-    // a Usage event whenever either is present so the economy ledger reflects
-    // real spend — this is the Ollama counterpart to the Anthropic provider's
-    // `usage` parsing, and the only reason the session "tok" line is non-zero
-    // on Ollama. Ordered before Done: the agent loop accumulates Usage during
-    // the stream and records it when the turn ends.
-    let input = v.get("prompt_eval_count").and_then(|n| n.as_u64());
-    let output = v.get("eval_count").and_then(|n| n.as_u64());
-    if input.is_some() || output.is_some() {
-        out.push(ProviderEvent::Usage(Usage {
-            input_tokens: input.unwrap_or(0),
-            output_tokens: output.unwrap_or(0),
-            cached: 0, // native /api/chat has no token-level prompt cache
-        }));
-    }
-    if v.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
+    // `prompt_eval_count` (input tokens) and `eval_count` (output tokens) as a
+    // single cumulative snapshot. Emit Usage ONLY on that final (`done`) frame:
+    // `ProviderEvent::Usage` is an additive delta the agent sums, so emitting it
+    // only once here keeps the economy ledger from double-counting. Ordered
+    // before Done: the agent accumulates Usage during the stream and records it
+    // when the turn ends.
+    let is_done = v.get("done").and_then(|d| d.as_bool()).unwrap_or(false);
+    if is_done {
+        let input = v.get("prompt_eval_count").and_then(|n| n.as_u64());
+        let output = v.get("eval_count").and_then(|n| n.as_u64());
+        if input.is_some() || output.is_some() {
+            out.push(ProviderEvent::Usage(Usage {
+                input_tokens: input.unwrap_or(0),
+                output_tokens: output.unwrap_or(0),
+                cached: 0, // native /api/chat has no token-level prompt cache
+            }));
+        }
         out.push(ProviderEvent::Done);
     }
     out
+}
+
+/// Coerce a tool-call `arguments` field into a usable arguments value. Ollama
+/// family models are inconsistent: some send a JSON object, some a JSON-encoded
+/// string, some omit it entirely. A string is parsed as JSON (falling back to
+/// `{}` when it isn't valid JSON); an object is kept as-is; anything else
+/// (absent, `null`, or a bare scalar/array) becomes `{}` — tool dispatch always
+/// expects an object, so a missing/garbage payload is safer as empty than as
+/// `Null` (which downstream would have to special-case).
+fn coerce_tool_args(raw: Option<&Value>) -> Value {
+    match raw {
+        // A JSON-encoded string must decode to an object to be usable as args;
+        // anything else (invalid JSON, or valid JSON that isn't an object like
+        // "[1,2]"/"42") falls back to {}.
+        Some(Value::String(s)) => serde_json::from_str::<Value>(s)
+            .ok()
+            .filter(Value::is_object)
+            .unwrap_or_else(|| json!({})),
+        Some(v @ Value::Object(_)) => v.clone(),
+        _ => json!({}),
+    }
 }
 
 /// Extract model names from an Ollama `/api/tags` response body. Lenient:
@@ -586,6 +608,18 @@ mod tests {
     }
 
     #[test]
+    fn counts_on_a_non_final_frame_do_not_emit_usage() {
+        // Only the terminal `done` frame carries token counts. If a non-final
+        // frame ever includes them they must NOT emit Usage — it's summed by the
+        // agent, so a stray emission would double-count. Content still surfaces.
+        let line = r#"{"message":{"role":"assistant","content":"hi"},"done":false,"prompt_eval_count":100,"eval_count":50}"#;
+        assert_eq!(
+            parse_line(line),
+            vec![ProviderEvent::TextDelta("hi".into())]
+        );
+    }
+
+    #[test]
     fn error_line_yields_error() {
         assert_eq!(
             parse_line(r#"{"error":"Unauthorized"}"#),
@@ -609,6 +643,56 @@ mod tests {
                 id: "".into(),
                 name: "read_file".into(),
                 args: json!({"path": "a.txt"})
+            })]
+        );
+    }
+
+    #[test]
+    fn tool_call_arguments_encoded_as_string_are_parsed() {
+        // Some models emit `arguments` as a JSON-encoded string rather than an
+        // object; it must be decoded to the object so dispatch sees real args.
+        let line = r#"{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"read_file","arguments":"{\"path\":\"a.txt\"}"}}]},"done":false}"#;
+        assert_eq!(
+            parse_line(line),
+            vec![ProviderEvent::ToolCall(ToolCall {
+                id: "".into(),
+                name: "read_file".into(),
+                args: json!({"path": "a.txt"})
+            })]
+        );
+    }
+
+    #[test]
+    fn tool_call_missing_or_garbage_arguments_default_to_empty_object() {
+        // Missing arguments → {}.
+        let missing = r#"{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"list_dir"}}]},"done":false}"#;
+        assert_eq!(
+            parse_line(missing),
+            vec![ProviderEvent::ToolCall(ToolCall {
+                id: "".into(),
+                name: "list_dir".into(),
+                args: json!({})
+            })]
+        );
+        // A non-JSON string → {} (rather than an unusable raw string).
+        let garbage = r#"{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"list_dir","arguments":"not json"}}]},"done":false}"#;
+        assert_eq!(
+            parse_line(garbage),
+            vec![ProviderEvent::ToolCall(ToolCall {
+                id: "".into(),
+                name: "list_dir".into(),
+                args: json!({})
+            })]
+        );
+        // A string that decodes to valid-but-non-object JSON → {} (tools take
+        // object args; an array/scalar is unusable).
+        let non_object = r#"{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"list_dir","arguments":"[1,2]"}}]},"done":false}"#;
+        assert_eq!(
+            parse_line(non_object),
+            vec![ProviderEvent::ToolCall(ToolCall {
+                id: "".into(),
+                name: "list_dir".into(),
+                args: json!({})
             })]
         );
     }

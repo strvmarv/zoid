@@ -129,6 +129,12 @@ pub struct ToolCall {
 pub enum ProviderEvent {
     TextDelta(String),
     ToolCall(ToolCall),
+    /// An **additive** usage delta. The agent loop sums every `Usage` event in a
+    /// sub-turn, so a provider must emit each token dimension exactly once, or as
+    /// disjoint deltas — never a running cumulative total on every chunk, which
+    /// would double-count under summation. Anthropic reports input on
+    /// `message_start` and output on `message_delta` (two disjoint events);
+    /// Ollama emits a single cumulative snapshot on its final frame only.
     Usage(Usage),
     Done,
     Error(String),

@@ -12,11 +12,11 @@ enum Cmd {
         reply: oneshot::Sender<Result<()>>,
     },
     Snapshot {
-        reply: oneshot::Sender<Vec<Event>>,
+        reply: oneshot::Sender<Result<Vec<Event>>>,
     },
     SnapshotSession {
         session_id: Ulid,
-        reply: oneshot::Sender<Vec<Event>>,
+        reply: oneshot::Sender<Result<Vec<Event>>>,
     },
     NewSession {
         id: Ulid,
@@ -67,11 +67,13 @@ impl SessionHandle {
                         let _ = reply.send(store.append(&event));
                     }
                     Cmd::Snapshot { reply } => {
-                        let snap = store.load_all().unwrap_or_default();
-                        let _ = reply.send(snap);
+                        // Propagate read failures (corruption, disk error) instead
+                        // of masking them as an empty log — an empty snapshot and a
+                        // failed read are very different to the caller.
+                        let _ = reply.send(store.load_all());
                     }
                     Cmd::SnapshotSession { session_id, reply } => {
-                        let _ = reply.send(store.load_session(session_id).unwrap_or_default());
+                        let _ = reply.send(store.load_session(session_id));
                     }
                     Cmd::NewSession {
                         id,
@@ -128,7 +130,7 @@ impl SessionHandle {
             .await
             .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
         rx.await
-            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
     }
 
     /// An ordered, immutable snapshot of one session's events.
@@ -139,7 +141,7 @@ impl SessionHandle {
             .await
             .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
         rx.await
-            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
     }
 
     /// Create a new session row.

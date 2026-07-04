@@ -2110,9 +2110,21 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 return Ok(false);
             }
             if let Some(&sid) = app.session_ids.get(app.shell.session_selected) {
+                // Load the target log FIRST: on a read failure, surface it and
+                // leave the current session intact instead of silently swapping
+                // in an empty log (the "corruption looks like data loss" failure
+                // mode #9 is meant to prevent).
+                let loaded = match app.session.snapshot_session(sid).await {
+                    Ok(events) => events,
+                    Err(e) => {
+                        app.shell.status_hint = Some(format!("could not load session: {e}"));
+                        app.shell.close_overlay();
+                        return Ok(false);
+                    }
+                };
                 app.session.touch_session(sid, now_ms()).await.ok();
                 app.session_id = sid;
-                app.events = app.session.snapshot_session(sid).await.unwrap_or_default();
+                app.events = loaded;
                 // Wholesale event-log replacement: reset the caches so they
                 // can't serve the previous session's data at an equal length.
                 app.proj = ProjectionCache::default();
