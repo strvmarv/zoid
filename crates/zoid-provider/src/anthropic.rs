@@ -170,6 +170,9 @@ impl Provider for AnthropicProvider {
         req: &crate::CompletionRequest,
         sink: mpsc::Sender<ProviderEvent>,
     ) -> Result<()> {
+        let start = std::time::Instant::now();
+        let mut ttft: Option<u64> = None;
+
         let resp = self
             .client
             .post(format!("{}/v1/messages", self.base_url))
@@ -194,6 +197,9 @@ impl Provider for AnthropicProvider {
             match item {
                 Ok(event) => {
                     if let Some(pe) = parse_event(&event.event, &event.data) {
+                        if ttft.is_none() {
+                            ttft = Some(start.elapsed().as_millis() as u64);
+                        }
                         let is_done = matches!(pe, ProviderEvent::Done);
                         if sink.send(pe).await.is_err() {
                             break; // receiver gone
@@ -209,6 +215,15 @@ impl Provider for AnthropicProvider {
                 }
             }
         }
+
+        tracing::info!(
+            kind = "provider",
+            provider = "anthropic",
+            model = %req.model,
+            ttft_ms = ttft.unwrap_or(0),
+            total_ms = start.elapsed().as_millis() as u64,
+            "provider stream complete"
+        );
         Ok(())
     }
 

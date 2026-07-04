@@ -188,7 +188,9 @@ async fn run_turn_inner(
     session_id: Ulid,
     now: fn() -> i64,
 ) -> Result<Vec<Event>> {
+    let turn_start = std::time::Instant::now();
     let mut iterations: u32 = 0;
+    let mut outcome: &'static str = "completed";
 
     'turn: loop {
         let req = build_request(&events, &model, &tools, &config.system);
@@ -254,6 +256,8 @@ async fn run_turn_inner(
                     )
                     .await?;
                     let _ = stream_task.await;
+                    tracing::warn!(ctx = "provider", message = msg.as_str(), "turn error");
+                    outcome = "error";
                     break 'turn;
                 }
                 ProviderEvent::Done => break,
@@ -294,6 +298,7 @@ async fn run_turn_inner(
                 now,
             )
             .await?;
+            outcome = "cap";
             break 'turn;
         }
 
@@ -302,7 +307,11 @@ async fn run_turn_inner(
         let cwd_for_exec = config.cwd.clone();
         let mut pending_iter = pending.into_iter();
         while let Some(tc) = pending_iter.next() {
+            let tool_start = std::time::Instant::now();
+            let tool_name = tc.name.clone();
+
             if let Gate::Deny(reason) = gate.check(&tc) {
+                let reason_msg = reason.clone();
                 emit(
                     &session,
                     &mut events,
@@ -318,6 +327,19 @@ async fn run_turn_inner(
                     now,
                 )
                 .await?;
+                tracing::info!(
+                    kind = "tool",
+                    name = tool_name.as_str(),
+                    ms = tool_start.elapsed().as_millis() as u64,
+                    ok = false,
+                    "tool executed"
+                );
+                let ctx = format!("tool {tool_name}");
+                tracing::warn!(
+                    ctx = ctx.as_str(),
+                    message = reason_msg.as_str(),
+                    "tool failed"
+                );
                 continue;
             }
 
@@ -358,8 +380,16 @@ async fn run_turn_inner(
                                 now,
                             )
                             .await?;
+                            tracing::info!(
+                                kind = "tool",
+                                name = tool_name.as_str(),
+                                ms = tool_start.elapsed().as_millis() as u64,
+                                ok = true,
+                                "tool executed"
+                            );
                         }
                         Err(msg) => {
+                            let tool_msg = msg.clone();
                             emit(
                                 &session,
                                 &mut events,
@@ -375,6 +405,19 @@ async fn run_turn_inner(
                                 now,
                             )
                             .await?;
+                            tracing::info!(
+                                kind = "tool",
+                                name = tool_name.as_str(),
+                                ms = tool_start.elapsed().as_millis() as u64,
+                                ok = false,
+                                "tool executed"
+                            );
+                            let ctx = format!("tool {tool_name}");
+                            tracing::warn!(
+                                ctx = ctx.as_str(),
+                                message = tool_msg.as_str(),
+                                "tool failed"
+                            );
                         }
                     }
                 }
@@ -431,6 +474,13 @@ async fn run_turn_inner(
                                 now,
                             )
                             .await?;
+                            tracing::info!(
+                                kind = "tool",
+                                name = tool_name.as_str(),
+                                ms = tool_start.elapsed().as_millis() as u64,
+                                ok = true,
+                                "tool executed"
+                            );
                         }
                         Err(_) => {
                             // Sender dropped == Esc hard-abort: balanced result, end the turn.
@@ -449,6 +499,13 @@ async fn run_turn_inner(
                                 now,
                             )
                             .await?;
+                            tracing::info!(
+                                kind = "tool",
+                                name = tool_name.as_str(),
+                                ms = tool_start.elapsed().as_millis() as u64,
+                                ok = true,
+                                "tool executed"
+                            );
                             // Drain any remaining batched tool calls so none is
                             // left without a matching ToolResult (the provider's
                             // tool-call protocol requires every call to be
@@ -470,6 +527,7 @@ async fn run_turn_inner(
                                 )
                                 .await?;
                             }
+                            outcome = "aborted";
                             break 'turn;
                         }
                     }
@@ -489,6 +547,8 @@ async fn run_turn_inner(
                         zoid_tools::run_tool(&tools_for_exec, &name, &args, &cwd)
                     })
                     .await?;
+                    let tool_ok = !out.is_error;
+                    let tool_fail_msg = out.is_error.then(|| out.text.clone());
                     emit(
                         &session,
                         &mut events,
@@ -504,12 +564,32 @@ async fn run_turn_inner(
                         now,
                     )
                     .await?;
+                    tracing::info!(
+                        kind = "tool",
+                        name = tool_name.as_str(),
+                        ms = tool_start.elapsed().as_millis() as u64,
+                        ok = tool_ok,
+                        "tool executed"
+                    );
+                    if let Some(msg) = tool_fail_msg {
+                        let ctx = format!("tool {tool_name}");
+                        tracing::warn!(ctx = ctx.as_str(), message = msg.as_str(), "tool failed");
+                    }
                 }
             }
         }
         record_compactions(&session, &mut events, ui, config, session_id, now).await?;
         // loop: re-request with the tool results now in context
     }
+
+    tracing::info!(
+        kind = "turn",
+        model = %model,
+        iterations = iterations as u64,
+        ms = turn_start.elapsed().as_millis() as u64,
+        outcome = outcome,
+        "turn complete"
+    );
 
     Ok(events)
 }

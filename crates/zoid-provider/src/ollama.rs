@@ -191,6 +191,9 @@ impl Provider for OllamaProvider {
         req: &CompletionRequest,
         sink: mpsc::Sender<ProviderEvent>,
     ) -> Result<()> {
+        let start = std::time::Instant::now();
+        let mut ttft: Option<u64> = None;
+
         let resp = self
             .client
             .post(format!("{}/api/chat", self.base_url))
@@ -214,7 +217,12 @@ impl Provider for OllamaProvider {
         // sequence), decoding only complete lines.
         let mut stream = resp.bytes_stream();
         let mut buf: Vec<u8> = Vec::new();
-        while let Some(chunk) = stream.next().await {
+        // Tracks whether the read loop ended via an explicit Done/send-failure/
+        // transport-error exit (in which case the trailing-line flush below must
+        // be skipped, matching the original early-`return Ok(())` behavior) as
+        // opposed to falling out of the loop because the transport simply closed.
+        let mut ended_early = false;
+        'read: while let Some(chunk) = stream.next().await {
             match chunk {
                 Ok(bytes) => {
                     buf.extend_from_slice(&bytes);
@@ -222,32 +230,50 @@ impl Provider for OllamaProvider {
                         let line: Vec<u8> = buf.drain(..=pos).collect();
                         let line = String::from_utf8_lossy(&line);
                         for pe in parse_line(&line) {
+                            if ttft.is_none() {
+                                ttft = Some(start.elapsed().as_millis() as u64);
+                            }
                             let is_done = matches!(pe, ProviderEvent::Done);
                             if sink.send(pe).await.is_err() {
-                                return Ok(());
+                                ended_early = true;
+                                break 'read;
                             }
                             if is_done {
-                                return Ok(());
+                                ended_early = true;
+                                break 'read;
                             }
                         }
                     }
                 }
                 Err(e) => {
                     let _ = sink.send(ProviderEvent::Error(e.to_string())).await;
-                    return Ok(());
+                    ended_early = true;
+                    break 'read;
                 }
             }
         }
 
         // Flush any trailing line without a final newline.
-        if !buf.is_empty() {
+        if !ended_early && !buf.is_empty() {
             let line = String::from_utf8_lossy(&buf);
             for pe in parse_line(&line) {
+                if ttft.is_none() {
+                    ttft = Some(start.elapsed().as_millis() as u64);
+                }
                 if sink.send(pe).await.is_err() {
                     break;
                 }
             }
         }
+
+        tracing::info!(
+            kind = "provider",
+            provider = "ollama",
+            model = %req.model,
+            ttft_ms = ttft.unwrap_or(0),
+            total_ms = start.elapsed().as_millis() as u64,
+            "provider stream complete"
+        );
         Ok(())
     }
 
