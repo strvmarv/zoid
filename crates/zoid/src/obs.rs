@@ -188,6 +188,10 @@ impl RollingStats {
         }
         (self.window.iter().sum::<u64>()) / self.window.len() as u64
     }
+    /// Max sample in the current rolling window; `0` when empty.
+    pub fn window_max(&self) -> u64 {
+        self.window.iter().copied().max().unwrap_or(0)
+    }
     pub fn p90(&self) -> u64 {
         if self.window.is_empty() {
             return 0;
@@ -353,6 +357,16 @@ mod tests {
         assert_eq!(r.avg(), 55);
         // p90 = value at the 90th percentile index of the sorted window.
         assert_eq!(r.p90(), 100);
+    }
+
+    #[test]
+    fn rolling_stats_window_max_returns_peak_or_zero() {
+        let mut r = RollingStats::default();
+        assert_eq!(r.window_max(), 0);
+        for v in [10u64, 90, 30] {
+            r.record(v);
+        }
+        assert_eq!(r.window_max(), 90);
     }
 
     #[test]

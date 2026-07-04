@@ -284,6 +284,89 @@ fn fmt_duration(start_ms: i64, now_ms: i64) -> String {
     }
 }
 
+/// Snapshot the obs aggregate + economy projection into the pure `OverviewData`
+/// consumed by `overview_lines`. Poison-safe: a poisoned obs mutex yields an
+/// empty dashboard rather than a panic (the observability layer never panics).
+fn build_overview_data(
+    app: &App,
+    obs_state: &std::sync::Arc<std::sync::Mutex<obs::ObsState>>,
+) -> zoid_tui::overview::OverviewData {
+    use zoid_tui::overview::OverviewData;
+    // Economy split from the same ledger the session drawer/context economy use.
+    let ledger = zoid_core::economy::token_ledger(&app.events);
+    // Prompt-cache hit rate = cache-read as a % of input tokens (economy).
+    let cache_hit_pct = if ledger.input == 0 {
+        0
+    } else {
+        ((ledger.cached * 100 / ledger.input) as u8).min(100)
+    };
+    // Per-turn prompt-cache sparkline: map the cached churn series onto the
+    // shared glyph::SPARK ramp, exactly as the context drawer's cache spark does.
+    let cache_vals: Vec<u64> = app.proj.churn.points.iter().map(|p| p.cached).collect();
+    let spark = zoid_tui::economy_view::sparkline(&cache_vals);
+
+    let s = match obs_state.lock() {
+        Ok(s) => s,
+        Err(_) => return OverviewData::default(),
+    };
+    OverviewData {
+        session_id: last4(&app.session_id.to_string()),
+        model: app.shell.model.clone(),
+        provider: app.shell.provider.clone(),
+        uptime: fmt_duration(app.session_started_ms, now_ms()),
+        turns: s.turn.count(),
+        tok_in: ledger.input,
+        tok_out: ledger.output,
+        tok_total: ledger.total,
+        cache_read: ledger.cached,
+        cache_hit_pct,
+        spark,
+        turn_last_ms: s.turn.last(),
+        turn_avg_ms: s.turn.avg(),
+        turn_p90_ms: s.turn.p90(),
+        ttft_ms: s.provider_ttft.avg(),
+        stream_ms: s.provider_total.avg(),
+        iter_avg: s.iterations.avg(),
+        tools: s
+            .tools
+            .iter()
+            .map(|(k, v)| (k.clone(), v.count, v.avg_ms()))
+            .collect(),
+        frame_avg_ms: s.frame.avg(),
+        frame_p90_ms: s.frame.p90(),
+        frame_max_ms: s.frame.window_max(),
+        // Body-render cache-hit ratio (obs frame events) — distinct from the
+        // prompt-cache `cache_hit_pct` above.
+        render_cache_pct: if s.cache_total == 0 {
+            0
+        } else {
+            ((s.cache_hits * 100 / s.cache_total) as u8).min(100)
+        },
+        proj_rebuilds: s.proj_rebuilds,
+        event_count: app.events.len() as u64,
+        errors: s
+            .errors
+            .iter()
+            .map(|e| {
+                (
+                    format!(
+                        "{} {}",
+                        if e.level == "error" { '⛔' } else { '⚠' },
+                        e.context
+                    ),
+                    e.message.clone(),
+                )
+            })
+            .collect(),
+    }
+}
+
+/// Last 4 chars of a string (short session id for the dashboard header).
+fn last4(s: &str) -> String {
+    let v: Vec<char> = s.chars().collect();
+    v[v.len().saturating_sub(4)..].iter().collect()
+}
+
 /// Human provider label for the provider actually constructed at startup
 /// (see the `config.provider` + secret-store match in `main`) — `provider_name`
 /// is the configured provider id ("anthropic"/"ollama"), `has_key` is whether a
@@ -725,6 +808,9 @@ struct App {
     proj: ProjectionCache,
     /// Cached rendered conversation body; reused across scroll/typing frames.
     body_cache: BodyCache,
+    /// The Overview dashboard body, rebuilt per-frame while at `Zoom::Overview`
+    /// (only while the user is viewing it). Empty at every other altitude.
+    overview_body: Vec<ratatui::text::Line<'static>>,
     /// When the altitude last changed, for the fold/unfold reveal (Ⓡ2).
     zoom_changed_at: Option<std::time::Instant>,
     /// Max conversation scroll offset from the last rendered frame (body length −
@@ -897,6 +983,7 @@ async fn main() -> Result<()> {
         started: std::time::Instant::now(),
         proj: ProjectionCache::default(),
         body_cache: BodyCache::default(),
+        overview_body: Vec::new(),
         zoom_changed_at: None,
         last_conv_max_scroll: 0,
         last_conv_rect: ratatui::layout::Rect::default(),
@@ -925,7 +1012,7 @@ async fn main() -> Result<()> {
     }
     let mut terminal = Terminal::new(CrosstermBackend::new(out))?;
 
-    let result = run(&mut terminal, &mut app, &mut ui_rx).await;
+    let result = run(&mut terminal, &mut app, &mut ui_rx, &obs.state).await;
 
     // Restore the terminal on every exit path — drive through errors, don't bail.
     if kbd_enhanced {
@@ -960,6 +1047,7 @@ async fn run<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     ui_rx: &mut mpsc::Receiver<AgentUpdate>,
+    obs_state: &std::sync::Arc<std::sync::Mutex<obs::ObsState>>,
 ) -> Result<()> {
     let mut term_events = EventStream::new();
 
@@ -1037,18 +1125,31 @@ async fn run<B: ratatui::backend::Backend>(
         let streaming = app.streaming;
         let zoom = app.shell.zoom;
         let tz = app.tz_offset_secs;
-        let cache_hit = app.body_cache.refresh(
-            BodyKey {
-                events_len: app.events.len(),
-                zoom,
-                width: body_w,
-                streaming,
-                caret: streaming && caret,
-                tz,
-            },
-            &app.proj.msgs,
-            body_w,
-        );
+        // At Overview the conversation pane hosts the metrics dashboard instead of
+        // the transcript: assemble a fresh `OverviewData` snapshot and render it
+        // into `overview_body` (a per-frame rebuild is fine — it only runs while the
+        // user is actually viewing Overview). Every other altitude reuses the cached
+        // conversation body. Consuming `obs.state` here is also what puts the shared
+        // aggregate to work in the render loop.
+        let is_overview = zoom == zoid_tui::state::Zoom::Overview;
+        let cache_hit = if is_overview {
+            let data = build_overview_data(app, obs_state);
+            app.overview_body = zoid_tui::overview::overview_lines(&data, body_w);
+            true
+        } else {
+            app.body_cache.refresh(
+                BodyKey {
+                    events_len: app.events.len(),
+                    zoom,
+                    width: body_w,
+                    streaming,
+                    caret: streaming && caret,
+                    tz,
+                },
+                &app.proj.msgs,
+                body_w,
+            )
+        };
 
         // Tail-follow: when engaged, pin the viewport to the latest line before
         // drawing — this is what makes the view show the latest output on startup
@@ -1057,14 +1158,27 @@ async fn run<B: ratatui::backend::Backend>(
         // anchor. max_scroll mirrors render's clamp: body length (+ the in-flight
         // tool line) minus the visible conversation height.
         let active_extra = usize::from(app.shell.active_tool.is_some());
-        let max_scroll = (app.body_cache.body.len() + active_extra)
+        // Scroll math reuses the active body's length (Overview dashboard or the
+        // cached transcript), so the scrollbar/clamp work unchanged at every altitude.
+        let body_len = if is_overview {
+            app.overview_body.len()
+        } else {
+            app.body_cache.body.len()
+        };
+        let max_scroll = (body_len + active_extra)
             .saturating_sub(layout.conversation.height as usize)
             .min(u16::MAX as usize) as u16;
         // Re-anchor after a zoom: map the captured message back to its line at the
         // new altitude. Runs before the draw (body/msg_starts now reflect the new
         // altitude), so the transient reset-to-0 from zoom_in/out never paints.
         if let Some(anchor) = app.pending_zoom_anchor.take() {
-            let line = zoid_tui::line_of_msg(&app.body_cache.msg_starts, anchor);
+            // Overview has no per-message lines, so there's nothing to anchor to —
+            // pin to the top (line 0), skipping cross-zoom anchoring naturally.
+            let line = if is_overview {
+                0
+            } else {
+                zoid_tui::line_of_msg(&app.body_cache.msg_starts, anchor)
+            };
             app.shell.conversation_scroll = (line.min(u16::MAX as usize) as u16).min(max_scroll);
         }
         if app.zoom_changed_at.is_none() {
@@ -1093,7 +1207,11 @@ async fn run<B: ratatui::backend::Backend>(
             // O(events) or re-render work on an ordinary frame.
             let economy = zoid_tui::EconomyView::build(&app.proj.window, &app.proj.churn, 0);
             let task_items = &app.proj.tasks;
-            let body = &app.body_cache.body;
+            let body: &[ratatui::text::Line<'static>] = if is_overview {
+                &app.overview_body
+            } else {
+                &app.body_cache.body
+            };
             // Zoom-reveal count derives from the cached body length — no second
             // conversation_view build. `reveal` is None on ordinary frames.
             let reveal = match app.zoom_changed_at {
@@ -2854,6 +2972,7 @@ mod tests {
             started: std::time::Instant::now(),
             proj: ProjectionCache::default(),
             body_cache: BodyCache::default(),
+            overview_body: Vec::new(),
             zoom_changed_at: None,
             last_conv_max_scroll: 0,
             last_conv_rect: ratatui::layout::Rect::default(),
