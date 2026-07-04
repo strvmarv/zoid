@@ -42,7 +42,13 @@ pub fn plan_compactions(events: &[Event], policy: &ContextPolicy) -> Vec<Compact
     // Latest non-error output per tool-result id.
     let mut output_of: HashMap<&str, &str> = HashMap::new();
     for e in events {
-        if let EventKind::ToolResult { id, output, is_error, .. } = &e.kind {
+        if let EventKind::ToolResult {
+            id,
+            output,
+            is_error,
+            ..
+        } = &e.kind
+        {
             if !*is_error {
                 output_of.insert(id.as_str(), output.as_str());
             }
@@ -59,11 +65,15 @@ pub fn plan_compactions(events: &[Event], policy: &ContextPolicy) -> Vec<Compact
         if it.kind != ItemKind::ToolResult || it.pinned {
             continue;
         }
-        let Some(id) = tool_id_of(&it.key) else { continue };
+        let Some(id) = tool_id_of(&it.key) else {
+            continue;
+        };
         if done.contains(id) {
             continue;
         }
-        let Some(output) = output_of.get(id) else { continue };
+        let Some(output) = output_of.get(id) else {
+            continue;
+        };
         let summary = compact_tool_output(output, COMPACT_HEAD_LINES);
         let summary_tokens = estimate_tokens(&summary);
         if summary_tokens >= it.tokens {
@@ -122,17 +132,28 @@ mod tests {
 
     fn big_tool_result(id: &str, name: &str, lines: usize) -> Event {
         let body: String = (0..lines).map(|i| format!("match {i} in file\n")).collect();
-        ev(EventKind::ToolResult { id: id.into(), name: name.into(), output: body, is_error: false })
+        ev(EventKind::ToolResult {
+            id: id.into(),
+            name: name.into(),
+            output: body,
+            is_error: false,
+        })
     }
 
     fn policy(threshold: u64) -> ContextPolicy {
-        ContextPolicy { token_ceiling: None, auto_evict_cold: false, compact_threshold: Some(threshold) }
+        ContextPolicy {
+            token_ceiling: None,
+            auto_evict_cold: false,
+            compact_threshold: Some(threshold),
+        }
     }
 
     #[test]
     fn no_compaction_below_threshold() {
         let evs = vec![
-            ev(EventKind::UserMessage { text: "search please".into() }),
+            ev(EventKind::UserMessage {
+                text: "search please".into(),
+            }),
             big_tool_result("c1", "search", 100),
         ];
         // Threshold huge → nothing to do.
@@ -159,7 +180,11 @@ mod tests {
         let evs = vec![
             ev(EventKind::UserMessage { text: "go".into() }),
             big_tool_result("c1", "search", 400),
-            ev(EventKind::ToolResultCompacted { id: "c1".into(), summary: "small".into(), original_tokens: 800 }),
+            ev(EventKind::ToolResultCompacted {
+                id: "c1".into(),
+                summary: "small".into(),
+                original_tokens: 800,
+            }),
         ];
         // c1 already compacted → nothing left to compact.
         assert!(plan_compactions(&evs, &policy(1)).is_empty());

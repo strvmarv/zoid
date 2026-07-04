@@ -396,7 +396,10 @@ async fn run_turn_inner(
                         })
                         .unwrap_or_default();
                     let (rtx, rrx) = oneshot::channel::<Answer>();
-                    crate::zlog!("ask_user: intercepted, sending AskUser (choices={})", choices.len());
+                    crate::zlog!(
+                        "ask_user: intercepted, sending AskUser (choices={})",
+                        choices.len()
+                    );
                     let sent = ui
                         .send(AgentUpdate::AskUser {
                             question,

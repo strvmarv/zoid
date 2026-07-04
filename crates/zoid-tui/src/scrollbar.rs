@@ -22,7 +22,8 @@ pub fn scrollbar_thumb(offset: u16, max_scroll: u16, track_h: u16, content_len: 
         // ensures content_len > track_h, so track_h²/content_len < track_h.
         .min(track_h as u32) as u16;
     let travel = track_h - len; // rows the thumb can move
-    let start = ((travel as u32 * offset as u32 + max_scroll as u32 / 2) / max_scroll as u32) as u16;
+    let start =
+        ((travel as u32 * offset as u32 + max_scroll as u32 / 2) / max_scroll as u32) as u16;
     (start.min(travel), len)
 }
 

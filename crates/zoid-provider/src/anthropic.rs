@@ -41,7 +41,8 @@ pub fn request_body(req: &CompletionRequest) -> Value {
     let mut messages = messages;
     if let Some(last) = messages.last_mut() {
         let text = last["content"].take();
-        last["content"] = json!([{ "type": "text", "text": text, "cache_control": { "type": "ephemeral" } }]);
+        last["content"] =
+            json!([{ "type": "text", "text": text, "cache_control": { "type": "ephemeral" } }]);
     }
 
     let mut body = json!({
@@ -51,7 +52,8 @@ pub fn request_body(req: &CompletionRequest) -> Value {
         "messages": messages,
     });
     if let Some(sys) = &req.system {
-        body["system"] = json!([{ "type": "text", "text": sys, "cache_control": { "type": "ephemeral" } }]);
+        body["system"] =
+            json!([{ "type": "text", "text": sys, "cache_control": { "type": "ephemeral" } }]);
     }
     body
 }

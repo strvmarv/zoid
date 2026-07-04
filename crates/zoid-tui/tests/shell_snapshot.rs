@@ -31,7 +31,17 @@ fn draw_econ(state: &ShellState, econ: &EconomyView, msgs: &[ChatMsg], w: u16, h
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|f| {
-            render_shell(f, state, econ, msgs, None, &[], &input, false, &normal_view());
+            render_shell(
+                f,
+                state,
+                econ,
+                msgs,
+                None,
+                &[],
+                &input,
+                false,
+                &normal_view(),
+            );
         })
         .unwrap();
     terminal.backend().to_string()

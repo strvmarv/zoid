@@ -876,7 +876,8 @@ fn scrollbar_row_to_offset(app: &mut App, row: u16) {
     }
     let max = app.last_conv_max_scroll;
     let rel = row.saturating_sub(conv.y).min(track_h - 1);
-    let offset = ((rel as u32 * max as u32 + (track_h as u32 - 1) / 2) / (track_h as u32 - 1)) as u16;
+    let offset =
+        ((rel as u32 * max as u32 + (track_h as u32 - 1) / 2) / (track_h as u32 - 1)) as u16;
     app.shell.scroll_to_offset(offset, max);
 }
 
@@ -946,11 +947,15 @@ async fn run<B: ratatui::backend::Backend>(
         // the whole transcript (the ~52ms/frame cost behind the scroll storm).
         let area = terminal
             .size()
-            .map(|s| Rect { x: 0, y: 0, width: s.width, height: s.height })
+            .map(|s| Rect {
+                x: 0,
+                y: 0,
+                width: s.width,
+                height: s.height,
+            })
             .unwrap_or_default();
         let layout = compute(area, &app.shell);
-        let body_w =
-            zoid_tui::layout::conv_text_width(layout.conversation.width) as usize;
+        let body_w = zoid_tui::layout::conv_text_width(layout.conversation.width) as usize;
         let elapsed = app.started.elapsed().as_millis() as u64;
         let caret = zoid_tui::motion::caret_on(elapsed, 1000, app.shell.reduced_motion);
         let streaming = app.streaming;
@@ -2311,7 +2316,11 @@ mod tests {
 
     #[test]
     fn input_delete_line_drops_the_cursor_line_regardless_of_column() {
-        let mut ta = TextArea::from(vec!["one".to_string(), "two".to_string(), "three".to_string()]);
+        let mut ta = TextArea::from(vec![
+            "one".to_string(),
+            "two".to_string(),
+            "three".to_string(),
+        ]);
         // Land the cursor mid-word on the middle line.
         ta.move_cursor(CursorMove::Down);
         ta.move_cursor(CursorMove::Forward);
@@ -2333,11 +2342,7 @@ mod tests {
     fn input_delete_line_on_blank_line_removes_only_that_row() {
         // Regression: delete_line_by_end merges the next line up on its own for an
         // empty line, so a second merge used to eat the leading char of "three".
-        let mut ta = TextArea::from(vec![
-            "one".to_string(),
-            "".to_string(),
-            "three".to_string(),
-        ]);
+        let mut ta = TextArea::from(vec!["one".to_string(), "".to_string(), "three".to_string()]);
         ta.move_cursor(CursorMove::Down); // onto the blank line
         input_delete_line(&mut ta);
         assert_eq!(ta.lines(), &["one".to_string(), "three".to_string()]);

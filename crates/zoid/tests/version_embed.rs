@@ -11,9 +11,15 @@ fn workspace_version_is_embedded_semver() {
     for p in &parts {
         // Strip any pre-release/build suffix on the patch component (e.g. "0-rc1").
         let num = p.split(['-', '+']).next().unwrap_or(p);
-        assert!(num.parse::<u64>().is_ok(), "non-numeric version component in {v:?}");
+        assert!(
+            num.parse::<u64>().is_ok(),
+            "non-numeric version component in {v:?}"
+        );
     }
-    assert_ne!(v, "0.0.0", "workspace version was never bumped from the default");
+    assert_ne!(
+        v, "0.0.0",
+        "workspace version was never bumped from the default"
+    );
 }
 
 #[test]

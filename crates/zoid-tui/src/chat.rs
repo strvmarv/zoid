@@ -38,7 +38,15 @@ pub fn conversation_lines(
     width: usize,
 ) -> Vec<Line<'static>> {
     let mut hits = Vec::new();
-    build_conversation(msgs, streaming, caret_on, tz_offset_secs, width, &mut hits, &mut Vec::new())
+    build_conversation(
+        msgs,
+        streaming,
+        caret_on,
+        tz_offset_secs,
+        width,
+        &mut hits,
+        &mut Vec::new(),
+    )
 }
 
 /// The clickable code-block map (line ranges + source) for the same inputs
@@ -52,7 +60,15 @@ pub fn code_hits(
     width: usize,
 ) -> Vec<CodeHit> {
     let mut hits = Vec::new();
-    build_conversation(msgs, streaming, caret_on, tz_offset_secs, width, &mut hits, &mut Vec::new());
+    build_conversation(
+        msgs,
+        streaming,
+        caret_on,
+        tz_offset_secs,
+        width,
+        &mut hits,
+        &mut Vec::new(),
+    );
     hits
 }
 
@@ -827,15 +843,33 @@ mod tests {
     #[test]
     fn conversation_view_indexed_starts_len_matches_msgs_at_each_zoom() {
         let msgs = vec![
-            ChatMsg::User { text: "first question".into(), ts: 0 },
-            ChatMsg::Assistant { text: "an answer".into(), tool_calls: vec![], ts: 0 },
-            ChatMsg::User { text: "second question".into(), ts: 0 },
-            ChatMsg::Assistant { text: "another answer".into(), tool_calls: vec![], ts: 0 },
+            ChatMsg::User {
+                text: "first question".into(),
+                ts: 0,
+            },
+            ChatMsg::Assistant {
+                text: "an answer".into(),
+                tool_calls: vec![],
+                ts: 0,
+            },
+            ChatMsg::User {
+                text: "second question".into(),
+                ts: 0,
+            },
+            ChatMsg::Assistant {
+                text: "another answer".into(),
+                tool_calls: vec![],
+                ts: 0,
+            },
         ];
         for zoom in [Zoom::Summary, Zoom::Normal, Zoom::Detail] {
             let v = view(zoom);
             let (lines, starts) = conversation_view_indexed(&msgs, &v, false, 80);
-            assert_eq!(starts.len(), msgs.len(), "one start per message at {zoom:?}");
+            assert_eq!(
+                starts.len(),
+                msgs.len(),
+                "one start per message at {zoom:?}"
+            );
             assert!(
                 starts.windows(2).all(|w| w[0] <= w[1]),
                 "starts not monotonic at {zoom:?}: {starts:?}"

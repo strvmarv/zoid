@@ -545,7 +545,7 @@ mod tests {
     #[test]
     fn shift_editing_chords_are_focus_contextual() {
         let mut s = ShellState::new(); // focus Input
-        // Message box: ⇧Delete deletes the line, ⇧Home/⇧End jump the cursor.
+                                       // Message box: ⇧Delete deletes the line, ⇧Home/⇧End jump the cursor.
         assert_eq!(
             route_key(&s, key(KeyCode::Delete, KeyModifiers::SHIFT)),
             Action::InputDeleteLine
@@ -694,11 +694,24 @@ mod tests {
     }
 
     fn test_layout(w: u16, h: u16) -> ShellLayout {
-        compute(Rect { x: 0, y: 0, width: w, height: h }, &ShellState::new())
+        compute(
+            Rect {
+                x: 0,
+                y: 0,
+                width: w,
+                height: h,
+            },
+            &ShellState::new(),
+        )
     }
 
     fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
-        MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE }
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
     }
 
     #[test]
@@ -708,7 +721,10 @@ mod tests {
         let bar_x = conv.right() - 1;
         assert_eq!(hit_test(&layout, bar_x, conv.y + 1), Target::Scrollbar);
         // one column left of the bar is still the conversation
-        assert_eq!(hit_test(&layout, bar_x - 1, conv.y + 1), Target::Conversation);
+        assert_eq!(
+            hit_test(&layout, bar_x - 1, conv.y + 1),
+            Target::Conversation
+        );
     }
 
     #[test]
@@ -718,14 +734,26 @@ mod tests {
         let bar_x = layout.conversation.right() - 1;
         let row = layout.conversation.y + 5;
         // grab on the bar
-        let a = route_mouse(&s, &layout, mouse(MouseEventKind::Down(MouseButton::Left), bar_x, row));
+        let a = route_mouse(
+            &s,
+            &layout,
+            mouse(MouseEventKind::Down(MouseButton::Left), bar_x, row),
+        );
         assert!(matches!(a, Action::ScrollbarGrab(r) if r == row));
         // once dragging, a bare Drag(Left) anywhere is a scrollbar drag
         s.scrollbar_drag = true;
-        let a = route_mouse(&s, &layout, mouse(MouseEventKind::Drag(MouseButton::Left), 3, row + 2));
+        let a = route_mouse(
+            &s,
+            &layout,
+            mouse(MouseEventKind::Drag(MouseButton::Left), 3, row + 2),
+        );
         assert!(matches!(a, Action::ScrollbarDrag(r) if r == row + 2));
         // release
-        let a = route_mouse(&s, &layout, mouse(MouseEventKind::Up(MouseButton::Left), 3, row));
+        let a = route_mouse(
+            &s,
+            &layout,
+            mouse(MouseEventKind::Up(MouseButton::Left), 3, row),
+        );
         assert!(matches!(a, Action::ScrollbarRelease));
     }
 
@@ -733,7 +761,11 @@ mod tests {
     fn drag_without_grab_is_ignored() {
         let s = ShellState::new(); // scrollbar_drag == false
         let layout = test_layout(100, 24);
-        let a = route_mouse(&s, &layout, mouse(MouseEventKind::Drag(MouseButton::Left), 3, 5));
+        let a = route_mouse(
+            &s,
+            &layout,
+            mouse(MouseEventKind::Drag(MouseButton::Left), 3, 5),
+        );
         assert_eq!(a, Action::Noop);
     }
 

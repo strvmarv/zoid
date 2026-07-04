@@ -64,7 +64,8 @@ async fn oversized_tool_result_is_compacted_when_over_threshold() {
     // ToolResult blows past a tiny compaction threshold. `shell` (unlike
     // `read_file`) has no path key, so its output stays an `ItemKind::ToolResult`
     // (compactable) rather than folding into an `ItemKind::File` item.
-    let command = "for i in $(seq 1 2000); do echo \"line $i: filler text to pad out tokens\"; done";
+    let command =
+        "for i in $(seq 1 2000); do echo \"line $i: filler text to pad out tokens\"; done";
 
     // Provider script: one tool call to a shell-like tool, then a final message.
     let provider = zoid_testkit::script(vec![
@@ -113,5 +114,8 @@ async fn oversized_tool_result_is_compacted_when_over_threshold() {
     let compacted = events
         .iter()
         .any(|e| matches!(e.kind, EventKind::ToolResultCompacted { .. }));
-    assert!(compacted, "a large tool-result over threshold must be compacted");
+    assert!(
+        compacted,
+        "a large tool-result over threshold must be compacted"
+    );
 }

@@ -241,10 +241,9 @@ pub fn context_window(events: &[Event]) -> ContextWindow {
             }
             EventKind::ToolResultCompacted { id, summary, .. } => {
                 // Item keys for non-file tool results are "tool:{name}:{id}".
-                if let Some(it) = items
-                    .iter_mut()
-                    .find(|i| i.kind == ItemKind::ToolResult && tool_id_of(&i.key) == Some(id.as_str()))
-                {
+                if let Some(it) = items.iter_mut().find(|i| {
+                    i.kind == ItemKind::ToolResult && tool_id_of(&i.key) == Some(id.as_str())
+                }) {
                     it.tokens = crate::economy::estimate_tokens(summary);
                     it.compacted = true;
                 }
@@ -547,13 +546,50 @@ mod tests {
         let big: String = (0..200).map(|i| format!("row {i}\n")).collect();
         let summary = "row 0\n… (compacted: 199 more lines, ~700 tokens elided)".to_string();
         let evs = vec![
-            Event::new(Ulid::new(), None, 0, EventKind::UserMessage { text: "go".into() }),
-            Event::new(Ulid::new(), None, 0, EventKind::ToolCall { id: "c1".into(), name: "search".into(), args: "{}".into() }),
-            Event::new(Ulid::new(), None, 0, EventKind::ToolResult { id: "c1".into(), name: "search".into(), output: big, is_error: false }),
-            Event::new(Ulid::new(), None, 0, EventKind::ToolResultCompacted { id: "c1".into(), summary: summary.clone(), original_tokens: 999 }),
+            Event::new(
+                Ulid::new(),
+                None,
+                0,
+                EventKind::UserMessage { text: "go".into() },
+            ),
+            Event::new(
+                Ulid::new(),
+                None,
+                0,
+                EventKind::ToolCall {
+                    id: "c1".into(),
+                    name: "search".into(),
+                    args: "{}".into(),
+                },
+            ),
+            Event::new(
+                Ulid::new(),
+                None,
+                0,
+                EventKind::ToolResult {
+                    id: "c1".into(),
+                    name: "search".into(),
+                    output: big,
+                    is_error: false,
+                },
+            ),
+            Event::new(
+                Ulid::new(),
+                None,
+                0,
+                EventKind::ToolResultCompacted {
+                    id: "c1".into(),
+                    summary: summary.clone(),
+                    original_tokens: 999,
+                },
+            ),
         ];
         let w = context_window(&evs);
-        let it = w.items.iter().find(|i| i.key == "tool:search:c1").expect("tool item present");
+        let it = w
+            .items
+            .iter()
+            .find(|i| i.key == "tool:search:c1")
+            .expect("tool item present");
         assert!(it.compacted);
         assert_eq!(it.tokens, estimate_tokens(&summary));
     }

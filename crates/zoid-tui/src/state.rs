@@ -625,10 +625,13 @@ mod tests {
     fn scrolling_up_detaches_follow_and_returning_to_bottom_reengages() {
         let mut s = ShellState::new();
         s.conversation_scroll = 100; // pinned to the bottom
-        // Scroll up one line → detaches from the tail.
+                                     // Scroll up one line → detaches from the tail.
         s.scroll_conversation(-1, 100);
         assert_eq!(s.conversation_scroll, 99);
-        assert!(!s.follow_tail, "scrolling up off the bottom detaches follow");
+        assert!(
+            !s.follow_tail,
+            "scrolling up off the bottom detaches follow"
+        );
         // Scroll back down to the bottom → re-engages.
         s.scroll_conversation(1, 100);
         assert_eq!(s.conversation_scroll, 100);

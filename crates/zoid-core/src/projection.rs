@@ -442,16 +442,51 @@ mod tests {
     #[test]
     fn conversation_substitutes_compacted_summary() {
         let evs = vec![
-            Event::new(Ulid::new(), None, 100, EventKind::UserMessage { text: "go".into() }),
-            Event::new(Ulid::new(), None, 200, EventKind::ToolResult { id: "c1".into(), name: "search".into(), output: "HUGE ORIGINAL OUTPUT".into(), is_error: false }),
-            Event::new(Ulid::new(), None, 300, EventKind::ToolResultCompacted { id: "c1".into(), summary: "tiny summary".into(), original_tokens: 500 }),
+            Event::new(
+                Ulid::new(),
+                None,
+                100,
+                EventKind::UserMessage { text: "go".into() },
+            ),
+            Event::new(
+                Ulid::new(),
+                None,
+                200,
+                EventKind::ToolResult {
+                    id: "c1".into(),
+                    name: "search".into(),
+                    output: "HUGE ORIGINAL OUTPUT".into(),
+                    is_error: false,
+                },
+            ),
+            Event::new(
+                Ulid::new(),
+                None,
+                300,
+                EventKind::ToolResultCompacted {
+                    id: "c1".into(),
+                    summary: "tiny summary".into(),
+                    original_tokens: 500,
+                },
+            ),
         ];
         let conv = conversation(&evs);
-        let tr = conv.iter().find_map(|m| match m {
-            ChatMsg::ToolResult { id, output, compacted, .. } if id == "c1" => Some((output.clone(), *compacted)),
-            _ => None,
-        }).expect("tool result present");
-        assert_eq!(tr.0, "tiny summary", "live request must carry the summary, not the dump");
+        let tr = conv
+            .iter()
+            .find_map(|m| match m {
+                ChatMsg::ToolResult {
+                    id,
+                    output,
+                    compacted,
+                    ..
+                } if id == "c1" => Some((output.clone(), *compacted)),
+                _ => None,
+            })
+            .expect("tool result present");
+        assert_eq!(
+            tr.0, "tiny summary",
+            "live request must carry the summary, not the dump"
+        );
         assert!(tr.1, "must be flagged compacted for the transcript");
     }
 

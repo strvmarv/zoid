@@ -16,12 +16,13 @@ fn long_choices_wrap_and_tails_are_visible() {
     );
     let backend = TestBackend::new(80, 30);
     let mut terminal = Terminal::new(backend).unwrap();
-    terminal
-        .draw(|f| render_question(f, f.area(), &q))
-        .unwrap();
+    terminal.draw(|f| render_question(f, f.area(), &q)).unwrap();
     let dump = terminal.backend().to_string();
     // The FINAL word of each long choice must appear — proof it wrapped rather
     // than being horizontally clipped (which would drop these tails).
     assert!(dump.contains("layout"), "tail of choice 1 clipped:\n{dump}");
-    assert!(dump.contains("overall"), "tail of choice 2 clipped:\n{dump}");
+    assert!(
+        dump.contains("overall"),
+        "tail of choice 2 clipped:\n{dump}"
+    );
 }

@@ -523,10 +523,7 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
     ];
     // cwd: truncate to the drawer width, never wrap (paths get long).
     lines.push(Line::from(vec![
-        Span::styled(
-            format!("{} ", glyph::SESS_CWD),
-            Style::new().fg(color::DIM),
-        ),
+        Span::styled(format!("{} ", glyph::SESS_CWD), Style::new().fg(color::DIM)),
         Span::styled("cwd ", Style::new().fg(color::DIM)),
         Span::styled(
             truncate(&state.cwd, (area.width as usize).saturating_sub(7)),
@@ -1036,7 +1033,10 @@ pub fn render_question(frame: &mut Frame, area: Rect, q: &crate::question::Quest
                 // instead of clipped at the card edge (the bug that made choices
                 // look invisible). Continuation lines are indented for legibility;
                 // every wrapped line of the selected row carries the highlight.
-                for (j, wl) in wrap_plain(r, content_w.saturating_sub(1)).iter().enumerate() {
+                for (j, wl) in wrap_plain(r, content_w.saturating_sub(1))
+                    .iter()
+                    .enumerate()
+                {
                     let indent = if j == 0 { " " } else { "   " };
                     lines.push(Line::from(Span::styled(format!("{indent}{wl}"), style)));
                 }
