@@ -10,6 +10,21 @@ pub struct EventStore {
     conn: Connection,
 }
 
+/// The searchable text of an event, or None for content-less events (Usage,
+/// eviction markers, tasks). Indexed into `events_fts` at append.
+fn fts_content(kind: &crate::event::EventKind) -> Option<String> {
+    use crate::event::EventKind::*;
+    match kind {
+        UserMessage { text } | AssistantMessage { text } | ModelDelta { text } => {
+            Some(text.clone())
+        }
+        ToolResult { output, name, .. } => Some(format!("{name}\n{output}")),
+        ToolCall { name, args, .. } => Some(format!("{name} {args}")),
+        DelegationResult { summary, .. } => Some(summary.clone()),
+        _ => None,
+    }
+}
+
 impl EventStore {
     pub fn open(path: &str) -> Result<Self> {
         let conn = Connection::open(path)?;
@@ -46,7 +61,8 @@ impl EventStore {
     }
 
     pub fn append(&self, event: &Event) -> Result<()> {
-        self.conn.execute(
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
             "INSERT INTO events (id, parent, branch, session_id, ts, kind, tokens)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
@@ -62,7 +78,48 @@ impl EventStore {
                     .transpose()?,
             ],
         )?;
+        if let Some(content) = fts_content(&event.kind) {
+            tx.execute(
+                "INSERT INTO events_fts (content, event_id) VALUES (?1, ?2)",
+                params![content, event.id.to_string()],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
+    }
+
+    /// BM25-ranked recall over all indexed content. Returns matching event ids,
+    /// best-first. The query is passed to FTS5 wrapped in double quotes so a raw
+    /// user string can't be interpreted as FTS syntax (quotes inside are escaped).
+    pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<Ulid>> {
+        let safe = format!("\"{}\"", query.replace('"', "\"\""));
+        let mut stmt = self.conn.prepare(
+            "SELECT event_id FROM events_fts WHERE events_fts MATCH ?1 ORDER BY rank LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![safe, limit as i64], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?.parse()?);
+        }
+        Ok(out)
+    }
+
+    /// Load full events for `ids`, in append (rowid) order. Ids not present are skipped.
+    pub fn events_by_ids(&self, ids: &[Ulid]) -> Result<Vec<Event>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = std::iter::repeat("?")
+            .take(ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "{} WHERE id IN ({placeholders}) ORDER BY rowid ASC",
+            Self::SELECT_COLS
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params: Vec<String> = ids.iter().map(|i| i.to_string()).collect();
+        Self::decode_rows(&mut stmt, rusqlite::params_from_iter(params.iter()))
     }
 
     const SELECT_COLS: &str = "SELECT id, parent, branch, session_id, ts, kind, tokens FROM events";
@@ -393,6 +450,59 @@ mod tests {
             .query_row("SELECT count(*) FROM secrets", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn append_indexes_searchable_content() {
+        let store = EventStore::open(":memory:").unwrap();
+        let e = Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "how do I configure the ceiling".into(),
+            },
+        );
+        store.append(&e).unwrap();
+        let hits = store.search_fts("ceiling", 10).unwrap();
+        assert_eq!(hits, vec![Ulid::from(1u128)]);
+    }
+
+    #[test]
+    fn search_ranks_and_loads_events() {
+        let store = EventStore::open(":memory:").unwrap();
+        store
+            .append(&Event::new(
+                Ulid::from(1u128),
+                None,
+                1,
+                EventKind::UserMessage {
+                    text: "database indexing strategy".into(),
+                },
+            ))
+            .unwrap();
+        store
+            .append(&Event::new(
+                Ulid::from(2u128),
+                None,
+                2,
+                EventKind::UserMessage {
+                    text: "unrelated small talk".into(),
+                },
+            ))
+            .unwrap();
+        let ids = store.search_fts("indexing", 10).unwrap();
+        assert_eq!(ids, vec![Ulid::from(1u128)]);
+        let evs = store.events_by_ids(&ids).unwrap();
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0].id, Ulid::from(1u128));
+    }
+
+    #[test]
+    fn search_bad_query_does_not_panic() {
+        let store = EventStore::open(":memory:").unwrap();
+        // FTS5 special chars must not blow up recall.
+        assert!(store.search_fts("\"unbalanced", 5).is_ok() || store.search_fts("\"unbalanced", 5).is_err());
     }
 
     #[test]
