@@ -806,6 +806,7 @@ async fn main() -> Result<()> {
         .context_ceiling
         .unwrap_or_else(|| zoid_provider::context_ceiling(&model));
     shell.provider = provider_label(provider_name, has_key);
+    shell.cache_supported = zoid_provider::has_prompt_cache(&model);
     shell.cwd = root.clone();
 
     let (ui_tx, mut ui_rx) = mpsc::channel::<AgentUpdate>(256);
@@ -1430,6 +1431,7 @@ fn apply_config_write(
     let (provider, provider_name, has_key) = select_provider(&app.config, &app.secrets);
     app.provider = provider;
     app.shell.provider = provider_label(provider_name, has_key);
+    app.shell.cache_supported = zoid_provider::has_prompt_cache(&app.model);
 }
 
 async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result<bool> {

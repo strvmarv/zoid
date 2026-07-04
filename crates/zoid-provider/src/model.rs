@@ -9,6 +9,11 @@ pub struct ModelInfo {
     pub context_window: u64,
     pub max_output: u64, // 0 = "use provider default"
     pub tools: bool,
+    /// Whether this model's provider reports a token-level prompt cache
+    /// (e.g. Anthropic's `cache_read_input_tokens`). When false, the session
+    /// drawer shows "n/a" for the `cac` line and the context drawer dims its
+    /// cache sparkline.
+    pub prompt_cache: bool,
 }
 
 /// How a provider entry is reached. Http/Cli carry their default connection
@@ -144,6 +149,7 @@ pub fn model_info(model: &str) -> ModelInfo {
         context_window,
         max_output: 0,
         tools: true,
+        prompt_cache: m.contains("claude"),
     }
 }
 

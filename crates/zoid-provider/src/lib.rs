@@ -199,6 +199,15 @@ pub fn context_ceiling(model: &str) -> u64 {
     model::model_info(model).context_window
 }
 
+/// Whether the provider/model reports a token-level prompt cache (cache-read
+/// tokens). Anthropic does (ephemeral cache breakpoints); Ollama's native
+/// `/api/chat` does not (`cached` is always 0 — `keep_alive` is infra-level,
+/// not token-level). Powers the "n/a" display for the session drawer's `cac`
+/// line and the context drawer's cache sparkline dimming.
+pub fn has_prompt_cache(model: &str) -> bool {
+    model::model_info(model).prompt_cache
+}
+
 #[cfg(test)]
 mod selection_tests {
     use super::*;

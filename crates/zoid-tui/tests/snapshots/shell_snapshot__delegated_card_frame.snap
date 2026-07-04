@@ -13,7 +13,7 @@ Buffer {
         "                                                      █ ╭ ▾ session ──────────────────────────────╮ ",
         "                                                      █ │🟢 (unnamed)                             │ ", // hidden by multi-width symbols: [(58, " ")]
         "                                                      █ │🤖  ·                                    │ ", // hidden by multi-width symbols: [(58, " ")]
-        "                                                      █ │⌚ dur 0m   tok 0   cac 0                │ ", // hidden by multi-width symbols: [(58, " ")]
+        "                                                      █ │⌚ dur 0m   tok 0   cac n/a              │ ", // hidden by multi-width symbols: [(58, " ")]
         "                                                      █ │📊 ctx 0                                 │ ", // hidden by multi-width symbols: [(58, " ")]
         "                                                      █ ╰─────────────────────────────────────────╯ ",
         "                                                      █                                             ",
@@ -96,8 +96,7 @@ Buffer {
         x: 69, y: 8, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 73, y: 8, fg: Rgb(201, 209, 217), bg: Reset, underline: Reset, modifier: NONE,
         x: 77, y: 8, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 81, y: 8, fg: Rgb(201, 209, 217), bg: Reset, underline: Reset, modifier: NONE,
-        x: 82, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 84, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 98, y: 8, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
         x: 99, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 54, y: 9, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,

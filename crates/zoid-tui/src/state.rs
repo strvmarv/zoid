@@ -181,6 +181,11 @@ pub struct ShellState {
     /// "cac" line). The subset of input tokens served from the provider's
     /// prompt cache, summed across all turns.
     pub cached_tokens: u64,
+    /// Whether the active provider/model reports a token-level prompt cache.
+    /// When false, the session drawer shows "n/a" for `cac` and the context
+    /// drawer dims its cache sparkline label. Set once at startup from
+    /// `has_prompt_cache(model)`.
+    pub cache_supported: bool,
     /// Current context-window token usage (session drawer "ctx" line).
     pub ctx_used: u64,
     /// Context-window ceiling in tokens (session drawer "ctx" line denominator).
@@ -284,6 +289,7 @@ impl ShellState {
             duration: "0m".into(),
             session_tokens: 0,
             cached_tokens: 0,
+            cache_supported: false,
             ctx_used: 0,
             ctx_ceiling: 0,
             cwd: String::new(),

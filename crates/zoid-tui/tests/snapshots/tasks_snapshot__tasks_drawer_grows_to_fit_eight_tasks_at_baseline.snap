@@ -12,7 +12,7 @@ expression: "draw_at(&s, &many_tasks(8), 160, 40)"
 "                                                                                                                  █ ╭ ▾ session ──────────────────────────────╮ "
 "                                                                                                                  █ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(118, " ")]
 "                                                                                                                  █ │🤖  ·                                    │ " Hidden by multi-width symbols: [(118, " ")]
-"                                                                                                                  █ │⌚ dur 0m   tok 0   cac 0                │ " Hidden by multi-width symbols: [(118, " ")]
+"                                                                                                                  █ │⌚ dur 0m   tok 0   cac n/a              │ " Hidden by multi-width symbols: [(118, " ")]
 "                                                                                                                  █ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(118, " ")]
 "                                                                                                                  █ │📁 cwd                                   │ " Hidden by multi-width symbols: [(118, " ")]
 "                                                                                                                  █ ╰─────────────────────────────────────────╯ "

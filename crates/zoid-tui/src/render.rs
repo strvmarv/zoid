@@ -512,8 +512,12 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
             ),
             Span::styled("cac ", Style::new().fg(color::DIM)),
             Span::styled(
-                human_tokens(state.cached_tokens),
-                Style::new().fg(color::TXT),
+                if state.cache_supported {
+                    human_tokens(state.cached_tokens)
+                } else {
+                    "n/a".to_string()
+                },
+                Style::new().fg(color::DIM),
             ),
         ]),
         {

@@ -13,7 +13,7 @@ Buffer {
         "           │                                                                      │           █ ╭ ▾ session ──────────────────────────────╮ ",
         "           │                                                                      │           █ │🟢 (unnamed)                             │ ", // hidden by multi-width symbols: [(98, " ")]
         "           │                                                                      │           █ │🤖  ·                                    │ ", // hidden by multi-width symbols: [(98, " ")]
-        "           │                                                                      │           █ │⌚ dur 0m   tok 0   cac 0                │ ", // hidden by multi-width symbols: [(98, " ")]
+        "           │                                                                      │           █ │⌚ dur 0m   tok 0   cac n/a              │ ", // hidden by multi-width symbols: [(98, " ")]
         "           │                                                                      │           █ │📊 ctx 0                                 │ ", // hidden by multi-width symbols: [(98, " ")]
         "           │                                                                      │           █ ╰─────────────────────────────────────────╯ ",
         "           │                                                                      │           █                                             ",
@@ -129,8 +129,7 @@ Buffer {
         x: 109, y: 8, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 113, y: 8, fg: Rgb(201, 209, 217), bg: Reset, underline: Reset, modifier: NONE,
         x: 117, y: 8, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 121, y: 8, fg: Rgb(201, 209, 217), bg: Reset, underline: Reset, modifier: NONE,
-        x: 122, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 124, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 138, y: 8, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
         x: 139, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 11, y: 9, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
