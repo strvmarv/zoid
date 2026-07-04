@@ -736,6 +736,294 @@ fn config_overlay_frame() {
     insta::assert_snapshot!(draw_config(&s, &sections, 100, 24));
 }
 
+/// API-key gate (Task 15): while `config_key_prompt` is set, the fields
+/// column shows a dedicated masked key-entry view instead of the normal
+/// per-row list — the literal secret text must never appear, only mask
+/// glyphs + caret.
+#[test]
+fn config_key_prompt_masks_entry() {
+    use zoid_core::config::{Config, Provenance, Source};
+    use zoid_core::secret::SecretStatus;
+    use zoid_tui::config_view::build_sections;
+
+    let mut s = ShellState::new();
+    s.overlay = Overlay::Config;
+    s.config_key_prompt = Some("ANTHROPIC_API_KEY");
+    s.config_edit = Some("sk-secret".to_string());
+    let cfg = Config::default();
+    let prov = Provenance {
+        provider: Source::Default,
+        base_url: Source::Default,
+        model: Source::Default,
+        context_ceiling: Source::Default,
+        auto_evict_cold: Source::Default,
+        compact_threshold_pct: Source::Default,
+        token_ceiling: Source::Default,
+        reduced_motion: Source::Default,
+    };
+    let ks = [
+        ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
+        ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
+    ];
+    let sections = build_sections(&cfg, &prov, &ks);
+    let snapshot = draw_config(&s, &sections, 160, 40);
+    assert!(
+        !snapshot.contains("sk-secret"),
+        "masked key prompt must not leak the literal secret text"
+    );
+    insta::assert_snapshot!(snapshot);
+}
+
+/// Config overlay (Task 8): full-screen three-column layout — sections rail |
+/// active section's fields | contextual picker — with the provider picker open
+/// on the `provider` field (col 3 populated from `config_view::provider_options`).
+#[test]
+fn config_overlay_provider_picker() {
+    use zoid_core::config::{Config, Provenance, Source};
+    use zoid_core::secret::SecretStatus;
+    use zoid_tui::config_view::{build_sections, provider_options};
+    use zoid_tui::state::ConfigCol;
+
+    let mut s = ShellState::new();
+    s.overlay = Overlay::Config;
+    s.config_section = 0;
+    s.config_field = 0; // "provider" row
+    s.config_col = ConfigCol::Picker;
+    let cfg = Config::default();
+    let prov = Provenance {
+        provider: Source::Default,
+        base_url: Source::Default,
+        model: Source::Default,
+        context_ceiling: Source::Default,
+        auto_evict_cold: Source::Default,
+        compact_threshold_pct: Source::Default,
+        token_ceiling: Source::Default,
+        reduced_motion: Source::Default,
+    };
+    let ks = [
+        ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
+        ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
+    ];
+    let sections = build_sections(&cfg, &prov, &ks);
+    s.config_picker = provider_options(&cfg.provider);
+    s.config_picker_sel = 0;
+    insta::assert_snapshot!(draw_config(&s, &sections, 160, 40));
+}
+
+/// The snapshot above renders via `to_string()`, which captures glyphs but not
+/// cell styles — so the picker's `SEL_BG` selection highlight and the `DIM`
+/// styling of `[planned]` rows are otherwise unverified. Build the identical
+/// state and render into a raw `Buffer` this time, then assert specific cell
+/// styles directly.
+///
+/// Row/col offsets come from the layout in `render_config`: with the picker
+/// open, columns are [rail 22 | fields 40 | picker Min(20)] inside the inner
+/// area (which starts at x=1, y=1 — one cell in from the rounded border), so
+/// the picker column starts at x = 1 + 22 + 40 = 63; `picker_x` below (70) is
+/// comfortably inside that column's padded text. Picker rows start at y = 1
+/// (right under the top border, no header row), one per `config_picker`
+/// entry — confirmed against
+/// `tests/snapshots/shell_snapshot__config_overlay_provider_picker.snap`,
+/// where row y=1 is the selected `provider` entry and row y=4 is the first
+/// `[planned]`, non-selectable entry.
+#[test]
+fn config_overlay_provider_picker_selection_and_planned_styles() {
+    use zoid_core::config::{Config, Provenance, Source};
+    use zoid_core::secret::SecretStatus;
+    use zoid_tui::config_view::{build_sections, provider_options};
+    use zoid_tui::render::render_config;
+    use zoid_tui::state::ConfigCol;
+    use zoid_tui::tokens::color;
+
+    let mut s = ShellState::new();
+    s.overlay = Overlay::Config;
+    s.config_section = 0;
+    s.config_field = 0; // "provider" row
+    s.config_col = ConfigCol::Picker;
+    let cfg = Config::default();
+    let prov = Provenance {
+        provider: Source::Default,
+        base_url: Source::Default,
+        model: Source::Default,
+        context_ceiling: Source::Default,
+        auto_evict_cold: Source::Default,
+        compact_threshold_pct: Source::Default,
+        token_ceiling: Source::Default,
+        reduced_motion: Source::Default,
+    };
+    let ks = [
+        ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
+        ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
+    ];
+    let sections = build_sections(&cfg, &prov, &ks);
+    s.config_picker = provider_options(&cfg.provider);
+    s.config_picker_sel = 0;
+
+    // Locate a non-selectable ("planned") row instead of hardcoding its
+    // index, so the test still holds if the registry gains/loses entries;
+    // still assert the fixture has the shape this test needs (a selectable
+    // row 0 to select, plus at least one planned row to check DIM against).
+    assert!(
+        s.config_picker[s.config_picker_sel].selectable,
+        "fixture's selected row must be selectable"
+    );
+    let planned_idx = s
+        .config_picker
+        .iter()
+        .position(|o| !o.selectable)
+        .expect("fixture must include at least one [planned] provider row");
+
+    let backend = TestBackend::new(160, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|f| {
+            let area = f.area();
+            render_config(f, &s, &sections, area);
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+
+    let picker_x: u16 = 70;
+    let sel_y = 1 + s.config_picker_sel as u16;
+    let planned_y = 1 + planned_idx as u16;
+
+    let sel_cell = &buffer[(picker_x, sel_y)];
+    assert_eq!(
+        sel_cell.bg,
+        color::SEL_BG,
+        "selected picker row must render the SEL_BG highlight"
+    );
+
+    let planned_cell = &buffer[(picker_x, planned_y)];
+    assert_eq!(
+        planned_cell.fg,
+        color::DIM,
+        "non-selectable [planned] row must render DIM"
+    );
+}
+
+/// Config overlay (Task 9): graceful degradation below the 160×40 baseline.
+/// At a narrower width the sections rail + fields still render, but three
+/// columns (rail 22 + fields 40 + picker 20 = 82 cols min, checked against
+/// the inner body width i.e. terminal width minus the 2-cell outer border)
+/// no longer fit side-by-side, so the open provider picker floats as a
+/// rounded overlay card on top of the fields column instead of squeezing
+/// into a sliver third column. 80 cols of terminal width (78 cols of inner
+/// body) is comfortably below the 82-col three-column minimum, so this
+/// exercises the degraded path. Never blank: sections rail, fields, and the
+/// overlaid picker card must all be visible.
+#[test]
+fn config_overlay_narrow_degrades() {
+    use zoid_core::config::{Config, Provenance, Source};
+    use zoid_core::secret::SecretStatus;
+    use zoid_tui::config_view::{build_sections, provider_options};
+    use zoid_tui::state::ConfigCol;
+
+    let mut s = ShellState::new();
+    s.overlay = Overlay::Config;
+    s.config_section = 0;
+    s.config_field = 0; // "provider" row
+    s.config_col = ConfigCol::Picker;
+    let cfg = Config::default();
+    let prov = Provenance {
+        provider: Source::Default,
+        base_url: Source::Default,
+        model: Source::Default,
+        context_ceiling: Source::Default,
+        auto_evict_cold: Source::Default,
+        compact_threshold_pct: Source::Default,
+        token_ceiling: Source::Default,
+        reduced_motion: Source::Default,
+    };
+    let ks = [
+        ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
+        ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
+    ];
+    let sections = build_sections(&cfg, &prov, &ks);
+    s.config_picker = provider_options(&cfg.provider);
+    s.config_picker_sel = 0;
+    insta::assert_snapshot!(draw_config(&s, &sections, 80, 24));
+}
+
+/// Code review fix for Task 9: the degraded overlay picker (rendered when the
+/// picker is open but three columns don't fit, e.g. 80x24) must only
+/// highlight its selected row when focus is actually on the picker
+/// (`ConfigCol::Picker`), matching the column-3 (non-degraded) behavior. A
+/// prior regression hardcoded `active = true` for the overlay, so it stayed
+/// highlighted even when focus moved to `ConfigCol::Fields`. Across the whole
+/// config render the only source of a `color::SEL_BG` cell background is the
+/// picker's selected row (rail/fields spans use fg only), so counting
+/// `SEL_BG` cells is a reliable oracle for "is the picker rendered as
+/// active."
+#[test]
+fn config_overlay_narrow_degrades_respects_focus() {
+    use zoid_core::config::{Config, Provenance, Source};
+    use zoid_core::secret::SecretStatus;
+    use zoid_tui::config_view::{build_sections, provider_options};
+    use zoid_tui::render::render_config;
+    use zoid_tui::state::ConfigCol;
+    use zoid_tui::tokens::color;
+
+    let cfg = Config::default();
+    let prov = Provenance {
+        provider: Source::Default,
+        base_url: Source::Default,
+        model: Source::Default,
+        context_ceiling: Source::Default,
+        auto_evict_cold: Source::Default,
+        compact_threshold_pct: Source::Default,
+        token_ceiling: Source::Default,
+        reduced_motion: Source::Default,
+    };
+    let ks = [
+        ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
+        ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
+    ];
+    let sections = build_sections(&cfg, &prov, &ks);
+
+    let sel_bg_count = |config_col: ConfigCol| {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Config;
+        s.config_section = 0;
+        s.config_field = 0; // "provider" row
+        s.config_col = config_col;
+        s.config_picker = provider_options(&cfg.provider);
+        s.config_picker_sel = 0;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                render_config(f, &s, &sections, area);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        buffer
+            .content()
+            .iter()
+            .filter(|c| c.bg == color::SEL_BG)
+            .count()
+    };
+
+    // Case A: focus is on the picker — the overlay's selected row IS
+    // highlighted.
+    let with_focus = sel_bg_count(ConfigCol::Picker);
+    assert!(
+        with_focus > 0,
+        "overlay picker must highlight its selected row when focus is on the picker"
+    );
+
+    // Case B: focus is on fields, but the picker is still open — the overlay
+    // must NOT highlight. This is the case that fails against the pre-fix
+    // hardcoded `true` and passes after the fix.
+    let without_focus = sel_bg_count(ConfigCol::Fields);
+    assert_eq!(
+        without_focus, 0,
+        "overlay picker must not highlight its selected row when focus is elsewhere"
+    );
+}
+
 /// The `ask_user` question overlay (Task 11), pick mode: a centered card
 /// listing the model's choices plus the two synthetic "Other…"/"— let you
 /// decide —" rows, the first row (default `selected == 0`) highlighted with
@@ -777,4 +1065,33 @@ fn question_overlay_freetext_frame() {
     use zoid_tui::question::QuestionState;
     let q = QuestionState::new("Describe the bug", vec![]);
     insta::assert_snapshot!(draw_question(q, 100, 24));
+}
+
+/// Quick-switch (`Alt+P`) overlay (Task 11): a two-pane floating card —
+/// providers left (with a current-marker dot), models right — rendered via
+/// `render_provider_switch`, mirroring the config picker's `picker_lines`
+/// styling. Never blank: both panes and the word-based footer must render.
+#[test]
+fn provider_switch_card() {
+    use zoid_tui::config_view::{model_options, provider_options};
+    use zoid_tui::render::render_provider_switch;
+    use zoid_tui::state::SwitchPane;
+
+    let mut s = ShellState::new();
+    s.overlay = Overlay::ProviderSwitch;
+    s.switch_providers = provider_options("ollama-cloud");
+    s.switch_models = model_options("anthropic-api", "");
+    s.switch_provider_sel = 0;
+    s.switch_model_sel = 0;
+    s.switch_pane = SwitchPane::Provider;
+
+    let backend = TestBackend::new(160, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|f| {
+            let area = f.area();
+            render_provider_switch(f, &s, area);
+        })
+        .unwrap();
+    insta::assert_snapshot!(terminal.backend().to_string());
 }

@@ -36,6 +36,15 @@ impl Zoom {
     }
 }
 
+/// Which column has focus inside the config overlay. Sections are switched with
+/// Tab (not a focusable column); focus moves between the field list and the
+/// contextual picker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigCol {
+    Fields,
+    Picker,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Overlay {
     None,
@@ -46,6 +55,15 @@ pub enum Overlay {
     Sessions,
     Config,
     Question,
+    ProviderSwitch,
+}
+
+/// Which pane has focus inside the quick-switch (`Alt+P`) overlay: the
+/// provider list or the model list (Task 11 renders/populates it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwitchPane {
+    Provider,
+    Model,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,6 +166,11 @@ pub struct ShellState {
     pub model: String,
     /// Human provider label (e.g. "anthropic", "ollama") shown beside the model.
     pub provider: String,
+    /// The secret env name currently being entered via the masked key-prompt
+    /// (e.g. `"ANTHROPIC_API_KEY"`), or `None` when not prompting. Set when a
+    /// selected provider needs a key we don't have yet (Task 15 gate); cleared
+    /// on commit or cancel.
+    pub config_key_prompt: Option<&'static str>,
     /// Compact elapsed-time-in-session label (e.g. "12m", "1h3m").
     pub duration: String,
     /// Total tokens spent in the active session (session drawer "tok" line).
@@ -168,12 +191,31 @@ pub struct ShellState {
     /// the bin once per frame from `Config` + `Provenance` + secret statuses
     /// (Task 12 wires population; empty here is a valid default).
     pub config_sections: Vec<crate::config_view::Section>,
+    /// Focused column in the config overlay (fields vs the drilled-open picker).
+    pub config_col: ConfigCol,
+    /// The open col-3 picker options; empty when no picker is drilled open.
+    pub config_picker: Vec<crate::config_view::PickOption>,
+    /// Highlighted row within the open picker.
+    pub config_picker_sel: usize,
     /// Name of the tool currently executing (in-flight indicator), or `None`.
     pub active_tool: Option<String>,
     /// The active `ask_user` question overlay's state, or `None` when no
     /// question is pending (Task 11 renders it; Task 9 populates it via
     /// `AgentUpdate::AskUser`).
     pub question: Option<crate::question::QuestionState>,
+    /// Highlighted row in the quick-switch overlay's provider list (Task 11
+    /// renders it; Task 10 only plumbs the state through).
+    pub switch_provider_sel: usize,
+    /// Highlighted row in the quick-switch overlay's model list.
+    pub switch_model_sel: usize,
+    /// Focused pane in the quick-switch overlay (provider list vs model list).
+    pub switch_pane: SwitchPane,
+    /// Provider options shown in the quick-switch overlay's left pane, seeded
+    /// by the bin on `OpenProviderSwitch`/pane moves (Task 11).
+    pub switch_providers: Vec<crate::config_view::PickOption>,
+    /// Model options shown in the quick-switch overlay's right pane, tracking
+    /// the highlighted provider (Task 11).
+    pub switch_models: Vec<crate::config_view::PickOption>,
 }
 
 impl ShellState {
@@ -232,6 +274,7 @@ impl ShellState {
             session_name: String::new(),
             model: String::new(),
             provider: String::new(),
+            config_key_prompt: None,
             duration: "0m".into(),
             session_tokens: 0,
             ctx_used: 0,
@@ -241,8 +284,16 @@ impl ShellState {
             config_field: 0,
             config_edit: None,
             config_sections: Vec::new(),
+            config_col: ConfigCol::Fields,
+            config_picker: Vec::new(),
+            config_picker_sel: 0,
             active_tool: None,
             question: None,
+            switch_provider_sel: 0,
+            switch_model_sel: 0,
+            switch_pane: SwitchPane::Provider,
+            switch_providers: Vec::new(),
+            switch_models: Vec::new(),
         }
     }
 
@@ -373,6 +424,11 @@ impl ShellState {
     /// Clear the in-flight spinner (its `ToolResult` arrived, or the turn ended).
     pub fn clear_active_tool(&mut self) {
         self.active_tool = None;
+    }
+
+    /// True when the col-3 contextual picker is drilled open.
+    pub fn config_picker_open(&self) -> bool {
+        !self.config_picker.is_empty()
     }
 }
 
@@ -635,5 +691,13 @@ mod tests {
         assert_eq!(s.active_tool.as_deref(), Some("shell"));
         s.clear_active_tool();
         assert_eq!(s.active_tool, None);
+    }
+
+    #[test]
+    fn config_picker_defaults_closed() {
+        let s = ShellState::new();
+        assert!(matches!(s.config_col, ConfigCol::Fields));
+        assert!(!s.config_picker_open());
+        assert_eq!(s.config_picker_sel, 0);
     }
 }

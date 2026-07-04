@@ -347,6 +347,39 @@ fn handle_conversation_click(app: &mut App, layout: &zoid_tui::layout::ShellLayo
     }
 }
 
+/// The base URL to hand a provider: an explicit non-blank config override wins,
+/// else the registry default for the (canonicalized) provider id, else empty
+/// (which `with_base_url` treats as "keep the built-in default").
+fn effective_base_url(config: &zoid_core::config::Config) -> String {
+    if let Some(u) = config.base_url.as_ref() {
+        if !u.trim().is_empty() {
+            return u.clone();
+        }
+    }
+    zoid_provider::model::default_base_url(&config.provider)
+        .map(str::to_string)
+        .unwrap_or_default()
+}
+
+/// Whether a provider id needs an API key to be usable. Local Ollama (localhost)
+/// does not; all remote HTTP flavors do. Hardcoded shortcut: `ollama-local` is
+/// the only keyless `Available` provider today. Revisit against the registry if
+/// `anthropic-cli`/`anthropic-sdk` (ambient auth, no API key) become selectable.
+fn entry_requires_key(id: &str) -> bool {
+    id != "ollama-local"
+}
+
+/// The secret env name a provider id needs, or `None` if it needs no key.
+fn key_env_for(id: &str) -> Option<&'static str> {
+    if !entry_requires_key(id) {
+        return None;
+    }
+    match zoid_provider::model::entry(id).map(|e| e.family) {
+        Some("anthropic") => Some("ANTHROPIC_API_KEY"),
+        _ => Some("OLLAMA_API_KEY"),
+    }
+}
+
 /// Provider + credential from `config.provider` + the secret store (env wins
 /// inside `SecretStore::get`). No key found → fall back to the offline
 /// `FakeProvider` so the binary always runs; `provider_label` mirrors this
@@ -369,12 +402,22 @@ fn select_provider(
             s.get(name)
         })
     };
-    // `base_url` override (config §7.1). Empty/unset keeps the provider's
-    // built-in default — `with_base_url` ignores blank input — so we can pass it
-    // unconditionally. The offline `FakeProvider` fallback has no endpoint, so
-    // the override only applies on the keyed branches.
-    let base_url = config.base_url.clone().unwrap_or_default();
-    match config.provider.as_str() {
+    // ollama-local: usable without a key (localhost, no auth). Construct directly.
+    if zoid_provider::model::canonical_id(&config.provider) == "ollama-local" {
+        let base_url = effective_base_url(config);
+        return (
+            Arc::new(
+                zoid_provider::ollama::OllamaProvider::new(String::new()).with_base_url(base_url),
+            ),
+            "ollama",
+            true, // no key required → treat as ready
+        );
+    }
+    let base_url = effective_base_url(config);
+    let family = zoid_provider::model::entry(&config.provider)
+        .map(|e| e.family)
+        .unwrap_or("ollama");
+    match family {
         "anthropic" => match key_for("ANTHROPIC_API_KEY") {
             Some(k) => (
                 Arc::new(
@@ -394,6 +437,25 @@ fn select_provider(
             None => (default_provider(), "ollama", false),
         },
     }
+}
+
+/// Spawn a background fetch of a provider's model list; the result is delivered
+/// as `AgentUpdate::ModelsFetched`. Non-fatal: any error → empty list (the
+/// picker keeps its static registry fallback).
+fn spawn_model_fetch(
+    provider: Arc<dyn Provider>,
+    provider_id: String,
+    ui_tx: mpsc::Sender<AgentUpdate>,
+) {
+    tokio::spawn(async move {
+        let models = provider.list_models().await.unwrap_or_default();
+        let _ = ui_tx
+            .send(AgentUpdate::ModelsFetched {
+                provider: provider_id,
+                models,
+            })
+            .await;
+    });
 }
 
 /// Build the economy `ContextPolicy` (spec §7.2) from the loaded config's
@@ -1069,6 +1131,9 @@ async fn run<B: ratatui::backend::Backend>(
                         app.shell.overlay = zoid_tui::state::Overlay::Question;
                         app.pending_answer = Some(reply);
                     }
+                    AgentUpdate::ModelsFetched { provider, models } => {
+                        apply_models_fetched(app, provider, models);
+                    }
                 }
             }
             _ = motion_tick.tick(), if app.streaming || app.delegating || app.zoom_changed_at.is_some() => {
@@ -1227,6 +1292,39 @@ fn current_config_field(app: &App) -> Option<(&'static str, zoid_tui::config_vie
         .map(|r| (r.label, r.kind.clone()))
 }
 
+/// Replace an OPEN model picker's options with a freshly-fetched live list.
+/// No-op if the list is empty (keep the static fallback) or a model picker
+/// isn't currently open (results arrived too late / focus moved).
+fn apply_models_fetched(app: &mut App, provider: String, models: Vec<String>) {
+    // Drop a stale fetch: the user switched providers while this was in flight.
+    if provider != app.config.provider {
+        return;
+    }
+    if models.is_empty() || !app.shell.config_picker_open() {
+        return;
+    }
+    if current_config_field(app).map(|(l, _)| l) != Some("model") {
+        return;
+    }
+    let cur = app.config.model.clone();
+    app.shell.config_picker = models
+        .into_iter()
+        .map(|m| zoid_tui::config_view::PickOption {
+            is_current: m == cur,
+            id: m.clone(),
+            label: m,
+            detail: String::new(),
+            selectable: true,
+        })
+        .collect();
+    app.shell.config_picker_sel = app
+        .shell
+        .config_picker
+        .iter()
+        .position(|o| o.is_current)
+        .unwrap_or(0);
+}
+
 /// Rebuild the live config screen from the current config/provenance/secret
 /// statuses.
 fn refresh_config_sections(app: &mut App) {
@@ -1260,6 +1358,16 @@ fn write_config_file(
     }
     std::fs::write(path, out)?;
     Ok(())
+}
+
+/// The TOML write for `base_url` when a provider is selected: the registry
+/// default endpoint (HTTP transports), or `Unset` to clear it (Cli/Sdk have no
+/// URL). The user can still override afterward (which flips provenance to [user]).
+fn base_url_write_for(id: &str) -> zoid_core::config::TomlValue {
+    match zoid_provider::model::default_base_url(id) {
+        Some(u) => zoid_core::config::TomlValue::Str(u.to_string()),
+        None => zoid_core::config::TomlValue::Unset,
+    }
 }
 
 /// Persist a single TOML key (to the repo `./.zoid/config.toml` when `to_repo`,
@@ -1579,8 +1687,56 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::ConfigCancelEdit => {
             app.shell.config_edit = None;
+            app.shell.config_key_prompt = None;
         }
         Action::ConfigCommitEdit => {
+            if let Some(env) = app.shell.config_key_prompt.take() {
+                let buf = app.shell.config_edit.take().unwrap_or_default();
+                let key = buf.trim();
+                if key.is_empty() {
+                    // Blank/whitespace commit: abort like Esc. Storing an empty
+                    // credential would falsely mark the provider "ready" (status
+                    // becomes Set) and suppress any future reprompt.
+                    return Ok(false);
+                }
+                if let Some(s) = &app.secrets {
+                    use zoid_core::secret::SecretStore;
+                    if let Err(e) = s.set(env, key) {
+                        eprintln!("zoid: secret set failed for {env}: {e}");
+                    }
+                } else {
+                    eprintln!("zoid: secret store unavailable; cannot set {env}");
+                }
+                refresh_config_sections(app);
+                // Re-select with the new key (the key lives in the secret store, not
+                // config, so apply_config_write's auto-reselect never ran), then
+                // advance to the model picker + fetch.
+                let (provider, name, has_key) = select_provider(&app.config, &app.secrets);
+                app.provider = provider;
+                app.shell.provider = provider_label(name, has_key);
+                if let Some(mi) = app
+                    .shell
+                    .config_sections
+                    .get(app.shell.config_section)
+                    .and_then(|sec| sec.rows.iter().position(|r| r.label == "model"))
+                {
+                    app.shell.config_field = mi;
+                }
+                app.shell.config_picker =
+                    zoid_tui::config_view::model_options(&app.config.provider, &app.config.model);
+                app.shell.config_picker_sel = 0;
+                app.shell.config_col = if app.shell.config_picker.is_empty() {
+                    zoid_tui::state::ConfigCol::Fields
+                } else {
+                    zoid_tui::state::ConfigCol::Picker
+                };
+                spawn_model_fetch(
+                    app.provider.clone(),
+                    app.config.provider.clone(),
+                    app.ui_tx.clone(),
+                );
+                return Ok(false);
+            }
             if let (Some((label, kind)), Some(buffer)) =
                 (current_config_field(app), app.shell.config_edit.clone())
             {
@@ -1623,49 +1779,122 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 }
             }
         }
-        Action::ConfigCycle(dir) => {
-            use zoid_core::config::TomlValue;
-            // Step an index by `dir` (±1) with wraparound in either direction.
-            let step = |i: usize, len: usize| -> usize {
-                if len == 0 {
-                    0
-                } else {
-                    (i as i32 + dir).rem_euclid(len as i32) as usize
+        Action::ConfigDrillOpen => {
+            use zoid_tui::state::ConfigCol;
+            if let Some((label, _)) = current_config_field(app) {
+                app.shell.config_picker = match label {
+                    "provider" => zoid_tui::config_view::provider_options(&app.config.provider),
+                    "model" => zoid_tui::config_view::model_options(
+                        &app.config.provider,
+                        &app.config.model,
+                    ),
+                    _ => Vec::new(),
+                };
+                if !app.shell.config_picker.is_empty() {
+                    // Cursor lands on the current value, else the first selectable row.
+                    app.shell.config_picker_sel = app
+                        .shell
+                        .config_picker
+                        .iter()
+                        .position(|o| o.is_current)
+                        .or_else(|| app.shell.config_picker.iter().position(|o| o.selectable))
+                        .unwrap_or(0);
+                    app.shell.config_col = ConfigCol::Picker;
                 }
-            };
-            if let Some((label, _kind)) = current_config_field(app) {
-                match label {
-                    "provider" => {
-                        let list = zoid_provider::model::KNOWN_PROVIDERS;
-                        let cur = app.config.provider.as_str();
-                        let next = match list.iter().position(|p| *p == cur) {
-                            Some(i) => list[step(i, list.len())],
-                            None => list[0],
+                if label == "model" {
+                    spawn_model_fetch(
+                        app.provider.clone(),
+                        app.config.provider.clone(),
+                        app.ui_tx.clone(),
+                    );
+                }
+            }
+        }
+        Action::ConfigPickerMove(d) => {
+            let picker = &app.shell.config_picker;
+            if !picker.is_empty() {
+                let n = picker.len() as i32;
+                let mut i = app.shell.config_picker_sel as i32;
+                for _ in 0..n {
+                    i = (i + d).rem_euclid(n);
+                    if picker[i as usize].selectable {
+                        break;
+                    }
+                }
+                app.shell.config_picker_sel = i as usize;
+            }
+        }
+        Action::ConfigPickerBack => {
+            use zoid_tui::state::ConfigCol;
+            app.shell.config_picker.clear();
+            app.shell.config_col = ConfigCol::Fields;
+        }
+        Action::ConfigPickerSelect => {
+            use zoid_core::config::TomlValue;
+            use zoid_tui::state::ConfigCol;
+            let chosen = app
+                .shell
+                .config_picker
+                .get(app.shell.config_picker_sel)
+                .filter(|o| o.selectable)
+                .map(|o| o.id.clone());
+            let label = current_config_field(app).map(|(l, _)| l).unwrap_or("");
+            if let Some(id) = chosen {
+                if label == "provider" {
+                    // Write provider, then seed base_url from the registry.
+                    apply_config_write(app, "provider", TomlValue::Str(id.clone()), false);
+                    apply_config_write(app, "base_url", base_url_write_for(&id), false);
+                    // Clear the model on a provider change (spec §4.3): the old
+                    // model almost never belongs to the new provider, and leaving
+                    // it would persist an incompatible provider+model pair if the
+                    // user backs out of the model picker below. Unset → empty →
+                    // the runtime falls back to the new provider's default_model()
+                    // until the user picks one from the (auto-opened) picker.
+                    apply_config_write(app, "model", TomlValue::Unset, false);
+                    // Key gate: if this provider needs a key we don't have, prompt first.
+                    let needs_key = key_env_for(&id).filter(|env| {
+                        use zoid_core::secret::{SecretStatus, SecretStore};
+                        app.secrets
+                            .as_ref()
+                            .map(|s| matches!(s.status(env), SecretStatus::NotSet))
+                            .unwrap_or(true)
+                    });
+                    if let Some(env) = needs_key {
+                        app.shell.config_key_prompt = Some(env);
+                        app.shell.config_edit = Some(String::new());
+                        app.shell.config_picker.clear();
+                        app.shell.config_col = ConfigCol::Fields;
+                    } else {
+                        // Auto-advance to the model field and open its picker.
+                        app.shell.config_picker.clear();
+                        if let Some(mi) = app
+                            .shell
+                            .config_sections
+                            .get(app.shell.config_section)
+                            .and_then(|s| s.rows.iter().position(|r| r.label == "model"))
+                        {
+                            app.shell.config_field = mi;
+                        }
+                        app.shell.config_picker = zoid_tui::config_view::model_options(
+                            &app.config.provider,
+                            &app.config.model,
+                        );
+                        app.shell.config_picker_sel = 0;
+                        app.shell.config_col = if app.shell.config_picker.is_empty() {
+                            ConfigCol::Fields
+                        } else {
+                            ConfigCol::Picker
                         };
-                        apply_config_write(
-                            app,
-                            "provider",
-                            TomlValue::Str(next.to_string()),
-                            false,
+                        spawn_model_fetch(
+                            app.provider.clone(),
+                            app.config.provider.clone(),
+                            app.ui_tx.clone(),
                         );
                     }
-                    "model" => {
-                        let list = zoid_provider::model::models_for(&app.config.provider);
-                        if !list.is_empty() {
-                            let cur = app.config.model.as_str();
-                            let next = match list.iter().position(|m| *m == cur) {
-                                Some(i) => list[step(i, list.len())],
-                                None => list[0],
-                            };
-                            apply_config_write(
-                                app,
-                                "model",
-                                TomlValue::Str(next.to_string()),
-                                false,
-                            );
-                        }
-                    }
-                    _ => {}
+                } else if label == "model" {
+                    apply_config_write(app, "model", TomlValue::Str(id), false);
+                    app.shell.config_picker.clear();
+                    app.shell.config_col = ConfigCol::Fields;
                 }
             }
         }
@@ -1742,6 +1971,109 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             // balanced "[user aborted]" result and end the turn.
             app.pending_answer = None; // drop the Sender
             app.shell.question = None;
+            app.shell.overlay = zoid_tui::state::Overlay::None;
+        }
+        Action::OpenProviderSwitch => {
+            use zoid_tui::state::{Overlay, SwitchPane};
+            app.shell.overlay = Overlay::ProviderSwitch;
+            app.shell.switch_providers =
+                zoid_tui::config_view::provider_options(&app.config.provider);
+            app.shell.switch_provider_sel = app
+                .shell
+                .switch_providers
+                .iter()
+                .position(|o| o.is_current)
+                .unwrap_or(0);
+            app.shell.switch_pane = SwitchPane::Provider;
+            app.shell.switch_model_sel = 0;
+            let highlighted_provider_id = app
+                .shell
+                .switch_providers
+                .get(app.shell.switch_provider_sel)
+                .map(|o| o.id.clone())
+                .unwrap_or_else(|| app.config.provider.clone());
+            app.shell.switch_models =
+                zoid_tui::config_view::model_options(&highlighted_provider_id, &app.config.model);
+        }
+        Action::SwitchPaneMove(_) => {
+            use zoid_tui::state::SwitchPane;
+            app.shell.switch_pane = match app.shell.switch_pane {
+                SwitchPane::Provider => SwitchPane::Model,
+                SwitchPane::Model => SwitchPane::Provider,
+            };
+        }
+        Action::SwitchItemMove(d) => {
+            use zoid_tui::state::SwitchPane;
+            match app.shell.switch_pane {
+                SwitchPane::Provider => {
+                    let list = &app.shell.switch_providers;
+                    if !list.is_empty() {
+                        let n = list.len() as i32;
+                        let mut i = app.shell.switch_provider_sel as i32;
+                        for _ in 0..n {
+                            i = (i + d).rem_euclid(n);
+                            if list[i as usize].selectable {
+                                break;
+                            }
+                        }
+                        app.shell.switch_provider_sel = i as usize;
+                        let highlighted_provider_id = app.shell.switch_providers
+                            [app.shell.switch_provider_sel]
+                            .id
+                            .clone();
+                        app.shell.switch_models = zoid_tui::config_view::model_options(
+                            &highlighted_provider_id,
+                            &app.config.model,
+                        );
+                        app.shell.switch_model_sel = 0;
+                    }
+                }
+                SwitchPane::Model => {
+                    let list = &app.shell.switch_models;
+                    if !list.is_empty() {
+                        let n = list.len() as i32;
+                        let mut i = app.shell.switch_model_sel as i32;
+                        for _ in 0..n {
+                            i = (i + d).rem_euclid(n);
+                            if list[i as usize].selectable {
+                                break;
+                            }
+                        }
+                        app.shell.switch_model_sel = i as usize;
+                    }
+                }
+            }
+        }
+        Action::SwitchApply => {
+            use zoid_core::config::TomlValue;
+            use zoid_tui::state::Overlay;
+            let provider_id = app
+                .shell
+                .switch_providers
+                .get(app.shell.switch_provider_sel)
+                .filter(|o| o.selectable)
+                .map(|o| o.id.clone());
+            let model_id = app
+                .shell
+                .switch_models
+                .get(app.shell.switch_model_sel)
+                .filter(|o| o.selectable)
+                .map(|o| o.id.clone());
+            if let Some(pid) = provider_id {
+                apply_config_write(app, "provider", TomlValue::Str(pid.clone()), false);
+                apply_config_write(app, "base_url", base_url_write_for(&pid), false);
+                if let Some(mid) = model_id {
+                    apply_config_write(app, "model", TomlValue::Str(mid), false);
+                } else {
+                    // No model chosen (e.g. ollama-local has no static model list):
+                    // clear any stale model so it can't outlive the provider change
+                    // (spec §4.3). Empty → new provider's default_model() at runtime.
+                    apply_config_write(app, "model", TomlValue::Unset, false);
+                }
+            }
+            app.shell.overlay = Overlay::None;
+        }
+        Action::SwitchCancel => {
             app.shell.overlay = zoid_tui::state::Overlay::None;
         }
         Action::Noop => {}
@@ -2125,7 +2457,7 @@ mod tests {
         );
         // provider / model → string TOML keys.
         assert_eq!(
-            field_target("provider", &FieldKind::Cycle(&[])),
+            field_target("provider", &FieldKind::Pick),
             Some(FieldTarget::Toml {
                 key: "provider",
                 ty: TomlTy::Str
@@ -2194,6 +2526,24 @@ mod tests {
             Some(TomlValue::Int(80))
         );
         assert_eq!(value_from_buffer(&TomlTy::U8Pct, "xx"), None);
+    }
+
+    #[test]
+    fn base_url_write_seeds_registry_default_or_unsets() {
+        use zoid_core::config::TomlValue;
+        assert_eq!(
+            base_url_write_for("ollama-local"),
+            TomlValue::Str("http://localhost:11434".into())
+        );
+        assert_eq!(
+            base_url_write_for("ollama"),
+            TomlValue::Str("https://ollama.com".into())
+        ); // alias → cloud
+        assert_eq!(
+            base_url_write_for("anthropic-api"),
+            TomlValue::Str("https://api.anthropic.com".into())
+        );
+        assert_eq!(base_url_write_for("anthropic-cli"), TomlValue::Unset); // Cli → clear base_url
     }
 
     #[test]
@@ -2401,6 +2751,117 @@ mod tests {
         assert_eq!(cache.msgs.len(), 2);
     }
 
+    /// `apply_models_fetched` replaces the OPEN model picker's options with the
+    /// live list, seeding the selection cursor on the current model; an empty
+    /// fetch result is a no-op (the static registry fallback is kept).
+    #[tokio::test]
+    async fn apply_models_fetched_replaces_open_model_picker() {
+        let mut app = test_app().await;
+        refresh_config_sections(&mut app);
+        // Find the "model" row and park the cursor on it, then open its
+        // picker exactly as `Action::ConfigDrillOpen` would.
+        let (section, field) = app
+            .shell
+            .config_sections
+            .iter()
+            .enumerate()
+            .find_map(|(si, s)| {
+                s.rows
+                    .iter()
+                    .position(|r| r.label == "model")
+                    .map(|ri| (si, ri))
+            })
+            .expect("config sections must include a \"model\" row");
+        app.shell.config_section = section;
+        app.shell.config_field = field;
+        assert_eq!(current_config_field(&app).map(|(l, _)| l), Some("model"));
+        app.shell.config_picker =
+            zoid_tui::config_view::model_options(&app.config.provider, &app.config.model);
+        app.shell.config_col = zoid_tui::state::ConfigCol::Picker;
+        assert!(app.shell.config_picker_open());
+
+        // Happy path: a live fetch replaces the fallback list.
+        let provider_id = app.config.provider.clone();
+        apply_models_fetched(
+            &mut app,
+            provider_id.clone(),
+            vec!["live-a".to_string(), "live-b".to_string()],
+        );
+        assert_eq!(app.shell.config_picker.len(), 2);
+        assert_eq!(app.shell.config_picker[0].id, "live-a");
+        assert_eq!(app.shell.config_picker[1].id, "live-b");
+        assert!(app.shell.config_picker.iter().all(|o| o.selectable));
+
+        // Empty fetch result: fallback list is left untouched.
+        apply_models_fetched(&mut app, provider_id, Vec::new());
+        assert_eq!(app.shell.config_picker.len(), 2);
+        assert_eq!(app.shell.config_picker[0].id, "live-a");
+        assert_eq!(app.shell.config_picker[1].id, "live-b");
+    }
+
+    /// A fetch tagged with a provider id that no longer matches
+    /// `app.config.provider` (the user switched providers while the fetch was
+    /// in flight) must be dropped entirely — the picker is left exactly as it
+    /// was, not overwritten with the stale provider's models.
+    #[tokio::test]
+    async fn stale_provider_fetch_is_dropped() {
+        let mut app = test_app().await;
+        refresh_config_sections(&mut app);
+        let (section, field) = app
+            .shell
+            .config_sections
+            .iter()
+            .enumerate()
+            .find_map(|(si, s)| {
+                s.rows
+                    .iter()
+                    .position(|r| r.label == "model")
+                    .map(|ri| (si, ri))
+            })
+            .expect("config sections must include a \"model\" row");
+        app.shell.config_section = section;
+        app.shell.config_field = field;
+        app.shell.config_picker =
+            zoid_tui::config_view::model_options(&app.config.provider, &app.config.model);
+        app.shell.config_col = zoid_tui::state::ConfigCol::Picker;
+        assert!(app.shell.config_picker_open());
+        let before = app.shell.config_picker.clone();
+        let before_sel = app.shell.config_picker_sel;
+
+        assert_ne!(app.config.provider, "some-other-provider");
+        apply_models_fetched(
+            &mut app,
+            "some-other-provider".to_string(),
+            vec!["stale-a".to_string(), "stale-b".to_string()],
+        );
+
+        assert_eq!(
+            app.shell.config_picker, before,
+            "a fetch tagged with a superseded provider id must not clobber the current picker"
+        );
+        assert_eq!(app.shell.config_picker_sel, before_sel);
+    }
+
+    /// A live fetch that lands after focus has moved off the model field (or
+    /// after the picker was closed) must not clobber whatever is on screen.
+    #[tokio::test]
+    async fn apply_models_fetched_ignored_when_model_picker_not_open() {
+        let mut app = test_app().await;
+        refresh_config_sections(&mut app);
+        // Cursor left on whatever the default field is (not drilled into a
+        // picker at all) — config_picker is empty, so config_picker_open() is
+        // false regardless of which row the cursor is on.
+        assert!(!app.shell.config_picker_open());
+
+        let provider_id = app.config.provider.clone();
+        apply_models_fetched(&mut app, provider_id, vec!["live-a".to_string()]);
+
+        assert!(
+            app.shell.config_picker.is_empty(),
+            "no picker was open; a stray fetch result must not open one"
+        );
+    }
+
     /// Regression for the busy-guard bug: `Action::Submit` must be a no-op
     /// while a delegation is in flight (`app.delegating`), symmetric with
     /// `start_delegation`'s `app.streaming || app.delegating` check. Before the
@@ -2510,5 +2971,77 @@ mod tests {
             Some("finish the current turn first"),
             "blocked NewSession should surface the busy hint"
         );
+    }
+
+    #[tokio::test]
+    async fn blank_key_commit_does_not_store_or_ready() {
+        let mut app = test_app().await;
+        app.shell.config_key_prompt = Some("ANTHROPIC_API_KEY");
+        app.shell.config_edit = Some("   ".to_string());
+
+        let quit = handle_action(&mut app, zoid_tui::route::Action::ConfigCommitEdit)
+            .await
+            .unwrap();
+
+        assert!(!quit, "blank key commit must not signal quit");
+        assert!(
+            app.shell.config_key_prompt.is_none(),
+            "key prompt must be cleared/aborted"
+        );
+        assert!(
+            app.shell.config_edit.is_none(),
+            "edit buffer must be cleared/aborted"
+        );
+        assert!(
+            app.shell.config_picker.is_empty(),
+            "blank commit must not advance to the model picker"
+        );
+    }
+
+    #[test]
+    fn effective_base_url_prefers_override_then_registry() {
+        use zoid_core::config::Config;
+        // No override → registry default for the canonical id.
+        let mut c = Config::default(); // provider = "ollama" (legacy) → ollama-cloud, base_url = None
+        assert_eq!(effective_base_url(&c), "https://ollama.com");
+
+        // Explicit local id, no override → local endpoint.
+        c.provider = "ollama-local".into();
+        c.base_url = None;
+        assert_eq!(effective_base_url(&c), "http://localhost:11434");
+
+        // Override wins over registry.
+        c.base_url = Some("http://127.0.0.1:1234".into());
+        assert_eq!(effective_base_url(&c), "http://127.0.0.1:1234");
+
+        // Blank override falls back to registry.
+        c.base_url = Some("   ".into());
+        assert_eq!(effective_base_url(&c), "http://localhost:11434");
+    }
+
+    #[test]
+    fn ollama_local_needs_no_key() {
+        // ollama-local is usable with no OLLAMA_API_KEY (localhost, no auth).
+        assert!(!entry_requires_key("ollama-local"));
+        assert!(entry_requires_key("ollama-cloud"));
+        assert!(entry_requires_key("anthropic-api"));
+    }
+
+    #[test]
+    fn key_env_for_family() {
+        assert_eq!(key_env_for("anthropic-api"), Some("ANTHROPIC_API_KEY"));
+        assert_eq!(key_env_for("ollama-cloud"), Some("OLLAMA_API_KEY"));
+        assert_eq!(key_env_for("ollama-local"), None); // no key needed
+    }
+
+    #[test]
+    fn select_provider_ollama_local_is_ready_without_key() {
+        let config = zoid_core::config::Config {
+            provider: "ollama-local".to_string(),
+            ..Default::default()
+        };
+        let (_provider, name, has_key) = select_provider(&config, &None);
+        assert_eq!(name, "ollama");
+        assert!(has_key, "ollama-local must be usable (ready) with no key");
     }
 }

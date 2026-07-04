@@ -152,12 +152,14 @@ pub fn render_shell(
             render_sessions_overlay(frame, state, p);
         }
     } else if state.overlay == Overlay::Config {
-        // render_config centers its own card within the given area.
+        // render_config draws a full-frame three-column card (sections | fields | picker).
         render_config(frame, state, &state.config_sections, frame.area());
     } else if state.overlay == Overlay::Question {
         if let Some(q) = &state.question {
             render_question(frame, frame.area(), q);
         }
+    } else if state.overlay == Overlay::ProviderSwitch {
+        render_provider_switch(frame, state, frame.area());
     }
     conv_max_scroll
 }
@@ -732,120 +734,257 @@ fn render_sessions_overlay(frame: &mut Frame, state: &ShellState, area: Rect) {
     );
 }
 
-/// The config overlay (Task 11): a contained, centered "zoid · settings" card.
-/// Single column — the section list (active marked), then the active section's
-/// rows (label, current value or the in-progress edit buffer + caret, and a
-/// right-aligned provenance tag with a `⚠` when an env var shadows the field),
-/// then a footer keybinding hint. Sized to its content and centered so a few
-/// short fields don't leave a vast empty screen. `area` is the full frame.
+/// The config overlay (Task 8): a full-frame "zoid · settings" three-column
+/// layout — col 1 the sections rail (active marked), col 2 the active
+/// section's fields (label, current value or the in-progress edit buffer +
+/// caret, and a right-aligned provenance tag), col 3 the contextual picker
+/// (provider / model), rendered only while `state.config_picker_open()`.
+/// A footer keybinding hint is reserved at the bottom of the card. `area` is
+/// the full frame.
 pub fn render_config(
     frame: &mut Frame,
     state: &ShellState,
     sections: &[crate::config_view::Section],
     area: Rect,
 ) {
-    use crate::layout::centered;
+    use crate::config_view::FieldKind;
     use crate::text::{pad_to, truncate};
+    use ratatui::layout::{Constraint, Direction, Layout};
 
-    frame.render_widget(Clear, area); // focus the card: clear the frame behind it
+    frame.render_widget(Clear, area);
     if sections.is_empty() {
         return;
     }
     let active = state.config_section.min(sections.len() - 1);
-    // Words, not arrow glyphs, keep the footer within §16 (no untokenized glyphs).
-    let footer = "Tab section · Left/Right change · Enter edit · Esc close";
 
-    // Content width: fit the footer and the widest section title, with a floor,
-    // plus one column of left indent, capped to the frame. Field rows are padded/
-    // truncated to this width so the provenance tag always lands at the card edge.
-    let title_w = sections
-        .iter()
-        .map(|s| s.title.width() + 2)
-        .max()
-        .unwrap_or(0);
-    let inner_w = (footer.width().max(title_w).max(40) + 1)
-        .min(area.width.saturating_sub(2) as usize)
-        .max(8);
-
-    let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from("")); // top breathing room
-    for (i, s) in sections.iter().enumerate() {
-        let on = i == active;
-        let marker = if on { glyph::COLLAPSED } else { ' ' };
-        lines.push(Line::from(Span::styled(
-            format!(" {marker} {}", s.title),
-            Style::new().fg(if on { color::CHAT_ACCENT } else { color::DIM }),
-        )));
-    }
-    lines.push(Line::from(""));
-
-    for (i, r) in sections[active].rows.iter().enumerate() {
-        let cur = i == state.config_field;
-        let val = if cur {
-            if let Some(buf) = &state.config_edit {
-                let shown = if matches!(r.kind, crate::config_view::FieldKind::Secret) {
-                    glyph::MASK.to_string().repeat(buf.chars().count())
-                } else {
-                    buf.clone()
-                };
-                format!("{shown}{}", glyph::CARET)
-            } else {
-                r.value.clone()
-            }
-        } else {
-            r.value.clone()
-        };
-        let (tag_txt, tag_col) = match r.source {
-            zoid_core::config::Source::Default => ("[default]", color::DIM),
-            zoid_core::config::Source::UserGlobal => ("[user]", color::CHAT_ACCENT),
-            zoid_core::config::Source::Project => ("[repo]", color::BRANCH),
-            zoid_core::config::Source::Local => ("[local]", color::BRANCH),
-            zoid_core::config::Source::Env => ("[env]", color::WARN),
-        };
-        let warn = if r.env_shadowed {
-            format!(" {}", glyph::WARNING)
-        } else {
-            String::new()
-        };
-        // Cursor marker + label on the left; value stretched (display-width padded)
-        // so the tag lands at the card's right edge.
-        let marker = if cur { glyph::COLLAPSED } else { ' ' };
-        let left = format!(" {marker} {}", pad_to(r.label, 14));
-        let fixed = left.width() + tag_txt.width() + warn.width();
-        let mid = inner_w.saturating_sub(fixed).max(1);
-        let val_shown = pad_to(&truncate(&val, mid), mid);
-        let mut spans = vec![
-            Span::styled(
-                left,
-                Style::new().fg(if cur { color::CHAT_ACCENT } else { color::TXT }),
-            ),
-            Span::styled(val_shown, Style::new().fg(color::TXT)),
-            Span::styled(tag_txt.to_string(), Style::new().fg(tag_col)),
-        ];
-        if !warn.is_empty() {
-            spans.push(Span::styled(warn, Style::new().fg(color::WARN)));
-        }
-        lines.push(Line::from(spans));
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        format!(" {footer}"),
-        Style::new().fg(color::DIM),
-    )));
-
-    // Card = content + border, centered; content is already 1-space indented.
-    let card_w = inner_w as u16 + 2;
-    let card_h = (lines.len() as u16 + 2).min(area.height);
-    let rect = centered(area, card_w, card_h);
-    // (the full-frame Clear above already wiped the card region)
+    // Outer full-frame card.
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .title(" zoid · settings ")
         .border_style(Style::new().fg(color::CHAT_ACCENT));
-    let inner = block.inner(rect);
-    frame.render_widget(block, rect);
-    frame.render_widget(Paragraph::new(lines), inner);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Footer line reserved at the bottom of the inner area.
+    let footer = "Tab section · Up/Down move · Enter drill · Esc back";
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+    let body = rows[0];
+    let foot = rows[1];
+
+    // Column split: sections rail | fields | (picker, only if open and it fits
+    // as a third column). Below the three-column minimum the picker instead
+    // renders as a floating overlay card on top of the fields column (see
+    // below) so every row stays legible instead of squeezing to nothing.
+    const RAIL_W: u16 = 22;
+    const FIELDS_W: u16 = 40;
+    const PICKER_MIN: u16 = 20;
+    let picker_open = state.config_picker_open();
+    let three_col_fits = body.width >= RAIL_W + FIELDS_W + PICKER_MIN;
+    let cols = if picker_open && three_col_fits {
+        // (unchanged) three columns: rail | fields | picker
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(RAIL_W),
+                Constraint::Length(FIELDS_W),
+                Constraint::Min(PICKER_MIN),
+            ])
+            .split(body)
+    } else if picker_open {
+        // degraded: two columns (rail | fields); picker floats as an overlay
+        // card over the fields column below. Shrink the rail at very narrow
+        // widths so the fields column (and the card over it) keeps room.
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(RAIL_W.min(body.width / 3).max(8)),
+                Constraint::Min(20),
+            ])
+            .split(body)
+    } else {
+        // picker closed: unchanged from before the settings redesign —
+        // fixed rail + fields fills the rest.
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(RAIL_W), Constraint::Min(30)])
+            .split(body)
+    };
+
+    // Column 1: sections rail.
+    let mut nav: Vec<Line> = Vec::new();
+    for (i, s) in sections.iter().enumerate() {
+        let on = i == active;
+        let marker = if on { glyph::COLLAPSED } else { ' ' };
+        nav.push(Line::from(Span::styled(
+            format!(" {marker} {}", s.title),
+            Style::new().fg(if on { color::CHAT_ACCENT } else { color::DIM }),
+        )));
+    }
+    frame.render_widget(Paragraph::new(nav), cols[0]);
+
+    // Column 2: fields of the active section — or, while the API-key gate is
+    // prompting, a dedicated masked key-entry view instead of the per-row list
+    // (the current field is the provider/model row, not a `FieldKind::Secret`
+    // row, so the normal per-row masking below wouldn't apply here).
+    let field_w = cols[1].width as usize;
+    let fields: Vec<Line> = if let Some(env) = state.config_key_prompt {
+        let buf = state.config_edit.as_deref().unwrap_or("");
+        let masked = glyph::MASK.to_string().repeat(buf.chars().count());
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!(" Enter {env}"),
+                Style::new().fg(color::CHAT_ACCENT),
+            )),
+            Line::from(Span::styled(
+                format!("   {masked}{}", glyph::CARET),
+                Style::new().fg(color::TXT),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "   Enter save · Esc cancel",
+                Style::new().fg(color::DIM),
+            )),
+        ]
+    } else {
+        let mut fields: Vec<Line> = Vec::new();
+        for (i, r) in sections[active].rows.iter().enumerate() {
+            let cur =
+                i == state.config_field && state.config_col == crate::state::ConfigCol::Fields;
+            let val = if i == state.config_field {
+                if let Some(buf) = &state.config_edit {
+                    let shown = if matches!(r.kind, FieldKind::Secret) {
+                        glyph::MASK.to_string().repeat(buf.chars().count())
+                    } else {
+                        buf.clone()
+                    };
+                    format!("{shown}{}", glyph::CARET)
+                } else {
+                    r.value.clone()
+                }
+            } else {
+                r.value.clone()
+            };
+            let (tag_txt, tag_col) = match r.source {
+                zoid_core::config::Source::Default => ("[default]", color::DIM),
+                zoid_core::config::Source::UserGlobal => ("[user]", color::CHAT_ACCENT),
+                zoid_core::config::Source::Project => ("[repo]", color::BRANCH),
+                zoid_core::config::Source::Local => ("[local]", color::BRANCH),
+                zoid_core::config::Source::Env => ("[env]", color::WARN),
+            };
+            let warn = if r.env_shadowed {
+                format!(" {}", glyph::WARNING)
+            } else {
+                String::new()
+            };
+            let marker = if cur { glyph::COLLAPSED } else { ' ' };
+            let left = format!(" {marker} {}", pad_to(r.label, 12));
+            let fixed = left.width() + tag_txt.width() + warn.width();
+            let mid = field_w.saturating_sub(fixed).max(1);
+            let val_shown = pad_to(&truncate(&val, mid), mid);
+            let mut spans = vec![
+                Span::styled(
+                    left,
+                    Style::new().fg(if cur { color::CHAT_ACCENT } else { color::TXT }),
+                ),
+                Span::styled(val_shown, Style::new().fg(color::TXT)),
+                Span::styled(tag_txt.to_string(), Style::new().fg(tag_col)),
+            ];
+            if !warn.is_empty() {
+                spans.push(Span::styled(warn, Style::new().fg(color::WARN)));
+            }
+            fields.push(Line::from(spans));
+        }
+        fields
+    };
+    frame.render_widget(Paragraph::new(fields), cols[1]);
+
+    // Column 3: contextual picker — only when open AND three columns fit.
+    // Below the fit threshold the picker renders as an overlay card instead
+    // (below), never in column 3, so it renders in exactly one place.
+    if picker_open && three_col_fits {
+        let active = state.config_col == crate::state::ConfigCol::Picker;
+        let pick = picker_lines(
+            &state.config_picker,
+            state.config_picker_sel,
+            active,
+            cols[2].width as usize,
+        );
+        frame.render_widget(Paragraph::new(pick), cols[2]);
+    }
+
+    // Graceful degradation: when the picker is open but three columns don't
+    // fit, float it as a rounded sub-card over the fields column (col 2)
+    // instead of squeezing a third column to nothing. The picker is
+    // transient, so overlaying is acceptable and keeps every row legible.
+    if picker_open && !three_col_fits {
+        let over = crate::layout::centered(
+            cols[1],
+            cols[1].width.saturating_sub(2),
+            (state.config_picker.len() as u16 + 2).min(cols[1].height),
+        );
+        frame.render_widget(Clear, over);
+        let pblock = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(color::CHAT_ACCENT));
+        let pinner = pblock.inner(over);
+        frame.render_widget(pblock, over);
+        let active = state.config_col == crate::state::ConfigCol::Picker;
+        let pick = picker_lines(
+            &state.config_picker,
+            state.config_picker_sel,
+            active,
+            pinner.width as usize,
+        );
+        frame.render_widget(Paragraph::new(pick), pinner);
+    }
+
+    // Footer.
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!(" {footer}"),
+            Style::new().fg(color::DIM),
+        ))),
+        foot,
+    );
+}
+
+/// Build the styled option lines for the contextual config picker, shared by
+/// both places it can render: the Task-8 inline column-3 layout (three
+/// columns fit) and the Task-9 floating overlay card (they don't). Applies
+/// the current marker, `SEL_BG` on the selected row when `active`, `DIM` for
+/// non-selectable/`[planned]` rows, and truncates/pads each line to `width`.
+fn picker_lines(
+    picker: &[crate::config_view::PickOption],
+    sel: usize,
+    active: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
+    use crate::text::{pad_to, truncate};
+    let w = width.saturating_sub(1).max(1);
+    picker
+        .iter()
+        .enumerate()
+        .map(|(i, o)| {
+            let is_sel = active && i == sel;
+            let dot = if o.is_current { glyph::COLLAPSED } else { ' ' };
+            let base = format!(" {dot} {}  {}", o.label, o.detail);
+            let text = pad_to(&truncate(&base, w), w);
+            let style = if !o.selectable {
+                Style::new().fg(color::DIM)
+            } else if is_sel {
+                Style::new().fg(color::TXT).bg(color::SEL_BG)
+            } else {
+                Style::new().fg(color::TXT)
+            };
+            Line::from(Span::styled(text, style))
+        })
+        .collect()
 }
 
 /// The `ask_user` question overlay (Task 11): a centered, contained card —
@@ -930,6 +1069,122 @@ pub fn render_question(frame: &mut Frame, area: Rect, q: &crate::question::Quest
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The quick-switch (`Alt+P`) overlay (Task 11): a centered, contained card —
+/// same chrome as `render_question`/`render_config` (rounded border, cleared
+/// background) — with two side-by-side panes: providers (left) and models
+/// (right). Reuses `picker_lines` so styling (current marker, `SEL_BG` on the
+/// active pane's selection, `DIM` for planned/non-selectable rows) matches
+/// the settings picker exactly. Options are read from `state.switch_providers`
+/// / `state.switch_models` (seeded by the bin — this fn has no `app.config`
+/// access, only `&ShellState`). All glyphs/colors come from `tokens` (§16).
+const SWITCH_FOOTER: &str = "Left/Right pane · Up/Down move · Enter apply · Esc cancel";
+
+pub fn render_provider_switch(frame: &mut Frame, state: &ShellState, area: Rect) {
+    use crate::layout::centered;
+    use crate::state::SwitchPane;
+    use ratatui::layout::{Constraint, Direction, Layout};
+
+    frame.render_widget(Clear, area); // focus the card: clear the frame behind it
+
+    let pane_w: u16 = 28;
+    // Two panes + a 1-col gutter + 2-col border, widened if needed so the
+    // word-based footer (§16 token purity) never truncates.
+    let card_w = (pane_w * 2 + 3)
+        .max(SWITCH_FOOTER.width() as u16 + 3)
+        .min(area.width);
+    let rows_needed = state.switch_providers.len().max(state.switch_models.len()) as u16;
+    let card_h = (rows_needed + 2 /* header row + footer row */ + 2/* border */).min(area.height);
+    let rect = centered(area, card_w, card_h);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(" zoid · quick switch ")
+        .border_style(Style::new().fg(color::CHAT_ACCENT));
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+
+    // Footer reserved at the bottom of the inner area; header row at the top.
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    let header = rows[0];
+    let body = rows[1];
+    let foot = rows[2];
+
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(pane_w),
+            Constraint::Length(1),
+            Constraint::Min(pane_w),
+        ])
+        .split(body);
+    let header_cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(pane_w),
+            Constraint::Length(1),
+            Constraint::Min(pane_w),
+        ])
+        .split(header);
+
+    let provider_active = state.switch_pane == SwitchPane::Provider;
+    let model_active = state.switch_pane == SwitchPane::Model;
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            " Provider",
+            Style::new().fg(if provider_active {
+                color::CHAT_ACCENT
+            } else {
+                color::DIM
+            }),
+        ))),
+        header_cols[0],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            " Model",
+            Style::new().fg(if model_active {
+                color::CHAT_ACCENT
+            } else {
+                color::DIM
+            }),
+        ))),
+        header_cols[2],
+    );
+
+    let provider_lines = picker_lines(
+        &state.switch_providers,
+        state.switch_provider_sel,
+        provider_active,
+        cols[0].width as usize,
+    );
+    frame.render_widget(Paragraph::new(provider_lines), cols[0]);
+
+    let model_lines = picker_lines(
+        &state.switch_models,
+        state.switch_model_sel,
+        model_active,
+        cols[2].width as usize,
+    );
+    frame.render_widget(Paragraph::new(model_lines), cols[2]);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!(" {SWITCH_FOOTER}"),
+            Style::new().fg(color::DIM),
+        ))),
+        foot,
+    );
 }
 
 /// Greedy word-wrap to at most `width` display columns per line (no hyphenation).
