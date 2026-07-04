@@ -57,12 +57,27 @@ impl Tool for InvokeSkillTool {
             }
         };
         match self.skills.get(name) {
-            Some(skill) => ToolOutput::ok(skill.body.clone()),
+            Some(skill) => ToolOutput::ok(body_with_anchor(skill)),
             None => ToolOutput::err(format!(
                 "unknown skill '{name}'. Available: {}",
                 self.skills.names().join(", ")
             )),
         }
+    }
+}
+
+/// The skill body, plus a resolved anchor line pointing at the skill's source
+/// directory when it was imported from disk — so the model can read bundled
+/// sibling files by absolute path via `read_file`. Built-ins (no `base_dir`)
+/// are returned unchanged.
+fn body_with_anchor(skill: &zoid_core::skill::Skill) -> String {
+    match &skill.base_dir {
+        Some(dir) => format!(
+            "{}\n\n---\nSkill files are in: {}/",
+            skill.body,
+            dir.display()
+        ),
+        None => skill.body.clone(),
     }
 }
 
@@ -77,6 +92,7 @@ pub fn chat_tools(skills: Arc<SkillRegistry>) -> Vec<Box<dyn Tool>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zoid_core::skill::Skill;
 
     fn tool() -> InvokeSkillTool {
         InvokeSkillTool::new(Arc::new(SkillRegistry::builtin()))
@@ -117,5 +133,27 @@ mod tests {
         assert!(names.contains(&"invoke_skill"));
         assert!(names.contains(&"write_file"));
         assert!(names.contains(&"read_file"));
+    }
+
+    #[test]
+    fn imported_skill_body_carries_base_dir_anchor() {
+        let reg = SkillRegistry::new(vec![Skill {
+            name: "docd".into(),
+            description: "d".into(),
+            body: "BODY".into(),
+            base_dir: Some(std::path::PathBuf::from("/abs/skills/docd")),
+        }]);
+        let tool = InvokeSkillTool::new(Arc::new(reg));
+        let out = tool.run(&json!({ "name": "docd" }), Path::new("."));
+        assert!(!out.is_error);
+        assert!(out.text.contains("BODY"));
+        assert!(out.text.contains("Skill files are in: /abs/skills/docd/"));
+    }
+
+    #[test]
+    fn builtin_skill_body_has_no_anchor() {
+        let out = tool().run(&json!({ "name": "spike-plan" }), Path::new("."));
+        assert!(!out.is_error);
+        assert!(!out.text.contains("Skill files are in:"));
     }
 }

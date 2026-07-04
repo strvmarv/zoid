@@ -1108,7 +1108,17 @@ async fn main() -> Result<()> {
 
     let (ui_tx, mut ui_rx) = mpsc::channel::<AgentUpdate>(256);
 
-    let skills = std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin());
+    let skills = {
+        let cfg_dir = resolve_config_dir(|k: &str| std::env::var(k).ok());
+        let home = std::env::var("HOME").ok().map(std::path::PathBuf::from);
+        let dirs = zoid::skill_import::resolve_skill_dirs(
+            &config.skills.source_dirs,
+            &cfg_dir,
+            std::path::Path::new(&root),
+            home.as_deref(),
+        );
+        std::sync::Arc::new(zoid::skill_import::build_registry(&dirs))
+    };
 
     let mut app = App {
         session,
