@@ -40,6 +40,7 @@ mod tests {
     }
 }
 
+use crate::economy::estimate_tokens;
 use crate::event::{Event, EventKind, EvictionMarker, EvictedSpan};
 use std::collections::HashSet;
 use ulid::Ulid;
@@ -121,5 +122,225 @@ mod fold_tests {
         let bc = eviction_breadcrumb(&events).unwrap();
         assert!(bc.contains("recall"));
         assert!(bc.contains("read config"));
+    }
+}
+
+/// Slice-4 relevance context (empty now; keeps the scorer signature stable).
+#[derive(Debug, Default)]
+pub struct GoalContext {}
+
+/// A candidate turn for eviction, derived positionally from the non-inert log.
+#[derive(Debug, Clone)]
+pub struct TurnView {
+    pub ids: Vec<Ulid>,
+    pub index: usize,
+    pub token_estimate: u64,
+    pub topic_hint: String,
+    /// System / recent-N / already-evicted / re-admitted-cooldown → never selected.
+    pub protected: bool,
+}
+
+/// Victim-selection seam (spec §3.7). Higher score = more worth keeping.
+pub trait EvictionScorer {
+    fn score(&self, turn: &TurnView, ctx: &GoalContext) -> f32;
+}
+
+/// Default: recency (newer index kept). Deterministic and safe.
+pub struct RecencyScorer;
+impl EvictionScorer for RecencyScorer {
+    fn score(&self, turn: &TurnView, _ctx: &GoalContext) -> f32 {
+        turn.index as f32
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvictedTurn {
+    pub ids: Vec<Ulid>,
+    pub token_estimate: u64,
+    pub topic_hint: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EvictionPlan {
+    pub turns: Vec<EvictedTurn>,
+}
+
+/// Is this event inert for turn-grouping (never starts/joins a conversational turn)?
+fn is_inert(kind: &EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::Usage
+            | EventKind::ContextMutation { .. }
+            | EventKind::ToolResultCompacted { .. }
+            | EventKind::Tasks { .. }
+            | EventKind::TurnsDropped { .. }
+            | EventKind::TurnsEvicted { .. }
+            | EventKind::TurnsReadmitted { .. }
+    )
+}
+
+/// The estimated token cost of one event's payload (chars/3), 0 for inert.
+fn event_tokens(kind: &EventKind) -> u64 {
+    match kind {
+        EventKind::UserMessage { text }
+        | EventKind::AssistantMessage { text }
+        | EventKind::ModelDelta { text } => estimate_tokens(text),
+        EventKind::ToolCall { args, name, .. } => estimate_tokens(args) + estimate_tokens(name),
+        EventKind::ToolResult { output, .. } => estimate_tokens(output),
+        EventKind::DelegationResult { summary, .. } => estimate_tokens(summary),
+        _ => 0,
+    }
+}
+
+/// Group the main-branch, non-inert log into positional turns. A turn begins at
+/// each `UserMessage` (spec §3.1 / M6: grouping is over the non-inert projection,
+/// so an interleaved inert event can't fragment a tool_use/tool_result pair).
+fn group_turns(events: &[Event], evicted: &HashSet<Ulid>, recent_n: usize) -> Vec<TurnView> {
+    let mut turns: Vec<TurnView> = Vec::new();
+    for e in events {
+        if e.branch != crate::event::BranchId::default() || is_inert(&e.kind) {
+            continue;
+        }
+        let starts_turn = matches!(e.kind, EventKind::UserMessage { .. });
+        if starts_turn || turns.is_empty() {
+            let topic_hint = match &e.kind {
+                EventKind::UserMessage { text } => text.lines().next().unwrap_or("").chars().take(60).collect(),
+                _ => String::new(),
+            };
+            turns.push(TurnView { ids: Vec::new(), index: turns.len(), token_estimate: 0, topic_hint, protected: false });
+        }
+        let t = turns.last_mut().unwrap();
+        t.ids.push(e.id);
+        t.token_estimate += event_tokens(&e.kind);
+    }
+    // M10 (spec §3.1): a turn re-admitted via recall is protected from immediate
+    // re-eviction, so recall→evict→recall can't oscillate. (v1 simplification:
+    // permanent protection rather than a timed cooldown — safe, and §6 handles the
+    // case where protected content alone exceeds the band.)
+    let readmitted: HashSet<Ulid> = events
+        .iter()
+        .flat_map(|e| match &e.kind {
+            EventKind::TurnsReadmitted { ids } => ids.clone(),
+            _ => Vec::new(),
+        })
+        .collect();
+    let n = turns.len();
+    for (i, t) in turns.iter_mut().enumerate() {
+        let is_recent = i + recent_n >= n;
+        let is_evicted = t.ids.iter().any(|id| evicted.contains(id));
+        let is_readmitted = t.ids.iter().any(|id| readmitted.contains(id));
+        t.protected = is_recent || is_evicted || is_readmitted;
+    }
+    turns
+}
+
+/// Plan an eviction wave (spec §3.1). Empty unless `current_tokens >= high_water`.
+/// Ranks evictable turns by `scorer` (lowest first), evicting until
+/// `current_tokens - reclaimed <= low_water`, never touching protected turns.
+pub fn plan_evictions(
+    events: &[Event],
+    policy: &EvictionPolicy,
+    current_tokens: u64,
+    scorer: &dyn EvictionScorer,
+) -> EvictionPlan {
+    if !policy.enabled {
+        return EvictionPlan::default();
+    }
+    let band = policy.band();
+    if current_tokens < band.high_water {
+        return EvictionPlan::default();
+    }
+    let evicted = evicted_ids(events);
+    let turns = group_turns(events, &evicted, policy.recent_n);
+    let ctx = GoalContext::default();
+
+    let mut candidates: Vec<&TurnView> = turns.iter().filter(|t| !t.protected && !t.ids.is_empty()).collect();
+    candidates.sort_by(|a, b| {
+        scorer.score(a, &ctx).partial_cmp(&scorer.score(b, &ctx)).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut reclaimed = 0u64;
+    let mut plan = EvictionPlan::default();
+    for t in candidates {
+        if current_tokens.saturating_sub(reclaimed) <= band.low_water {
+            break;
+        }
+        reclaimed += t.token_estimate;
+        plan.turns.push(EvictedTurn { ids: t.ids.clone(), token_estimate: t.token_estimate, topic_hint: t.topic_hint.clone() });
+    }
+    plan
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+    use crate::event::{Event, EventKind};
+
+    fn user(id: u128, t: &str) -> Event { Event::new(Ulid::from(id), None, id as i64, EventKind::UserMessage { text: t.into() }) }
+    fn asst(id: u128, t: &str) -> Event { Event::new(Ulid::from(id), None, id as i64, EventKind::AssistantMessage { text: t.into() }) }
+
+    fn policy(target: u64, recent_n: usize) -> EvictionPolicy {
+        EvictionPolicy { enabled: true, capacity: 1_000_000, context_target: target, band_headroom_pct: 20, recent_n, max_output: None }
+    }
+
+    #[test]
+    fn no_plan_below_high_water() {
+        let events = vec![user(1, "a"), asst(2, "b")];
+        let plan = plan_evictions(&events, &policy(384_000, 4), 100, &RecencyScorer);
+        assert!(plan.turns.is_empty());
+    }
+
+    #[test]
+    fn evicts_oldest_first_down_to_low_water() {
+        // 6 turns, each ~1000 tokens estimate; recent_n=2 protects the last two.
+        let big = "x".repeat(3000); // ~1000 tokens (chars/3)
+        let mut events = Vec::new();
+        for i in 0..6u128 { events.push(user(i*2+1, &big)); events.push(asst(i*2+2, "ok")); }
+        // current well over high_water forces a wave; low_water = target - 20%.
+        let plan = plan_evictions(&events, &policy(3_000, 2), 6_000, &RecencyScorer);
+        assert!(!plan.turns.is_empty());
+        // never evicts the protected (newest) turns
+        let evicted_ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
+        assert!(!evicted_ids.contains(&Ulid::from(11u128))); // 6th user msg (newest)
+        // oldest turn is evicted first
+        assert!(evicted_ids.contains(&Ulid::from(1u128)));
+    }
+
+    #[test]
+    fn idempotent_skips_already_evicted() {
+        let big = "x".repeat(3000);
+        let mut events = vec![user(1, &big), asst(2, "ok"), user(3, &big), asst(4, "ok"), user(5, "recent"), asst(6, "ok")];
+        events.push(Event::new(Ulid::from(99u128), None, 99, EventKind::TurnsEvicted {
+            ids: vec![Ulid::from(1u128), Ulid::from(2u128)], reclaimed_tokens: 1000, marker: crate::event::EvictionMarker { spans: vec![] },
+        }));
+        // turn 1 already evicted → not re-selected
+        let plan = plan_evictions(&events, &policy(1_000, 2), 5_000, &RecencyScorer);
+        let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
+        assert!(!ids.contains(&Ulid::from(1u128)));
+    }
+
+    #[test]
+    fn never_evicts_protected_even_if_over() {
+        // all turns are recent (recent_n huge) → empty plan even over high_water
+        let big = "x".repeat(3000);
+        let events = vec![user(1, &big), asst(2, "ok")];
+        let plan = plan_evictions(&events, &policy(100, 10), 100_000, &RecencyScorer);
+        assert!(plan.turns.is_empty());
+    }
+
+    #[test]
+    fn readmitted_turn_is_protected_from_re_eviction() {
+        // M10: an old, low-recency turn that was re-admitted via recall must not be
+        // the immediate next eviction victim.
+        let big = "x".repeat(3000);
+        let mut events = vec![user(1, &big), asst(2, "ok"), user(3, &big), asst(4, "ok"), user(5, "recent"), asst(6, "ok")];
+        // turn 1 was evicted then recalled back.
+        events.push(Event::new(Ulid::from(90u128), None, 90, EventKind::TurnsEvicted {
+            ids: vec![Ulid::from(1u128), Ulid::from(2u128)], reclaimed_tokens: 1000, marker: crate::event::EvictionMarker { spans: vec![] },
+        }));
+        events.push(Event::new(Ulid::from(91u128), None, 91, EventKind::TurnsReadmitted { ids: vec![Ulid::from(1u128), Ulid::from(2u128)] }));
+        let plan = plan_evictions(&events, &policy(1_000, 2), 5_000, &RecencyScorer);
+        let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
+        assert!(!ids.contains(&Ulid::from(1u128)), "recalled turn must not immediately re-evict");
     }
 }
