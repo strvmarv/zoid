@@ -20,6 +20,8 @@ use tokio::sync::mpsc;
 use tui_textarea::{CursorMove, TextArea};
 use ulid::Ulid;
 
+mod obs;
+
 use zoid::agent::{run_agent_turn, AgentUpdate};
 use zoid_core::event::{Event, EventKind};
 use zoid_core::projection::conversation;
@@ -760,6 +762,8 @@ impl App {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let obs = obs::init();
+
     match zoid::cli::parse_args(std::env::args().skip(1)) {
         zoid::cli::Cli::Version => {
             println!("{}", zoid::cli::version_string());
