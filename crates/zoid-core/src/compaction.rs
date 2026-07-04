@@ -72,7 +72,7 @@ pub fn plan_compactions(
         if running <= threshold {
             break;
         }
-        if it.kind != ItemKind::ToolResult || it.pinned {
+        if (it.kind != ItemKind::ToolResult && it.kind != ItemKind::File) || it.pinned {
             continue;
         }
         let Some(id) = tool_id_of(&it.key) else {
