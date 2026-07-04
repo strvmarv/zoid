@@ -170,9 +170,13 @@ pub fn build_request(
     tools: &[Box<dyn Tool>],
     system: &str,
 ) -> CompletionRequest {
+    let system = match zoid_core::eviction::eviction_breadcrumb(events) {
+        Some(bc) => format!("{system}\n\n{bc}"),
+        None => system.to_string(),
+    };
     CompletionRequest {
         model: model.to_string(),
-        system: Some(system.to_string()),
+        system: Some(system),
         messages: conversation(events).into_iter().map(map_msg).collect(),
         max_tokens: 4096,
         tools: tool_specs(tools),
@@ -935,6 +939,39 @@ mod tests {
     fn build_request_uses_the_given_system_prompt() {
         let req = build_request(&[], "m", &zoid_tools::registry(), "CUSTOM SYS");
         assert_eq!(req.system.as_deref(), Some("CUSTOM SYS"));
+    }
+
+    #[test]
+    fn build_request_appends_breadcrumb_when_evicted() {
+        use zoid_core::event::{EvictedSpan, EvictionMarker};
+        let events = vec![
+            Event::new(
+                Ulid::from(1u128),
+                None,
+                1,
+                EventKind::UserMessage { text: "hi".into() },
+            ),
+            Event::new(
+                Ulid::from(9u128),
+                None,
+                9,
+                EventKind::TurnsEvicted {
+                    ids: vec![Ulid::from(1u128)],
+                    reclaimed_tokens: 4200,
+                    marker: EvictionMarker {
+                        spans: vec![EvictedSpan {
+                            id_range_label: "t1".into(),
+                            token_estimate: 4200,
+                            topic_hint: "setup".into(),
+                        }],
+                    },
+                },
+            ),
+        ];
+        let req = build_request(&events, "m", &zoid_tools::registry(), "SYS");
+        let sys = req.system.unwrap();
+        assert!(sys.starts_with("SYS"));
+        assert!(sys.contains("recall"));
     }
 
     #[test]
