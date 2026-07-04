@@ -23,21 +23,26 @@ pub struct Config {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EconomyConfig {
-    /// None → defer to the model registry's context_ceiling().
-    pub context_ceiling: Option<u64>,
+    /// The soft setpoint the controller manages toward (tokens). None → the bin
+    /// defaults it to min(capacity, 384_000). Renamed from `context_ceiling`.
+    pub context_target: Option<u64>,
     pub auto_evict_cold: bool,
-    /// 0 disables compaction; else percent of the ceiling (1–100).
+    /// 0 disables compaction; else percent of the target (1–100).
     pub compact_threshold_pct: u8,
-    pub token_ceiling: Option<u64>,
+    /// Eviction band headroom, percent of effective target (default 20).
+    pub band_headroom_pct: u8,
+    /// Most-recent turns never evictable (default 4).
+    pub recent_n: usize,
 }
 
 impl Default for EconomyConfig {
     fn default() -> Self {
         Self {
-            context_ceiling: None,
+            context_target: None,
             auto_evict_cold: true,
             compact_threshold_pct: 0,
-            token_ceiling: None,
+            band_headroom_pct: 20,
+            recent_n: 4,
         }
     }
 }
@@ -65,7 +70,9 @@ mod tests {
         assert_eq!(c.provider, "ollama");
         assert!(c.economy.auto_evict_cold);
         assert_eq!(c.economy.compact_threshold_pct, 0);
-        assert!(c.economy.context_ceiling.is_none());
+        assert!(c.economy.context_target.is_none());
+        assert_eq!(c.economy.band_headroom_pct, 20);
+        assert_eq!(c.economy.recent_n, 4);
     }
 }
 
@@ -83,20 +90,22 @@ pub struct Provenance {
     pub provider: Source,
     pub base_url: Source,
     pub model: Source,
-    pub context_ceiling: Source,
+    pub context_target: Source,
     pub auto_evict_cold: Source,
     pub compact_threshold_pct: Source,
-    pub token_ceiling: Source,
+    pub band_headroom_pct: Source,
+    pub recent_n: Source,
     pub reduced_motion: Source,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PartialEconomy {
-    pub context_ceiling: Option<u64>,
+    pub context_target: Option<u64>,
     pub auto_evict_cold: Option<bool>,
     pub compact_threshold_pct: Option<u8>,
-    pub token_ceiling: Option<u64>,
+    pub band_headroom_pct: Option<u8>,
+    pub recent_n: Option<usize>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -130,10 +139,11 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         provider: Source::Default,
         base_url: Source::Default,
         model: Source::Default,
-        context_ceiling: Source::Default,
+        context_target: Source::Default,
         auto_evict_cold: Source::Default,
         compact_threshold_pct: Source::Default,
-        token_ceiling: Source::Default,
+        band_headroom_pct: Source::Default,
+        recent_n: Source::Default,
         reduced_motion: Source::Default,
     };
     for (src, p) in layers {
@@ -153,9 +163,9 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
             cfg.reduced_motion = v;
             prov.reduced_motion = *src;
         }
-        if let Some(v) = p.economy.context_ceiling {
-            cfg.economy.context_ceiling = Some(v);
-            prov.context_ceiling = *src;
+        if let Some(v) = p.economy.context_target {
+            cfg.economy.context_target = Some(v);
+            prov.context_target = *src;
         }
         if let Some(v) = p.economy.auto_evict_cold {
             cfg.economy.auto_evict_cold = v;
@@ -165,9 +175,13 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
             cfg.economy.compact_threshold_pct = v;
             prov.compact_threshold_pct = *src;
         }
-        if let Some(v) = p.economy.token_ceiling {
-            cfg.economy.token_ceiling = Some(v);
-            prov.token_ceiling = *src;
+        if let Some(v) = p.economy.band_headroom_pct {
+            cfg.economy.band_headroom_pct = v;
+            prov.band_headroom_pct = *src;
+        }
+        if let Some(v) = p.economy.recent_n {
+            cfg.economy.recent_n = v;
+            prov.recent_n = *src;
         }
         if let Some(dirs) = &p.skills.source_dirs {
             for d in dirs {
@@ -294,10 +308,10 @@ mod write_tests {
     fn sets_top_level_and_nested_preserving_others() {
         let src = "model = \"old\"\n[economy]\nauto_evict_cold = true\n";
         let out = set_in_toml(src, "model", TomlValue::Str("new".into())).unwrap();
-        let out = set_in_toml(&out, "economy.context_ceiling", TomlValue::Int(512000)).unwrap();
+        let out = set_in_toml(&out, "economy.context_target", TomlValue::Int(512000)).unwrap();
         let p = parse_toml(&out).unwrap();
         assert_eq!(p.model.as_deref(), Some("new"));
-        assert_eq!(p.economy.context_ceiling, Some(512000));
+        assert_eq!(p.economy.context_target, Some(512000));
         assert_eq!(p.economy.auto_evict_cold, Some(true)); // preserved
     }
 
