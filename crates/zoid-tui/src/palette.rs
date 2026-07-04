@@ -107,7 +107,7 @@ pub fn all_items(mode: Mode) -> Vec<PaletteItem> {
             icon: glyph::SETTINGS,
             label: "Quit zoid",
             hint: "exit",
-            keybind: "^C",
+            keybind: "^Q",
             command: Some(Command::Quit),
         },
         // recipes — post-v1

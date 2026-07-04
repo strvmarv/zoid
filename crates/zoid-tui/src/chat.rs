@@ -734,7 +734,7 @@ pub fn render_chat(frame: &mut Frame, msgs: &[ChatMsg], input: &TextArea<'_>, st
         Span::styled(" CHAT ", Style::new().fg(color::CHAT_ACCENT)),
         Span::styled(
             format!(
-                "· {}Tab Build · {} send · ^C quit",
+                "· {}Tab Build · {} send · ^Q quit",
                 glyph::SHIFT,
                 glyph::RETURN
             ),

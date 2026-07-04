@@ -1,7 +1,7 @@
 //! The app-framework floor: contextual key routing, mouse hit-testing, and the
 //! `Action` vocabulary. Pure — synthetic events in, `Action` out (spec §13/§14.1).
 //! Precedence: an active overlay captures keys first; then global combos
-//! (`^C`/`^P`/`⇧Tab`); then focus-contextual keys (Input edits; Conversation/Rail
+//! (`^Q`/`^P`/`⇧Tab`); then focus-contextual keys (Input edits; Conversation/Rail
 //! navigate). `:` opens the command line only when focus ≠ Input.
 
 use crate::command::{parse_command, Command};
@@ -133,7 +133,7 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
     }
 
     // 2. Global combos.
-    if ctrl(&key, 'c') {
+    if ctrl(&key, 'q') {
         return Action::Quit;
     }
     if ctrl(&key, 'p') {
@@ -502,10 +502,10 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_c_quits_and_ctrl_p_opens_palette() {
+    fn ctrl_q_quits_and_ctrl_p_opens_palette() {
         let s = ShellState::new();
         assert_eq!(
-            route_key(&s, key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            route_key(&s, key(KeyCode::Char('q'), KeyModifiers::CONTROL)),
             Action::Quit
         );
         assert_eq!(
@@ -605,9 +605,9 @@ mod tests {
     fn overlay_captures_keys_first() {
         let mut s = ShellState::new();
         s.overlay = Overlay::Palette;
-        // ^C no longer quits while palette is up — the CONTROL guard rejects it from the char arm → Noop
+        // ^Q no longer quits while palette is up — the CONTROL guard rejects it from the char arm → Noop
         assert_eq!(
-            route_key(&s, key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            route_key(&s, key(KeyCode::Char('q'), KeyModifiers::CONTROL)),
             Action::Noop
         );
         assert_eq!(
@@ -625,7 +625,7 @@ mod tests {
         // Same guard applies to CommandLine overlay.
         s.overlay = Overlay::CommandLine;
         assert_eq!(
-            route_key(&s, key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            route_key(&s, key(KeyCode::Char('q'), KeyModifiers::CONTROL)),
             Action::Noop
         );
     }
