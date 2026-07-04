@@ -15,6 +15,73 @@ pub struct Skill {
     pub base_dir: Option<std::path::PathBuf>,
 }
 
+/// The `name`/`description`/`body` extracted from a `SKILL.md`. Carries no
+/// filesystem location — the caller (the bin's importer) assigns `base_dir`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedSkill {
+    pub name: String,
+    pub description: String,
+    pub body: String,
+}
+
+/// Strip one matching pair of surrounding single or double quotes.
+fn unquote(s: &str) -> String {
+    let b = s.as_bytes();
+    let n = s.len();
+    if n >= 2
+        && ((b[0] == b'"' && b[n - 1] == b'"') || (b[0] == b'\'' && b[n - 1] == b'\''))
+    {
+        s[1..n - 1].to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+/// Parse a `SKILL.md` document: a `---`-fenced frontmatter block followed by the
+/// markdown body. Reads the `name` and `description` scalar lines from the
+/// frontmatter (stripping one matching pair of surrounding quotes); the body is
+/// everything after the FIRST closing fence, verbatim. Pure — no filesystem.
+/// Single-line scalar values only (YAML block scalars are out of scope).
+///
+/// Returns `Err` with a human-readable reason if there is no frontmatter block
+/// or the `name` field is missing/empty.
+pub fn parse_skill_md(text: &str) -> Result<ParsedSkill, String> {
+    let after_open = text
+        .strip_prefix("---")
+        .ok_or("missing frontmatter opening '---'")?;
+    let after_open = after_open.strip_prefix('\n').unwrap_or(after_open);
+    let close = after_open
+        .find("\n---")
+        .ok_or("missing frontmatter closing '---'")?;
+    let front = &after_open[..close];
+    // Everything from the closing "\n---" onward: drop the newline, the "---",
+    // and one trailing newline to reach the body start.
+    let rest = &after_open[close + 1..]; // starts at "---"
+    let body = rest
+        .strip_prefix("---")
+        .map(|b| b.strip_prefix('\n').unwrap_or(b))
+        .unwrap_or(rest)
+        .to_string();
+
+    let mut name = String::new();
+    let mut description = String::new();
+    for line in front.lines() {
+        if let Some(v) = line.strip_prefix("name:") {
+            name = unquote(v.trim());
+        } else if let Some(v) = line.strip_prefix("description:") {
+            description = unquote(v.trim());
+        }
+    }
+    if name.is_empty() {
+        return Err("frontmatter is missing a non-empty 'name'".into());
+    }
+    Ok(ParsedSkill {
+        name,
+        description,
+        body,
+    })
+}
+
 /// The skills available to the current session.
 #[derive(Debug, Clone, Default)]
 pub struct SkillRegistry {
@@ -150,5 +217,40 @@ mod tests {
         assert!(!r.push_unique(mk("a"))); // duplicate name rejected, no change
         assert!(r.push_unique(mk("b")));
         assert_eq!(r.names(), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn parses_name_description_and_body() {
+        let md = "---\nname: brainstorming\n\
+                  description: \"Explore: intent, and design\"\n\
+                  ---\n# Body\n\nHello.\n";
+        let p = parse_skill_md(md).unwrap();
+        assert_eq!(p.name, "brainstorming");
+        assert_eq!(p.description, "Explore: intent, and design"); // quotes stripped, colons kept
+        assert_eq!(p.body, "# Body\n\nHello.\n");
+    }
+
+    #[test]
+    fn body_preserved_verbatim_including_internal_dashes() {
+        let md = "---\nname: x\ndescription: d\n---\nline1\n---\nline2\n";
+        let p = parse_skill_md(md).unwrap();
+        assert_eq!(p.body, "line1\n---\nline2\n"); // only the FIRST closing fence splits
+    }
+
+    #[test]
+    fn missing_frontmatter_is_err() {
+        assert!(parse_skill_md("# no frontmatter\n").is_err());
+    }
+
+    #[test]
+    fn missing_name_is_err() {
+        let md = "---\ndescription: only desc\n---\nbody\n";
+        assert!(parse_skill_md(md).is_err());
+    }
+
+    #[test]
+    fn single_quoted_description_is_unquoted() {
+        let md = "---\nname: n\ndescription: 'hi there'\n---\nb\n";
+        assert_eq!(parse_skill_md(md).unwrap().description, "hi there");
     }
 }
