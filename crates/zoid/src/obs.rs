@@ -51,6 +51,42 @@ where
     Some(layer.boxed())
 }
 
+const ROLL_CAP: usize = 64;
+
+/// Bounded rolling window: total count + last value + avg/p90 over the last
+/// `ROLL_CAP` samples. O(1) memory.
+#[derive(Debug, Default)]
+pub struct RollingStats {
+    window: std::collections::VecDeque<u64>,
+    count: u64,
+    last: u64,
+}
+
+impl RollingStats {
+    pub fn record(&mut self, sample: u64) {
+        self.count += 1;
+        self.last = sample;
+        if self.window.len() == ROLL_CAP {
+            self.window.pop_front();
+        }
+        self.window.push_back(sample);
+    }
+    pub fn count(&self) -> u64 { self.count }
+    pub fn last(&self) -> u64 { self.last }
+    pub fn avg(&self) -> u64 {
+        if self.window.is_empty() { return 0; }
+        (self.window.iter().sum::<u64>()) / self.window.len() as u64
+    }
+    pub fn p90(&self) -> u64 {
+        if self.window.is_empty() { return 0; }
+        let mut v: Vec<u64> = self.window.iter().copied().collect();
+        v.sort_unstable();
+        // ceil((len)*0.9), clamped — index of the 90th-percentile sample.
+        let idx = (((v.len() as f64) * 0.9).ceil() as usize).min(v.len() - 1);
+        v[idx]
+    }
+}
+
 /// Test helper: a Registry with only the file layer (no global install).
 #[cfg(test)]
 fn file_only_subscriber(path: &std::path::Path) -> Option<impl tracing::Subscriber> {
@@ -87,5 +123,32 @@ mod tests {
         std::fs::File::open(&path).unwrap().read_to_string(&mut s).unwrap();
         assert!(s.contains("\"ms\":42"), "json line must carry the ms field: {s}");
         assert!(s.contains("turn done"));
+    }
+
+    #[test]
+    fn rolling_stats_tracks_count_last_avg_p90() {
+        let mut r = RollingStats::default();
+        assert_eq!((r.count(), r.last(), r.avg(), r.p90()), (0, 0, 0, 0));
+        for v in [10u64, 20, 30, 40, 50, 60, 70, 80, 90, 100] {
+            r.record(v);
+        }
+        assert_eq!(r.count(), 10);
+        assert_eq!(r.last(), 100);
+        assert_eq!(r.avg(), 55);
+        // p90 = value at the 90th percentile index of the sorted window.
+        assert_eq!(r.p90(), 100);
+    }
+
+    #[test]
+    fn rolling_stats_window_caps_at_capacity() {
+        let mut r = RollingStats::default();
+        for v in 0..200u64 {
+            r.record(v);
+        }
+        // count reflects total records; the window only keeps the last ROLL_CAP.
+        assert_eq!(r.count(), 200);
+        assert_eq!(r.last(), 199);
+        // avg is over the last 64 samples (136..=199), mean = 167.
+        assert_eq!(r.avg(), 167);
     }
 }
