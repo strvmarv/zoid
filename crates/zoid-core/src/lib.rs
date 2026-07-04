@@ -4,6 +4,7 @@
 pub mod agent_profile;
 pub mod skill;
 pub mod assembler;
+pub mod band;
 pub mod compaction;
 pub mod config;
 pub mod context;
