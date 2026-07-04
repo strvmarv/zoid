@@ -344,7 +344,7 @@ async fn run_turn_inner(
             }
 
             let kind = tools.iter().find(|t| t.name() == tc.name).map(|t| t.kind());
-            crate::zlog!("tool: name={:?} kind={:?}", tc.name, kind);
+            tracing::debug!("tool: name={:?} kind={:?}", tc.name, kind);
 
             match kind {
                 Some(zoid_tools::ToolKind::Emitting) if tc.name == "update_tasks" => {
@@ -439,7 +439,7 @@ async fn run_turn_inner(
                         })
                         .unwrap_or_default();
                     let (rtx, rrx) = oneshot::channel::<Answer>();
-                    crate::zlog!(
+                    tracing::debug!(
                         "ask_user: intercepted, sending AskUser (choices={})",
                         choices.len()
                     );
@@ -450,9 +450,9 @@ async fn run_turn_inner(
                             reply: rtx,
                         })
                         .await;
-                    crate::zlog!("ask_user: send result ok={}, awaiting reply", sent.is_ok());
+                    tracing::debug!("ask_user: send result ok={}, awaiting reply", sent.is_ok());
                     let ans = rrx.await;
-                    crate::zlog!("ask_user: reply received ok={}", ans.is_ok());
+                    tracing::debug!("ask_user: reply received ok={}", ans.is_ok());
                     match ans {
                         Ok(ans) => {
                             let output = match ans {

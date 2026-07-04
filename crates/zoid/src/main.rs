@@ -670,10 +670,17 @@ struct BodyCache {
 }
 
 impl BodyCache {
-    /// Rebuild the body iff `key` changed; cheap no-op otherwise.
-    fn refresh(&mut self, key: BodyKey, msgs: &[zoid_core::projection::ChatMsg], width: usize) {
+    /// Rebuild the body iff `key` changed; cheap no-op otherwise. Returns
+    /// `true` when the cache was reused (a "hit": the key was unchanged),
+    /// `false` when the body was rebuilt.
+    fn refresh(
+        &mut self,
+        key: BodyKey,
+        msgs: &[zoid_core::projection::ChatMsg],
+        width: usize,
+    ) -> bool {
         if self.key.as_ref() == Some(&key) {
-            return;
+            return true;
         }
         let view = ChatView {
             zoom: key.zoom,
@@ -686,6 +693,7 @@ impl BodyCache {
         self.body = body;
         self.msg_starts = starts;
         self.key = Some(key);
+        false
     }
 }
 
@@ -993,7 +1001,7 @@ async fn run<B: ratatui::backend::Backend>(
         // Refresh cached projections only when the event log grew (append-only),
         // so typing / scrolling / zoom reuse them instead of rebuilding O(events)
         // projections every frame.
-        app.proj.refresh(&app.events);
+        let proj_rebuilt = app.proj.refresh(&app.events);
         app.shell.session_tokens = app.proj.ledger_total.saturating_sub(app.proj.cached_total);
         app.shell.cached_tokens = app.proj.cached_total;
         app.shell.ctx_used = app.proj.window.total_tokens;
@@ -1029,7 +1037,7 @@ async fn run<B: ratatui::backend::Backend>(
         let streaming = app.streaming;
         let zoom = app.shell.zoom;
         let tz = app.tz_offset_secs;
-        app.body_cache.refresh(
+        let cache_hit = app.body_cache.refresh(
             BodyKey {
                 events_len: app.events.len(),
                 zoom,
@@ -1078,12 +1086,7 @@ async fn run<B: ratatui::backend::Backend>(
             app.shell.reduced_motion,
         )];
 
-        if app.shell.overlay == zoid_tui::state::Overlay::Question {
-            zoid::zlog!(
-                "main: drawing frame with Question overlay (question.is_some={})",
-                app.shell.question.is_some()
-            );
-        }
+        let frame_start = std::time::Instant::now();
         terminal.draw(|f| {
             // The drawer is read-only/observability-only, so it needs only
             // window + churn. All inputs come from caches — zero per-frame
@@ -1128,6 +1131,13 @@ async fn run<B: ratatui::backend::Backend>(
                 &view,
             );
         })?;
+        tracing::trace!(
+            kind = "frame",
+            ms = frame_start.elapsed().as_millis() as u64,
+            cache_hit = cache_hit,
+            proj_rebuilt = proj_rebuilt,
+            "frame"
+        );
         app.last_conv_max_scroll = frame_conv_max;
         // End the zoom animation only once a settled (reveal-complete) frame has
         // actually been painted, so the final full-body frame is never skipped.
@@ -1195,7 +1205,7 @@ async fn run<B: ratatui::backend::Backend>(
                         choices,
                         reply,
                     } => {
-                        zoid::zlog!(
+                        tracing::debug!(
                             "main: AskUser received, raising Question overlay (choices={})",
                             choices.len()
                         );
@@ -1598,12 +1608,6 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::ScrollConversation(d) => {
             app.shell.scroll_conversation(d, app.last_conv_max_scroll);
-            zoid::zlog!(
-                "scroll: d={} -> offset={} (max={})",
-                d,
-                app.shell.conversation_scroll,
-                app.last_conv_max_scroll
-            );
         }
         Action::ScrollbarGrab(row) => {
             app.shell.scrollbar_drag = true;

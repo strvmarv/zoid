@@ -101,7 +101,32 @@ pub struct ObsHandle {
 pub fn init() -> ObsHandle {
     let state = Arc::new(Mutex::new(ObsState::default()));
     install(state.clone());
+    install_panic_hook();
     ObsHandle { state }
+}
+
+/// Chain a panic hook that logs the panic message/location through `tracing`
+/// (so it lands in the error ring + JSON file) before the previous hook runs.
+/// Fires before unwind/Drop, so this trail survives even though the terminal
+/// hasn't been restored yet — no terminal manipulation belongs here.
+///
+/// `message`/`location` are bound to owned `String`s and passed as `&str`
+/// (no `%` sigil): an explicit `&str` `message` field routes through
+/// `FieldGrab::record_str`, which is what makes the real panic text — not the
+/// literal "panic" — the authoritative message in the error ring.
+fn install_panic_hook() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let m = info.to_string();
+        let loc = info.location().map(|l| l.to_string()).unwrap_or_default();
+        tracing::error!(
+            ctx = "panic",
+            message = m.as_str(),
+            location = loc.as_str(),
+            "panic"
+        );
+        prev(info);
+    }));
 }
 
 /// Env var naming the JSON diagnostic file. Unset → no file layer (zero cost),
