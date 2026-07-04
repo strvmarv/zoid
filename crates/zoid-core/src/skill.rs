@@ -4,12 +4,15 @@
 //! built-in skills that chain (spike-plan → spike-implement) to prove the
 //! runtime; the SKILL.md importer is a later slice. Pure: no provider/process deps.
 
-/// A single named skill: its one-line menu description and its full body.
+/// A single named skill: its one-line menu description, its full body, and the
+/// source directory it was imported from (for bundled sibling files). Built-in
+/// skills have `base_dir: None`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Skill {
     pub name: String,
     pub description: String,
     pub body: String,
+    pub base_dir: Option<std::path::PathBuf>,
 }
 
 /// The skills available to the current session.
@@ -22,6 +25,17 @@ impl SkillRegistry {
     /// Build a registry from an explicit skill list.
     pub fn new(skills: Vec<Skill>) -> Self {
         Self { skills }
+    }
+
+    /// Append `skill` unless a skill with the same name already exists. Returns
+    /// `true` if appended, `false` (and leaves the registry unchanged) on a name
+    /// collision — first-wins, so built-ins and earlier imports are protected.
+    pub fn push_unique(&mut self, skill: Skill) -> bool {
+        if self.skills.iter().any(|s| s.name == skill.name) {
+            return false;
+        }
+        self.skills.push(skill);
+        true
     }
 
     /// The two hand-written built-in spike skills. `spike-plan` ends by
@@ -41,6 +55,7 @@ impl SkillRegistry {
                     \"spike-implement\".\n\
                     Do NOT write the file yourself in this step — spike-implement does that."
                     .into(),
+                base_dir: None,
             },
             Skill {
                 name: "spike-implement".into(),
@@ -49,6 +64,7 @@ impl SkillRegistry {
                     Create the file ./spike-artifact.txt with exactly one line of content: spike ok\n\
                     Use the write_file tool. Then confirm in one sentence that you wrote it."
                     .into(),
+                base_dir: None,
             },
         ])
     }
@@ -112,5 +128,27 @@ mod tests {
     #[test]
     fn empty_registry_menu_is_empty_string() {
         assert_eq!(SkillRegistry::new(vec![]).menu(), "");
+    }
+
+    #[test]
+    fn builtin_skills_have_no_base_dir() {
+        let r = SkillRegistry::builtin();
+        assert!(r.get("spike-plan").unwrap().base_dir.is_none());
+        assert!(r.get("spike-implement").unwrap().base_dir.is_none());
+    }
+
+    #[test]
+    fn push_unique_appends_new_and_rejects_duplicate() {
+        let mk = |n: &str| Skill {
+            name: n.into(),
+            description: "d".into(),
+            body: "b".into(),
+            base_dir: None,
+        };
+        let mut r = SkillRegistry::new(vec![]);
+        assert!(r.push_unique(mk("a")));
+        assert!(!r.push_unique(mk("a"))); // duplicate name rejected, no change
+        assert!(r.push_unique(mk("b")));
+        assert_eq!(r.names(), vec!["a".to_string(), "b".to_string()]);
     }
 }
