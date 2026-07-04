@@ -1367,7 +1367,8 @@ fn current_config_field(app: &App) -> Option<(&'static str, zoid_tui::config_vie
 /// Replace an OPEN model picker's options with a freshly-fetched live list.
 /// No-op if the list is empty (keep the static fallback) or a model picker
 /// isn't currently open (results arrived too late / focus moved).
-fn apply_models_fetched(app: &mut App, provider: String, models: Vec<String>) {
+fn apply_models_fetched(app: &mut App, provider: String, mut models: Vec<String>) {
+    models.sort();
     // Drop a stale fetch: the user switched providers while this was in flight.
     if provider != app.config.provider {
         return;
@@ -1403,8 +1404,9 @@ fn apply_models_fetched(app: &mut App, provider: String, models: Vec<String>) {
 /// provider the user has since scrolled past must not clobber the visible list.
 /// An empty result keeps the static registry fallback. The user's highlighted
 /// model is preserved across the refresh when it survives in the live list.
-fn apply_switch_models_fetched(app: &mut App, provider: String, models: Vec<String>) {
+fn apply_switch_models_fetched(app: &mut App, provider: String, mut models: Vec<String>) {
     use zoid_tui::state::Overlay;
+    models.sort();
     if app.shell.overlay != Overlay::ProviderSwitch || models.is_empty() {
         return;
     }

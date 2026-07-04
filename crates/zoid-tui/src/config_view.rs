@@ -54,9 +54,12 @@ pub fn provider_options(current_id: &str) -> Vec<PickOption> {
         .collect()
 }
 
-/// The model picker options for a provider (registry convenience list).
+/// The model picker options for a provider (registry convenience list),
+/// sorted alphabetically by name for easy scanning.
 pub fn model_options(provider_id: &str, current_model: &str) -> Vec<PickOption> {
-    model::models_for(provider_id)
+    let mut models: Vec<&str> = model::models_for(provider_id).to_vec();
+    models.sort();
+    models
         .iter()
         .map(|m| PickOption {
             id: (*m).to_string(),
