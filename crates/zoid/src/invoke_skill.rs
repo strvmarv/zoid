@@ -72,7 +72,11 @@ impl Tool for InvokeSkillTool {
 /// are returned unchanged.
 fn body_with_anchor(skill: &zoid_core::skill::Skill) -> String {
     match &skill.base_dir {
-        Some(dir) => format!("{}\n\n---\nSkill files are in: {}/", skill.body, dir.display()),
+        Some(dir) => format!(
+            "{}\n\n---\nSkill files are in: {}/",
+            skill.body,
+            dir.display()
+        ),
         None => skill.body.clone(),
     }
 }

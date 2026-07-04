@@ -28,9 +28,7 @@ pub struct ParsedSkill {
 fn unquote(s: &str) -> String {
     let b = s.as_bytes();
     let n = s.len();
-    if n >= 2
-        && ((b[0] == b'"' && b[n - 1] == b'"') || (b[0] == b'\'' && b[n - 1] == b'\''))
-    {
+    if n >= 2 && ((b[0] == b'"' && b[n - 1] == b'"') || (b[0] == b'\'' && b[n - 1] == b'\'')) {
         s[1..n - 1].to_string()
     } else {
         s.to_string()

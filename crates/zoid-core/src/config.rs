@@ -215,7 +215,10 @@ mod merge_tests {
     #[test]
     fn parses_skills_source_dirs() {
         let p = parse_toml("[skills]\nsource_dirs = [\"a\", \"b\"]").unwrap();
-        assert_eq!(p.skills.source_dirs, Some(vec!["a".to_string(), "b".to_string()]));
+        assert_eq!(
+            p.skills.source_dirs,
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
     }
 
     #[test]
