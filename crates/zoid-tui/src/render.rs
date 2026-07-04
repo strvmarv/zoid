@@ -8,7 +8,7 @@ use crate::chat::{conversation_view, ChatView};
 use crate::economy_view::EconomyView;
 use crate::layout::{compute, ShellLayout, CONV_PAD};
 use crate::palette::{all_items, nav, selectable_matches, PaletteItem};
-use crate::state::{DrawerId, Focus, Mode, Overlay, ShellState};
+use crate::state::{DrawerId, Focus, Mode, Overlay, PaletteStage, ShellState};
 use crate::tokens::{color, glyph};
 use ratatui::{
     layout::{Margin, Rect},
@@ -665,65 +665,59 @@ fn render_tasks_body(frame: &mut Frame, area: Rect, items: &[zoid_core::tasks::T
 
 fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
     frame.render_widget(Clear, area);
+
+    // Title reflects the phase: Pick shows the search prompt + query; Arg shows
+    // the argument prompt + typed input so far.
+    let title = match &state.palette.stage {
+        PaletteStage::Pick => format!(" {} {} ", glyph::USER_TURN, state.palette.query),
+        PaletteStage::Arg { kind, input } => format!(" {}: {} ", kind.prompt(), input),
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::new().fg(color::CHAT_ACCENT))
-        .title(Span::styled(
-            format!(" {} {} ", glyph::USER_TURN, state.palette.query),
-            Style::new().fg(color::TXT),
-        ));
+        .title(Span::styled(title, Style::new().fg(color::TXT)));
     let inner = area.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });
     frame.render_widget(block, area);
 
-    let items = all_items(state.mode);
-    let matches = selectable_matches(&items, &state.palette.query);
-    let sel = nav(state.palette.selected, 0, matches.len());
+    match &state.palette.stage {
+        PaletteStage::Arg { .. } => {
+            // Inline argument entry: a single dim hint line under the prompt.
+            let hint = Line::styled("Enter apply · Esc back", Style::new().fg(color::DIM));
+            frame.render_widget(Paragraph::new(vec![hint]), inner);
+        }
+        PaletteStage::Pick => {
+            let items = all_items(state.mode);
+            let matches = selectable_matches(&items, &state.palette.query);
+            let sel = nav(state.palette.selected, 0, matches.len());
 
-    // Render the full grouped list; highlight the selected *selectable* row.
-    // Track the line index of the selected row (group headers are interleaved)
-    // so the viewport can scroll to keep it visible — group counts vary with
-    // Plan 2's session group, so the list can exceed the overlay's fixed height.
-    let mut lines: Vec<Line> = Vec::new();
-    let mut last_group = String::new();
-    let mut selected_line: usize = 0;
-    for (i, it) in items.iter().enumerate() {
-        if it.group != last_group {
-            lines.push(Line::styled(
-                it.group.to_uppercase(),
-                Style::new().fg(color::CHAT_ACCENT),
-            ));
-            last_group = it.group.clone();
+            // Flat single-column list of ranked matches; highlight the selected row.
+            let mut lines: Vec<Line> = Vec::new();
+            let mut selected_line: usize = 0;
+            for (rank, &i) in matches.iter().enumerate() {
+                if rank == sel {
+                    selected_line = lines.len();
+                }
+                lines.push(palette_row_line(&items[i], rank == sel));
+            }
+
+            // Scroll-follow: keep the selected line within the visible viewport.
+            // The curated list is short today, but this stays correct if it grows.
+            let vh = inner.height as usize;
+            let off = selected_line.saturating_sub(vh.saturating_sub(1));
+            frame.render_widget(Paragraph::new(lines).scroll((off as u16, 0)), inner);
         }
-        let is_sel = matches.get(sel) == Some(&i);
-        if is_sel {
-            selected_line = lines.len();
-        }
-        lines.push(palette_row_line(it, is_sel));
     }
-
-    // Scroll-follow: keep the selected line within the visible viewport. When
-    // the selection is near the top, offset is 0; as it moves past the bottom
-    // edge, the offset grows so the selected row stays on the last visible line.
-    let vh = inner.height as usize;
-    let off = selected_line.saturating_sub(vh.saturating_sub(1));
-    frame.render_widget(Paragraph::new(lines).scroll((off as u16, 0)), inner);
 }
 
 fn palette_row_line(it: &PaletteItem, selected: bool) -> Line<'static> {
-    let enabled = it.command.is_some();
-    let fg = if enabled { color::TXT } else { color::DIM };
     let bg = |s: Style| if selected { s.bg(color::SEL_BG) } else { s };
-    Line::from(vec![
-        Span::styled(
-            format!(" {} {}", it.icon, it.label),
-            bg(Style::new().fg(fg)),
-        ),
-        Span::styled(format!("  {}", it.hint), bg(Style::new().fg(color::DIM))),
-        Span::styled(format!("  {}", it.keybind), bg(Style::new().fg(color::DIM))),
-    ])
+    Line::from(Span::styled(
+        format!(" {}", it.label),
+        bg(Style::new().fg(color::TXT)),
+    ))
 }
 
 fn render_cmdline(frame: &mut Frame, state: &ShellState, area: Rect) {

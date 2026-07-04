@@ -3,8 +3,8 @@ source: crates/zoid-tui/tests/shell_snapshot.rs
 expression: "draw(&s, &seeded(), 100, 24)"
 ---
 "                                                zoid                                      ^P palette"
-"┌ › build ────────────────────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
-"│ Switch to Build                                     │ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
+"┌ Rename to: my-feature ──────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
+"│Enter apply · Esc back                               │ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
 "│                                                     │ ╰─────────────────────────────────────────╯ "
 "│                                                     │                                             "
 "│                                                     │ ╭ ▾ session ──────────────────────────────╮ "

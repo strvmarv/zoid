@@ -439,11 +439,12 @@ pub fn route_mouse(state: &ShellState, layout: &ShellLayout, m: MouseEvent) -> A
 }
 
 /// Resolve the palette's selected row to its command (bin calls after PaletteRun).
+/// `None` means no row matched the current query.
 pub fn palette_selected_command(state: &ShellState) -> Option<Command> {
     let items = all_items(state.mode);
     let matches = selectable_matches(&items, &state.palette.query);
     let sel = nav(state.palette.selected, 0, matches.len());
-    matches.get(sel).and_then(|&i| items[i].command.clone())
+    matches.get(sel).map(|&i| items[i].command.clone())
 }
 
 #[cfg(test)]
