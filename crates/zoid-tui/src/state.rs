@@ -128,6 +128,12 @@ pub struct ShellState {
     /// bin each frame; the status bar shows an animated spinner while true and
     /// the static idle glyph otherwise.
     pub busy: bool,
+    /// Whether a *cancellable* chat turn is in flight (mirrors the bin's
+    /// `turn_cancel.is_some()`). Distinct from `busy`, which also covers
+    /// subagent delegation — which has no stop token — so Esc/Ctrl-C only routes
+    /// to `CancelTurn` when there is actually a token to fire, and keeps its
+    /// normal focus behavior otherwise.
+    pub cancellable: bool,
     /// Current activity-spinner frame glyph, refreshed by the bin each frame
     /// from wall-clock elapsed. Defaults to a fixed frame so snapshot tests are
     /// deterministic unless they opt into `busy`.
@@ -276,6 +282,7 @@ impl ShellState {
             follow_tail: true,
             scrollbar_drag: false,
             busy: false,
+            cancellable: false,
             spinner: crate::tokens::glyph::SPINNER[0],
             branch: "main".into(),
             repo_name: String::new(),

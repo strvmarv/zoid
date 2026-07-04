@@ -8,6 +8,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
 use zoid_core::agent_profile::AgentProfile;
@@ -202,6 +203,44 @@ pub async fn run_agent_turn(
     session_id: Ulid,
     now: fn() -> i64,
 ) -> Result<Vec<Event>> {
+    // Not externally cancellable: a token that never fires. The TUI uses
+    // `run_agent_turn_cancellable` to wire Esc/Ctrl-C; subagents and tests use
+    // this convenience wrapper.
+    run_agent_turn_cancellable(
+        config,
+        provider,
+        tools,
+        gate,
+        session,
+        events,
+        model,
+        ui,
+        session_id,
+        now,
+        CancellationToken::new(),
+    )
+    .await
+}
+
+/// Like [`run_agent_turn`] but cancellable: when `cancel` fires (Esc/Ctrl-C from
+/// the TUI), the loop stops at the next safe point — draining any un-executed
+/// tool calls with a balanced `[skipped: turn aborted]` result so no tool call
+/// is left unanswered — and ends the turn cleanly. `TurnComplete` still fires on
+/// every exit path.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_agent_turn_cancellable(
+    config: TurnConfig,
+    provider: Arc<dyn Provider>,
+    tools: Arc<Vec<Box<dyn Tool>>>,
+    gate: Arc<dyn ToolGate>,
+    session: SessionHandle,
+    events: Vec<Event>,
+    model: String,
+    ui: mpsc::Sender<AgentUpdate>,
+    session_id: Ulid,
+    now: fn() -> i64,
+    cancel: CancellationToken,
+) -> Result<Vec<Event>> {
     // Calibration ratio: real_input_tokens / context_window.total_tokens from
     // the last non-cached sub-turn. The chars/4 estimate undercounts 5-7x for
     // code/tool output, so when the provider reports 0 (Ollama cached prompt)
@@ -240,6 +279,7 @@ pub async fn run_agent_turn(
         &config, provider, tools, gate, session, events, model, &ui, session_id, now,
         &mut calibration_ratio,
         &overhead,
+        &cancel,
     )
     .await;
     // Best-effort: if the receiver is already gone we still return the inner result.
@@ -265,12 +305,18 @@ async fn run_turn_inner(
     now: fn() -> i64,
     calibration_ratio: &mut Option<f64>,
     overhead: &zoid_core::context::ContextOverhead,
+    cancel: &CancellationToken,
 ) -> Result<Vec<Event>> {
     let turn_start = std::time::Instant::now();
     let mut iterations: u32 = 0;
     let mut outcome: &'static str = "completed";
 
     'turn: loop {
+        // Cancelled between sub-turns: nothing is pending here, so end cleanly.
+        if cancel.is_cancelled() {
+            outcome = "aborted";
+            break 'turn;
+        }
         let req = build_request(&events, &model, &tools, &config.system);
 
         // Stream one model turn. Spawn the provider so a missing terminal Done
@@ -284,7 +330,19 @@ async fn run_turn_inner(
 
         let mut turn_usage = zoid_core::event::TokenStat::default();
         let mut pending: Vec<ToolCall> = Vec::new();
-        while let Some(pe) = prx.recv().await {
+        let mut aborted = false;
+        loop {
+            let pe = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    aborted = true;
+                    break;
+                }
+                maybe = prx.recv() => match maybe {
+                    Some(pe) => pe,
+                    None => break,
+                },
+            };
             match pe {
                 ProviderEvent::TextDelta(s) => {
                     emit(
@@ -340,6 +398,33 @@ async fn run_turn_inner(
                 }
                 ProviderEvent::Done => break,
             }
+        }
+        if aborted {
+            // Cancelled mid-stream: stop the provider task and balance any tool
+            // calls parsed before the cancel so none is left without a
+            // ToolResult (the provider protocol requires every call answered
+            // before the next request).
+            stream_task.abort();
+            let _ = stream_task.await;
+            for tc in pending.drain(..) {
+                emit(
+                    &session,
+                    &mut events,
+                    ui,
+                    &config.branch,
+                    EventKind::ToolResult {
+                        id: tc.id,
+                        name: tc.name,
+                        output: "[skipped: turn aborted]".to_string(),
+                        is_error: false,
+                    },
+                    session_id,
+                    now,
+                )
+                .await?;
+            }
+            outcome = "aborted";
+            break 'turn;
         }
         let _ = stream_task.await;
 
@@ -403,6 +488,30 @@ async fn run_turn_inner(
         let cwd_for_exec = config.cwd.clone();
         let mut pending_iter = pending.into_iter();
         while let Some(tc) = pending_iter.next() {
+            // Cancelled mid-batch: skip this tool and every remaining one with a
+            // balanced result, then end the turn (same integrity rule as the
+            // ask_user abort path — no tool call left unanswered).
+            if cancel.is_cancelled() {
+                for rest in std::iter::once(tc).chain(pending_iter.by_ref()) {
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::ToolResult {
+                            id: rest.id,
+                            name: rest.name,
+                            output: "[skipped: turn aborted]".to_string(),
+                            is_error: false,
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                }
+                outcome = "aborted";
+                break 'turn;
+            }
             let tool_start = std::time::Instant::now();
             let tool_name = tc.name.clone();
 

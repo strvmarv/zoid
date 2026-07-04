@@ -45,6 +45,9 @@ pub enum Action {
     ZoomIn,
     ZoomOut,
     Submit,
+    /// Esc / Ctrl-C while a turn is in flight: cooperatively cancel it. The bin
+    /// fires the turn's cancellation token; a no-op if no cancellable turn.
+    CancelTurn,
     Newline,
     Edit(KeyEvent),
     /// ⇧Delete in the message box: delete the whole current line.
@@ -133,6 +136,15 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
     }
 
     // 2. Global combos.
+    // While a cancellable chat turn is in flight, Esc or Ctrl-C requests
+    // cancellation (the bin fires the turn's token; the agent loop drains
+    // pending tool calls and ends the turn). Gated on `cancellable`, NOT `busy`:
+    // a subagent delegation has no token, so during one Esc/Ctrl-C keep their
+    // normal focus behavior instead of a silent no-op. Checked before Ctrl-Q so
+    // a mid-turn interrupt never quits by accident.
+    if state.cancellable && (key.code == KeyCode::Esc || ctrl(&key, 'c')) {
+        return Action::CancelTurn;
+    }
     if ctrl(&key, 'q') {
         return Action::Quit;
     }
@@ -460,6 +472,61 @@ mod tests {
             }],
         }];
         s
+    }
+
+    #[test]
+    fn esc_or_ctrl_c_while_cancellable_cancels_turn() {
+        let mut s = ShellState::new();
+        s.cancellable = true;
+        assert_eq!(
+            route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)),
+            Action::CancelTurn
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Action::CancelTurn
+        );
+    }
+
+    #[test]
+    fn esc_or_ctrl_c_when_idle_does_not_cancel() {
+        let s = ShellState::new(); // cancellable = false
+        assert_ne!(
+            route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)),
+            Action::CancelTurn
+        );
+        assert_ne!(
+            route_key(&s, key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Action::CancelTurn
+        );
+    }
+
+    #[test]
+    fn busy_delegation_without_a_token_keeps_normal_esc_behavior() {
+        // A subagent delegation sets `busy` but NOT `cancellable` (no token).
+        // Esc must fall through to focus behavior, not become a silent no-op.
+        let mut s = ShellState::new();
+        s.busy = true;
+        s.cancellable = false;
+        s.focus = Focus::Conversation;
+        assert_eq!(
+            route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)),
+            Action::FocusRegion(Focus::Input)
+        );
+    }
+
+    #[test]
+    fn cancel_does_not_pre_empt_an_open_overlay() {
+        // ask_user (Question) and the pickers have their own Esc handling; the
+        // cancel intercept must not fire while an overlay is captured (overlay
+        // routing runs first, in section 1).
+        let mut s = ShellState::new();
+        s.cancellable = true;
+        s.overlay = crate::state::Overlay::Palette;
+        assert_ne!(
+            route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)),
+            Action::CancelTurn
+        );
     }
 
     #[test]

@@ -22,7 +22,7 @@ use ulid::Ulid;
 
 mod obs;
 
-use zoid::agent::{run_agent_turn, AgentUpdate};
+use zoid::agent::{run_agent_turn_cancellable, AgentUpdate};
 use zoid_core::event::{Event, EventKind};
 use zoid_core::projection::conversation;
 use zoid_core::session::SessionHandle;
@@ -979,6 +979,11 @@ struct App {
     /// while the question overlay is up. Dropping it (Esc-abort) makes the
     /// agent loop record a balanced "[user aborted]" result and end the turn.
     pending_answer: Option<tokio::sync::oneshot::Sender<zoid::agent::Answer>>,
+    /// Cancellation token for the in-flight chat turn (`Some` while streaming).
+    /// Firing it (Esc/Ctrl-C via `Action::CancelTurn`) makes the agent loop
+    /// drain any pending tool calls and end the turn cleanly; cleared on
+    /// `TurnComplete`.
+    turn_cancel: Option<tokio_util::sync::CancellationToken>,
     /// Dynamically-fetched model capabilities (from Ollama `/api/show` etc.),
     /// overriding the static MODEL_CAPS table. `None` until the first fetch
     /// lands (or when the provider doesn't support capability introspection).
@@ -1152,6 +1157,7 @@ async fn main() -> Result<()> {
         session_ids: Vec::new(),
         delegating: false,
         pending_answer: None,
+        turn_cancel: None,
         fetched_model_info: None,
     };
 
@@ -1372,6 +1378,10 @@ async fn run<B: ratatui::backend::Backend>(
         // (kept out of the pure renderer for snapshot determinism); the motion
         // tick below redraws at MOTION_FPS while busy so it actually animates.
         app.shell.busy = app.streaming || app.delegating;
+        // Only a chat turn carries a cancellation token; delegation has none, so
+        // Esc/Ctrl-C routes to CancelTurn only while this is true (and keeps its
+        // normal focus behavior during a delegation).
+        app.shell.cancellable = app.turn_cancel.is_some();
         app.shell.spinner = zoid_tui::tokens::glyph::SPINNER[zoid_tui::motion::spinner_frame(
             elapsed,
             80,
@@ -1518,6 +1528,9 @@ async fn run<B: ratatui::backend::Backend>(
                         app.streaming = false;
                         app.shell.clear_active_tool();
                         app.pending_answer = None;
+                        app.turn_cancel = None;
+                        // Clear any lingering "cancelling…" hint now the turn ended.
+                        app.shell.status_hint = None;
                     }
                     // Raise the question overlay and hold the reply channel:
                     // the user's answer (or an Esc-abort, which drops `reply`)
@@ -2027,6 +2040,15 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             }
             app.streaming = true;
             spawn_turn(app);
+        }
+        Action::CancelTurn => {
+            // Esc/Ctrl-C while a chat turn is streaming: fire the token. The
+            // agent loop drains any pending tool calls and ends the turn
+            // cleanly; the resulting TurnComplete clears streaming + the token.
+            if let Some(cancel) = &app.turn_cancel {
+                cancel.cancel();
+                app.shell.status_hint = Some("cancelling…".into());
+            }
         }
         // Object-first picker (P4d ④): pick an object, then a verb scoped to
         // it. Picking a verb composes a prompt and queues it into the input
@@ -2751,7 +2773,7 @@ fn start_delegation(app: &mut App, task: String) {
     });
 }
 
-fn spawn_turn(app: &App) {
+fn spawn_turn(app: &mut App) {
     let provider = app.provider.clone();
     let tools = app.tools.clone();
     let session = app.session.clone();
@@ -2763,8 +2785,12 @@ fn spawn_turn(app: &App) {
     let menu = app.skills.menu();
     let mut turn_config = zoid::agent::chat_turn_config_with(profile, &menu);
     turn_config.policy = policy_from_config(&app.economy, app.shell.ctx_ceiling);
+    // Mint a fresh cancellation token for this turn and keep a clone so
+    // `Action::CancelTurn` (Esc/Ctrl-C) can fire it. Cleared on `TurnComplete`.
+    let cancel = tokio_util::sync::CancellationToken::new();
+    app.turn_cancel = Some(cancel.clone());
     tokio::spawn(async move {
-        let _ = run_agent_turn(
+        let _ = run_agent_turn_cancellable(
             turn_config,
             provider,
             tools,
@@ -2775,6 +2801,7 @@ fn spawn_turn(app: &App) {
             ui,
             session_id,
             now_ms,
+            cancel,
         )
         .await;
     });
@@ -3216,6 +3243,7 @@ mod tests {
             session_ids: Vec::new(),
             delegating: false,
             pending_answer: None,
+            turn_cancel: None,
             fetched_model_info: None,
         }
     }

@@ -2859,6 +2859,7 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "tui-textarea",

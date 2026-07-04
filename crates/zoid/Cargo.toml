@@ -21,6 +21,9 @@ anyhow = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 tokio = { workspace = true }
+# CancellationToken threads a cooperative stop signal into the agent turn loop
+# (Esc/Ctrl-C cancellation). Pure Rust, no C deps — static-musl safe.
+tokio-util = { version = "0.7", default-features = false }
 tui-textarea = { workspace = true }
 ulid = { workspace = true }
 futures-util = { workspace = true }
@@ -48,5 +51,6 @@ tempfile = { workspace = true }
 async-trait = { workspace = true }
 rusqlite = { workspace = true }
 zoid-testkit = { path = "../zoid-testkit" }
+tokio-util = { version = "0.7", default-features = false }
 flate2 = "1"
 tar = "0.4"
