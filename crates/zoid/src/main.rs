@@ -742,6 +742,11 @@ struct ProjectionCache {
     /// subset of `ledger_total`'s input that was served from the provider's
     /// prompt cache. Surfaced as the session drawer's "cac" line.
     cached_total: u64,
+    /// The real input token count from the most recent Usage event (the
+    /// provider's actual prompt size for the last turn). Used as `ctx_used`
+    /// when available — far more accurate than `estimate_tokens` (chars/4).
+    /// `None` until the first turn's Usage event arrives.
+    last_input_tokens: Option<u64>,
 }
 
 impl ProjectionCache {
@@ -758,6 +763,13 @@ impl ProjectionCache {
         let ledger = zoid_core::economy::token_ledger(events);
         self.ledger_total = ledger.total;
         self.cached_total = ledger.cached;
+        // Find the last Usage event's real input token count — the provider's
+        // actual prompt size, far more accurate than the chars/4 estimate.
+        self.last_input_tokens = events
+            .iter()
+            .rev()
+            .find_map(|e| e.tokens.map(|t| t.input))
+            .filter(|&t| t > 0);
         self.events_len = Some(events.len());
         true
     }
@@ -1227,7 +1239,10 @@ async fn run<B: ratatui::backend::Backend>(
         let proj_rebuilt = app.proj.refresh(&app.events);
         app.shell.session_tokens = app.proj.ledger_total.saturating_sub(app.proj.cached_total);
         app.shell.cached_tokens = app.proj.cached_total;
-        app.shell.ctx_used = app.proj.window.total_tokens;
+        app.shell.ctx_used = app
+            .proj
+            .last_input_tokens
+            .unwrap_or(app.proj.window.total_tokens);
         app.shell.tasks_len = app.proj.tasks.len() as u16;
         app.shell.duration = fmt_duration(app.session_started_ms, now_ms());
         app.shell.input_rows = app.textarea.lines().len().max(1) as u16;
