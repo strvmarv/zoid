@@ -284,6 +284,21 @@ fn fmt_duration(start_ms: i64, now_ms: i64) -> String {
     }
 }
 
+/// Compact relative age from a millisecond delta (e.g. "45s", "12m", "3h"),
+/// used to render `⚠ 12m provider` / `⛔ 3m tool shell` rows in the Overview
+/// ERRORS band. Guarded against a negative/zero delta (clock skew or a
+/// same-tick error) so it never underflows — those read as `"0s"`.
+fn fmt_age(ms_ago: i64) -> String {
+    let ms_ago = ms_ago.max(0);
+    if ms_ago < 60_000 {
+        format!("{}s", ms_ago / 1000)
+    } else if ms_ago < 3_600_000 {
+        format!("{}m", ms_ago / 60_000)
+    } else {
+        format!("{}h", ms_ago / 3_600_000)
+    }
+}
+
 /// Snapshot the obs aggregate + economy projection into the pure `OverviewData`
 /// consumed by `overview_lines`. Poison-safe: a poisoned obs mutex yields an
 /// empty dashboard rather than a panic (the observability layer never panics).
@@ -348,10 +363,12 @@ fn build_overview_data(
             .errors
             .iter()
             .map(|e| {
+                let age = fmt_age(now_ms() - e.ts_ms);
                 (
                     format!(
-                        "{} {}",
+                        "{} {} {}",
                         if e.level == "error" { '⛔' } else { '⚠' },
+                        age,
                         e.context
                     ),
                     e.message.clone(),

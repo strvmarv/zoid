@@ -264,10 +264,17 @@ fn error_lines(d: &OverviewData, width: usize) -> Vec<Line<'static>> {
             let pw = UnicodeWidthStr::width(prefix.as_str());
             let avail = width.saturating_sub(4 + pw);
             let msg = truncate(msg, avail);
+            // Prefix starts with the glyph: `⛔` marks a critical error (ERROR
+            // color), anything else (`⚠`) is a warning (WARN color).
+            let severity = if prefix.starts_with('⛔') {
+                color::ERROR
+            } else {
+                color::WARN
+            };
             fit_line(
                 vec![
                     Span::raw("  ".to_string()),
-                    Span::styled(prefix.clone(), Style::new().fg(color::WARN)),
+                    Span::styled(prefix.clone(), Style::new().fg(severity)),
                     Span::raw(format!("  {msg}")),
                 ],
                 width,

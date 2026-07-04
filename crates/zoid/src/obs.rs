@@ -194,6 +194,9 @@ impl RollingStats {
     pub fn window_max(&self) -> u64 {
         self.window.iter().copied().max().unwrap_or(0)
     }
+    /// 90th-percentile sample using a `ceil`-based rank (`ceil(len*0.9)`): it
+    /// reports the value at/above the 90th percentile, reading slightly high vs
+    /// textbook nearest-rank — intentional/conservative for a latency panel.
     pub fn p90(&self) -> u64 {
         if self.window.is_empty() {
             return 0;
