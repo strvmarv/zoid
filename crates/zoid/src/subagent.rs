@@ -329,6 +329,7 @@ mod tests {
             ProviderEvent::Usage(Usage {
                 input_tokens: 200,
                 output_tokens: 30,
+                cached: 0,
             }),
             ProviderEvent::Done,
         ]));

@@ -59,8 +59,16 @@ impl Message {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Usage {
+    /// Total prompt tokens for the request, *including* any cache-read and
+    /// cache-creation tokens (so the economy total stays honest even when a
+    /// provider bills cached input on a separate line).
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Cache-read tokens: the subset of `input_tokens` served from the
+    /// provider's prompt cache (Anthropic `cache_read_input_tokens`). 0 for
+    /// providers without a token-level prompt cache (e.g. Ollama). Powers the
+    /// context drawer's per-turn cache sparkline.
+    pub cached: u64,
 }
 
 /// A tool the model may call (OpenAI/Ollama function shape). `parameters` is a
@@ -215,6 +223,7 @@ mod tests {
             ProviderEvent::Usage(Usage {
                 input_tokens: 3,
                 output_tokens: 2,
+                cached: 0,
             }),
             ProviderEvent::Done,
         ];

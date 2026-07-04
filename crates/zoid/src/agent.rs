@@ -231,6 +231,7 @@ async fn run_turn_inner(
                 ProviderEvent::Usage(u) => {
                     turn_usage.input += u.input_tokens;
                     turn_usage.output += u.output_tokens;
+                    turn_usage.cached += u.cached;
                 }
                 ProviderEvent::Error(msg) => {
                     emit(

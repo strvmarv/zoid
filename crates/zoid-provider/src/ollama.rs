@@ -45,6 +45,11 @@ pub fn request_body(req: &CompletionRequest) -> Value {
         "model": req.model,
         "stream": true,
         "messages": messages,
+        // Keep the model warm between turns (Ollama's analog to prompt caching):
+        // hold it loaded for 30m after a response so a coding session's rapid
+        // follow-up turns skip the cold reload. The native API has no token-level
+        // prompt cache, so `cached` stays 0 for this provider.
+        "keep_alive": "30m",
     });
     if !req.tools.is_empty() {
         body["tools"] = Value::Array(
@@ -125,6 +130,7 @@ pub fn parse_line(line: &str) -> Vec<ProviderEvent> {
         out.push(ProviderEvent::Usage(Usage {
             input_tokens: input.unwrap_or(0),
             output_tokens: output.unwrap_or(0),
+            cached: 0, // native /api/chat has no token-level prompt cache
         }));
     }
     if v.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
@@ -284,11 +290,14 @@ mod tests {
                     { "role": "user", "content": "hi" },
                     { "role": "assistant", "content": "hello" },
                 ],
+                "keep_alive": "30m",
             })
         );
         // native body must NOT carry OpenAI-only fields
         assert!(body.get("max_tokens").is_none());
         assert!(body.get("stream_options").is_none());
+        // keeps the model warm between turns (Ollama's caching analog)
+        assert_eq!(body["keep_alive"], json!("30m"));
     }
 
     #[test]
@@ -388,7 +397,8 @@ mod tests {
             vec![
                 ProviderEvent::Usage(Usage {
                     input_tokens: 124,
-                    output_tokens: 58
+                    output_tokens: 58,
+                    cached: 0
                 }),
                 ProviderEvent::Done
             ]
@@ -404,7 +414,8 @@ mod tests {
             vec![
                 ProviderEvent::Usage(Usage {
                     input_tokens: 0,
-                    output_tokens: 58
+                    output_tokens: 58,
+                    cached: 0
                 }),
                 ProviderEvent::Done
             ]

@@ -31,6 +31,19 @@ pub fn request_body(req: &CompletionRequest) -> Value {
         })
         .collect();
 
+    // Prompt caching (Anthropic ephemeral cache): place a cache breakpoint on the
+    // system block and on the last message. Anthropic caches the longest matching
+    // prefix (tools → system → messages), so the previous turn's breakpoint —
+    // now an interior message — still serves as a cache *read*, while the new
+    // breakpoint extends the cached prefix for the next turn. Only the newly
+    // appended delta pays the cache-creation surcharge. Prompts below the model's
+    // minimum cacheable size are simply not cached (no error, `cached` stays 0).
+    let mut messages = messages;
+    if let Some(last) = messages.last_mut() {
+        let text = last["content"].take();
+        last["content"] = json!([{ "type": "text", "text": text, "cache_control": { "type": "ephemeral" } }]);
+    }
+
     let mut body = json!({
         "model": req.model,
         "max_tokens": req.max_tokens,
@@ -38,7 +51,7 @@ pub fn request_body(req: &CompletionRequest) -> Value {
         "messages": messages,
     });
     if let Some(sys) = &req.system {
-        body["system"] = json!(sys);
+        body["system"] = json!([{ "type": "text", "text": sys, "cache_control": { "type": "ephemeral" } }]);
     }
     body
 }
@@ -54,14 +67,24 @@ pub fn parse_event(event_type: &str, data: &str) -> Option<ProviderEvent> {
         }
         "message_start" => {
             let v: Value = serde_json::from_str(data).ok()?;
-            let input = v
-                .get("message")?
-                .get("usage")?
-                .get("input_tokens")?
-                .as_u64()?;
+            let usage = v.get("message")?.get("usage")?;
+            let input = usage.get("input_tokens")?.as_u64()?;
+            // Anthropic reports cache-read and cache-creation tokens on separate
+            // lines; `input_tokens` counts neither. Fold both back in so the
+            // economy total reflects the true prompt size, and expose the
+            // cache-read subset as `cached`.
+            let read = usage
+                .get("cache_read_input_tokens")
+                .and_then(|n| n.as_u64())
+                .unwrap_or(0);
+            let creation = usage
+                .get("cache_creation_input_tokens")
+                .and_then(|n| n.as_u64())
+                .unwrap_or(0);
             Some(ProviderEvent::Usage(Usage {
-                input_tokens: input,
+                input_tokens: input + read + creation,
                 output_tokens: 0,
+                cached: read,
             }))
         }
         "message_delta" => {
@@ -70,6 +93,7 @@ pub fn parse_event(event_type: &str, data: &str) -> Option<ProviderEvent> {
             Some(ProviderEvent::Usage(Usage {
                 input_tokens: 0,
                 output_tokens: output,
+                cached: 0,
             }))
         }
         "message_stop" => Some(ProviderEvent::Done),
@@ -226,15 +250,19 @@ mod tests {
                 "max_tokens": 1024,
                 "stream": true,
                 "messages": [
+                    // Interior messages stay plain strings; only the last carries
+                    // the rolling cache breakpoint.
                     { "role": "user", "content": "hi" },
-                    { "role": "assistant", "content": "hello" },
+                    { "role": "assistant", "content": [
+                        { "type": "text", "text": "hello", "cache_control": { "type": "ephemeral" } }
+                    ] },
                 ],
             })
         );
     }
 
     #[test]
-    fn includes_system_when_present() {
+    fn includes_system_as_cacheable_block_when_present() {
         let req = CompletionRequest {
             model: "m".into(),
             system: Some("be terse".into()),
@@ -243,7 +271,36 @@ mod tests {
             tools: vec![],
         };
         let body = request_body(&req);
-        assert_eq!(body["system"], json!("be terse"));
+        assert_eq!(
+            body["system"],
+            json!([{ "type": "text", "text": "be terse", "cache_control": { "type": "ephemeral" } }])
+        );
+    }
+
+    #[test]
+    fn caches_only_the_last_message() {
+        // A cache breakpoint on the last message caches the whole conversation
+        // prefix; interior messages must not each carry one (max 4 breakpoints).
+        let req = CompletionRequest {
+            model: "m".into(),
+            system: None,
+            messages: vec![
+                Message::user("a"),
+                Message::assistant("b"),
+                Message::user("c"),
+            ],
+            max_tokens: 8,
+            tools: vec![],
+        };
+        let msgs = request_body(&req)["messages"].clone();
+        assert_eq!(msgs[0], json!({ "role": "user", "content": "a" }));
+        assert_eq!(msgs[1], json!({ "role": "assistant", "content": "b" }));
+        assert_eq!(
+            msgs[2],
+            json!({ "role": "user", "content": [
+                { "type": "text", "text": "c", "cache_control": { "type": "ephemeral" } }
+            ] })
+        );
     }
 
     #[test]
@@ -270,7 +327,8 @@ mod tests {
             parse_event("message_delta", data),
             Some(ProviderEvent::Usage(Usage {
                 input_tokens: 0,
-                output_tokens: 12
+                output_tokens: 12,
+                cached: 0
             }))
         );
     }
@@ -283,7 +341,22 @@ mod tests {
             parse_event("message_start", data),
             Some(ProviderEvent::Usage(Usage {
                 input_tokens: 7,
-                output_tokens: 0
+                output_tokens: 0,
+                cached: 0
+            }))
+        );
+    }
+
+    #[test]
+    fn message_start_folds_cache_tokens_into_input_and_reports_cached() {
+        // input_tokens excludes cache lines; total prompt = 7 + 40 read + 3 creation.
+        let data = r#"{"type":"message_start","message":{"usage":{"input_tokens":7,"cache_read_input_tokens":40,"cache_creation_input_tokens":3}}}"#;
+        assert_eq!(
+            parse_event("message_start", data),
+            Some(ProviderEvent::Usage(Usage {
+                input_tokens: 50,
+                output_tokens: 0,
+                cached: 40,
             }))
         );
     }
