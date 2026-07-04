@@ -642,7 +642,16 @@ async fn record_compactions(
     now: fn() -> i64,
     real_input_tokens: Option<u64>,
 ) -> Result<()> {
-    for c in zoid_core::compaction::plan_compactions(events, &config.policy, real_input_tokens) {
+    // When the current turn's input tokens are 0 (e.g. Ollama reports
+    // prompt_eval_count=0 when the prompt is cached), fall back to the last
+    // non-zero input from any prior Usage event in the log.
+    let effective_tokens = real_input_tokens.filter(|&t| t > 0).or_else(|| {
+        events
+            .iter()
+            .rev()
+            .find_map(|e| e.tokens.map(|t| t.input).filter(|&t| t > 0))
+    });
+    for c in zoid_core::compaction::plan_compactions(events, &config.policy, effective_tokens) {
         emit(
             session,
             events,
