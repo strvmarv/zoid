@@ -399,3 +399,79 @@ async fn cancel_mid_stream_drains_pending_tool_calls_without_running_them() {
         "cancel must drain pending tool calls with a balanced skipped result"
     );
 }
+
+#[tokio::test]
+async fn truncated_event_surfaces_a_warning_and_still_completes() {
+    // A Truncated event (model hit the output cap) must log an incomplete-reply
+    // warning but NOT abort — the following Done still ends the turn cleanly.
+    let provider = Arc::new(ScriptedProvider {
+        turns: Mutex::new(std::collections::VecDeque::from(vec![vec![
+            zoid_testkit::text("partial ans"),
+            ProviderEvent::Truncated,
+            ProviderEvent::Done,
+        ]])),
+        requests: Mutex::new(Vec::new()),
+    });
+    let provider_probe = provider.clone();
+    let tools = Arc::new(zoid_tools::registry());
+    let session = SessionHandle::spawn(":memory:").unwrap();
+    let seed = vec![Event::new(
+        ulid::Ulid::from(1u128),
+        None,
+        0,
+        EventKind::UserMessage { text: "go".into() },
+    )];
+    session.append(seed[0].clone()).await.unwrap();
+
+    let (tx, mut rx) = mpsc::channel(64);
+    let drain = tokio::spawn(async move {
+        let mut complete = false;
+        while let Some(u) = rx.recv().await {
+            if matches!(u, AgentUpdate::TurnComplete) {
+                complete = true;
+            }
+        }
+        complete
+    });
+
+    run_agent_turn(
+        zoid::agent::chat_turn_config(),
+        provider,
+        tools,
+        std::sync::Arc::new(zoid_tools::AllowAll),
+        session.clone(),
+        seed,
+        "fake".into(),
+        tx,
+        ulid::Ulid::new(),
+        fixed_now,
+    )
+    .await
+    .unwrap();
+
+    assert!(drain.await.unwrap(), "TurnComplete must fire after a truncation");
+
+    // Exactly one sub-turn: a truncation must not trigger a spurious re-request.
+    assert_eq!(
+        provider_probe.requests.lock().unwrap().len(),
+        1,
+        "truncation must not spawn a second sub-turn"
+    );
+
+    let log = session.snapshot().await.unwrap();
+    let text_idx = log.iter().position(|e| {
+        matches!(&e.kind, EventKind::ModelDelta { text } if text.contains("partial ans"))
+    });
+    let warn_idx = log.iter().position(|e| {
+        matches!(&e.kind, EventKind::AssistantMessage { text } if text.contains("truncated"))
+    });
+    assert!(text_idx.is_some(), "the partial reply must be logged");
+    assert!(
+        warn_idx.is_some(),
+        "a Truncated event must surface an incomplete-reply warning"
+    );
+    assert!(
+        text_idx < warn_idx,
+        "the truncation warning must come after the partial reply, not before"
+    );
+}

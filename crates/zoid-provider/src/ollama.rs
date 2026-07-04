@@ -136,6 +136,12 @@ pub fn parse_line(line: &str) -> Vec<ProviderEvent> {
                 cached: 0, // native /api/chat has no token-level prompt cache
             }));
         }
+        // `done_reason:"length"` = the model hit the output cap; its reply is
+        // truncated. Surface it (before Done) so the turn isn't treated as a
+        // clean stop.
+        if v.get("done_reason").and_then(|r| r.as_str()) == Some("length") {
+            out.push(ProviderEvent::Truncated);
+        }
         out.push(ProviderEvent::Done);
     }
     out
@@ -605,6 +611,26 @@ mod tests {
         let line =
             r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop"}"#;
         assert_eq!(parse_line(line), vec![ProviderEvent::Done]);
+    }
+
+    #[test]
+    fn done_reason_length_yields_usage_then_truncated_then_done() {
+        // A length-capped final frame: Usage, then Truncated, then Done — in
+        // that order (the agent accumulates Usage, warns on Truncated, breaks on
+        // Done).
+        let line = r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"length","prompt_eval_count":124,"eval_count":4096}"#;
+        assert_eq!(
+            parse_line(line),
+            vec![
+                ProviderEvent::Usage(Usage {
+                    input_tokens: 124,
+                    output_tokens: 4096,
+                    cached: 0
+                }),
+                ProviderEvent::Truncated,
+                ProviderEvent::Done
+            ]
+        );
     }
 
     #[test]

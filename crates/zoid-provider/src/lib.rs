@@ -136,6 +136,11 @@ pub enum ProviderEvent {
     /// `message_start` and output on `message_delta` (two disjoint events);
     /// Ollama emits a single cumulative snapshot on its final frame only.
     Usage(Usage),
+    /// The model stopped because it hit the output token cap (Anthropic
+    /// `stop_reason:"max_tokens"` / Ollama `done_reason:"length"`), so its reply
+    /// is incomplete. Emitted just before `Done`; the agent surfaces a warning
+    /// but still treats the following `Done` as the terminal event.
+    Truncated,
     Done,
     Error(String),
 }

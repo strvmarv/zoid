@@ -59,9 +59,29 @@ pub fn request_body(req: &CompletionRequest) -> Value {
     body
 }
 
-/// Map one Anthropic SSE frame to a `ProviderEvent`. Unhandled or malformed
-/// frames return `None` (the caller skips them). Never panics.
-pub fn parse_event(event_type: &str, data: &str) -> Option<ProviderEvent> {
+/// Map one Anthropic SSE frame to zero-or-more `ProviderEvent`s. Wraps
+/// `parse_one` and appends a `Truncated` marker when a `message_delta` reports
+/// `stop_reason:"max_tokens"`, so that single frame yields both its `Usage` and
+/// the truncation signal. Never panics.
+pub fn parse_event(event_type: &str, data: &str) -> Vec<ProviderEvent> {
+    let mut out: Vec<ProviderEvent> = parse_one(event_type, data).into_iter().collect();
+    if event_type == "message_delta" {
+        if let Ok(v) = serde_json::from_str::<Value>(data) {
+            if v.get("delta")
+                .and_then(|d| d.get("stop_reason"))
+                .and_then(|s| s.as_str())
+                == Some("max_tokens")
+            {
+                out.push(ProviderEvent::Truncated);
+            }
+        }
+    }
+    out
+}
+
+/// Map one Anthropic SSE frame to a single `ProviderEvent`. Unhandled or
+/// malformed frames return `None` (the caller skips them). Never panics.
+fn parse_one(event_type: &str, data: &str) -> Option<ProviderEvent> {
     match event_type {
         "content_block_delta" => {
             let v: Value = serde_json::from_str(data).ok()?;
@@ -248,17 +268,23 @@ impl Provider for AnthropicProvider {
             };
             match item {
                 Ok(event) => {
-                    if let Some(pe) = parse_event(&event.event, &event.data) {
+                    let mut stop = false;
+                    for pe in parse_event(&event.event, &event.data) {
                         if ttft.is_none() {
                             ttft = Some(start.elapsed().as_millis() as u64);
                         }
                         let is_done = matches!(pe, ProviderEvent::Done);
                         if sink.send(pe).await.is_err() {
-                            break; // receiver gone
-                        }
-                        if is_done {
+                            stop = true; // receiver gone
                             break;
                         }
+                        if is_done {
+                            stop = true;
+                            break;
+                        }
+                    }
+                    if stop {
+                        break;
                     }
                 }
                 Err(e) => {
@@ -403,7 +429,7 @@ mod tests {
         let data = r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
         assert_eq!(
             parse_event("content_block_delta", data),
-            Some(ProviderEvent::TextDelta("Hello".into()))
+            vec![ProviderEvent::TextDelta("Hello".into())]
         );
     }
 
@@ -411,7 +437,7 @@ mod tests {
     fn parses_message_stop_as_done() {
         assert_eq!(
             parse_event("message_stop", r#"{"type":"message_stop"}"#),
-            Some(ProviderEvent::Done)
+            vec![ProviderEvent::Done]
         );
     }
 
@@ -420,11 +446,11 @@ mod tests {
         let data = r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}"#;
         assert_eq!(
             parse_event("message_delta", data),
-            Some(ProviderEvent::Usage(Usage {
+            vec![ProviderEvent::Usage(Usage {
                 input_tokens: 0,
                 output_tokens: 12,
                 cached: 0
-            }))
+            })]
         );
     }
 
@@ -434,11 +460,11 @@ mod tests {
             r#"{"type":"message_start","message":{"usage":{"input_tokens":7,"output_tokens":1}}}"#;
         assert_eq!(
             parse_event("message_start", data),
-            Some(ProviderEvent::Usage(Usage {
+            vec![ProviderEvent::Usage(Usage {
                 input_tokens: 7,
                 output_tokens: 0,
                 cached: 0
-            }))
+            })]
         );
     }
 
@@ -448,11 +474,11 @@ mod tests {
         let data = r#"{"type":"message_start","message":{"usage":{"input_tokens":7,"cache_read_input_tokens":40,"cache_creation_input_tokens":3}}}"#;
         assert_eq!(
             parse_event("message_start", data),
-            Some(ProviderEvent::Usage(Usage {
+            vec![ProviderEvent::Usage(Usage {
                 input_tokens: 50,
                 output_tokens: 0,
                 cached: 40,
-            }))
+            })]
         );
     }
 
@@ -461,26 +487,38 @@ mod tests {
         let data = r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
         assert_eq!(
             parse_event("error", data),
-            Some(ProviderEvent::Error("Overloaded".into()))
+            vec![ProviderEvent::Error("Overloaded".into())]
         );
     }
 
     #[test]
     fn ignores_unhandled_frames() {
-        assert_eq!(parse_event("ping", "{}"), None);
-        assert_eq!(
-            parse_event("content_block_start", r#"{"type":"content_block_start"}"#),
-            None
-        );
-        assert_eq!(
-            parse_event("content_block_stop", r#"{"type":"content_block_stop"}"#),
-            None
-        );
+        assert!(parse_event("ping", "{}").is_empty());
+        assert!(parse_event("content_block_start", r#"{"type":"content_block_start"}"#).is_empty());
+        assert!(parse_event("content_block_stop", r#"{"type":"content_block_stop"}"#).is_empty());
     }
 
     #[test]
-    fn malformed_data_yields_none_not_panic() {
-        assert_eq!(parse_event("content_block_delta", "not json"), None);
+    fn malformed_data_yields_empty_not_panic() {
+        assert!(parse_event("content_block_delta", "not json").is_empty());
+    }
+
+    #[test]
+    fn message_delta_with_max_tokens_stop_yields_usage_then_truncated() {
+        // A length-capped turn: the message_delta carries both the output usage
+        // and stop_reason:"max_tokens" → Usage then Truncated, in that order.
+        let data = r#"{"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":4096}}"#;
+        assert_eq!(
+            parse_event("message_delta", data),
+            vec![
+                ProviderEvent::Usage(Usage {
+                    input_tokens: 0,
+                    output_tokens: 4096,
+                    cached: 0
+                }),
+                ProviderEvent::Truncated
+            ]
+        );
     }
 
     #[test]

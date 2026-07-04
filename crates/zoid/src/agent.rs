@@ -396,6 +396,25 @@ async fn run_turn_inner(
                     outcome = "error";
                     break 'turn;
                 }
+                ProviderEvent::Truncated => {
+                    // Surface an incomplete-reply warning but do NOT break: the
+                    // provider still sends a terminal Done right after.
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::AssistantMessage {
+                            text: format!(
+                                "{WARN_GLYPH} response truncated — hit the output token cap; \
+                                 the reply above is incomplete"
+                            ),
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                }
                 ProviderEvent::Done => break,
             }
         }
