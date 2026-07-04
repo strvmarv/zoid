@@ -22,12 +22,22 @@ pub struct Compaction {
 /// `policy.compact_threshold`. Compacts `ToolResult` items only (never System /
 /// Message / File), largest-first, skipping pinned + already-compacted + any
 /// whose summary would not actually shrink them, until back under threshold.
-pub fn plan_compactions(events: &[Event], policy: &ContextPolicy) -> Vec<Compaction> {
+///
+/// `real_input_tokens`, when provided (from the provider's last Usage event),
+/// overrides the estimate-based `window.total_tokens` as the current context
+/// size — the chars/4 estimate significantly underestimates for code and tool
+/// results, so compaction would fire far too late without the real count.
+pub fn plan_compactions(
+    events: &[Event],
+    policy: &ContextPolicy,
+    real_input_tokens: Option<u64>,
+) -> Vec<Compaction> {
     let Some(threshold) = policy.compact_threshold else {
         return Vec::new();
     };
     let window = context_window(events);
-    if window.total_tokens <= threshold {
+    let current = real_input_tokens.unwrap_or(window.total_tokens);
+    if current <= threshold {
         return Vec::new();
     }
 
@@ -55,7 +65,7 @@ pub fn plan_compactions(events: &[Event], policy: &ContextPolicy) -> Vec<Compact
         }
     }
 
-    let mut running = window.total_tokens;
+    let mut running = current;
     let mut out: Vec<Compaction> = Vec::new();
     for it in &window.items {
         // window.items is sorted tokens-desc, so this is largest-first.
@@ -157,9 +167,9 @@ mod tests {
             big_tool_result("c1", "search", 100),
         ];
         // Threshold huge → nothing to do.
-        assert!(plan_compactions(&evs, &policy(1_000_000)).is_empty());
+        assert!(plan_compactions(&evs, &policy(1_000_000), None).is_empty());
         // No threshold set → nothing to do.
-        assert!(plan_compactions(&evs, &ContextPolicy::default()).is_empty());
+        assert!(plan_compactions(&evs, &ContextPolicy::default(), None).is_empty());
     }
 
     #[test]
@@ -169,7 +179,7 @@ mod tests {
             big_tool_result("c1", "search", 400), // biggest
             big_tool_result("c2", "shell", 50),
         ];
-        let plan = plan_compactions(&evs, &policy(500));
+        let plan = plan_compactions(&evs, &policy(500), None);
         assert_eq!(plan.len(), 1, "only the big one needs compacting");
         assert_eq!(plan[0].id, "c1");
         assert!(plan[0].original_tokens > estimate_tokens(&plan[0].summary));
@@ -187,7 +197,7 @@ mod tests {
             }),
         ];
         // c1 already compacted → nothing left to compact.
-        assert!(plan_compactions(&evs, &policy(1)).is_empty());
+        assert!(plan_compactions(&evs, &policy(1), None).is_empty());
     }
 
     #[test]
@@ -259,7 +269,7 @@ mod tests {
             for (i, n) in lines.iter().enumerate() {
                 evs.push(big_tool_result(&format!("c{i}"), "search", *n));
             }
-            let plan = plan_compactions(&evs, &policy(100));
+            let plan = plan_compactions(&evs, &policy(100), None);
             let mut ids: Vec<&str> = plan.iter().map(|c| c.id.as_str()).collect();
             ids.sort_unstable();
             let n = ids.len();

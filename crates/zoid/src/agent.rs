@@ -292,7 +292,16 @@ async fn run_turn_inner(
         // case) would break out of the loop before reaching record_compactions,
         // and the context window would grow unbounded until the model happens
         // to call a tool.
-        record_compactions(&session, &mut events, ui, config, session_id, now).await?;
+        record_compactions(
+            &session,
+            &mut events,
+            ui,
+            config,
+            session_id,
+            now,
+            if turn_usage.input > 0 { Some(turn_usage.input) } else { None },
+        )
+        .await?;
 
         if pending.is_empty() {
             break 'turn; // model answered without tools — turn complete
@@ -592,7 +601,7 @@ async fn run_turn_inner(
                 }
             }
         }
-        record_compactions(&session, &mut events, ui, config, session_id, now).await?;
+        record_compactions(&session, &mut events, ui, config, session_id, now, if turn_usage.input > 0 { Some(turn_usage.input) } else { None }).await?;
         // loop: re-request with the tool results now in context
     }
 
@@ -631,8 +640,9 @@ async fn record_compactions(
     config: &TurnConfig,
     session_id: Ulid,
     now: fn() -> i64,
+    real_input_tokens: Option<u64>,
 ) -> Result<()> {
-    for c in zoid_core::compaction::plan_compactions(events, &config.policy) {
+    for c in zoid_core::compaction::plan_compactions(events, &config.policy, real_input_tokens) {
         emit(
             session,
             events,
