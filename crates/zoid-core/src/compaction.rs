@@ -18,6 +18,17 @@ pub struct Compaction {
     pub original_tokens: u64,
 }
 
+/// The result of planning context management: tool-result compactions
+/// (layer 1) and optionally a turn-drop count (layer 4, sliding window).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CompactionPlan {
+    /// Tool results to compact (layer 1).
+    pub compactions: Vec<Compaction>,
+    /// If set, drop this many of the oldest complete turns from the live
+    /// context (layer 4). 0 or None = no turn dropping.
+    pub turns_to_drop: Option<usize>,
+}
+
 /// Plan which tool-results to compact. Empty unless the window exceeds
 /// `policy.compact_threshold`. Compacts `ToolResult` items only (never System /
 /// Message / File), largest-first, skipping pinned + already-compacted + any
@@ -31,14 +42,14 @@ pub fn plan_compactions(
     events: &[Event],
     policy: &ContextPolicy,
     real_input_tokens: Option<u64>,
-) -> Vec<Compaction> {
+) -> CompactionPlan {
     let Some(threshold) = policy.compact_threshold else {
-        return Vec::new();
+        return CompactionPlan::default();
     };
     let window = context_window(events);
     let current = real_input_tokens.unwrap_or(window.total_tokens);
     if current <= threshold {
-        return Vec::new();
+        return CompactionPlan::default();
     }
 
     let done: HashSet<&str> = events
@@ -160,7 +171,48 @@ pub fn plan_compactions(
             original_tokens: it.tokens,
         });
     }
-    out
+
+    // Layer 4: if still over threshold after compacting tool results, drop
+    // entire old turns (sliding window). Count complete turns (UserMessage
+    // boundaries) from oldest to newest, estimating how many we need to drop
+    // to get under threshold. We can't measure the exact token savings per
+    // turn (we only have the estimate), so we drop turns one at a time until
+    // the estimated remaining context is under threshold.
+    let mut turns_to_drop = None;
+    if running > threshold {
+        // Count turns: each UserMessage starts a new turn.
+        let turn_starts: Vec<usize> = events
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| {
+                matches!(e.kind, EventKind::UserMessage { .. }).then_some(i)
+            })
+            .collect();
+        if turn_starts.len() > 1 {
+            // Estimate per-turn token cost from the context window items.
+            // Group items by turn and sum their estimated tokens.
+            let total_estimate: u64 = window.items.iter().map(|it| it.tokens).sum();
+            let per_turn_avg = total_estimate / turn_starts.len() as u64;
+            let over = running.saturating_sub(threshold);
+            let need_to_drop = if per_turn_avg > 0 {
+                (over / per_turn_avg).max(1) as usize
+            } else {
+                1
+            };
+            // Never drop ALL turns — keep at least the last turn.
+            let max_drop = turn_starts.len().saturating_sub(1);
+            let drop = need_to_drop.min(max_drop);
+            if drop > 0 {
+                running = running.saturating_sub(per_turn_avg.saturating_mul(drop as u64));
+                turns_to_drop = Some(drop);
+            }
+        }
+    }
+
+    CompactionPlan {
+        compactions: out,
+        turns_to_drop,
+    }
 }
 
 /// Summarize an oversized tool-result body: keep the first `head_lines` lines
@@ -231,9 +283,9 @@ mod tests {
             big_tool_result("c1", "search", 100),
         ];
         // Threshold huge → nothing to do.
-        assert!(plan_compactions(&evs, &policy(1_000_000), None).is_empty());
+        assert!(plan_compactions(&evs, &policy(1_000_000), None).compactions.is_empty());
         // No threshold set → nothing to do.
-        assert!(plan_compactions(&evs, &ContextPolicy::default(), None).is_empty());
+        assert!(plan_compactions(&evs, &ContextPolicy::default(), None).compactions.is_empty());
     }
 
     #[test]
@@ -244,9 +296,9 @@ mod tests {
             big_tool_result("c2", "shell", 50),
         ];
         let plan = plan_compactions(&evs, &policy(500), None);
-        assert_eq!(plan.len(), 1, "only the big one needs compacting");
-        assert_eq!(plan[0].id, "c1");
-        assert!(plan[0].original_tokens > estimate_tokens(&plan[0].summary));
+        assert_eq!(plan.compactions.len(), 1, "only the big one needs compacting");
+        assert_eq!(plan.compactions[0].id, "c1");
+        assert!(plan.compactions[0].original_tokens > estimate_tokens(&plan.compactions[0].summary));
     }
 
     #[test]
@@ -261,7 +313,7 @@ mod tests {
             }),
         ];
         // c1 already compacted → nothing left to compact.
-        assert!(plan_compactions(&evs, &policy(1), None).is_empty());
+        assert!(plan_compactions(&evs, &policy(1), None).compactions.is_empty());
     }
 
     #[test]
@@ -334,7 +386,7 @@ mod tests {
                 evs.push(big_tool_result(&format!("c{i}"), "search", *n));
             }
             let plan = plan_compactions(&evs, &policy(100), None);
-            let mut ids: Vec<&str> = plan.iter().map(|c| c.id.as_str()).collect();
+            let mut ids: Vec<&str> = plan.compactions.iter().map(|c| c.id.as_str()).collect();
             ids.sort_unstable();
             let n = ids.len();
             ids.dedup();

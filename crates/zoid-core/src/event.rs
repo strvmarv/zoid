@@ -82,6 +82,13 @@ pub enum EventKind {
     Tasks {
         items: Vec<crate::tasks::TaskItem>,
     },
+    /// Marks all events before this one (by timestamp) as dropped from the
+    /// live context — they stay in the DB/transcript but are excluded from the
+    /// provider request. `turns_dropped` is how many complete turns were
+    /// truncated. Driven by layer-4 compaction (sliding window).
+    TurnsDropped {
+        turns_dropped: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

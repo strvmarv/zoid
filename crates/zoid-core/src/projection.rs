@@ -48,10 +48,28 @@ pub enum ChatMsg {
 /// any `ToolCall`s before the next user/tool-result/assistant boundary collapses
 /// into one `Assistant` item; `ToolResult` events become their own items. Pure.
 pub fn conversation(events: &[Event]) -> Vec<ChatMsg> {
+    // Layer 4 (sliding window): find the last TurnsDropped marker and skip all
+    // events before it. The dropped events stay in the DB/transcript but are
+    // excluded from the provider request and the live conversation view.
+    let drop_before_ts: Option<i64> = events
+        .iter()
+        .rev()
+        .find_map(|e| match &e.kind {
+            EventKind::TurnsDropped { .. } => Some(e.ts),
+            _ => None,
+        });
+    let visible: &[Event] = match drop_before_ts {
+        Some(cutoff) => {
+            let idx = events.iter().position(|e| e.ts > cutoff).unwrap_or(events.len());
+            &events[idx..]
+        }
+        None => events,
+    };
+
     // ACM-1: a tool-result whose id has a later ToolResultCompacted is emitted
     // as its summary (last write wins), both to the live request and the view.
     let mut compacted: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
-    for e in events {
+    for e in visible {
         if let EventKind::ToolResultCompacted { id, summary, .. } = &e.kind {
             compacted.insert(id.as_str(), summary.as_str());
         }
@@ -79,9 +97,7 @@ pub fn conversation(events: &[Event]) -> Vec<ChatMsg> {
         *turn_ts = None;
     }
 
-    for e in events {
-        // Subagent work lives on its own branch and never appears in the main
-        // conversation; only its folded DelegationResult (on main) surfaces.
+    for e in visible {
         if e.branch != crate::event::BranchId::default() {
             continue;
         }
@@ -148,6 +164,9 @@ pub fn conversation(events: &[Event]) -> Vec<ChatMsg> {
             }
             EventKind::Tasks { .. } => {
                 // Rail-only snapshot; never inlined into the conversation transcript.
+            }
+            EventKind::TurnsDropped { .. } => {
+                // Metadata marker; not a conversation item.
             }
         }
     }

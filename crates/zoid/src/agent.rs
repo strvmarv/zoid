@@ -651,21 +651,38 @@ async fn record_compactions(
             .rev()
             .find_map(|e| e.tokens.map(|t| t.input).filter(|&t| t > 0))
     });
-    for c in zoid_core::compaction::plan_compactions(events, &config.policy, effective_tokens) {
+    let plan = zoid_core::compaction::plan_compactions(events, &config.policy, effective_tokens);
+    for c in &plan.compactions {
         emit(
             session,
             events,
             ui,
             &config.branch,
             EventKind::ToolResultCompacted {
-                id: c.id,
-                summary: c.summary,
+                id: c.id.clone(),
+                summary: c.summary.clone(),
                 original_tokens: c.original_tokens,
             },
             session_id,
             now,
         )
         .await?;
+    }
+    if let Some(turns) = plan.turns_to_drop {
+        if turns > 0 {
+            emit(
+                session,
+                events,
+                ui,
+                &config.branch,
+                EventKind::TurnsDropped {
+                    turns_dropped: turns,
+                },
+                session_id,
+                now,
+            )
+            .await?;
+        }
     }
     Ok(())
 }
