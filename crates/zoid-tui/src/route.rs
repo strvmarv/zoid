@@ -28,6 +28,9 @@ pub enum Action {
     PaletteBackspace,
     /// Run the palette's currently-selected command (resolved by the bin/state).
     PaletteRun,
+    /// Esc while in the palette's Arg (argument-entry) phase: return to the Pick
+    /// list without closing the overlay.
+    PaletteArgCancel,
     CmdlineChar(char),
     CmdlineBackspace,
     /// Run the command line buffer (parsed into a `Command`).

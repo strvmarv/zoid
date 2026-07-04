@@ -7,6 +7,39 @@ use crate::command::Command;
 use crate::state::Mode;
 use crate::tokens::glyph;
 
+/// A parameterized palette command's argument-capture flow. The palette enters
+/// an inline "Arg" phase to collect the argument, then builds the final command.
+/// Extend with new variants (e.g. `Delegate`) as more commands take arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArgKind {
+    Rename,
+}
+
+impl ArgKind {
+    /// The label shown on the argument-entry prompt line.
+    pub fn prompt(&self) -> &'static str {
+        match self {
+            ArgKind::Rename => "Rename to",
+        }
+    }
+
+    /// Build the final `Command` from the captured argument text.
+    pub fn build(&self, input: String) -> Command {
+        match self {
+            ArgKind::Rename => Command::RenameSession(input),
+        }
+    }
+}
+
+/// Which inline-argument flow (if any) a command needs when chosen from the
+/// palette. Pure — the bin uses this to decide the Pick→Arg transition.
+pub fn arg_kind_for(cmd: &Command) -> Option<ArgKind> {
+    match cmd {
+        Command::RenameSession(_) => Some(ArgKind::Rename),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaletteItem {
     pub group: String,
@@ -233,6 +266,23 @@ mod tests {
         assert_eq!(nav(0, 1, 0), 0);
         // A multi-step delta still lands in range.
         assert_eq!(nav(0, 5, 3), 2);
+    }
+
+    #[test]
+    fn arg_kind_for_flags_only_parameterized_commands() {
+        assert_eq!(arg_kind_for(&Command::RenameSession(String::new())), Some(ArgKind::Rename));
+        assert_eq!(arg_kind_for(&Command::ShowOverview), None);
+        assert_eq!(arg_kind_for(&Command::Quit), None);
+        assert_eq!(arg_kind_for(&Command::NewSession), None);
+    }
+
+    #[test]
+    fn arg_kind_builds_command_and_prompt() {
+        assert_eq!(ArgKind::Rename.prompt(), "Rename to");
+        assert_eq!(
+            ArgKind::Rename.build("my-feature".to_string()),
+            Command::RenameSession("my-feature".to_string())
+        );
     }
 
     #[test]

@@ -89,6 +89,20 @@ pub struct Drawer {
 pub struct PaletteState {
     pub query: String,
     pub selected: usize,
+    pub stage: PaletteStage,
+}
+
+/// The palette's two-phase lifecycle. `Pick` = flat search-and-select; `Arg` =
+/// inline argument entry for a parameterized command (e.g. Rename). `Default`
+/// is `Pick`, so `PaletteState::default()` (used by `close_overlay`) resets it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum PaletteStage {
+    #[default]
+    Pick,
+    Arg {
+        kind: crate::palette::ArgKind,
+        input: String,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -586,6 +600,20 @@ mod tests {
         assert_eq!(s.overlay, Overlay::None);
         assert_eq!(s.palette, PaletteState::default());
         assert_eq!(s.cmdline, CmdlineState::default());
+    }
+
+    #[test]
+    fn close_overlay_resets_palette_stage_to_pick() {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Palette;
+        s.palette.query = "ren".into();
+        s.palette.stage = PaletteStage::Arg {
+            kind: crate::palette::ArgKind::Rename,
+            input: "half-typed".into(),
+        };
+        s.close_overlay();
+        assert_eq!(s.palette.stage, PaletteStage::Pick);
+        assert!(s.palette.query.is_empty());
     }
 
     #[test]

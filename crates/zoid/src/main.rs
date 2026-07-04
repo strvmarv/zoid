@@ -1957,6 +1957,9 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 return exec_command(app, c).await;
             }
         }
+        Action::PaletteArgCancel => {
+            app.shell.palette.stage = zoid_tui::state::PaletteStage::Pick;
+        }
         Action::CmdlineChar(c) => app.shell.cmdline.buffer.push(c),
         Action::CmdlineBackspace => {
             app.shell.cmdline.buffer.pop();
