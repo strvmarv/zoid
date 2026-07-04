@@ -5,6 +5,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
@@ -180,14 +181,103 @@ fn file_only_subscriber(path: &std::path::Path) -> Option<impl tracing::Subscrib
     Some(Registry::default().with(json_file_layer(path)))
 }
 
+/// Collects the fields of one event into a flat record we can fold.
+#[derive(Default)]
+struct FieldGrab {
+    kind: Option<String>,
+    name: Option<String>,
+    ctx: Option<String>,
+    message: Option<String>,
+    ms: u64,
+    ttft_ms: u64,
+    total_ms: u64,
+    iterations: u64,
+    cache_hit: bool,
+    proj_rebuilt: bool,
+}
+
+impl Visit for FieldGrab {
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        match field.name() {
+            "ms" => self.ms = value,
+            "ttft_ms" => self.ttft_ms = value,
+            "total_ms" => self.total_ms = value,
+            "iterations" => self.iterations = value,
+            _ => {}
+        }
+    }
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        match field.name() {
+            "cache_hit" => self.cache_hit = value,
+            "proj_rebuilt" => self.proj_rebuilt = value,
+            _ => {}
+        }
+    }
+    fn record_str(&mut self, field: &Field, value: &str) {
+        match field.name() {
+            "kind" => self.kind = Some(value.to_string()),
+            "name" => self.name = Some(value.to_string()),
+            "ctx" => self.ctx = Some(value.to_string()),
+            "message" => self.message = Some(value.to_string()),
+            _ => {}
+        }
+    }
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        // The implicit event message arrives as the `message` field via Debug.
+        if field.name() == "message" && self.message.is_none() {
+            self.message = Some(format!("{value:?}"));
+        }
+    }
+}
+
+pub struct ObsLayer {
+    pub state: Arc<Mutex<ObsState>>,
+}
+
+impl<S: tracing::Subscriber> Layer<S> for ObsLayer {
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        let mut g = FieldGrab::default();
+        event.record(&mut g);
+        let Ok(mut s) = self.state.lock() else { return }; // poisoned → skip, never panic
+        match g.kind.as_deref() {
+            Some("turn") => s.record_turn(g.ms, g.iterations),
+            Some("tool") => s.record_tool(g.name.as_deref().unwrap_or("?"), g.ms),
+            Some("provider") => s.record_provider(g.ttft_ms, g.total_ms),
+            Some("frame") => s.record_frame(g.ms, g.cache_hit, g.proj_rebuilt),
+            _ => {}
+        }
+        let level = *event.metadata().level();
+        if level == tracing::Level::WARN || level == tracing::Level::ERROR {
+            let lvl = if level == tracing::Level::ERROR { "error" } else { "warn" };
+            s.record_error(
+                now_ms(),
+                lvl,
+                g.ctx.unwrap_or_default(),
+                g.message.unwrap_or_default(),
+            );
+        }
+    }
+}
+
+/// Epoch millis (kept local so obs has no cross-module dep).
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 /// Install the global subscriber: ObsLayer (always on) + optional JSON file
 /// layer (when `ZOID_LOG` is set). Safe to call once.
-fn install(_state: Arc<Mutex<ObsState>>) {
+fn install(state: Arc<Mutex<ObsState>>) {
+    type Base = tracing_subscriber::layer::Layered<ObsLayer, Registry>;
     let file_layer = std::env::var(LOG_ENV)
         .ok()
-        .and_then(|p| json_file_layer::<Registry>(std::path::Path::new(&p)));
-    // ObsLayer is added in Task 4; for now the file layer alone.
-    let _ = Registry::default().with(file_layer).try_init();
+        .and_then(|p| json_file_layer::<Base>(std::path::Path::new(&p)));
+    let _ = Registry::default()
+        .with(ObsLayer { state })
+        .with(file_layer)
+        .try_init();
 }
 
 #[cfg(test)]
@@ -277,5 +367,25 @@ mod tests {
         assert_eq!(s.cache_total, 3);
         assert_eq!(s.cache_hits, 2);
         assert_eq!(s.proj_rebuilds, 1);
+    }
+
+    #[test]
+    fn obslayer_folds_events_into_state() {
+        let state = Arc::new(Mutex::new(ObsState::default()));
+        let sub = Registry::default().with(ObsLayer { state: state.clone() });
+        tracing::subscriber::with_default(sub, || {
+            tracing::info!(kind = "tool", name = "shell", ms = 240u64, ok = true, "tool");
+            tracing::info!(kind = "turn", ms = 4200u64, iterations = 3u64, "turn");
+            tracing::info!(kind = "frame", ms = 7u64, cache_hit = true, proj_rebuilt = false, "frame");
+            tracing::warn!(ctx = "provider", message = "HTTP 429", "provider error");
+        });
+        let s = state.lock().unwrap();
+        assert_eq!(s.tools["shell"].avg_ms(), 240);
+        assert_eq!(s.turn.last(), 4200);
+        assert_eq!(s.iterations.last(), 3);
+        assert_eq!(s.frame.last(), 7);
+        assert_eq!(s.cache_hits, 1);
+        assert_eq!(s.errors.len(), 1);
+        assert_eq!(s.errors.back().unwrap().context, "provider");
     }
 }
