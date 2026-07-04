@@ -174,7 +174,13 @@ pub struct ShellState {
     /// Compact elapsed-time-in-session label (e.g. "12m", "1h3m").
     pub duration: String,
     /// Total tokens spent in the active session (session drawer "tok" line).
+    /// Excludes cache-read tokens (those are tracked separately in
+    /// `cached_tokens`).
     pub session_tokens: u64,
+    /// Cumulative cache-read tokens for the active session (session drawer
+    /// "cac" line). The subset of input tokens served from the provider's
+    /// prompt cache, summed across all turns.
+    pub cached_tokens: u64,
     /// Current context-window token usage (session drawer "ctx" line).
     pub ctx_used: u64,
     /// Context-window ceiling in tokens (session drawer "ctx" line denominator).
@@ -277,6 +283,7 @@ impl ShellState {
             config_key_prompt: None,
             duration: "0m".into(),
             session_tokens: 0,
+            cached_tokens: 0,
             ctx_used: 0,
             ctx_ceiling: 0,
             cwd: String::new(),

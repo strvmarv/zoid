@@ -507,7 +507,12 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
             ),
             Span::styled("tok ", Style::new().fg(color::DIM)),
             Span::styled(
-                human_tokens(state.session_tokens),
+                format!("{}   ", human_tokens(state.session_tokens)),
+                Style::new().fg(color::TXT),
+            ),
+            Span::styled("cac ", Style::new().fg(color::DIM)),
+            Span::styled(
+                human_tokens(state.cached_tokens),
                 Style::new().fg(color::TXT),
             ),
         ]),

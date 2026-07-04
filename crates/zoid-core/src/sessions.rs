@@ -16,7 +16,8 @@ pub struct SessionRow {
 }
 
 /// A session folded for the resume picker / rail widget: the row plus a
-/// token total summed from that session's events (`input + output`).
+/// token total summed from that session's events. The total excludes
+/// cache-read tokens (net new tokens only: `(input - cached) + output`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionInfo {
     pub id: Ulid,
@@ -29,8 +30,10 @@ pub struct SessionInfo {
 
 /// Fold session rows into `SessionInfo`, most-recent-first by `last_touched_ts`
 /// (ties broken by `id` desc for determinism). `token_total` sums each session's
-/// events' `input + output`. When `root_filter` is `Some`, only sessions whose
-/// `root_path` matches are returned. Pure.
+/// events' `(input - cached) + output` — cache-read tokens are excluded so the
+/// total reflects net new tokens, not re-sent cached content. When
+/// `root_filter` is `Some`, only sessions whose `root_path` matches are
+/// returned. Pure.
 pub fn session_list(
     rows: &[SessionRow],
     events: &[Event],
@@ -39,7 +42,8 @@ pub fn session_list(
     let mut totals: HashMap<Ulid, u64> = HashMap::new();
     for e in events {
         if let Some(t) = e.tokens {
-            *totals.entry(e.session_id).or_default() += t.input + t.output;
+            let net = t.input.saturating_sub(t.cached) + t.output;
+            *totals.entry(e.session_id).or_default() += net;
         }
     }
     let mut out: Vec<SessionInfo> = rows
@@ -85,6 +89,15 @@ mod tests {
                 cached: 0,
             })
     }
+    fn usage_cached(session: u128, input: u64, cached: u64, output: u64) -> Event {
+        Event::new(Ulid::new(), None, 0, EventKind::Usage)
+            .with_session(Ulid::from(session))
+            .with_tokens(TokenStat {
+                input,
+                output,
+                cached,
+            })
+    }
 
     #[test]
     fn orders_recent_first_sums_tokens_and_filters_repo() {
@@ -108,5 +121,14 @@ mod tests {
             a.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
             vec!["new", "old"]
         );
+    }
+
+    #[test]
+    fn cached_tokens_excluded_from_total() {
+        // input=200, cached=150, output=50 → net = (200-150)+50 = 100
+        let rows = vec![row(1, "cached", "/repo", 100)];
+        let events = vec![usage_cached(1, 200, 150, 50)];
+        let all = session_list(&rows, &events, None);
+        assert_eq!(all[0].token_total, 100); // net, not 250
     }
 }

@@ -559,6 +559,10 @@ struct ProjectionCache {
     churn: zoid_core::economy::ChurnTimeline,
     tasks: Vec<zoid_core::tasks::TaskItem>,
     ledger_total: u64,
+    /// Cumulative cached (cache-read) tokens across all Usage events — the
+    /// subset of `ledger_total`'s input that was served from the provider's
+    /// prompt cache. Surfaced as the session drawer's "cac" line.
+    cached_total: u64,
 }
 
 impl ProjectionCache {
@@ -572,7 +576,9 @@ impl ProjectionCache {
         self.window = zoid_core::context::context_window(events);
         self.churn = zoid_core::economy::churn_timeline(events);
         self.tasks = zoid_core::tasks::tasks(events);
-        self.ledger_total = zoid_core::economy::token_ledger(events).total;
+        let ledger = zoid_core::economy::token_ledger(events);
+        self.ledger_total = ledger.total;
+        self.cached_total = ledger.cached;
         self.events_len = Some(events.len());
         true
     }
@@ -927,7 +933,8 @@ async fn run<B: ratatui::backend::Backend>(
         // so typing / scrolling / zoom reuse them instead of rebuilding O(events)
         // projections every frame.
         app.proj.refresh(&app.events);
-        app.shell.session_tokens = app.proj.ledger_total;
+        app.shell.session_tokens = app.proj.ledger_total.saturating_sub(app.proj.cached_total);
+        app.shell.cached_tokens = app.proj.cached_total;
         app.shell.ctx_used = app.proj.window.total_tokens;
         app.shell.tasks_len = app.proj.tasks.len() as u16;
         app.shell.duration = fmt_duration(app.session_started_ms, now_ms());
