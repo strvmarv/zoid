@@ -918,6 +918,12 @@ struct App {
     events: Vec<Event>,
     provider: Arc<dyn Provider>,
     tools: Arc<Vec<Box<dyn Tool>>>,
+    /// Available mode profiles with the active one marked; drives the turn's
+    /// system prompt. v1 holds only the default profile.
+    profiles: zoid_core::agent_profile::AgentProfileRegistry,
+    /// Skills the `invoke_skill` tool can load; also rendered as the menu the
+    /// active mode's system prompt advertises.
+    skills: std::sync::Arc<zoid_core::skill::SkillRegistry>,
     model: String,
     /// Economy config (spec §7.2), carried from `load_config()` so `run`'s
     /// per-frame `ContextPolicy` build (via `policy_from_config`) doesn't need
@@ -1102,12 +1108,18 @@ async fn main() -> Result<()> {
 
     let (ui_tx, mut ui_rx) = mpsc::channel::<AgentUpdate>(256);
 
+    let skills = std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin());
+
     let mut app = App {
         session,
         session_id,
         events,
         provider,
-        tools: Arc::new(zoid_tools::registry()),
+        tools: Arc::new(zoid::invoke_skill::chat_tools(skills.clone())),
+        profiles: zoid_core::agent_profile::AgentProfileRegistry::new(vec![
+            zoid::agent::default_profile(),
+        ]),
+        skills,
         model,
         economy: config.economy,
         config: config.clone(),
@@ -2737,7 +2749,9 @@ fn spawn_turn(app: &App) {
     let model = app.model.clone();
     let ui = app.ui_tx.clone();
     let session_id = app.session_id;
-    let mut turn_config = zoid::agent::chat_turn_config();
+    let profile = app.profiles.active();
+    let menu = app.skills.menu();
+    let mut turn_config = zoid::agent::chat_turn_config_with(profile, &menu);
     turn_config.policy = policy_from_config(&app.economy, app.shell.ctx_ceiling);
     tokio::spawn(async move {
         let _ = run_agent_turn(
@@ -3154,6 +3168,10 @@ mod tests {
             events: Vec::new(),
             provider: Arc::new(zoid_provider::FakeProvider::new(Vec::new())),
             tools: Arc::new(Vec::new()),
+            profiles: zoid_core::agent_profile::AgentProfileRegistry::new(vec![
+                zoid::agent::default_profile(),
+            ]),
+            skills: std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
             model: "test-model".into(),
             economy: zoid_core::config::EconomyConfig::default(),
             config: zoid_core::config::Config::default(),

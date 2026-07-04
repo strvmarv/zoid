@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use ulid::Ulid;
 
+use zoid_core::agent_profile::AgentProfile;
 use zoid_core::event::{BranchId, Event, EventKind};
 use zoid_core::projection::{conversation, ChatMsg};
 use zoid_core::session::SessionHandle;
@@ -27,6 +28,20 @@ pub const SYSTEM_PROMPT: &str =
      You can call tools to read, write, edit, and search files and run shell \
      commands in the user's working directory. Use them when helpful.";
 
+/// The default Chat mode profile: the standard zoid system prompt with an
+/// unrestricted tool set (empty allow-list = every tool permitted, per
+/// `AgentProfile::allows`). Seeds the `AgentProfileRegistry`; reproduces
+/// pre-mode behavior exactly.
+pub fn default_profile() -> AgentProfile {
+    AgentProfile {
+        name: "default".into(),
+        description: "General terminal coding assistant.".into(),
+        system_prompt: SYSTEM_PROMPT.to_string(),
+        tools: vec![], // empty = every tool permitted
+        model: None,
+    }
+}
+
 /// How one agent turn is run: its system prompt, working directory, and the
 /// event branch its output is recorded on. Chat uses the main branch + process
 /// cwd; a subagent uses its own branch + (optionally) a worktree.
@@ -40,14 +55,31 @@ pub struct TurnConfig {
     pub policy: zoid_core::assembler::ContextPolicy,
 }
 
-/// The orchestrator (Chat) turn config: main branch, process cwd, Chat prompt.
-pub fn chat_turn_config() -> TurnConfig {
+/// The orchestrator (Chat) turn config for an explicit mode profile + skill menu.
+/// `system` is the profile's prompt; when `skill_menu` is non-empty it is
+/// appended under a header so the model knows what it can `invoke_skill`.
+pub fn chat_turn_config_with(profile: &AgentProfile, skill_menu: &str) -> TurnConfig {
+    let system = if skill_menu.is_empty() {
+        profile.system_prompt.clone()
+    } else {
+        format!(
+            "{}\n\n## Available skills — call invoke_skill(name):\n{}",
+            profile.system_prompt, skill_menu
+        )
+    };
     TurnConfig {
-        system: SYSTEM_PROMPT.to_string(),
+        system,
         cwd: PathBuf::from("."),
         branch: BranchId::default(),
         policy: zoid_core::assembler::ContextPolicy::default(),
     }
+}
+
+/// The default Chat turn config: the `default_profile()` with no skill menu.
+/// Kept zero-arg for the many callers (tests) that don't exercise modes;
+/// byte-identical to the pre-mode behavior.
+pub fn chat_turn_config() -> TurnConfig {
+    chat_turn_config_with(&default_profile(), "")
 }
 
 /// Max tool rounds per user message before the loop force-ends (safety leash).
@@ -732,6 +764,16 @@ mod tests {
     }
 
     #[test]
+    fn default_profile_carries_system_prompt_and_allows_all_tools() {
+        let p = default_profile();
+        assert_eq!(p.name, "default");
+        assert_eq!(p.system_prompt, SYSTEM_PROMPT);
+        assert!(p.tools.is_empty(), "empty allow-list = all tools permitted");
+        assert!(p.allows("invoke_skill"));
+        assert!(p.allows("write_file"));
+    }
+
+    #[test]
     fn build_request_carries_compacted_summary_into_live_messages() {
         let ts = 1700000000i64;
         let events = vec![
@@ -788,5 +830,27 @@ mod tests {
         // Assert the content is the compacted summary, not the original dump
         assert_eq!(tool_msg.content, "compacted summary");
         assert!(!tool_msg.content.contains("HUGE ORIGINAL DUMP"));
+    }
+
+    #[test]
+    fn chat_turn_config_with_embeds_menu_in_system() {
+        let p = default_profile();
+        let cfg = chat_turn_config_with(&p, "- spike-plan: do the thing");
+        assert!(cfg.system.starts_with(SYSTEM_PROMPT));
+        assert!(cfg.system.contains("## Available skills"));
+        assert!(cfg.system.contains("- spike-plan: do the thing"));
+    }
+
+    #[test]
+    fn chat_turn_config_with_empty_menu_is_just_prompt() {
+        let p = default_profile();
+        let cfg = chat_turn_config_with(&p, "");
+        assert_eq!(cfg.system, SYSTEM_PROMPT);
+    }
+
+    #[test]
+    fn zero_arg_chat_turn_config_matches_default_profile_no_menu() {
+        // The zero-arg convenience must stay byte-identical to the old behavior.
+        assert_eq!(chat_turn_config().system, SYSTEM_PROMPT);
     }
 }
