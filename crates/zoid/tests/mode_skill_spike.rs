@@ -51,7 +51,10 @@ async fn invoke_skill_body_flows_back_into_the_loop() {
         turns: Mutex::new(std::collections::VecDeque::from(vec![
             // Turn 1: the model loads the spike-plan skill, then ends its stream.
             vec![
-                zoid_testkit::tool_call("invoke_skill", serde_json::json!({ "name": "spike-plan" })),
+                zoid_testkit::tool_call(
+                    "invoke_skill",
+                    serde_json::json!({ "name": "spike-plan" }),
+                ),
                 ProviderEvent::Done,
             ],
             // Turn 2: with the skill body in context, the model replies in text.
@@ -113,7 +116,11 @@ async fn invoke_skill_body_flows_back_into_the_loop() {
 
     // 2) The skill body was fed back into the second provider request as a Tool message.
     let captured = provider.requests.lock().unwrap();
-    assert_eq!(captured.len(), 2, "expected a tool-call turn + a follow-up turn");
+    assert_eq!(
+        captured.len(),
+        2,
+        "expected a tool-call turn + a follow-up turn"
+    );
     assert!(
         captured[1]
             .messages

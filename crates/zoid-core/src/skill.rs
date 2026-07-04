@@ -86,7 +86,10 @@ mod tests {
             vec!["spike-plan".to_string(), "spike-implement".to_string()]
         );
         let plan = r.get("spike-plan").unwrap();
-        assert!(plan.body.contains("spike-implement"), "spike-plan must chain to spike-implement");
+        assert!(
+            plan.body.contains("spike-implement"),
+            "spike-plan must chain to spike-implement"
+        );
         assert!(plan.body.contains("invoke_skill"));
         let imp = r.get("spike-implement").unwrap();
         assert!(imp.body.contains("write_file"));

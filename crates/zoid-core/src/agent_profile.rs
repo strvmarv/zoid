@@ -68,7 +68,10 @@ impl AgentProfileRegistry {
             !profiles.is_empty(),
             "AgentProfileRegistry needs at least one profile"
         );
-        Self { profiles, active: 0 }
+        Self {
+            profiles,
+            active: 0,
+        }
     }
 
     /// The currently active profile (never `None`).
