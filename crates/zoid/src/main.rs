@@ -638,6 +638,43 @@ impl ProjectionCache {
         self.events_len = Some(events.len());
         true
     }
+
+    /// Incrementally apply a single new event to the cached `msgs` projection.
+    /// Handles `ModelDelta` (append text to the last assistant message) and
+    /// `ToolCall` (append to its tool_calls) in O(1). Returns `true` when the
+    /// event was applied incrementally. For all other event kinds, returns
+    /// `false` — the caller must do a full `refresh` on the next frame.
+    fn apply_streaming(&mut self, ev: &Event) -> bool {
+        use zoid_core::event::EventKind;
+        use zoid_core::projection::{ChatMsg, ToolCallRef};
+        match &ev.kind {
+            EventKind::ModelDelta { text } => {
+                if let Some(ChatMsg::Assistant { text: t, .. }) = self.msgs.last_mut() {
+                    t.push_str(text);
+                } else {
+                    self.msgs.push(ChatMsg::Assistant {
+                        text: text.clone(),
+                        tool_calls: Vec::new(),
+                        ts: ev.ts,
+                    });
+                }
+                self.events_len = Some(self.events_len.unwrap_or(0) + 1);
+                true
+            }
+            EventKind::ToolCall { id, name, args } => {
+                if let Some(ChatMsg::Assistant { tool_calls, .. }) = self.msgs.last_mut() {
+                    tool_calls.push(ToolCallRef {
+                        id: id.clone(),
+                        name: name.clone(),
+                        args: args.clone(),
+                    });
+                }
+                self.events_len = Some(self.events_len.unwrap_or(0) + 1);
+                true
+            }
+            _ => false, // structural event — needs a full refresh
+        }
+    }
 }
 
 /// Inputs that determine the rendered conversation body. Scroll offset is NOT
@@ -1171,6 +1208,16 @@ async fn run<B: ratatui::backend::Backend>(
                         // A tool result ends the in-flight indicator for that tool.
                         if matches!(ev.kind, EventKind::ToolResult { .. }) {
                             app.shell.clear_active_tool();
+                        }
+                        // Incremental streaming: ModelDelta and ToolCall events
+                        // append directly into the cached ChatMsg vec in O(1)
+                        // instead of triggering a full O(n) conversation() fold
+                        // on the next frame. Structural events (ToolResult,
+                        // Usage, etc.) return false and get a full refresh.
+                        if !app.proj.apply_streaming(&ev) {
+                            // Structural event — invalidate the events_len so
+                            // the next frame's refresh() does a full recompute.
+                            app.proj.events_len = None;
                         }
                         app.events.push(*ev);
                     }
