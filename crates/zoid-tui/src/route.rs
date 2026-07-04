@@ -319,7 +319,9 @@ fn route_config_key(state: &ShellState, key: KeyEvent) -> Action {
         KeyCode::Right | KeyCode::Enter => match kind {
             Some(FieldKind::Pick) => Action::ConfigDrillOpen,
             Some(FieldKind::Bool) => Action::ConfigToggle,
-            Some(FieldKind::Text) | Some(FieldKind::Uint) => Action::ConfigBeginEdit,
+            Some(FieldKind::Text) | Some(FieldKind::Uint) | Some(FieldKind::Secret) => {
+                Action::ConfigBeginEdit
+            }
             _ => Action::Noop,
         },
         KeyCode::Char('r') => Action::ConfigSaveToRepo,
