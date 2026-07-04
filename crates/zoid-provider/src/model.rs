@@ -142,6 +142,8 @@ pub fn model_info(model: &str) -> ModelInfo {
         200_000
     } else if m.contains("glm") {
         256_000
+    } else if m.contains("deepseek") {
+        128_000
     } else {
         32_000 // conservative default for unknown / small local models
     };
@@ -163,8 +165,10 @@ mod tests {
         assert_eq!(model_info("claude-sonnet-4-6").context_window, 200_000);
         assert_eq!(model_info("claude-opus-4-8").context_window, 200_000);
         assert_eq!(model_info("glm-5.2:cloud").context_window, 256_000);
+        assert_eq!(model_info("deepseek-v4-pro").context_window, 128_000);
         // Case-insensitive family match still works.
         assert_eq!(model_info("CLAUDE-sonnet-4-6").context_window, 200_000);
+        assert_eq!(model_info("DEEPSEEK-V4-PRO").context_window, 128_000);
         // Unknown models take the CONSERVATIVE (small) default, never an
         // optimistic large one — an over-high window makes ACM under-compact.
         assert_eq!(model_info("some-tiny-local:8b").context_window, 32_000);
