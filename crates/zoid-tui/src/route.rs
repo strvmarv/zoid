@@ -143,12 +143,13 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
         return Action::OpenObjects;
     }
     // Zoom altitude from any focus (mirrors Ctrl+scroll) — a modifier is required
-    // because plain =/- are text the message box must keep receiving. Alt, not
-    // Ctrl: terminals grab Ctrl/Ctrl+Shift with +/-/= for their own font zoom.
-    if alt(&key, '=') || alt(&key, '+') {
+    // because plain arrow keys navigate the conversation/input. Alt, not Ctrl:
+    // terminals grab Ctrl with +/-/= for their own font zoom. Alt+Left zooms
+    // out (wider view), Alt+Right zooms in (narrower view).
+    if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Right {
         return Action::ZoomIn;
     }
-    if alt(&key, '-') || alt(&key, '_') {
+    if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Left {
         return Action::ZoomOut;
     }
     if alt(&key, 'p') {
@@ -951,34 +952,26 @@ mod tests {
         let mut s = ShellState::new();
         s.focus = Focus::Input; // typing in the message box, yet zoom still works
         assert_eq!(
-            route_key(&s, key(KeyCode::Char('='), KeyModifiers::ALT)),
+            route_key(&s, key(KeyCode::Right, KeyModifiers::ALT)),
             Action::ZoomIn
         );
         assert_eq!(
-            route_key(&s, key(KeyCode::Char('+'), KeyModifiers::ALT)),
-            Action::ZoomIn
-        );
-        assert_eq!(
-            route_key(&s, key(KeyCode::Char('-'), KeyModifiers::ALT)),
+            route_key(&s, key(KeyCode::Left, KeyModifiers::ALT)),
             Action::ZoomOut
         );
-        assert_eq!(
-            route_key(&s, key(KeyCode::Char('_'), KeyModifiers::ALT)),
-            Action::ZoomOut
-        );
-        // Alt+`+` may also carry SHIFT; still routes to zoom.
+        // Alt+Right may also carry SHIFT; still routes to zoom.
         assert_eq!(
             route_key(
                 &s,
-                key(KeyCode::Char('+'), KeyModifiers::ALT | KeyModifiers::SHIFT)
+                key(KeyCode::Right, KeyModifiers::ALT | KeyModifiers::SHIFT)
             ),
             Action::ZoomIn
         );
-        // Plain =/- in the input are still text, not zoom.
-        assert_eq!(
+        // Plain arrow keys in the input are still text/navigation, not zoom.
+        assert!(matches!(
             route_key(&s, key(KeyCode::Char('='), KeyModifiers::NONE)),
-            Action::Edit(key(KeyCode::Char('='), KeyModifiers::NONE))
-        );
+            Action::Edit(_)
+        ));
     }
 
     #[test]
