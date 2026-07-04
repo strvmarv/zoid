@@ -223,6 +223,18 @@ The levers are cheap (eviction = pick turn ids + append one `TurnsEvicted` event
 
 **Why define the async lane now** even though Slices 0–2 put almost nothing on it: Slice 4's embed-every-event is the first genuinely expensive tenant, and reserving the lane as a seam avoids retrofitting async into the hot path later.
 
+### 3.9 Massive single influx (a huge file read) — the offending item absorbs its own pressure, no collateral holes
+
+The dangerous scenario: one turn reads a 200k-token file. A naive "evict oldest turns until under budget" controller would respond by **evicting unrelated conversation history** to make room for one giant result — punching holes in the agent's working memory as collateral damage for something the *newest* item caused. The design avoids this on three levels:
+
+1. **Prevent at the source — files are demand-paged too (recommended companion to Slice 2).** The read/search tools **window large outputs**: return the first *K* tokens plus a handle — `"…file is 5,000 lines (~180k tokens); read(path, offset=…) or recall("<topic in file>") for more."` A single massive blob then never enters context at all. This is the biggest and cheapest win, and it is the same demand-paging principle applied to files instead of turns. (Touches the bin's read/search tools — can ride Slice 1 or be its own small slice.)
+
+2. **Graduated levers already bias against holes.** The pre-flight gate runs **compaction (largest-first) before eviction**. A huge tool result is, by construction, the *largest* item, so it is the **first** thing compacted — reclaiming the pressure at its source — and eviction of old turns only runs if compaction alone can't fit the budget. So the huge read is summarized (with a recall handle to its full content in the cold tier / on disk), while the conversation stays intact. Compaction leaves a **legible inline marker + recall handle**, not a hole.
+
+3. **Single-item-over-budget rule (explicit).** If one freshly-arrived item alone exceeds a per-item fraction of `usable`, it is compacted-with-precise-recall-handle (e.g. line ranges) **in preference to evicting any conversation turn** — the item that caused the pressure absorbs it. Recent-*N* protection still shields it from being compacted to *nothing* the instant it arrives; but when it genuinely cannot fit, a summary + exact-slice recall beats both a 400 and a hole in history. The full content is always retrievable (cold tier / re-read by offset), so this is paging, not loss.
+
+North-star structural end-state (§11): **per-kind token budgets** make this automatic — tool-results have their own sub-budget and structurally cannot cannibalize the conversation's, so a huge read can only compact *within its own lane*. Until then, rules 1–3 deliver the same "no collateral holes" behavior.
+
 ---
 
 ## 4. Data flow (one sub-turn)
