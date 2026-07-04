@@ -266,6 +266,20 @@ pub fn has_prompt_cache(model: &str) -> bool {
     model::model_info(model).prompt_cache
 }
 
+/// Heuristic: does a provider error string indicate the request exceeded the
+/// model's context window? Both Anthropic ("prompt is too long", "maximum
+/// context length") and Ollama/OpenAI-shape ("context length", "context window")
+/// surface these in the error body. Used by the agent's bounded capacity-error
+/// retry (the hard-bound backstop for a fallible pre-flight estimate).
+pub fn is_context_length_error(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("too long")
+        || m.contains("context length")
+        || m.contains("context window")
+        || m.contains("maximum context")
+        || (m.contains("context") && m.contains("exceed"))
+}
+
 #[cfg(test)]
 mod selection_tests {
     use super::*;
@@ -315,6 +329,19 @@ mod tests {
             got.push(ev);
         }
         assert_eq!(got, script);
+    }
+
+    #[test]
+    fn detects_context_length_errors() {
+        assert!(is_context_length_error(
+            "prompt is too long: 1050000 tokens > 1000000 maximum"
+        ));
+        assert!(is_context_length_error(
+            "This model's maximum context length is 200000 tokens"
+        ));
+        assert!(is_context_length_error("input length exceeds context window"));
+        assert!(!is_context_length_error("rate limit exceeded"));
+        assert!(!is_context_length_error("connection reset"));
     }
 }
 

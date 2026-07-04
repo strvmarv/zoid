@@ -88,6 +88,11 @@ pub fn chat_turn_config() -> TurnConfig {
 
 /// Max tool rounds per user message before the loop force-ends (safety leash).
 pub const MAX_TOOL_ITERATIONS: u32 = 50;
+/// Bound on the capacity-error retry (Task 1.7): the hard-bound backstop when
+/// the pre-flight estimate under-reads reality and the provider still rejects
+/// the request as too large. Each retry forces an eviction wave before
+/// re-sending, so this also bounds the number of forced eviction waves per turn.
+pub const MAX_CONTEXT_RETRIES: u32 = 3;
 
 /// The user's answer to an `ask_user` prompt.
 pub enum Answer {
@@ -316,6 +321,7 @@ async fn run_turn_inner(
 ) -> Result<Vec<Event>> {
     let turn_start = std::time::Instant::now();
     let mut iterations: u32 = 0;
+    let mut context_retries: u32 = 0;
     let mut outcome: &'static str = "completed";
 
     'turn: loop {
@@ -388,6 +394,19 @@ async fn run_turn_inner(
                     turn_usage.cached += u.cached;
                 }
                 ProviderEvent::Error(msg) => {
+                    let _ = stream_task.await;
+                    if zoid_provider::is_context_length_error(&msg)
+                        && context_retries < MAX_CONTEXT_RETRIES
+                        && config.eviction.enabled
+                    {
+                        context_retries += 1;
+                        // The estimate under-read reality: force a wave toward low_water and retry.
+                        let est = zoid_core::context::context_window_with(&events, overhead.clone()).total_tokens;
+                        let plan = zoid_core::eviction::plan_evictions(&events, &config.eviction, est, &zoid_core::eviction::RecencyScorer);
+                        emit_eviction(&session, &mut events, ui, config, session_id, now, plan).await?;
+                        tracing::warn!(ctx = "provider", "context-length error; forced eviction, retrying ({context_retries}/{MAX_CONTEXT_RETRIES})");
+                        continue 'turn;
+                    }
                     emit(
                         &session,
                         &mut events,
@@ -400,7 +419,6 @@ async fn run_turn_inner(
                         now,
                     )
                     .await?;
-                    let _ = stream_task.await;
                     tracing::warn!(ctx = "provider", message = msg.as_str(), "turn error");
                     outcome = "error";
                     break 'turn;
@@ -1225,5 +1243,55 @@ mod tests {
         );
         // and the surviving conversation is under the seed size
         assert!(zoid_core::projection::conversation(&out).len() < 16);
+    }
+
+    // Test double: replays a different script per stream() call (retry / multi-request turns).
+    struct SequencedProvider {
+        scripts: std::sync::Mutex<std::collections::VecDeque<Vec<zoid_provider::ProviderEvent>>>,
+    }
+    impl SequencedProvider {
+        fn new(scripts: Vec<Vec<zoid_provider::ProviderEvent>>) -> Self {
+            Self { scripts: std::sync::Mutex::new(scripts.into_iter().collect()) }
+        }
+    }
+    #[async_trait::async_trait]
+    impl zoid_provider::Provider for SequencedProvider {
+        async fn stream(
+            &self,
+            _req: &zoid_provider::CompletionRequest,
+            sink: tokio::sync::mpsc::Sender<zoid_provider::ProviderEvent>,
+        ) -> anyhow::Result<()> {
+            let script = self.scripts.lock().unwrap().pop_front().unwrap_or_default();
+            for ev in script {
+                if sink.send(ev).await.is_err() { break; }
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn context_length_error_is_retried_not_surfaced() {
+        use zoid_provider::ProviderEvent;
+        use zoid_core::event::{Event, EventKind};
+        use ulid::Ulid;
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(Ulid::from(1u128), None, 1, EventKind::UserMessage { text: "hi".into() })];
+        for e in &seed { session.append(e.clone()).await.unwrap(); }
+        // First stream errors with a context-length message; the retry completes.
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![ProviderEvent::Error("prompt is too long: exceeds context window".into())],
+            vec![ProviderEvent::TextDelta("recovered".into()), ProviderEvent::Done],
+        ]));
+        let mut cfg = chat_turn_config();
+        // enabled so the retry arm is active; band huge so the preflight gate itself evicts nothing
+        // — this isolates the capacity-error retry path.
+        cfg.eviction = zoid_core::eviction::EvictionPolicy { enabled: true, capacity: 1_000_000, context_target: 900_000, band_headroom_pct: 20, recent_n: 4, max_output: None };
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let out = run_agent_turn(cfg, provider, std::sync::Arc::new(zoid_tools::registry()), std::sync::Arc::new(zoid_tools::AllowAll), session, seed, "m".into(), tx, Ulid::new(), || 0).await.unwrap();
+        // The context error was retried, not surfaced as a ⚠ message …
+        assert!(!out.iter().any(|e| matches!(&e.kind, EventKind::AssistantMessage { text } if text.starts_with(WARN_GLYPH))), "context error must not surface");
+        // … and the retry reached the second, successful stream.
+        assert!(out.iter().any(|e| matches!(&e.kind, EventKind::ModelDelta { text } if text == "recovered")), "retry must reach the successful stream");
     }
 }
