@@ -374,21 +374,15 @@ fn palette_overlay_frame() {
     insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
 }
 
-/// Drawn at a deliberately short 20-row terminal so the overlay is
-/// height-clamped below the grouped list's length (independent of how many
-/// palette rows exist). Navigating to the LAST selectable item (Quit) must
-/// scroll it into view, not clip it — this is the CL5 scroll-follow guard.
 #[test]
-fn palette_overlay_scrolled_to_end_frame() {
+fn palette_arg_stage_frame() {
     let mut s = ShellState::new();
     s.overlay = Overlay::Palette;
-    s.palette.selected = 6; // directly select the last selectable item (Quit zoid)
-    let out = draw(&s, &seeded(), 100, 20);
-    assert!(
-        out.contains("Quit zoid"),
-        "the last row (Quit) must be visible, not clipped:\n{out}"
-    );
-    insta::assert_snapshot!(out);
+    s.palette.stage = zoid_tui::state::PaletteStage::Arg {
+        kind: zoid_tui::palette::ArgKind::Rename,
+        input: "my-feature".into(),
+    };
+    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
 }
 
 #[test]

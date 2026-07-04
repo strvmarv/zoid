@@ -28,6 +28,9 @@ pub enum Action {
     PaletteBackspace,
     /// Run the palette's currently-selected command (resolved by the bin/state).
     PaletteRun,
+    /// Esc while in the palette's Arg (argument-entry) phase: return to the Pick
+    /// list without closing the overlay.
+    PaletteArgCancel,
     CmdlineChar(char),
     CmdlineBackspace,
     /// Run the command line buffer (parsed into a `Command`).
@@ -119,7 +122,7 @@ fn alt(key: &KeyEvent, c: char) -> bool {
 pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
     // 1. Overlays capture keys first.
     match state.overlay {
-        Overlay::Palette => return route_palette_key(key),
+        Overlay::Palette => return route_palette_key(state, key),
         Overlay::CommandLine => return route_cmdline_key(state, key),
         Overlay::Objects => return route_objects_key(key),
         Overlay::Verbs => return route_verbs_key(key),
@@ -219,12 +222,16 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
     }
 }
 
-fn route_palette_key(key: KeyEvent) -> Action {
+fn route_palette_key(state: &ShellState, key: KeyEvent) -> Action {
+    let in_arg = matches!(state.palette.stage, crate::state::PaletteStage::Arg { .. });
     match key.code {
+        // Esc: in Arg phase return to the Pick list; in Pick phase close.
+        KeyCode::Esc if in_arg => Action::PaletteArgCancel,
         KeyCode::Esc => Action::CloseOverlay,
         KeyCode::Enter => Action::PaletteRun,
-        KeyCode::Up => Action::PaletteMove(-1),
-        KeyCode::Down => Action::PaletteMove(1),
+        // Selection nav only applies to the Pick list.
+        KeyCode::Up if !in_arg => Action::PaletteMove(-1),
+        KeyCode::Down if !in_arg => Action::PaletteMove(1),
         KeyCode::Backspace => Action::PaletteBackspace,
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             Action::PaletteChar(c)
@@ -432,11 +439,12 @@ pub fn route_mouse(state: &ShellState, layout: &ShellLayout, m: MouseEvent) -> A
 }
 
 /// Resolve the palette's selected row to its command (bin calls after PaletteRun).
+/// `None` means no row matched the current query.
 pub fn palette_selected_command(state: &ShellState) -> Option<Command> {
     let items = all_items(state.mode);
     let matches = selectable_matches(&items, &state.palette.query);
     let sel = nav(state.palette.selected, 0, matches.len());
-    matches.get(sel).and_then(|&i| items[i].command.clone())
+    matches.get(sel).map(|&i| items[i].command.clone())
 }
 
 #[cfg(test)]
@@ -666,6 +674,55 @@ mod tests {
             route_key(&s, key(KeyCode::Char(':'), KeyModifiers::NONE)),
             Action::OpenCommandLine
         );
+    }
+
+    #[test]
+    fn palette_pick_phase_routing() {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Palette; // stage defaults to Pick
+        let k = |c: KeyCode| KeyEvent::new(c, KeyModifiers::NONE);
+        assert_eq!(route_key(&s, k(KeyCode::Esc)), Action::CloseOverlay);
+        assert_eq!(route_key(&s, k(KeyCode::Enter)), Action::PaletteRun);
+        assert_eq!(route_key(&s, k(KeyCode::Up)), Action::PaletteMove(-1));
+        assert_eq!(route_key(&s, k(KeyCode::Down)), Action::PaletteMove(1));
+        assert_eq!(
+            route_key(&s, k(KeyCode::Backspace)),
+            Action::PaletteBackspace
+        );
+        assert_eq!(
+            route_key(&s, k(KeyCode::Char('r'))),
+            Action::PaletteChar('r')
+        );
+    }
+
+    #[test]
+    fn palette_arg_phase_routing() {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Palette;
+        s.palette.stage = zoid_tui_stage_arg(); // helper below
+        let k = |c: KeyCode| KeyEvent::new(c, KeyModifiers::NONE);
+        // Esc goes BACK to Pick, not close.
+        assert_eq!(route_key(&s, k(KeyCode::Esc)), Action::PaletteArgCancel);
+        assert_eq!(route_key(&s, k(KeyCode::Enter)), Action::PaletteRun);
+        // Arrows are inert in Arg (no list to move).
+        assert_eq!(route_key(&s, k(KeyCode::Up)), Action::Noop);
+        assert_eq!(route_key(&s, k(KeyCode::Down)), Action::Noop);
+        // Char/Backspace still edit (the bin routes them to `input` in Arg phase).
+        assert_eq!(
+            route_key(&s, k(KeyCode::Char('x'))),
+            Action::PaletteChar('x')
+        );
+        assert_eq!(
+            route_key(&s, k(KeyCode::Backspace)),
+            Action::PaletteBackspace
+        );
+    }
+
+    fn zoid_tui_stage_arg() -> crate::state::PaletteStage {
+        crate::state::PaletteStage::Arg {
+            kind: crate::palette::ArgKind::Rename,
+            input: String::new(),
+        }
     }
 
     #[test]

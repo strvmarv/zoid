@@ -1,24 +1,54 @@
-//! The command palette's item set + fuzzy filtering (spec §6.5; mockup
-//! `palette.html`). Grouped, mode-aware, each row teaching its keybind.
-//! Post-v1 rows (branch/recipes) have `command: None` → rendered dimmed, not
-//! selectable. Pure; rendering lives in `render.rs`.
+//! The command palette's item set + fuzzy filtering. A flat, curated,
+//! runnable-only list (VSCode-style): typing filters/re-ranks it, the top match
+//! is auto-selected, Enter runs it. Parameterized commands (Rename) capture
+//! their argument inline via `ArgKind`. Pure; rendering lives in `render.rs`.
 
 use crate::command::Command;
 use crate::state::Mode;
-use crate::tokens::glyph;
+
+/// A parameterized palette command's argument-capture flow. The palette enters
+/// an inline "Arg" phase to collect the argument, then builds the final command.
+/// Extend with new variants (e.g. `Delegate`) as more commands take arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArgKind {
+    Rename,
+}
+
+impl ArgKind {
+    /// The label shown on the argument-entry prompt line.
+    pub fn prompt(&self) -> &'static str {
+        match self {
+            ArgKind::Rename => "Rename to",
+        }
+    }
+
+    /// Build the final `Command` from the captured argument text.
+    pub fn build(&self, input: String) -> Command {
+        match self {
+            ArgKind::Rename => Command::RenameSession(input),
+        }
+    }
+}
+
+/// Which inline-argument flow (if any) a command needs when chosen from the
+/// palette. Pure — the bin uses this to decide the Pick→Arg transition.
+pub fn arg_kind_for(cmd: &Command) -> Option<ArgKind> {
+    match cmd {
+        Command::RenameSession(_) => Some(ArgKind::Rename),
+        _ => None,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaletteItem {
-    pub group: String,
-    pub icon: char,
     pub label: &'static str,
-    pub hint: &'static str,
-    pub keybind: &'static str,
-    /// `None` = disabled (post-v1), shown dimmed and skipped by selection.
-    pub command: Option<Command>,
+    pub command: Command,
 }
 
-/// The full, ordered item set for `mode` (grouped exactly as `palette.html`).
+/// The flat, curated, runnable-only item set for `mode`. Fixed order at rest;
+/// `selectable_matches` re-ranks it by fuzzy score while the user types. Non-
+/// implemented actions (fork/undo/pin/evict/recipe) are intentionally omitted —
+/// re-add them here with their real `Command` when those features ship.
 pub fn all_items(mode: Mode) -> Vec<PaletteItem> {
     // The mode row offers the *other* mode.
     let (mode_label, mode_cmd) = match mode {
@@ -26,107 +56,33 @@ pub fn all_items(mode: Mode) -> Vec<PaletteItem> {
         Mode::Build => ("Switch to Chat", Command::SwitchMode(Mode::Chat)),
     };
     vec![
-        // session — leads the palette (matches palette.html).
         PaletteItem {
-            group: "session".to_string(),
-            icon: glyph::NEW,
             label: "New session",
-            hint: "fresh thread + clean context budget",
-            keybind: ":new",
-            command: Some(Command::NewSession),
+            command: Command::NewSession,
         },
         PaletteItem {
-            group: "session".to_string(),
-            icon: glyph::RESUME,
             label: "Resume session…",
-            hint: "this repo, most-recent first",
-            keybind: "⏎",
-            command: Some(Command::ResumeSessionPicker),
+            command: Command::ResumeSessionPicker,
         },
         PaletteItem {
-            group: "session".to_string(),
-            icon: glyph::RENAME,
             label: "Rename session…",
-            hint: "rename the current thread",
-            keybind: ":rename",
-            command: Some(Command::RenameSession(String::new())),
+            command: Command::RenameSession(String::new()),
         },
         PaletteItem {
-            group: "mode".to_string(),
-            icon: glyph::MODE_SWITCH,
             label: mode_label,
-            hint: "continue this conversation into the loop",
-            keybind: "⇧Tab",
-            command: Some(mode_cmd),
-        },
-        // branch group — post-v1, disabled/dimmed
-        PaletteItem {
-            group: format!("branch {}", glyph::BRANCH),
-            icon: glyph::BRANCH,
-            label: "Fork from here",
-            hint: "new branch at this turn",
-            keybind: ":fork",
-            command: None,
+            command: mode_cmd,
         },
         PaletteItem {
-            group: format!("branch {}", glyph::BRANCH),
-            icon: glyph::UNDO,
-            label: "Undo last turn",
-            hint: "move head back",
-            keybind: "u",
-            command: None,
-        },
-        // context ⑤ — placeholder (real actions land P3), disabled for now
-        PaletteItem {
-            group: "context".to_string(),
-            icon: glyph::EDIT,
-            label: "Pin file to context",
-            hint: "coming soon",
-            keybind: "",
-            command: None,
-        },
-        PaletteItem {
-            group: "context".to_string(),
-            icon: glyph::EVICT,
-            label: "Evict cold items",
-            hint: "coming soon",
-            keybind: "",
-            command: None,
-        },
-        // view
-        PaletteItem {
-            group: "view".to_string(),
-            icon: glyph::SETTINGS,
             label: "Overview",
-            hint: "session metrics · tokens · timing · errors",
-            keybind: ":overview",
-            command: Some(Command::ShowOverview),
+            command: Command::ShowOverview,
         },
-        // settings
         PaletteItem {
-            group: "settings".to_string(),
-            icon: glyph::SETTINGS,
             label: "Open settings",
-            hint: "provider · model · economy · secrets",
-            keybind: ":config",
-            command: Some(Command::OpenConfig),
+            command: Command::OpenConfig,
         },
         PaletteItem {
-            group: "settings".to_string(),
-            icon: glyph::SETTINGS,
             label: "Quit zoid",
-            hint: "exit",
-            keybind: "^Q",
-            command: Some(Command::Quit),
-        },
-        // recipes — post-v1
-        PaletteItem {
-            group: "recipes".to_string(),
-            icon: glyph::RECIPE,
-            label: "Run recipe…",
-            hint: "coming soon",
-            keybind: "",
-            command: None,
+            command: Command::Quit,
         },
     ]
 }
@@ -163,13 +119,12 @@ pub fn fuzzy_score(label: &str, query: &str) -> Option<i32> {
     }
 }
 
-/// Indices into `items` of *selectable* rows (have a command) matching `query`,
-/// ranked best-first (stable on ties).
+/// Indices into `items` matching `query`, ranked best-first (stable on ties).
+/// Empty query returns every row in curated order.
 pub fn selectable_matches(items: &[PaletteItem], query: &str) -> Vec<usize> {
     let mut scored: Vec<(usize, i32)> = items
         .iter()
         .enumerate()
-        .filter(|(_, it)| it.command.is_some())
         .filter_map(|(i, it)| fuzzy_score(it.label, query).map(|s| (i, s)))
         .collect();
     scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
@@ -205,20 +160,58 @@ mod tests {
     }
 
     #[test]
-    fn matches_exclude_disabled_rows() {
+    fn all_items_is_flat_curated() {
+        // Runnable-only is now a *type-level* guarantee (the field is `Command`,
+        // not `Option<Command>`), so there's nothing to assert at runtime for it.
+        // This pins the flat curated set and its at-rest order.
         let items = all_items(Mode::Chat);
-        // "Fork from here" is post-v1 (command None) — never selectable.
-        let idxs = selectable_matches(&items, "fork");
-        assert!(idxs.is_empty());
-        let idxs = selectable_matches(&items, "build");
-        assert_eq!(items[idxs[0]].label, "Switch to Build");
+        let labels: Vec<&str> = items.iter().map(|i| i.label).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "New session",
+                "Resume session…",
+                "Rename session…",
+                "Switch to Build",
+                "Overview",
+                "Open settings",
+                "Quit zoid",
+            ]
+        );
     }
 
     #[test]
-    fn empty_query_returns_all_selectable() {
+    fn mode_row_offers_the_other_mode() {
+        assert_eq!(
+            all_items(Mode::Chat)
+                .iter()
+                .find(|i| i.command == Command::SwitchMode(Mode::Build))
+                .map(|i| i.label),
+            Some("Switch to Build")
+        );
+        assert_eq!(
+            all_items(Mode::Build)
+                .iter()
+                .find(|i| i.command == Command::SwitchMode(Mode::Chat))
+                .map(|i| i.label),
+            Some("Switch to Chat")
+        );
+    }
+
+    #[test]
+    fn empty_query_returns_all_rows_in_order() {
         let items = all_items(Mode::Chat);
-        let selectable = items.iter().filter(|i| i.command.is_some()).count();
-        assert_eq!(selectable_matches(&items, "").len(), selectable);
+        let idxs = selectable_matches(&items, "");
+        assert_eq!(idxs, (0..items.len()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn typing_reranks_best_match_first() {
+        let items = all_items(Mode::Chat);
+        let idxs = selectable_matches(&items, "over");
+        assert_eq!(items[idxs[0]].label, "Overview");
+        let idxs = selectable_matches(&items, "build");
+        assert_eq!(items[idxs[0]].label, "Switch to Build");
     }
 
     #[test]
@@ -236,40 +229,22 @@ mod tests {
     }
 
     #[test]
-    fn settings_group_has_open_settings() {
-        let items = all_items(Mode::Chat);
-        assert!(selectable_matches(&items, "settings")
-            .iter()
-            .any(|&i| items[i].command == Some(Command::OpenConfig)));
-    }
-
-    #[test]
-    fn palette_has_overview_entry() {
-        let items = all_items(Mode::Chat);
-        assert!(items
-            .iter()
-            .any(|i| i.label == "Overview" && i.command == Some(Command::ShowOverview)));
-    }
-
-    #[test]
-    fn session_group_is_first_and_selectable() {
-        let items = all_items(Mode::Chat);
-        // The session group leads the palette (matches palette.html).
-        assert_eq!(items[0].group, "session");
-        let labels: Vec<&str> = items
-            .iter()
-            .filter(|i| i.group == "session")
-            .map(|i| i.label)
-            .collect();
+    fn arg_kind_for_flags_only_parameterized_commands() {
         assert_eq!(
-            labels,
-            vec!["New session", "Resume session…", "Rename session…"]
+            arg_kind_for(&Command::RenameSession(String::new())),
+            Some(ArgKind::Rename)
         );
-        // All three are selectable (have commands).
-        for l in ["New session", "Resume session…", "Rename session…"] {
-            assert!(selectable_matches(&items, l)
-                .iter()
-                .any(|&i| items[i].label == l));
-        }
+        assert_eq!(arg_kind_for(&Command::ShowOverview), None);
+        assert_eq!(arg_kind_for(&Command::Quit), None);
+        assert_eq!(arg_kind_for(&Command::NewSession), None);
+    }
+
+    #[test]
+    fn arg_kind_builds_command_and_prompt() {
+        assert_eq!(ArgKind::Rename.prompt(), "Rename to");
+        assert_eq!(
+            ArgKind::Rename.build("my-feature".to_string()),
+            Command::RenameSession("my-feature".to_string())
+        );
     }
 }
