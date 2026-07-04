@@ -277,7 +277,7 @@ fn palette_overlay_frame() {
 fn palette_overlay_scrolled_to_end_frame() {
     let mut s = ShellState::new();
     s.overlay = Overlay::Palette;
-    s.palette.selected = 5; // directly select the last selectable item (Quit zoid)
+    s.palette.selected = 6; // directly select the last selectable item (Quit zoid)
     let out = draw(&s, &seeded(), 100, 20);
     assert!(
         out.contains("Quit zoid"),

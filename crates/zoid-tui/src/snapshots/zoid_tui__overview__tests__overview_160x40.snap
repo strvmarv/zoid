@@ -1,0 +1,24 @@
+---
+source: crates/zoid-tui/src/overview.rs
+assertion_line: 419
+expression: text
+---
+OVERVIEW   session a3f2 · glm-5.2:cloud (ollama) · up 12m · 8 turns
+══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+  54.3k tokens · 64% cache-hit · 3.8s avg turn · 7ms/frame · 2 errors
+══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+ECONOMY                                               │ TIMING
+  input    48.2k                                      │   turn   last 4.2s   avg 3.8s   p90 7.1s
+  output   6.1k                                       │   provider   ttft 0.6s   stream 3.1s
+  cache    31.0k   hit 64%                            │   iterations   3 avg / turn
+  per-turn ▁▂▃▅▇▆▄                                    │
+                                                      │
+TOOLS                                                 │ RUNTIME
+  read_file  ×14  avg 12ms                            │   frame   avg 7ms   p90 11ms   max 16ms
+  shell      ×6   avg 240ms                           │   cache-hit   98%   (body render)
+  edit_file  ×3   avg 18ms                            │   projections rebuilt   42
+                                                      │   event log   1,204 events
+──────────────────────────────────────────────────────┴───────────────────────────────────────────────────────
+ERRORS (2)
+  ⚠ 12m provider  HTTP 429: rate limited
+  ⛔ 3m shell  exit 1: ./deploy.sh: no such file

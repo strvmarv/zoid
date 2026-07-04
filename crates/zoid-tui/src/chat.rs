@@ -473,6 +473,12 @@ pub fn conversation_view_indexed(
 ) -> (Vec<Line<'static>>, Vec<usize>) {
     let mut starts: Vec<usize> = Vec::new();
     let mut lines: Vec<Line<'static>> = match view.zoom {
+        Zoom::Overview => {
+            // Overview is not a transcript view — the bin renders it via
+            // `overview::overview_lines`, bypassing this builder. Return empty
+            // so the match is exhaustive and any accidental call is harmless.
+            Vec::new()
+        }
         Zoom::Summary => {
             starts = summary_msg_starts(msgs);
             digest_lines(&digests(msgs))

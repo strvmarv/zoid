@@ -93,6 +93,15 @@ pub fn all_items(mode: Mode) -> Vec<PaletteItem> {
             keybind: "",
             command: None,
         },
+        // view
+        PaletteItem {
+            group: "view".to_string(),
+            icon: glyph::SETTINGS,
+            label: "Overview",
+            hint: "session metrics · tokens · timing · errors",
+            keybind: ":overview",
+            command: Some(Command::ShowOverview),
+        },
         // settings
         PaletteItem {
             group: "settings".to_string(),
@@ -232,6 +241,14 @@ mod tests {
         assert!(selectable_matches(&items, "settings")
             .iter()
             .any(|&i| items[i].command == Some(Command::OpenConfig)));
+    }
+
+    #[test]
+    fn palette_has_overview_entry() {
+        let items = all_items(Mode::Chat);
+        assert!(items
+            .iter()
+            .any(|i| i.label == "Overview" && i.command == Some(Command::ShowOverview)));
     }
 
     #[test]

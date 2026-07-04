@@ -1,5 +1,6 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
+assertion_line: 269
 expression: "draw(&s, &seeded(), 100, 24)"
 ---
 "                                                zoid                                      ^P palette"
@@ -16,10 +17,10 @@ expression: "draw(&s, &seeded(), 100, 24)"
 "│CONTEXT                                              │                                             "
 "│ ● Pin file to context  coming soon                  │ ╭ ▾ context · tokens ─────────────────────╮ "
 "│ ✕ Evict cold items  coming soon                     │ │churn                              cache │ "
-"│SETTINGS                                             │ ╰─────────────────────────────────────────╯ "
-"│ ◆ Open settings  provider · model · economy · secret│                                             "
-"│ ◆ Quit zoid  exit  ^Q                               │ ╭ ▾ tasks ────────────────────────────────╮ "
-"│RECIPES                                              │ │no tasks                                 │ "
+"│VIEW                                                 │ ╰─────────────────────────────────────────╯ "
+"│ ◆ Overview  session metrics · tokens · timing · erro│                                             "
+"│SETTINGS                                             │ ╭ ▾ tasks ────────────────────────────────╮ "
+"│ ◆ Open settings  provider · model · economy · secret│ │no tasks                                 │ "
 "└─────────────────────────────────────────────────────┘ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"

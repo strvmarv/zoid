@@ -15,11 +15,14 @@ pub enum Focus {
     Rail,
 }
 
-/// Conversation altitude (spec ① semantic zoom). `Normal` is the default
-/// turn-by-turn view; `Summary` collapses each turn to a one-line digest;
-/// `Detail` expands tool output with code highlighting.
+/// Conversation altitude (spec ① semantic zoom), ordered from least to most
+/// detail: `Overview` is the topmost altitude (rendered by the bin, not a
+/// transcript view); `Summary` collapses each turn to a one-line digest;
+/// `Normal` is the default turn-by-turn view; `Detail` expands tool output
+/// with code highlighting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Zoom {
+    Overview,
     Summary,
     Normal,
     Detail,
@@ -29,6 +32,7 @@ impl Zoom {
     /// Short altitude name for the status-bar indicator.
     pub fn label(self) -> &'static str {
         match self {
+            Zoom::Overview => "overview",
             Zoom::Summary => "summary",
             Zoom::Normal => "normal",
             Zoom::Detail => "detail",
@@ -377,12 +381,13 @@ impl ShellState {
         self.session_selected = 0;
     }
 
-    /// Increase detail (Summary → Normal → Detail), saturating. A real altitude
-    /// change re-anchors `conversation_scroll` to the top: altitudes have
-    /// incomparable line counts, so a carried-over offset could otherwise land
-    /// past the new altitude's end and render blank.
+    /// Increase detail (Overview → Summary → Normal → Detail), saturating. A
+    /// real altitude change re-anchors `conversation_scroll` to the top:
+    /// altitudes have incomparable line counts, so a carried-over offset could
+    /// otherwise land past the new altitude's end and render blank.
     pub fn zoom_in(&mut self) {
         let next = match self.zoom {
+            Zoom::Overview => Zoom::Summary,
             Zoom::Summary => Zoom::Normal,
             Zoom::Normal | Zoom::Detail => Zoom::Detail,
         };
@@ -392,12 +397,14 @@ impl ShellState {
         self.zoom = next;
     }
 
-    /// Decrease detail (Detail → Normal → Summary), saturating. Re-anchors scroll
-    /// on a real change (see `zoom_in`).
+    /// Decrease detail (Detail → Normal → Summary → Overview), saturating.
+    /// Re-anchors scroll on a real change (see `zoom_in`).
     pub fn zoom_out(&mut self) {
         let next = match self.zoom {
             Zoom::Detail => Zoom::Normal,
-            Zoom::Normal | Zoom::Summary => Zoom::Summary,
+            Zoom::Normal => Zoom::Summary,
+            Zoom::Summary => Zoom::Overview,
+            Zoom::Overview => Zoom::Overview,
         };
         if next != self.zoom {
             self.conversation_scroll = 0;
@@ -601,7 +608,11 @@ mod tests {
         s.zoom_out();
         assert_eq!(s.zoom, Zoom::Summary);
         s.zoom_out();
-        assert_eq!(s.zoom, Zoom::Summary); // saturates
+        assert_eq!(s.zoom, Zoom::Overview);
+        s.zoom_out();
+        assert_eq!(s.zoom, Zoom::Overview); // saturates
+        s.zoom_in();
+        assert_eq!(s.zoom, Zoom::Summary);
         s.zoom_in();
         assert_eq!(s.zoom, Zoom::Normal);
         s.zoom_in();
@@ -629,6 +640,29 @@ mod tests {
             s.conversation_scroll, 17,
             "a saturating no-op zoom keypress preserves scroll"
         );
+    }
+
+    #[test]
+    fn overview_is_the_topmost_altitude() {
+        let mut s = ShellState::new(); // starts Normal
+        s.zoom_out(); // Normal -> Summary
+        assert_eq!(s.zoom, Zoom::Summary);
+        s.zoom_out(); // Summary -> Overview
+        assert_eq!(s.zoom, Zoom::Overview);
+        s.zoom_out(); // saturates
+        assert_eq!(s.zoom, Zoom::Overview);
+        assert_eq!(s.zoom.label(), "overview");
+        s.zoom_in(); // Overview -> Summary
+        assert_eq!(s.zoom, Zoom::Summary);
+    }
+
+    #[test]
+    fn entering_overview_resets_scroll() {
+        let mut s = ShellState::new();
+        s.zoom_out(); // Summary
+        s.conversation_scroll = 9;
+        s.zoom_out(); // -> Overview, must re-anchor
+        assert_eq!(s.conversation_scroll, 0);
     }
 
     #[test]

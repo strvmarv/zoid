@@ -20,6 +20,8 @@ use tokio::sync::mpsc;
 use tui_textarea::{CursorMove, TextArea};
 use ulid::Ulid;
 
+mod obs;
+
 use zoid::agent::{run_agent_turn, AgentUpdate};
 use zoid_core::event::{Event, EventKind};
 use zoid_core::projection::conversation;
@@ -280,6 +282,106 @@ fn fmt_duration(start_ms: i64, now_ms: i64) -> String {
     } else {
         format!("{}h{}m", mins / 60, mins % 60)
     }
+}
+
+/// Compact relative age from a millisecond delta (e.g. "45s", "12m", "3h"),
+/// used to render `⚠ 12m provider` / `⛔ 3m tool shell` rows in the Overview
+/// ERRORS band. Guarded against a negative/zero delta (clock skew or a
+/// same-tick error) so it never underflows — those read as `"0s"`.
+fn fmt_age(ms_ago: i64) -> String {
+    let ms_ago = ms_ago.max(0);
+    if ms_ago < 60_000 {
+        format!("{}s", ms_ago / 1000)
+    } else if ms_ago < 3_600_000 {
+        format!("{}m", ms_ago / 60_000)
+    } else {
+        format!("{}h", ms_ago / 3_600_000)
+    }
+}
+
+/// Snapshot the obs aggregate + economy projection into the pure `OverviewData`
+/// consumed by `overview_lines`. Poison-safe: a poisoned obs mutex yields an
+/// empty dashboard rather than a panic (the observability layer never panics).
+fn build_overview_data(
+    app: &App,
+    obs_state: &std::sync::Arc<std::sync::Mutex<obs::ObsState>>,
+) -> zoid_tui::overview::OverviewData {
+    use zoid_tui::overview::OverviewData;
+    // Economy split from the same ledger the session drawer/context economy use.
+    let ledger = zoid_core::economy::token_ledger(&app.events);
+    // Prompt-cache hit rate = cache-read as a % of input tokens (economy).
+    let cache_hit_pct = if ledger.input == 0 {
+        0
+    } else {
+        (ledger.cached * 100 / ledger.input).min(100) as u8
+    };
+    // Per-turn prompt-cache sparkline: map the cached churn series onto the
+    // shared glyph::SPARK ramp, exactly as the context drawer's cache spark does.
+    let cache_vals: Vec<u64> = app.proj.churn.points.iter().map(|p| p.cached).collect();
+    let spark = zoid_tui::economy_view::sparkline(&cache_vals);
+
+    let s = match obs_state.lock() {
+        Ok(s) => s,
+        Err(_) => return OverviewData::default(),
+    };
+    OverviewData {
+        session_id: last4(&app.session_id.to_string()),
+        model: app.shell.model.clone(),
+        provider: app.shell.provider.clone(),
+        uptime: fmt_duration(app.session_started_ms, now_ms()),
+        turns: s.turn.count(),
+        tok_in: ledger.input,
+        tok_out: ledger.output,
+        tok_total: ledger.total,
+        cache_read: ledger.cached,
+        cache_hit_pct,
+        spark,
+        turn_last_ms: s.turn.last(),
+        turn_avg_ms: s.turn.avg(),
+        turn_p90_ms: s.turn.p90(),
+        ttft_ms: s.provider_ttft.avg(),
+        stream_ms: s.provider_total.avg(),
+        iter_avg: s.iterations.avg(),
+        tools: s
+            .tools
+            .iter()
+            .map(|(k, v)| (k.clone(), v.count, v.avg_ms()))
+            .collect(),
+        frame_avg_ms: s.frame.avg(),
+        frame_p90_ms: s.frame.p90(),
+        frame_max_ms: s.frame.window_max(),
+        // Body-render cache-hit ratio (obs frame events) — distinct from the
+        // prompt-cache `cache_hit_pct` above.
+        render_cache_pct: if s.cache_total == 0 {
+            0
+        } else {
+            (s.cache_hits * 100 / s.cache_total).min(100) as u8
+        },
+        proj_rebuilds: s.proj_rebuilds,
+        event_count: app.events.len() as u64,
+        errors: s
+            .errors
+            .iter()
+            .map(|e| {
+                let age = fmt_age(now_ms() - e.ts_ms);
+                (
+                    format!(
+                        "{} {} {}",
+                        if e.level == "error" { '⛔' } else { '⚠' },
+                        age,
+                        e.context
+                    ),
+                    e.message.clone(),
+                )
+            })
+            .collect(),
+    }
+}
+
+/// Last 4 chars of a string (short session id for the dashboard header).
+fn last4(s: &str) -> String {
+    let v: Vec<char> = s.chars().collect();
+    v[v.len().saturating_sub(4)..].iter().collect()
 }
 
 /// Human provider label for the provider actually constructed at startup
@@ -735,15 +837,22 @@ struct BodyCache {
 }
 
 impl BodyCache {
-    /// Rebuild the body iff `key` changed; cheap no-op otherwise. During
-    /// streaming, when the message count hasn't changed (only the last
-    /// message's text is growing), only the last message is re-rendered and
-    /// spliced into the cached body — O(1) per frame instead of O(n).
-    fn refresh(&mut self, key: BodyKey, msgs: &[zoid_core::projection::ChatMsg], width: usize) {
-        // During streaming the last message's text is growing every frame, so
-        // we can never no-op — at minimum we re-render the last message.
+    /// Rebuild the body iff `key` changed; cheap no-op otherwise. Returns
+    /// `true` when the cache was reused (a full-frame "hit": nothing to
+    /// re-render), `false` when the body was rebuilt or incrementally
+    /// re-rendered. During streaming the last message's text grows every
+    /// frame, so a key match is NOT a no-op — we fall through to the
+    /// incremental re-render (re-render just the last message, O(1) per
+    /// frame instead of O(n)), which counts as a render (returns `false`).
+    fn refresh(
+        &mut self,
+        key: BodyKey,
+        msgs: &[zoid_core::projection::ChatMsg],
+        width: usize,
+    ) -> bool {
+        // Full no-op only when not streaming and nothing changed.
         if !key.streaming && self.key.as_ref() == Some(&key) && self.msg_count == msgs.len() {
-            return;
+            return true;
         }
         let view = ChatView {
             zoom: key.zoom,
@@ -777,7 +886,8 @@ impl BodyCache {
             );
             // conversation_view_indexed appends a trailing blank; we want it.
             self.body.extend(new_lines);
-            return;
+            // An incremental re-render is render work, not a pure cache hit.
+            return false;
         }
         // Full rebuild.
         let (body, starts) =
@@ -786,6 +896,7 @@ impl BodyCache {
         self.msg_starts = starts;
         self.msg_count = msgs.len();
         self.key = Some(key);
+        false
     }
 }
 
@@ -817,6 +928,9 @@ struct App {
     proj: ProjectionCache,
     /// Cached rendered conversation body; reused across scroll/typing frames.
     body_cache: BodyCache,
+    /// The Overview dashboard body, rebuilt per-frame while at `Zoom::Overview`
+    /// (only while the user is viewing it). Empty at every other altitude.
+    overview_body: Vec<ratatui::text::Line<'static>>,
     /// When the altitude last changed, for the fold/unfold reveal (Ⓡ2).
     zoom_changed_at: Option<std::time::Instant>,
     /// Max conversation scroll offset from the last rendered frame (body length −
@@ -866,6 +980,8 @@ impl App {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let obs = obs::init();
+
     match zoid::cli::parse_args(std::env::args().skip(1)) {
         zoid::cli::Cli::Version => {
             println!("{}", zoid::cli::version_string());
@@ -992,6 +1108,7 @@ async fn main() -> Result<()> {
         started: std::time::Instant::now(),
         proj: ProjectionCache::default(),
         body_cache: BodyCache::default(),
+        overview_body: Vec::new(),
         zoom_changed_at: None,
         last_conv_max_scroll: 0,
         last_conv_rect: ratatui::layout::Rect::default(),
@@ -1030,7 +1147,7 @@ async fn main() -> Result<()> {
         app.ui_tx.clone(),
     );
 
-    let result = run(&mut terminal, &mut app, &mut ui_rx).await;
+    let result = run(&mut terminal, &mut app, &mut ui_rx, &obs.state).await;
 
     // Restore the terminal on every exit path — drive through errors, don't bail.
     if kbd_enhanced {
@@ -1065,6 +1182,7 @@ async fn run<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     ui_rx: &mut mpsc::Receiver<AgentUpdate>,
+    obs_state: &std::sync::Arc<std::sync::Mutex<obs::ObsState>>,
 ) -> Result<()> {
     let mut term_events = EventStream::new();
 
@@ -1106,7 +1224,7 @@ async fn run<B: ratatui::backend::Backend>(
         // Refresh cached projections only when the event log grew (append-only),
         // so typing / scrolling / zoom reuse them instead of rebuilding O(events)
         // projections every frame.
-        app.proj.refresh(&app.events);
+        let proj_rebuilt = app.proj.refresh(&app.events);
         app.shell.session_tokens = app.proj.ledger_total.saturating_sub(app.proj.cached_total);
         app.shell.cached_tokens = app.proj.cached_total;
         app.shell.ctx_used = app.proj.window.total_tokens;
@@ -1146,17 +1264,34 @@ async fn run<B: ratatui::backend::Backend>(
         } else {
             zoid_tui::motion::caret_on(elapsed, 1000, app.shell.reduced_motion)
         };
-        app.body_cache.refresh(
-            BodyKey {
-                zoom,
-                width: body_w,
-                streaming,
-                caret: streaming && caret,
-                tz,
-            },
-            &app.proj.msgs,
-            body_w,
-        );
+        // At Overview the conversation pane hosts the metrics dashboard instead of
+        // the transcript: assemble a fresh `OverviewData` snapshot and render it
+        // into `overview_body` (a per-frame rebuild is fine — it only runs while the
+        // user is actually viewing Overview). Every other altitude reuses the cached
+        // conversation body. Consuming `obs.state` here is also what puts the shared
+        // aggregate to work in the render loop.
+        let is_overview = zoom == zoid_tui::state::Zoom::Overview;
+        // `None` at Overview: the body is rebuilt fresh every frame (no
+        // `BodyCache` lookup happens at all), so there's no cache signal to
+        // report — Overview frames must not participate in the body-render
+        // cache ratio (`render_cache_pct`), only in frame timing.
+        let cache_hit = if is_overview {
+            let data = build_overview_data(app, obs_state);
+            app.overview_body = zoid_tui::overview::overview_lines(&data, body_w);
+            None
+        } else {
+            Some(app.body_cache.refresh(
+                BodyKey {
+                    zoom,
+                    width: body_w,
+                    streaming,
+                    caret: streaming && caret,
+                    tz,
+                },
+                &app.proj.msgs,
+                body_w,
+            ))
+        };
 
         // Tail-follow: when engaged, pin the viewport to the latest line before
         // drawing — this is what makes the view show the latest output on startup
@@ -1165,14 +1300,27 @@ async fn run<B: ratatui::backend::Backend>(
         // anchor. max_scroll mirrors render's clamp: body length (+ the in-flight
         // tool line) minus the visible conversation height.
         let active_extra = usize::from(app.shell.active_tool.is_some());
-        let max_scroll = (app.body_cache.body.len() + active_extra)
+        // Scroll math reuses the active body's length (Overview dashboard or the
+        // cached transcript), so the scrollbar/clamp work unchanged at every altitude.
+        let body_len = if is_overview {
+            app.overview_body.len()
+        } else {
+            app.body_cache.body.len()
+        };
+        let max_scroll = (body_len + active_extra)
             .saturating_sub(layout.conversation.height as usize)
             .min(u16::MAX as usize) as u16;
         // Re-anchor after a zoom: map the captured message back to its line at the
         // new altitude. Runs before the draw (body/msg_starts now reflect the new
         // altitude), so the transient reset-to-0 from zoom_in/out never paints.
         if let Some(anchor) = app.pending_zoom_anchor.take() {
-            let line = zoid_tui::line_of_msg(&app.body_cache.msg_starts, anchor);
+            // Overview has no per-message lines, so there's nothing to anchor to —
+            // pin to the top (line 0), skipping cross-zoom anchoring naturally.
+            let line = if is_overview {
+                0
+            } else {
+                zoid_tui::line_of_msg(&app.body_cache.msg_starts, anchor)
+            };
             app.shell.conversation_scroll = (line.min(u16::MAX as usize) as u16).min(max_scroll);
         }
         if app.zoom_changed_at.is_none() {
@@ -1194,19 +1342,18 @@ async fn run<B: ratatui::backend::Backend>(
             app.shell.reduced_motion,
         )];
 
-        if app.shell.overlay == zoid_tui::state::Overlay::Question {
-            zoid::zlog!(
-                "main: drawing frame with Question overlay (question.is_some={})",
-                app.shell.question.is_some()
-            );
-        }
+        let frame_start = std::time::Instant::now();
         terminal.draw(|f| {
             // The drawer is read-only/observability-only, so it needs only
             // window + churn. All inputs come from caches — zero per-frame
             // O(events) or re-render work on an ordinary frame.
             let economy = zoid_tui::EconomyView::build(&app.proj.window, &app.proj.churn, 0);
             let task_items = &app.proj.tasks;
-            let body = &app.body_cache.body;
+            let body: &[ratatui::text::Line<'static>] = if is_overview {
+                &app.overview_body
+            } else {
+                &app.body_cache.body
+            };
             // Zoom-reveal count derives from the cached body length — no second
             // conversation_view build. `reveal` is None on ordinary frames.
             let reveal = match app.zoom_changed_at {
@@ -1244,6 +1391,25 @@ async fn run<B: ratatui::backend::Backend>(
                 &view,
             );
         })?;
+        // The `cache_hit` field is present only for transcript frames (a real
+        // body-cache lookup happened); Overview frames omit it entirely so
+        // `ObsLayer`'s `FieldGrab::cache_hit_present` stays false and the
+        // frame is excluded from the cache ratio while still timing it.
+        match cache_hit {
+            Some(hit) => tracing::trace!(
+                kind = "frame",
+                ms = frame_start.elapsed().as_millis() as u64,
+                cache_hit = hit,
+                proj_rebuilt = proj_rebuilt,
+                "frame"
+            ),
+            None => tracing::trace!(
+                kind = "frame",
+                ms = frame_start.elapsed().as_millis() as u64,
+                proj_rebuilt = proj_rebuilt,
+                "frame"
+            ),
+        }
         app.last_conv_max_scroll = frame_conv_max;
         // End the zoom animation only once a settled (reveal-complete) frame has
         // actually been painted, so the final full-body frame is never skipped.
@@ -1321,7 +1487,7 @@ async fn run<B: ratatui::backend::Backend>(
                         choices,
                         reply,
                     } => {
-                        zoid::zlog!(
+                        tracing::debug!(
                             "main: AskUser received, raising Question overlay (choices={})",
                             choices.len()
                         );
@@ -1747,12 +1913,6 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::ScrollConversation(d) => {
             app.shell.scroll_conversation(d, app.last_conv_max_scroll);
-            zoid::zlog!(
-                "scroll: d={} -> offset={} (max={})",
-                d,
-                app.shell.conversation_scroll,
-                app.last_conv_max_scroll
-            );
         }
         Action::ScrollbarGrab(row) => {
             app.shell.scrollbar_drag = true;
@@ -2456,6 +2616,11 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             refresh_config_sections(app);
             Ok(false)
         }
+        Command::ShowOverview => {
+            app.shell.zoom = zoid_tui::state::Zoom::Overview;
+            app.shell.conversation_scroll = 0;
+            Ok(false)
+        }
         Command::Unknown(_) => Ok(false),
     }
 }
@@ -2994,6 +3159,7 @@ mod tests {
             started: std::time::Instant::now(),
             proj: ProjectionCache::default(),
             body_cache: BodyCache::default(),
+            overview_body: Vec::new(),
             zoom_changed_at: None,
             last_conv_max_scroll: 0,
             last_conv_rect: ratatui::layout::Rect::default(),
