@@ -1400,4 +1400,52 @@ mod tests {
         // … and the turn is back in the projection.
         assert!(conversation(&out).iter().any(|m| matches!(m, ChatMsg::User { text, .. } if text.contains("vector backend"))));
     }
+
+    #[tokio::test]
+    async fn evict_then_recall_round_trips() {
+        use zoid_provider::{ProviderEvent, ToolCall, FakeProvider};
+        use zoid_core::event::{Event, EventKind};
+        use zoid_core::projection::{conversation, ChatMsg};
+        use zoid_core::eviction::EvictionPolicy;
+        use ulid::Ulid;
+        use serde_json::json;
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let big = "x".repeat(3000); // ~1000 tokens per turn
+        // Oldest turn carries a distinctive searchable token.
+        let mut seed = vec![
+            Event::new(Ulid::from(1u128), None, 1, EventKind::UserMessage { text: format!("zephyrbackend {big}") }),
+            Event::new(Ulid::from(2u128), None, 2, EventKind::AssistantMessage { text: "ok".into() }),
+        ];
+        for i in 1..8u128 {
+            seed.push(Event::new(Ulid::from(i*2+1), None, (i*2+1) as i64, EventKind::UserMessage { text: big.clone() }));
+            seed.push(Event::new(Ulid::from(i*2+2), None, (i*2+2) as i64, EventKind::AssistantMessage { text: "ok".into() }));
+        }
+        for e in &seed { session.append(e.clone()).await.unwrap(); }
+        let policy = EvictionPolicy { enabled: true, capacity: 1_000_000, context_target: 3_000, band_headroom_pct: 20, recent_n: 2, max_output: None };
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin())));
+
+        // TURN 1 — the pre-flight gate evicts the oldest turns.
+        let mut cfg1 = chat_turn_config();
+        cfg1.eviction = policy;
+        let p1 = std::sync::Arc::new(FakeProvider::new(vec![ProviderEvent::TextDelta("ack".into()), ProviderEvent::Done]));
+        let (tx1, mut rx1) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx1.recv().await.is_some() {} });
+        let out1 = run_agent_turn(cfg1, p1, tools.clone(), std::sync::Arc::new(zoid_tools::AllowAll), session.clone(), seed, "m".into(), tx1, Ulid::new(), || 0).await.unwrap();
+        assert!(out1.iter().any(|e| matches!(e.kind, EventKind::TurnsEvicted { .. })), "turn 1 must evict");
+        assert!(!conversation(&out1).iter().any(|m| matches!(m, ChatMsg::User { text, .. } if text.contains("zephyrbackend"))), "evicted turn gone from projection");
+
+        // TURN 2 — the model recalls the evicted content.
+        let mut cfg2 = chat_turn_config();
+        cfg2.eviction = policy;
+        let p2 = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![ProviderEvent::ToolCall(ToolCall { id: "r1".into(), name: "recall".into(), args: json!({"query": "zephyrbackend"}) }), ProviderEvent::Done],
+            vec![ProviderEvent::TextDelta("got it".into()), ProviderEvent::Done],
+        ]));
+        let (tx2, mut rx2) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx2.recv().await.is_some() {} });
+        let out2 = run_agent_turn(cfg2, p2, tools, std::sync::Arc::new(zoid_tools::AllowAll), session, out1, "m".into(), tx2, Ulid::new(), || 0).await.unwrap();
+        assert!(out2.iter().any(|e| matches!(&e.kind, EventKind::TurnsReadmitted { ids } if ids.contains(&Ulid::from(1u128)))), "recall re-admits the evicted turn");
+        assert!(out2.iter().any(|e| matches!(&e.kind, EventKind::ToolResult { name, output, .. } if name == "recall" && output.contains("zephyrbackend"))), "recall result carries content");
+    }
 }
