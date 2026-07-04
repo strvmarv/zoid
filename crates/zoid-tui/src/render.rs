@@ -192,13 +192,19 @@ fn render_title(frame: &mut Frame, _state: &ShellState, area: Rect) {
     let wm_w = wordmark.width();
     let pad = w.saturating_sub(wm_w) / 2;
     let mut spans = vec![Span::styled(" ".repeat(pad), Style::new())];
-    spans.push(Span::styled(wordmark.to_string(), Style::new().fg(color::DIM)));
+    spans.push(Span::styled(
+        wordmark.to_string(),
+        Style::new().fg(color::DIM),
+    ));
     let used = pad + wm_w;
     let right_pad = w.saturating_sub(used).saturating_sub(palette_hint.width());
     if right_pad > 0 {
         spans.push(Span::styled(" ".repeat(right_pad), Style::new()));
     }
-    spans.push(Span::styled(palette_hint.to_string(), Style::new().fg(color::DIM)));
+    spans.push(Span::styled(
+        palette_hint.to_string(),
+        Style::new().fg(color::DIM),
+    ));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -1110,14 +1116,20 @@ pub fn render_provider_switch(frame: &mut Frame, state: &ShellState, area: Rect)
 
     frame.render_widget(Clear, area); // focus the card: clear the frame behind it
 
-    let pane_w: u16 = 28;
-    // Two panes + a 1-col gutter + 2-col border, widened if needed so the
-    // word-based footer (§16 token purity) never truncates.
-    let card_w = (pane_w * 2 + 3)
-        .max(SWITCH_FOOTER.width() as u16 + 3)
-        .min(area.width);
+    // Quick-switch is a substantial centered overlay sized against the 160×40
+    // baseline, not a card that hugs its content: a ~59-col content-width box
+    // looks lost on a full-size terminal. Grow to ~60% of the frame, floored so
+    // the two panes + word footer always fit, capped to the frame so it still
+    // degrades gracefully on small windows.
     let rows_needed = state.switch_providers.len().max(state.switch_models.len()) as u16;
-    let card_h = (rows_needed + 2 /* header row + footer row */ + 2/* border */).min(area.height);
+    // Floor: two 28-col panes + 1-col gutter + 2-col border, or the word footer,
+    // whichever is wider.
+    let content_min_w = (28 * 2 + 3).max(SWITCH_FOOTER.width() as u16 + 3);
+    let card_w = (area.width * 3 / 5).max(content_min_w).min(area.width);
+    // Height follows the longest list (header + footer + border), with a floor
+    // so a short list still reads as a panel rather than a sliver.
+    let content_h = rows_needed + 2 /* header row + footer row */ + 2/* border */;
+    let card_h = content_h.max(16).min(area.height);
     let rect = centered(area, card_w, card_h);
 
     let block = Block::default()
@@ -1127,6 +1139,9 @@ pub fn render_provider_switch(frame: &mut Frame, state: &ShellState, area: Rect)
         .border_style(Style::new().fg(color::CHAT_ACCENT));
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
+
+    // Two equal panes split the inner width, separated by a 1-col gutter.
+    let pane_w = inner.width.saturating_sub(1) / 2;
 
     // Footer reserved at the bottom of the inner area; header row at the top.
     let rows = Layout::default()
