@@ -719,7 +719,9 @@ impl BodyCache {
     /// message's text is growing), only the last message is re-rendered and
     /// spliced into the cached body — O(1) per frame instead of O(n).
     fn refresh(&mut self, key: BodyKey, msgs: &[zoid_core::projection::ChatMsg], width: usize) {
-        if self.key.as_ref() == Some(&key) && self.msg_count == msgs.len() {
+        // During streaming the last message's text is growing every frame, so
+        // we can never no-op — at minimum we re-render the last message.
+        if !key.streaming && self.key.as_ref() == Some(&key) && self.msg_count == msgs.len() {
             return;
         }
         let view = ChatView {
