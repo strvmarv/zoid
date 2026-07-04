@@ -9,8 +9,87 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
 
+pub const MAX_ERR_RING: usize = 20;
+
+#[derive(Debug, Default, Clone)]
+pub struct ToolStat {
+    pub count: u64,
+    pub total_ms: u64,
+}
+impl ToolStat {
+    pub fn avg_ms(&self) -> u64 {
+        if self.count == 0 {
+            0
+        } else {
+            self.total_ms / self.count
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ErrEntry {
+    pub ts_ms: i64,
+    pub level: &'static str,
+    pub context: String,
+    pub message: String,
+}
+
 #[derive(Debug, Default)]
-pub struct ObsState; // expanded in Task 3
+pub struct ObsState {
+    pub turn: RollingStats,
+    pub iterations: RollingStats,
+    pub provider_ttft: RollingStats,
+    pub provider_total: RollingStats,
+    pub frame: RollingStats,
+    pub tools: std::collections::BTreeMap<String, ToolStat>,
+    pub cache_hits: u64,
+    pub cache_total: u64,
+    pub proj_rebuilds: u64,
+    pub errors: std::collections::VecDeque<ErrEntry>,
+}
+
+impl ObsState {
+    pub fn record_turn(&mut self, ms: u64, iterations: u64) {
+        self.turn.record(ms);
+        self.iterations.record(iterations);
+    }
+    pub fn record_tool(&mut self, name: &str, ms: u64) {
+        let e = self.tools.entry(name.to_string()).or_default();
+        e.count += 1;
+        e.total_ms += ms;
+    }
+    pub fn record_provider(&mut self, ttft_ms: u64, total_ms: u64) {
+        self.provider_ttft.record(ttft_ms);
+        self.provider_total.record(total_ms);
+    }
+    pub fn record_frame(&mut self, ms: u64, cache_hit: bool, proj_rebuilt: bool) {
+        self.frame.record(ms);
+        self.cache_total += 1;
+        if cache_hit {
+            self.cache_hits += 1;
+        }
+        if proj_rebuilt {
+            self.proj_rebuilds += 1;
+        }
+    }
+    pub fn record_error(
+        &mut self,
+        ts_ms: i64,
+        level: &'static str,
+        context: String,
+        message: String,
+    ) {
+        if self.errors.len() == MAX_ERR_RING {
+            self.errors.pop_front();
+        }
+        self.errors.push_back(ErrEntry {
+            ts_ms,
+            level,
+            context,
+            message,
+        });
+    }
+}
 
 pub struct ObsHandle {
     pub state: Arc<Mutex<ObsState>>,
@@ -71,14 +150,22 @@ impl RollingStats {
         }
         self.window.push_back(sample);
     }
-    pub fn count(&self) -> u64 { self.count }
-    pub fn last(&self) -> u64 { self.last }
+    pub fn count(&self) -> u64 {
+        self.count
+    }
+    pub fn last(&self) -> u64 {
+        self.last
+    }
     pub fn avg(&self) -> u64 {
-        if self.window.is_empty() { return 0; }
+        if self.window.is_empty() {
+            return 0;
+        }
         (self.window.iter().sum::<u64>()) / self.window.len() as u64
     }
     pub fn p90(&self) -> u64 {
-        if self.window.is_empty() { return 0; }
+        if self.window.is_empty() {
+            return 0;
+        }
         let mut v: Vec<u64> = self.window.iter().copied().collect();
         v.sort_unstable();
         // ceil((len)*0.9), clamped — index of the 90th-percentile sample.
@@ -120,8 +207,14 @@ mod tests {
             tracing::info!(kind = "turn", ms = 42u64, "turn done");
         });
         let mut s = String::new();
-        std::fs::File::open(&path).unwrap().read_to_string(&mut s).unwrap();
-        assert!(s.contains("\"ms\":42"), "json line must carry the ms field: {s}");
+        std::fs::File::open(&path)
+            .unwrap()
+            .read_to_string(&mut s)
+            .unwrap();
+        assert!(
+            s.contains("\"ms\":42"),
+            "json line must carry the ms field: {s}"
+        );
         assert!(s.contains("turn done"));
     }
 
@@ -150,5 +243,39 @@ mod tests {
         assert_eq!(r.last(), 199);
         // avg is over the last 64 samples (136..=199), mean = 167.
         assert_eq!(r.avg(), 167);
+    }
+
+    #[test]
+    fn obsstate_folds_tools_and_caps_errors() {
+        let mut s = ObsState::default();
+        s.record_tool("read_file", 10);
+        s.record_tool("read_file", 20);
+        s.record_tool("shell", 240);
+        assert_eq!(s.tools["read_file"].count, 2);
+        assert_eq!(s.tools["read_file"].avg_ms(), 15);
+        assert_eq!(s.tools["shell"].avg_ms(), 240);
+
+        for i in 0..30 {
+            s.record_error(i, "warn", "ctx".into(), format!("err {i}"));
+        }
+        assert_eq!(s.errors.len(), MAX_ERR_RING);
+        // oldest dropped: the ring keeps the most recent MAX_ERR_RING.
+        assert_eq!(s.errors.back().unwrap().message, "err 29");
+        assert_eq!(
+            s.errors.front().unwrap().message,
+            format!("err {}", 30 - MAX_ERR_RING)
+        );
+    }
+
+    #[test]
+    fn obsstate_folds_frame_cache_ratio() {
+        let mut s = ObsState::default();
+        s.record_frame(7, true, false);
+        s.record_frame(11, true, true);
+        s.record_frame(16, false, false);
+        assert_eq!(s.frame.count(), 3);
+        assert_eq!(s.cache_total, 3);
+        assert_eq!(s.cache_hits, 2);
+        assert_eq!(s.proj_rebuilds, 1);
     }
 }
