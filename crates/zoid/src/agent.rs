@@ -324,6 +324,8 @@ async fn run_turn_inner(
             outcome = "aborted";
             break 'turn;
         }
+        // PRE-FLIGHT GATE (spec §3.8): shrink to fit BEFORE building the request.
+        preflight_gate(&session, &mut events, ui, config, session_id, now, &*calibration_ratio, overhead).await?;
         let req = build_request(&events, &model, &tools, &config.system);
 
         // Stream one model turn. Spawn the provider so a missing terminal Done
@@ -897,6 +899,104 @@ async fn record_compactions(
     Ok(())
 }
 
+/// Bias applied to the pre-flight estimate (the chars/3 estimate under-reads
+/// code/tool output). Push the estimate up so the gate fires early, not late.
+const OVERCOUNT_BIAS: f64 = 1.15;
+
+/// Run the cheap correctness levers BEFORE the request is built (spec §3.8, C1):
+/// (1) compact tool results, (2) evict oldest turns to `low_water`, (3) if near
+/// hard capacity, evict harder toward the safety floor. Emits `ToolResultCompacted`
+/// / `TurnsEvicted` events (append-only). No-op when `config.eviction.enabled` is
+/// false (subagents/tests) — byte-identical to pre-ACM behavior.
+#[allow(clippy::too_many_arguments)]
+async fn preflight_gate(
+    session: &SessionHandle,
+    events: &mut Vec<Event>,
+    ui: &mpsc::Sender<AgentUpdate>,
+    config: &TurnConfig,
+    session_id: Ulid,
+    now: fn() -> i64,
+    calibration_ratio: &Option<f64>,
+    overhead: &zoid_core::context::ContextOverhead,
+) -> Result<()> {
+    let policy = &config.eviction;
+    if !policy.enabled {
+        return Ok(());
+    }
+    let band = policy.band();
+
+    let estimate = |events: &[Event]| -> u64 {
+        let raw = zoid_core::context::context_window_with(events, overhead.clone()).total_tokens;
+        let scaled = match calibration_ratio {
+            Some(r) if *r > 0.0 => (raw as f64 * r) as u64,
+            _ => raw,
+        };
+        (scaled as f64 * OVERCOUNT_BIAS) as u64
+    };
+
+    // (1) Compaction first (largest-first; spec §3.9 rule 2). Reuse plan_compactions
+    // with the band's high_water as the threshold.
+    if estimate(events) >= band.high_water {
+        let gate_policy = zoid_core::assembler::ContextPolicy {
+            compact_threshold: Some(band.high_water),
+            ..config.policy
+        };
+        let plan = zoid_core::compaction::plan_compactions(events, &gate_policy, None, *calibration_ratio, overhead);
+        for c in &plan.compactions {
+            emit(session, events, ui, &config.branch, EventKind::ToolResultCompacted {
+                id: c.id.clone(), summary: c.summary.clone(), original_tokens: c.original_tokens,
+            }, session_id, now).await?;
+        }
+    }
+
+    // (2) Eviction to low_water.
+    if estimate(events) >= band.high_water {
+        let plan = zoid_core::eviction::plan_evictions(events, policy, estimate(events), &zoid_core::eviction::RecencyScorer);
+        emit_eviction(session, events, ui, config, session_id, now, plan).await?;
+    }
+
+    // (3) Hard floor: if still near capacity, evict harder toward the safety margin.
+    let hard = policy.capacity.saturating_sub(zoid_core::band::CAPACITY_SAFETY_MARGIN);
+    if estimate(events) >= hard {
+        // Re-run with the same policy; low_water already targets below capacity.
+        let plan = zoid_core::eviction::plan_evictions(events, policy, estimate(events), &zoid_core::eviction::RecencyScorer);
+        emit_eviction(session, events, ui, config, session_id, now, plan).await?;
+    }
+    Ok(())
+}
+
+/// Emit one `TurnsEvicted` event carrying the plan's spans (or nothing if empty).
+#[allow(clippy::too_many_arguments)]
+async fn emit_eviction(
+    session: &SessionHandle,
+    events: &mut Vec<Event>,
+    ui: &mpsc::Sender<AgentUpdate>,
+    config: &TurnConfig,
+    session_id: Ulid,
+    now: fn() -> i64,
+    plan: zoid_core::eviction::EvictionPlan,
+) -> Result<()> {
+    if plan.turns.is_empty() {
+        return Ok(());
+    }
+    let mut ids = Vec::new();
+    let mut reclaimed = 0u64;
+    let mut spans = Vec::new();
+    for t in plan.turns {
+        reclaimed += t.token_estimate;
+        spans.push(zoid_core::event::EvictedSpan {
+            id_range_label: format!("{} events", t.ids.len()),
+            token_estimate: t.token_estimate,
+            topic_hint: t.topic_hint,
+        });
+        ids.extend(t.ids);
+    }
+    emit(session, events, ui, &config.branch, EventKind::TurnsEvicted {
+        ids, reclaimed_tokens: reclaimed, marker: zoid_core::event::EvictionMarker { spans },
+    }, session_id, now).await?;
+    Ok(())
+}
+
 /// Persist one event (optionally carrying token usage) and announce it to the
 /// UI, keeping the local log in sync.
 // 8 args: session, events, ui, branch, kind, tokens, session_id, clock — every
@@ -1063,5 +1163,67 @@ mod tests {
     fn zero_arg_chat_turn_config_matches_default_profile_no_menu() {
         // The zero-arg convenience must stay byte-identical to the old behavior.
         assert_eq!(chat_turn_config().system, SYSTEM_PROMPT);
+    }
+
+    #[tokio::test]
+    async fn preflight_gate_evicts_before_send() {
+        use zoid_core::event::{Event, EventKind};
+        use ulid::Ulid;
+        // 8 fat turns, target tiny so the gate must evict.
+        let big = "x".repeat(3000);
+        let mut seed = Vec::new();
+        for i in 0..8u128 {
+            seed.push(Event::new(
+                Ulid::from(i * 2 + 1),
+                None,
+                (i * 2 + 1) as i64,
+                EventKind::UserMessage { text: big.clone() },
+            ));
+            seed.push(Event::new(
+                Ulid::from(i * 2 + 2),
+                None,
+                (i * 2 + 2) as i64,
+                EventKind::AssistantMessage { text: "ok".into() },
+            ));
+        }
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+        let provider = std::sync::Arc::new(zoid_provider::FakeProvider::new(vec![
+            zoid_provider::ProviderEvent::TextDelta("done".into()),
+            zoid_provider::ProviderEvent::Done,
+        ]));
+        let mut cfg = chat_turn_config();
+        cfg.eviction = zoid_core::eviction::EvictionPolicy {
+            enabled: true,
+            capacity: 1_000_000,
+            context_target: 3_000,
+            band_headroom_pct: 20,
+            recent_n: 2,
+            max_output: None,
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} }); // drain UI updates
+        let out = run_agent_turn(
+            cfg,
+            provider,
+            std::sync::Arc::new(zoid_tools::registry()),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            seed,
+            "m".into(),
+            tx,
+            Ulid::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+        assert!(
+            out.iter().any(|e| matches!(e.kind, EventKind::TurnsEvicted { .. })),
+            "gate must evict pre-flight"
+        );
+        // and the surviving conversation is under the seed size
+        assert!(zoid_core::projection::conversation(&out).len() < 16);
     }
 }
