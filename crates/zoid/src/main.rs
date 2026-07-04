@@ -11,7 +11,7 @@ use crossterm::{
     },
 };
 use futures_util::StreamExt;
-use ratatui::{layout::Rect, prelude::CrosstermBackend, Terminal};
+use ratatui::{layout::Rect, prelude::CrosstermBackend, text::Line, Terminal};
 use std::io::stdout;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -763,6 +763,12 @@ impl BodyCache {
             // Remove the old trailing blank + old last-message lines, then
             // re-render the last message and re-append the trailing blank.
             self.body.truncate(start);
+            // Re-add the inter-turn blank line that build_conversation would
+            // have inserted (it only adds one when `out` is non-empty, but
+            // rendering the last message in isolation starts with an empty vec).
+            if start > 0 {
+                self.body.push(Line::from(""));
+            }
             let (new_lines, _) = zoid_tui::chat::conversation_view_indexed(
                 &msgs[last_idx..],
                 &view,
