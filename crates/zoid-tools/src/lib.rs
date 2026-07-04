@@ -5,6 +5,7 @@
 pub mod ask;
 pub mod edit;
 pub mod read;
+pub mod recall;
 pub mod search;
 pub mod shell;
 pub mod tasks;

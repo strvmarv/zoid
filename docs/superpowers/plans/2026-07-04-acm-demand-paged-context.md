@@ -157,9 +157,12 @@ mod tests {
 
     #[test]
     fn small_model_collapses_target_to_usable() {
-        // 32k capacity, 384k target: effective target clamps to usable (~28.8k).
+        // 32k capacity, 384k target: effective target clamps to usable. Output reserve
+        // is max(OUTPUT_RESERVE_FLOOR, cap/10) — for a 32k model the 8_192 floor binds
+        // (cap/10 = 3_200 would leave less than the 4_096-token max_tokens response
+        // room), so usable = 32_000 - 8_192.
         let b = derive_band(32_000, 384_000, None, 20);
-        assert_eq!(b.effective_target, 32_000 - 3_200); // usable = cap - cap/10
+        assert_eq!(b.effective_target, 32_000 - OUTPUT_RESERVE_FLOOR);
         assert!(b.high_water <= 32_000);
         assert!(b.low_water < b.high_water);
     }

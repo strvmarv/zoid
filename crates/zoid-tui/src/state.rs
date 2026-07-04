@@ -200,10 +200,6 @@ pub struct ShellState {
     pub ctx_used: u64,
     /// Context-window ceiling in tokens (session drawer "ctx" line denominator).
     pub ctx_ceiling: u64,
-    /// Whether `ctx_ceiling` was set by a user config override rather than the
-    /// model's native value. When true, the session drawer renders a `*` after
-    /// the ceiling to signal the override.
-    pub ctx_ceiling_overridden: bool,
     /// Current working directory shown (truncated) in the session drawer.
     pub cwd: String,
     /// Highlighted section in the config overlay's left nav (Task 11).
@@ -307,7 +303,6 @@ impl ShellState {
             cache_supported: false,
             ctx_used: 0,
             ctx_ceiling: 0,
-            ctx_ceiling_overridden: false,
             cwd: String::new(),
             config_section: 0,
             config_field: 0,

@@ -108,7 +108,7 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
     (
         "claude-sonnet-4-6",
         ModelInfo {
-            context_window: 200_000,
+            context_window: 1_000_000,
             max_output: 0,
             // Anthropic tool-use is not wired yet: the provider's request_body
             // doesn't send a `tools` array and can't parse `tool_use` frames, so
@@ -122,7 +122,7 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
     (
         "claude-opus-4-8",
         ModelInfo {
-            context_window: 200_000,
+            context_window: 1_000_000,
             max_output: 0,
             // Anthropic tool-use is not wired yet: the provider's request_body
             // doesn't send a `tools` array and can't parse `tool_use` frames, so
@@ -136,7 +136,7 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
     (
         "glm-5.2:cloud",
         ModelInfo {
-            context_window: 256_000,
+            context_window: 1_000_000,
             max_output: 0,
             tools: true,
             prompt_cache: false,
@@ -216,10 +216,10 @@ mod tests {
 
     #[test]
     fn model_info_exact_lookup() {
-        assert_eq!(model_info("claude-sonnet-4-6").context_window, 200_000);
+        assert_eq!(model_info("claude-sonnet-4-6").context_window, 1_000_000);
         assert!(model_info("claude-sonnet-4-6").prompt_cache);
-        assert_eq!(model_info("claude-opus-4-8").context_window, 200_000);
-        assert_eq!(model_info("glm-5.2:cloud").context_window, 256_000);
+        assert_eq!(model_info("claude-opus-4-8").context_window, 1_000_000);
+        assert_eq!(model_info("glm-5.2:cloud").context_window, 1_000_000);
         assert!(!model_info("glm-5.2:cloud").prompt_cache);
         assert_eq!(model_info("deepseek-v4-pro").context_window, 128_000);
         assert!(!model_info("deepseek-v4-pro").prompt_cache);
@@ -236,9 +236,9 @@ mod tests {
 
     #[test]
     fn model_info_case_insensitive() {
-        assert_eq!(model_info("CLAUDE-SONNET-4-6").context_window, 200_000);
+        assert_eq!(model_info("CLAUDE-SONNET-4-6").context_window, 1_000_000);
         assert_eq!(model_info("DEEPSEEK-V4-PRO").context_window, 128_000);
-        assert_eq!(model_info("GlM-5.2:ClOuD").context_window, 256_000);
+        assert_eq!(model_info("GlM-5.2:ClOuD").context_window, 1_000_000);
     }
 
     #[test]

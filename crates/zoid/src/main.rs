@@ -118,7 +118,7 @@ fn load_config() -> (zoid_core::config::Config, zoid_core::config::Provenance) {
     if let Ok(v) = std::env::var("ZOID_CONTEXT_CEILING") {
         if let Ok(n) = v.trim().parse::<u64>() {
             if n > 0 {
-                envp.economy.context_ceiling = Some(n);
+                envp.economy.context_target = Some(n);
             }
         }
     }
@@ -310,11 +310,10 @@ fn build_overview_data(
     // Economy split from the same ledger the session drawer/context economy use.
     let ledger = zoid_core::economy::token_ledger(&app.events);
     // Prompt-cache hit rate = cache-read as a % of input tokens (economy).
-    let cache_hit_pct = if ledger.input == 0 {
-        0
-    } else {
-        (ledger.cached * 100 / ledger.input).min(100) as u8
-    };
+    let cache_hit_pct = (ledger.cached * 100)
+        .checked_div(ledger.input)
+        .map(|v| v.min(100) as u8)
+        .unwrap_or(0);
     // Per-turn prompt-cache sparkline: map the cached churn series onto the
     // shared glyph::SPARK ramp, exactly as the context drawer's cache spark does.
     let cache_vals: Vec<u64> = app.proj.churn.points.iter().map(|p| p.cached).collect();
@@ -352,11 +351,10 @@ fn build_overview_data(
         frame_max_ms: s.frame.window_max(),
         // Body-render cache-hit ratio (obs frame events) — distinct from the
         // prompt-cache `cache_hit_pct` above.
-        render_cache_pct: if s.cache_total == 0 {
-            0
-        } else {
-            (s.cache_hits * 100 / s.cache_total).min(100) as u8
-        },
+        render_cache_pct: (s.cache_hits * 100)
+            .checked_div(s.cache_total)
+            .map(|v| v.min(100) as u8)
+            .unwrap_or(0),
         proj_rebuilds: s.proj_rebuilds,
         event_count: app.events.len() as u64,
         errors: s
@@ -551,13 +549,11 @@ fn spawn_model_info_fetch(
     ui_tx: mpsc::Sender<AgentUpdate>,
 ) {
     tokio::spawn(async move {
-        match provider.fetch_model_info(&model).await {
-            Ok(Some(info)) => {
-                let _ = ui_tx
-                    .send(AgentUpdate::ModelInfoFetched { model, info })
-                    .await;
-            }
-            _ => {} // error or None → keep the static fallback
+        // error or None → keep the static fallback
+        if let Ok(Some(info)) = provider.fetch_model_info(&model).await {
+            let _ = ui_tx
+                .send(AgentUpdate::ModelInfoFetched { model, info })
+                .await;
         }
     });
 }
@@ -639,23 +635,25 @@ fn spawn_switch_model_fetch(app: &App, provider_id: &str) {
 
 /// Build the economy `ContextPolicy` (spec §7.2) from the loaded config's
 /// `[economy]` table, resolving `compact_threshold_pct` (0–100) against the
-/// resolved token `ceiling` — 0 disables compaction (`None`), else the
-/// absolute token count `ceiling * pct / 100`.
+/// resolved `target` (the soft setpoint, NOT capacity) — 0 disables
+/// compaction (`None`), else the absolute token count `target * pct / 100`.
 ///
 /// Feeds `spawn_turn`'s live `TurnConfig.policy` (ACM-1), so the agent loop
 /// actually records `ToolResultCompacted` events once `compact_threshold_pct`
 /// is set above 0; the default (0) leaves existing chat behavior unchanged.
+/// `EconomyConfig.token_ceiling` was retired; `ContextPolicy.token_ceiling`
+/// (subagent-only) is always `None` from this path.
 fn policy_from_config(
     econ: &zoid_core::config::EconomyConfig,
-    ceiling: u64,
+    target: u64,
 ) -> zoid_core::assembler::ContextPolicy {
     let compact_threshold = if econ.compact_threshold_pct == 0 {
         None
     } else {
-        Some(ceiling.saturating_mul(econ.compact_threshold_pct as u64) / 100)
+        Some(target.saturating_mul(econ.compact_threshold_pct as u64) / 100)
     };
     zoid_core::assembler::ContextPolicy {
-        token_ceiling: econ.token_ceiling,
+        token_ceiling: None,
         auto_evict_cold: econ.auto_evict_cold,
         compact_threshold,
     }
@@ -929,6 +927,11 @@ struct App {
     /// per-frame `ContextPolicy` build (via `policy_from_config`) doesn't need
     /// its own copy of `main`'s `config` local.
     economy: zoid_core::config::EconomyConfig,
+    /// The resolved soft setpoint (config `economy.context_target`, defaulted to
+    /// `min(capacity, 384_000)` when unset) — separate from `shell.ctx_ceiling`
+    /// (capacity, the model window). Recomputed on config reload and once the
+    /// model's real capacity lands via `ModelInfoFetched`.
+    context_target: u64,
     /// Full resolved config + provenance, kept live so the config screen can
     /// display current values and so edits reload/re-render without a restart.
     config: zoid_core::config::Config,
@@ -1099,14 +1102,16 @@ async fn main() -> Result<()> {
     }
     shell.session_name = session_name;
     shell.model = model.clone();
-    // Economy ⑤ denominator: config-derived (ZOID_CONTEXT_CEILING overrides via
-    // config.economy.context_ceiling), else the model registry's default.
+    // Economy ⑤ denominator: capacity is always the model window; the user's
+    // target (ZOID_CONTEXT_CEILING → config.economy.context_target) is a
+    // separate soft knob, defaulted to min(capacity, 384_000) when unset.
     // Constant for the process lifetime, so set once here rather than per frame.
-    shell.ctx_ceiling = config
+    let capacity = zoid_provider::context_ceiling(&model);
+    let context_target = config
         .economy
-        .context_ceiling
-        .unwrap_or_else(|| zoid_provider::context_ceiling(&model));
-    shell.ctx_ceiling_overridden = config.economy.context_ceiling.is_some();
+        .context_target
+        .unwrap_or_else(|| capacity.min(384_000));
+    shell.ctx_ceiling = capacity;
     shell.provider = provider_label(provider_name, has_key);
     shell.cache_supported = zoid_provider::has_prompt_cache(&model);
     shell.cwd = root.clone();
@@ -1137,6 +1142,7 @@ async fn main() -> Result<()> {
         skills,
         model,
         economy: config.economy,
+        context_target,
         config: config.clone(),
         prov,
         secrets: secrets.clone(),
@@ -1561,15 +1567,16 @@ async fn run<B: ratatui::backend::Backend>(
                         // was in flight.
                         if model == app.model {
                             app.fetched_model_info = Some(info);
-                            // Live-apply the context ceiling (unless the user
-                            // set an explicit override in config).
-                            app.shell.ctx_ceiling = app
+                            // Live-apply the capacity (model window) — always the
+                            // provider's real value once known.
+                            app.shell.ctx_ceiling = info.context_window;
+                            // Recompute the target if it was defaulted (not an
+                            // explicit config override), now that capacity landed.
+                            app.context_target = app
                                 .config
                                 .economy
-                                .context_ceiling
-                                .unwrap_or(info.context_window);
-                            app.shell.ctx_ceiling_overridden =
-                                app.config.economy.context_ceiling.is_some();
+                                .context_target
+                                .unwrap_or_else(|| app.shell.ctx_ceiling.min(384_000));
                             app.shell.cache_supported = info.prompt_cache;
                         }
                     }
@@ -1593,10 +1600,12 @@ enum TomlTy {
     Str,
     /// String where an empty buffer removes the key (base_url).
     StrUnsetEmpty,
-    /// Unsigned int; empty / "(none)" / unparseable removes the key (ceilings).
+    /// Unsigned int; empty / "(none)" / unparseable removes the key (context target).
     U64Unset,
-    /// Percent clamped to 0..=100; unparseable is a no-op (compact at %).
+    /// Percent clamped to 0..=100; unparseable is a no-op (compact at %, band headroom %).
     U8Pct,
+    /// Non-negative integer, always written verbatim; unparseable is a no-op (recent turns).
+    UintPlain,
 }
 
 /// Where the field under the cursor persists. Secret rows go to the secret
@@ -1630,17 +1639,21 @@ fn field_target(label: &str, kind: &zoid_tui::config_view::FieldKind) -> Option<
             key: "base_url",
             ty: TomlTy::StrUnsetEmpty,
         },
-        "context ceiling" => FieldTarget::Toml {
-            key: "economy.context_ceiling",
+        "context target" => FieldTarget::Toml {
+            key: "economy.context_target",
             ty: TomlTy::U64Unset,
         },
         "compact at %" => FieldTarget::Toml {
             key: "economy.compact_threshold_pct",
             ty: TomlTy::U8Pct,
         },
-        "token ceiling" => FieldTarget::Toml {
-            key: "economy.token_ceiling",
-            ty: TomlTy::U64Unset,
+        "band headroom %" => FieldTarget::Toml {
+            key: "economy.band_headroom_pct",
+            ty: TomlTy::U8Pct,
+        },
+        "recent turns" => FieldTarget::Toml {
+            key: "economy.recent_n",
+            ty: TomlTy::UintPlain,
         },
         // Bools (auto-evict cold / reduced motion) persist via toggle, not edit.
         _ => return None,
@@ -1675,6 +1688,10 @@ fn value_from_buffer(ty: &TomlTy, buf: &str) -> Option<zoid_core::config::TomlVa
             Ok(n) => TomlValue::Int(n.clamp(0, 100)),
             Err(_) => return None,
         },
+        TomlTy::UintPlain => match t.parse::<i64>() {
+            Ok(n) if n >= 0 => TomlValue::Int(n),
+            _ => return None,
+        },
     })
 }
 
@@ -1707,7 +1724,7 @@ fn current_write(
                 .map(TomlValue::Str)
                 .unwrap_or(TomlValue::Unset),
         ),
-        "context ceiling" => ("economy.context_ceiling", opt_u64(econ.context_ceiling)),
+        "context target" => ("economy.context_target", opt_u64(econ.context_target)),
         "auto-evict cold" => (
             "economy.auto_evict_cold",
             TomlValue::Bool(econ.auto_evict_cold),
@@ -1716,7 +1733,11 @@ fn current_write(
             "economy.compact_threshold_pct",
             TomlValue::Int(econ.compact_threshold_pct as i64),
         ),
-        "token ceiling" => ("economy.token_ceiling", opt_u64(econ.token_ceiling)),
+        "band headroom %" => (
+            "economy.band_headroom_pct",
+            TomlValue::Int(econ.band_headroom_pct as i64),
+        ),
+        "recent turns" => ("economy.recent_n", TomlValue::Int(econ.recent_n as i64)),
         "reduced motion" => ("reduced_motion", TomlValue::Bool(app.config.reduced_motion)),
         _ => return None,
     })
@@ -1894,12 +1915,13 @@ fn apply_config_write(
     };
     app.model = new_model.clone();
     app.shell.model = new_model;
-    app.shell.ctx_ceiling = app
+    // Capacity is always the model window; the target is the separate soft knob.
+    app.shell.ctx_ceiling = zoid_provider::context_ceiling(&app.model);
+    app.context_target = app
         .config
         .economy
-        .context_ceiling
-        .unwrap_or_else(|| zoid_provider::context_ceiling(&app.model));
-    app.shell.ctx_ceiling_overridden = app.config.economy.context_ceiling.is_some();
+        .context_target
+        .unwrap_or_else(|| app.shell.ctx_ceiling.min(384_000));
     // Live-apply the provider (same selection as startup) so a provider change
     // takes effect on the next turn, and keep the cached drawer label truthful
     // (shell.provider is set once at startup, not recomputed per frame).
@@ -2796,7 +2818,15 @@ fn spawn_turn(app: &mut App) {
     let profile = app.profiles.active();
     let menu = app.skills.menu();
     let mut turn_config = zoid::agent::chat_turn_config_with(profile, &menu);
-    turn_config.policy = policy_from_config(&app.economy, app.shell.ctx_ceiling);
+    turn_config.policy = policy_from_config(&app.economy, app.context_target);
+    turn_config.eviction = zoid_core::eviction::EvictionPolicy {
+        enabled: app.economy.compact_threshold_pct > 0, // master switch (back-compat)
+        capacity: app.shell.ctx_ceiling,                // capacity = model window
+        context_target: app.context_target,             // resolved soft setpoint
+        band_headroom_pct: app.economy.band_headroom_pct,
+        recent_n: app.economy.recent_n,
+        max_output: None, // Slice-4 catalog supplies this; None → derived reserve
+    };
     // Mint a fresh cancellation token for this turn and keep a clone so
     // `Action::CancelTurn` (Esc/Ctrl-C) can fire it. Cleared on `TurnComplete`.
     let cancel = tokio_util::sync::CancellationToken::new();
@@ -2956,14 +2986,15 @@ mod tests {
     #[test]
     fn policy_from_config_maps_pct_to_absolute() {
         let econ = zoid_core::config::EconomyConfig {
-            context_ceiling: Some(200_000),
+            context_target: Some(200_000),
             auto_evict_cold: false,
             compact_threshold_pct: 80,
-            token_ceiling: Some(50_000),
+            band_headroom_pct: 20,
+            recent_n: 4,
         };
         let p = policy_from_config(&econ, 200_000);
         assert!(!p.auto_evict_cold);
-        assert_eq!(p.token_ceiling, Some(50_000));
+        assert_eq!(p.token_ceiling, None); // EconomyConfig.token_ceiling retired
         assert_eq!(p.compact_threshold, Some(160_000)); // 80% of 200k
                                                         // 0% disables compaction
         let econ0 = zoid_core::config::EconomyConfig {
@@ -2997,11 +3028,11 @@ mod tests {
                 ty: TomlTy::Str
             })
         );
-        // context ceiling → economy.context_ceiling, uint-with-unset.
+        // context target → economy.context_target, uint-with-unset.
         assert_eq!(
-            field_target("context ceiling", &FieldKind::Uint),
+            field_target("context target", &FieldKind::Uint),
             Some(FieldTarget::Toml {
-                key: "economy.context_ceiling",
+                key: "economy.context_target",
                 ty: TomlTy::U64Unset
             })
         );
@@ -3053,6 +3084,13 @@ mod tests {
             Some(TomlValue::Int(80))
         );
         assert_eq!(value_from_buffer(&TomlTy::U8Pct, "xx"), None);
+        // recent turns: plain non-negative integer; unparseable/negative is a no-op.
+        assert_eq!(
+            value_from_buffer(&TomlTy::UintPlain, "4"),
+            Some(TomlValue::Int(4))
+        );
+        assert_eq!(value_from_buffer(&TomlTy::UintPlain, "-1"), None);
+        assert_eq!(value_from_buffer(&TomlTy::UintPlain, "xx"), None);
     }
 
     #[test]
@@ -3083,14 +3121,14 @@ mod tests {
         let parsed = parse_toml(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(parsed.reduced_motion, Some(true));
         // A nested-table write preserves the earlier top-level key.
-        write_config_file(&path, "economy.context_ceiling", TomlValue::Int(200_000)).unwrap();
+        write_config_file(&path, "economy.context_target", TomlValue::Int(200_000)).unwrap();
         let parsed = parse_toml(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(parsed.reduced_motion, Some(true));
-        assert_eq!(parsed.economy.context_ceiling, Some(200_000));
+        assert_eq!(parsed.economy.context_target, Some(200_000));
         // Unset removes the key again.
-        write_config_file(&path, "economy.context_ceiling", TomlValue::Unset).unwrap();
+        write_config_file(&path, "economy.context_target", TomlValue::Unset).unwrap();
         let parsed = parse_toml(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(parsed.economy.context_ceiling, None);
+        assert_eq!(parsed.economy.context_target, None);
     }
 
     #[test]
@@ -3223,6 +3261,7 @@ mod tests {
             skills: std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
             model: "test-model".into(),
             economy: zoid_core::config::EconomyConfig::default(),
+            context_target: 384_000,
             config: zoid_core::config::Config::default(),
             prov: {
                 use zoid_core::config::Source;
@@ -3230,10 +3269,11 @@ mod tests {
                     provider: Source::Default,
                     base_url: Source::Default,
                     model: Source::Default,
-                    context_ceiling: Source::Default,
+                    context_target: Source::Default,
                     auto_evict_cold: Source::Default,
                     compact_threshold_pct: Source::Default,
-                    token_ceiling: Source::Default,
+                    band_headroom_pct: Source::Default,
+                    recent_n: Source::Default,
                     reduced_motion: Source::Default,
                 }
             },

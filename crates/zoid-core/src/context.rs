@@ -172,6 +172,7 @@ pub fn context_window(events: &[Event]) -> ContextWindow {
 /// actually tokenizes — not just the conversation items.
 pub fn context_window_with(events: &[Event], overhead: ContextOverhead) -> ContextWindow {
     let visible: &[Event] = events;
+    let evicted = crate::eviction::evicted_ids(events);
 
     let mut order: Vec<String> = Vec::new(); // first-seen order of keys
     let mut acc: HashMap<String, Acc> = HashMap::new();
@@ -182,6 +183,9 @@ pub fn context_window_with(events: &[Event], overhead: ContextOverhead) -> Conte
     let mut pending_call_args_tokens: u64 = 0; // tool-call args cost, folded into the assistant message
 
     for e in visible {
+        if evicted.contains(&e.id) {
+            continue;
+        }
         // Subagent work lives on its own branch and is not part of the main
         // context window (mirrors `conversation()`); only main-branch events count.
         if e.branch != crate::event::BranchId::default() {
@@ -698,5 +702,20 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn context_window_excludes_evicted_tokens() {
+        use crate::event::{Event, EventKind, EvictionMarker};
+        use ulid::Ulid;
+        let big = "x".repeat(3000); // ~1000 tokens
+        let base = vec![Event::new(Ulid::from(1u128), None, 1, EventKind::UserMessage { text: big.clone() })];
+        let with_evict = vec![
+            base[0].clone(),
+            Event::new(Ulid::from(9u128), None, 9, EventKind::TurnsEvicted { ids: vec![Ulid::from(1u128)], reclaimed_tokens: 1000, marker: EvictionMarker { spans: vec![] } }),
+        ];
+        let full = context_window_with(&base, ContextOverhead::default()).total_tokens;
+        let after = context_window_with(&with_evict, ContextOverhead::default()).total_tokens;
+        assert!(after < full, "evicted event's tokens must be excluded from the window");
     }
 }

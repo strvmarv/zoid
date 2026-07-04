@@ -39,6 +39,12 @@ enum Cmd {
         root_filter: Option<String>,
         reply: oneshot::Sender<Result<Vec<SessionInfo>>>,
     },
+    Recall {
+        query: String,
+        session_id: Ulid,
+        limit: usize,
+        reply: oneshot::Sender<Result<Vec<Event>>>,
+    },
 }
 
 /// A cloneable handle to the single-writer event-store actor (spec §4.1).
@@ -100,6 +106,17 @@ impl SessionHandle {
                                 root_filter.as_deref(),
                             ))
                         })();
+                        let _ = reply.send(out);
+                    }
+                    Cmd::Recall {
+                        query,
+                        session_id,
+                        limit,
+                        reply,
+                    } => {
+                        let out = store
+                            .search_fts(&query, session_id, limit)
+                            .and_then(|ids| store.events_by_ids(&ids));
                         let _ = reply.send(out);
                     }
                 }
@@ -199,6 +216,23 @@ impl SessionHandle {
         rx.await
             .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
     }
+
+    /// Search the cold tier (BM25 via FTS5), scoped to `session_id`, and load
+    /// matching events, best-first.
+    pub async fn recall(&self, query: String, session_id: Ulid, limit: usize) -> Result<Vec<Event>> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Cmd::Recall {
+                query,
+                session_id,
+                limit,
+                reply,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
+    }
 }
 
 #[cfg(test)]
@@ -269,5 +303,33 @@ mod tests {
         let list = handle.list_sessions(Some("/repo".into())).await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].name, "alpha");
+    }
+
+    #[tokio::test]
+    async fn recall_finds_indexed_events() {
+        let h = SessionHandle::spawn(":memory:").unwrap();
+        h.append(Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "vector search backend".into(),
+            },
+        ))
+        .await
+        .unwrap();
+        h.append(Event::new(
+            Ulid::from(2u128),
+            None,
+            2,
+            EventKind::UserMessage {
+                text: "hello".into(),
+            },
+        ))
+        .await
+        .unwrap();
+        let hits = h.recall("vector".into(), Ulid::from(0u128), 10).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, Ulid::from(1u128));
     }
 }

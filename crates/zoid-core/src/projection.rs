@@ -56,6 +56,7 @@ pub enum ChatMsg {
 /// doing. (See `context.rs::context_window` for the window-scoped filter.)
 pub fn conversation(events: &[Event]) -> Vec<ChatMsg> {
     let visible: &[Event] = events;
+    let evicted = crate::eviction::evicted_ids(events);
 
     // ACM-1: a tool-result whose id has a later ToolResultCompacted is emitted
     // as its summary (last write wins), both to the live request and the view.
@@ -89,6 +90,9 @@ pub fn conversation(events: &[Event]) -> Vec<ChatMsg> {
     }
 
     for e in visible {
+        if evicted.contains(&e.id) {
+            continue;
+        }
         if e.branch != crate::event::BranchId::default() {
             continue;
         }
@@ -158,6 +162,10 @@ pub fn conversation(events: &[Event]) -> Vec<ChatMsg> {
             }
             EventKind::TurnsDropped { .. } => {
                 // Metadata marker; not a conversation item.
+            }
+            EventKind::TurnsEvicted { .. } | EventKind::TurnsReadmitted { .. } => {
+                // Metadata marker; not a conversation item. (Out of scope: rendering
+                // the in-context breadcrumb / recall filtering is a later slice.)
             }
         }
     }
@@ -533,5 +541,21 @@ mod tests {
             let events: Vec<Event> = texts.iter().enumerate().map(|(i, t)| user(i as u128 + 1, t)).collect();
             prop_assert_eq!(conversation(&events), conversation(&events));
         }
+    }
+
+    #[test]
+    fn conversation_skips_evicted_turns() {
+        use crate::event::{Event, EventKind, EvictionMarker};
+        use ulid::Ulid;
+        let mk = |id: u128, k| Event::new(Ulid::from(id), None, id as i64, k);
+        let events = vec![
+            mk(1, EventKind::UserMessage { text: "old".into() }),
+            mk(2, EventKind::AssistantMessage { text: "old-reply".into() }),
+            mk(3, EventKind::UserMessage { text: "new".into() }),
+            mk(9, EventKind::TurnsEvicted { ids: vec![Ulid::from(1u128), Ulid::from(2u128)], reclaimed_tokens: 5, marker: EvictionMarker { spans: vec![] } }),
+        ];
+        let msgs = conversation(&events);
+        assert_eq!(msgs.len(), 1); // only the "new" user message survives
+        assert!(matches!(&msgs[0], ChatMsg::User { text, .. } if text == "new"));
     }
 }

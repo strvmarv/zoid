@@ -146,11 +146,11 @@ pub fn build_sections(
         title: "Economy".into(),
         rows: vec![
             FieldRow {
-                label: "context ceiling",
-                value: opt(&cfg.economy.context_ceiling),
+                label: "context target",
+                value: opt(&cfg.economy.context_target),
                 kind: FieldKind::Uint,
-                source: prov.context_ceiling,
-                env_shadowed: prov.context_ceiling == Source::Env,
+                source: prov.context_target,
+                env_shadowed: prov.context_target == Source::Env,
             },
             FieldRow {
                 label: "auto-evict cold",
@@ -167,11 +167,18 @@ pub fn build_sections(
                 env_shadowed: prov.compact_threshold_pct == Source::Env,
             },
             FieldRow {
-                label: "token ceiling",
-                value: opt(&cfg.economy.token_ceiling),
+                label: "band headroom %",
+                value: cfg.economy.band_headroom_pct.to_string(),
                 kind: FieldKind::Uint,
-                source: prov.token_ceiling,
-                env_shadowed: prov.token_ceiling == Source::Env,
+                source: prov.band_headroom_pct,
+                env_shadowed: prov.band_headroom_pct == Source::Env,
+            },
+            FieldRow {
+                label: "recent turns",
+                value: cfg.economy.recent_n.to_string(),
+                kind: FieldKind::Uint,
+                source: prov.recent_n,
+                env_shadowed: prov.recent_n == Source::Env,
             },
         ],
     };
@@ -228,10 +235,11 @@ mod tests {
             provider: Source::Default,
             base_url: Source::Default,
             model: Source::Env,
-            context_ceiling: Source::Default,
+            context_target: Source::Default,
             auto_evict_cold: Source::Env,
             compact_threshold_pct: Source::Default,
-            token_ceiling: Source::Default,
+            band_headroom_pct: Source::Default,
+            recent_n: Source::Default,
             reduced_motion: Source::Default,
         };
         let ks = [
@@ -286,10 +294,11 @@ mod tests {
             provider: Source::Default,
             base_url: Source::Default,
             model: Source::Default,
-            context_ceiling: Source::Default,
+            context_target: Source::Default,
             auto_evict_cold: Source::Default,
             compact_threshold_pct: Source::Default,
-            token_ceiling: Source::Default,
+            band_headroom_pct: Source::Default,
+            recent_n: Source::Default,
             reduced_motion: Source::Default,
         };
         let sections = build_sections(&cfg, &prov, &[]);

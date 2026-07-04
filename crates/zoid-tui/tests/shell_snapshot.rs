@@ -841,10 +841,11 @@ fn config_overlay_frame() {
         provider: Source::Default,
         base_url: Source::Default,
         model: Source::Env,
-        context_ceiling: Source::Default,
+        context_target: Source::Default,
         auto_evict_cold: Source::Default,
         compact_threshold_pct: Source::Default,
-        token_ceiling: Source::Default,
+        band_headroom_pct: Source::Default,
+        recent_n: Source::Default,
         reduced_motion: Source::Default,
     };
     let ks = [
@@ -874,10 +875,11 @@ fn config_key_prompt_masks_entry() {
         provider: Source::Default,
         base_url: Source::Default,
         model: Source::Default,
-        context_ceiling: Source::Default,
+        context_target: Source::Default,
         auto_evict_cold: Source::Default,
         compact_threshold_pct: Source::Default,
-        token_ceiling: Source::Default,
+        band_headroom_pct: Source::Default,
+        recent_n: Source::Default,
         reduced_motion: Source::Default,
     };
     let ks = [
@@ -913,10 +915,11 @@ fn config_overlay_provider_picker() {
         provider: Source::Default,
         base_url: Source::Default,
         model: Source::Default,
-        context_ceiling: Source::Default,
+        context_target: Source::Default,
         auto_evict_cold: Source::Default,
         compact_threshold_pct: Source::Default,
-        token_ceiling: Source::Default,
+        band_headroom_pct: Source::Default,
+        recent_n: Source::Default,
         reduced_motion: Source::Default,
     };
     let ks = [
@@ -964,10 +967,11 @@ fn config_overlay_provider_picker_selection_and_planned_styles() {
         provider: Source::Default,
         base_url: Source::Default,
         model: Source::Default,
-        context_ceiling: Source::Default,
+        context_target: Source::Default,
         auto_evict_cold: Source::Default,
         compact_threshold_pct: Source::Default,
-        token_ceiling: Source::Default,
+        band_headroom_pct: Source::Default,
+        recent_n: Source::Default,
         reduced_motion: Source::Default,
     };
     let ks = [
@@ -1048,10 +1052,11 @@ fn config_overlay_narrow_degrades() {
         provider: Source::Default,
         base_url: Source::Default,
         model: Source::Default,
-        context_ceiling: Source::Default,
+        context_target: Source::Default,
         auto_evict_cold: Source::Default,
         compact_threshold_pct: Source::Default,
-        token_ceiling: Source::Default,
+        band_headroom_pct: Source::Default,
+        recent_n: Source::Default,
         reduced_motion: Source::Default,
     };
     let ks = [
@@ -1088,10 +1093,11 @@ fn config_overlay_narrow_degrades_respects_focus() {
         provider: Source::Default,
         base_url: Source::Default,
         model: Source::Default,
-        context_ceiling: Source::Default,
+        context_target: Source::Default,
         auto_evict_cold: Source::Default,
         compact_threshold_pct: Source::Default,
-        token_ceiling: Source::Default,
+        band_headroom_pct: Source::Default,
+        recent_n: Source::Default,
         reduced_motion: Source::Default,
     };
     let ks = [

@@ -148,6 +148,7 @@ pub async fn run_subagent(
         cwd,
         branch: branch.clone(),
         policy: subagent_policy(),
+        eviction: zoid_core::eviction::EvictionPolicy::disabled(),
     };
     let produced = run_agent_turn(
         config,

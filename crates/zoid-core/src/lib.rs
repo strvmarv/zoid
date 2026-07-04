@@ -4,12 +4,15 @@
 pub mod agent_profile;
 pub mod skill;
 pub mod assembler;
+pub mod band;
 pub mod compaction;
 pub mod config;
 pub mod context;
 pub mod economy;
 pub mod event;
+pub mod eviction;
 pub mod projection;
+pub mod retrieval;
 pub mod secret;
 pub mod session;
 pub mod sessions;
