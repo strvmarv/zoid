@@ -65,6 +65,111 @@ fn draw_config(
     terminal.backend().to_string()
 }
 
+/// Draw a frame allowing the pre-rendered (cached) body to be supplied — the
+/// hot path the bin uses. `None` exercises the uncached fallback.
+fn draw_body(
+    state: &ShellState,
+    msgs: &[ChatMsg],
+    w: u16,
+    h: u16,
+    body: Option<&[ratatui::text::Line<'static>]>,
+    view: &ChatView,
+) -> String {
+    let input = TextArea::default();
+    let backend = TestBackend::new(w, h);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|f| {
+            render_shell(f, state, &empty_economy(), msgs, body, &[], &input, false, view);
+        })
+        .unwrap();
+    terminal.backend().to_string()
+}
+
+/// The cached-body window render (borrowing lines into the buffer) must produce
+/// byte-identical frames to the uncached Paragraph render. This is the safety
+/// net for the #7 per-frame-clone optimization, since every other snapshot test
+/// uses the `None` (uncached) path.
+///
+/// Scope of the invariant: cached==uncached holds for `reveal == None` at any
+/// scroll/tool state, and for `reveal == Some(k)` when `k <= raw_line_count`
+/// (the reveal cap sits at or below the transcript body). It does NOT hold for
+/// `k > raw_line_count`, because `conversation_view` appends a trailing blank
+/// line only when `reveal == None`: the cached body (built reveal-None) carries
+/// that blank, while the uncached reveal render drops it — a pre-existing
+/// cached/uncached asymmetry that is unreachable at runtime (production always
+/// passes the cached body). The reveal window logic is otherwise faithful to the
+/// pre-optimization cached path by construction (`full[..min(k,len)]`).
+#[test]
+fn cached_body_window_matches_uncached_paragraph() {
+    use ratatui::layout::{Margin, Rect};
+    use zoid_tui::chat::{conversation_view, ChatView};
+    use zoid_tui::layout::{compute, CONV_PAD};
+
+    // A transcript tall enough to scroll at 160x40, plus a short one (fewer lines
+    // than the viewport) to cover the base_len < height window.
+    let tall: Vec<ChatMsg> = (0..30)
+        .flat_map(|i| {
+            [
+                ChatMsg::User {
+                    text: format!("question number {i} about the codebase"),
+                    ts: 0,
+                },
+                ChatMsg::Assistant {
+                    text: format!("answer {i}: it is the unwrapped lookup in the handler again"),
+                    tool_calls: vec![],
+                    ts: 0,
+                },
+            ]
+        })
+        .collect();
+    let short = seeded(); // two messages, well under a 40-row viewport
+
+    let (w, h) = (160u16, 40u16);
+    // Layout width is independent of conversation_scroll / active_tool (the only
+    // fields the draws below vary), so building `full` once at the base width is
+    // faithful to what every draw computes.
+    let conv = compute(Rect::new(0, 0, w, h), &ShellState::new())
+        .conversation
+        .inner(Margin {
+            horizontal: CONV_PAD,
+            vertical: 0,
+        });
+
+    let reveal_view = |k: usize| ChatView {
+        reveal: Some(k),
+        ..normal_view()
+    };
+
+    for msgs in [&tall, &short] {
+        // `full` is what the bin caches: built reveal-None.
+        let full = conversation_view(msgs, &normal_view(), false, conv.width as usize);
+        let raw_lines = full.len().saturating_sub(1); // reveal-None appends one blank
+
+        // reveal == None at several scrolls × spinner off/on, plus a reveal case
+        // capped at/below the raw body (where cached == uncached holds).
+        let views = [normal_view(), reveal_view(raw_lines.min(3))];
+        for view in &views {
+            for &scroll in &[0u16, 5, full.len() as u16 /* clamps to bottom */] {
+                for tool in [false, true] {
+                    let mut state = ShellState::new();
+                    state.conversation_scroll = scroll;
+                    if tool {
+                        state.set_active_tool("shell");
+                    }
+                    let uncached = draw_body(&state, msgs, w, h, None, view);
+                    let cached = draw_body(&state, msgs, w, h, Some(&full), view);
+                    assert_eq!(
+                        uncached, cached,
+                        "cached window must match uncached (scroll={scroll}, tool={tool}, reveal={:?})",
+                        view.reveal
+                    );
+                }
+            }
+        }
+    }
+}
+
 fn seeded() -> Vec<ChatMsg> {
     vec![
         ChatMsg::User {

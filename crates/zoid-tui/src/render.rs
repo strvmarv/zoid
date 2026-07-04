@@ -21,6 +21,19 @@ use tui_textarea::TextArea;
 use unicode_width::UnicodeWidthStr;
 use zoid_core::projection::ChatMsg;
 
+/// The in-flight tool indicator: a dim spinner line shown below the last
+/// message while a Local tool call runs. Shared by the cached and uncached
+/// render paths so both produce byte-identical output.
+fn tool_spinner_line(name: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{} ", glyph::RUNNING), Style::new().fg(color::WARN)),
+        Span::styled(
+            format!("running · {name} {}", glyph::ELLIPSIS),
+            Style::new().fg(color::DIM),
+        ),
+    ])
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn render_shell(
     frame: &mut Frame,
@@ -61,43 +74,81 @@ pub fn render_shell(
                 horizontal: CONV_PAD,
                 vertical: 0,
             });
-            // Cached full render (reveal == None) → apply the zoom-reveal
-            // truncation here (cheap take/clone, not a re-render). Without a cache
-            // (tests), render it via conversation_view, which applies reveal itself.
-            let mut body: Vec<Line<'static>> = match body {
-                Some(full) => match view.reveal {
-                    Some(n) => full.iter().take(n).cloned().collect(),
-                    None => full.to_vec(),
-                },
-                None => conversation_view(msgs, view, streaming, text.width as usize),
-            };
-            // In-flight tool indicator: a dim spinner line below the last message,
-            // above the input, shown while a Local tool call is running (cleared
-            // once its `ToolResult` arrives or the turn completes). §16: glyph and
-            // colors come from `tokens`, never a literal.
-            if let Some(name) = &state.active_tool {
-                body.push(Line::from(vec![
-                    Span::styled(format!("{} ", glyph::RUNNING), Style::new().fg(color::WARN)),
-                    Span::styled(
-                        format!("running · {name} {}", glyph::ELLIPSIS),
-                        Style::new().fg(color::DIM),
-                    ),
-                ]));
-            }
+            let has_tool = state.active_tool.is_some();
             // Clamp the scroll offset to the body produced at THIS altitude. The three
             // zoom altitudes (Summary/Normal/Detail) yield very different line counts,
             // so an offset valid at one is meaningless at another; without this clamp a
             // large offset carried from a taller altitude renders past the end as blank
             // rows after a zoom switch (the "corrupted display" bug). Display-only — the
             // stored offset is reset to 0 on an actual zoom change.
-            let max_scroll = body
-                .len()
-                .saturating_sub(text.height as usize)
-                .min(u16::MAX as usize) as u16;
+            //
+            // `(scroll, max_scroll, content_len)` are computed per path; the
+            // scrollbar below is shared.
+            let (scroll, max_scroll, content_len) = match body {
+                // Hot path: the caller cached the full body. Paint only the
+                // visible window by BORROWING each line straight into the buffer
+                // — no per-frame deep clone of the whole (potentially
+                // thousands-of-owned-lines) transcript, which was the cost of the
+                // old `full.to_vec()`. Lines are pre-wrapped to `text.width`, so
+                // each maps to exactly one row, identical to a no-wrap Paragraph
+                // scrolled by `scroll`. The zoom-reveal truncation caps the base
+                // line count; the in-flight tool spinner is a single trailing row.
+                Some(full) => {
+                    let base_len = match view.reveal {
+                        Some(n) => full.len().min(n),
+                        None => full.len(),
+                    };
+                    let total = base_len + has_tool as usize;
+                    let max_scroll =
+                        total.saturating_sub(text.height as usize).min(u16::MAX as usize) as u16;
+                    let scroll = state.conversation_scroll.min(max_scroll);
+                    let content_len = total.min(u16::MAX as usize) as u16;
+
+                    let spinner =
+                        has_tool.then(|| tool_spinner_line(state.active_tool.as_deref().unwrap_or("")));
+                    // Equivalence to a no-wrap Paragraph relies on every body
+                    // line being LEFT-aligned (set_line always starts at text.x;
+                    // Paragraph would honor per-line alignment). conversation_view
+                    // never sets alignment, so this holds — a centered/right line
+                    // added there would break the cached path only.
+                    let start = scroll as usize;
+                    let buf = frame.buffer_mut();
+                    for row in 0..text.height as usize {
+                        let idx = start + row;
+                        let y = text.y + row as u16;
+                        if idx < base_len {
+                            buf.set_line(text.x, y, &full[idx], text.width);
+                        } else {
+                            // The spinner (if any) sits at index `base_len`, just
+                            // past the last transcript line; nothing follows it.
+                            if idx == base_len {
+                                if let Some(line) = &spinner {
+                                    buf.set_line(text.x, y, line, text.width);
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    (scroll, max_scroll, content_len)
+                }
+                // Uncached fallback (tests / examples): render `conversation_view`
+                // (the expensive wrap + highlight pass) and let Paragraph scroll.
+                None => {
+                    let mut body = conversation_view(msgs, view, streaming, text.width as usize);
+                    if has_tool {
+                        body.push(tool_spinner_line(state.active_tool.as_deref().unwrap_or("")));
+                    }
+                    let max_scroll = body
+                        .len()
+                        .saturating_sub(text.height as usize)
+                        .min(u16::MAX as usize) as u16;
+                    let scroll = state.conversation_scroll.min(max_scroll);
+                    let content_len = body.len().min(u16::MAX as usize) as u16;
+                    frame.render_widget(Paragraph::new(body).scroll((scroll, 0)), text);
+                    (scroll, max_scroll, content_len)
+                }
+            };
             conv_max_scroll = max_scroll;
-            let scroll = state.conversation_scroll.min(max_scroll);
-            let content_len = body.len().min(u16::MAX as usize) as u16;
-            frame.render_widget(Paragraph::new(body).scroll((scroll, 0)), text);
 
             // Always-visible scrollbar in the rightmost gutter column of the
             // conversation rect (CONV_PAD reserves it, so text never overlaps).
