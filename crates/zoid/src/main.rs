@@ -961,6 +961,7 @@ async fn main() -> Result<()> {
         .economy
         .context_ceiling
         .unwrap_or_else(|| zoid_provider::context_ceiling(&model));
+    shell.ctx_ceiling_overridden = config.economy.context_ceiling.is_some();
     shell.provider = provider_label(provider_name, has_key);
     shell.cache_supported = zoid_provider::has_prompt_cache(&model);
     shell.cwd = root.clone();
@@ -1341,6 +1342,8 @@ async fn run<B: ratatui::backend::Backend>(
                                 .economy
                                 .context_ceiling
                                 .unwrap_or(info.context_window);
+                            app.shell.ctx_ceiling_overridden =
+                                app.config.economy.context_ceiling.is_some();
                             app.shell.cache_supported = info.prompt_cache;
                         }
                     }
@@ -1670,6 +1673,7 @@ fn apply_config_write(
         .economy
         .context_ceiling
         .unwrap_or_else(|| zoid_provider::context_ceiling(&app.model));
+    app.shell.ctx_ceiling_overridden = app.config.economy.context_ceiling.is_some();
     // Live-apply the provider (same selection as startup) so a provider change
     // takes effect on the next turn, and keep the cached drawer label truthful
     // (shell.provider is set once at startup, not recomputed per frame).
