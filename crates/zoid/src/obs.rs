@@ -235,7 +235,11 @@ pub struct ObsLayer {
 }
 
 impl<S: tracing::Subscriber> Layer<S> for ObsLayer {
-    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
         let mut g = FieldGrab::default();
         event.record(&mut g);
         let Ok(mut s) = self.state.lock() else { return }; // poisoned → skip, never panic
@@ -248,7 +252,11 @@ impl<S: tracing::Subscriber> Layer<S> for ObsLayer {
         }
         let level = *event.metadata().level();
         if level == tracing::Level::WARN || level == tracing::Level::ERROR {
-            let lvl = if level == tracing::Level::ERROR { "error" } else { "warn" };
+            let lvl = if level == tracing::Level::ERROR {
+                "error"
+            } else {
+                "warn"
+            };
             s.record_error(
                 now_ms(),
                 lvl,
@@ -372,11 +380,25 @@ mod tests {
     #[test]
     fn obslayer_folds_events_into_state() {
         let state = Arc::new(Mutex::new(ObsState::default()));
-        let sub = Registry::default().with(ObsLayer { state: state.clone() });
+        let sub = Registry::default().with(ObsLayer {
+            state: state.clone(),
+        });
         tracing::subscriber::with_default(sub, || {
-            tracing::info!(kind = "tool", name = "shell", ms = 240u64, ok = true, "tool");
+            tracing::info!(
+                kind = "tool",
+                name = "shell",
+                ms = 240u64,
+                ok = true,
+                "tool"
+            );
             tracing::info!(kind = "turn", ms = 4200u64, iterations = 3u64, "turn");
-            tracing::info!(kind = "frame", ms = 7u64, cache_hit = true, proj_rebuilt = false, "frame");
+            tracing::info!(
+                kind = "frame",
+                ms = 7u64,
+                cache_hit = true,
+                proj_rebuilt = false,
+                "frame"
+            );
             tracing::warn!(ctx = "provider", message = "HTTP 429", "provider error");
         });
         let s = state.lock().unwrap();
