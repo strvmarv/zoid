@@ -1479,9 +1479,13 @@ async fn run<B: ratatui::backend::Backend>(
                         // on the next frame. Structural events (ToolResult,
                         // Usage, etc.) return false and get a full refresh.
                         if !app.proj.apply_streaming(&ev) {
-                            // Structural event — invalidate the events_len so
-                            // the next frame's refresh() does a full recompute.
+                            // Structural event — invalidate the projection cache
+                            // AND the body cache so both do a full rebuild on
+                            // the next frame. Compaction events replace content
+                            // in existing messages (same count) so the BodyCache's
+                            // msg_count check would skip the rebuild without this.
                             app.proj.events_len = None;
+                            app.body_cache.key = None;
                         }
                         app.events.push(*ev);
                     }
