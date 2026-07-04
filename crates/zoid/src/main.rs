@@ -1058,10 +1058,14 @@ async fn run<B: ratatui::backend::Backend>(
         let layout = compute(area, &app.shell);
         let body_w = zoid_tui::layout::conv_text_width(layout.conversation.width) as usize;
         let elapsed = app.started.elapsed().as_millis() as u64;
-        let caret = zoid_tui::motion::caret_on(elapsed, 1000, app.shell.reduced_motion);
         let streaming = app.streaming;
         let zoom = app.shell.zoom;
         let tz = app.tz_offset_secs;
+        let caret = if streaming {
+            true // solid caret during streaming — the spinner indicates activity
+        } else {
+            zoid_tui::motion::caret_on(elapsed, 1000, app.shell.reduced_motion)
+        };
         app.body_cache.refresh(
             BodyKey {
                 events_len: app.events.len(),
