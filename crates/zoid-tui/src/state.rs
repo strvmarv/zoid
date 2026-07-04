@@ -254,6 +254,14 @@ impl ShellState {
         self.drawers.iter_mut().find(|d| d.id == id)
     }
 
+    /// Drop a drawer from the rail entirely (not just collapse it). The layout
+    /// allocator and renderer both iterate `drawers`, so a removed drawer takes
+    /// up no rail rows and is never drawn. Used by the bin to hide the Repo
+    /// drawer when the working directory is not inside a git repo (§16).
+    pub fn remove_drawer(&mut self, id: DrawerId) {
+        self.drawers.retain(|d| d.id != id);
+    }
+
     /// The focus ring (forward only; `⇧Tab` is mode-switch, not focus-prev — spec §6.2).
     /// Rail participates only when visible.
     pub fn focus_next(&mut self) {
@@ -399,6 +407,21 @@ mod tests {
         assert!(s.drawer(DrawerId::Session).unwrap().open);
         assert!(s.drawer(DrawerId::Context).unwrap().open);
         assert!(s.drawer(DrawerId::Tasks).unwrap().open);
+    }
+
+    #[test]
+    fn remove_drawer_drops_it_from_the_rail() {
+        let mut s = ShellState::new();
+        s.remove_drawer(DrawerId::Repo);
+        let ids: Vec<DrawerId> = s.drawers.iter().map(|d| d.id).collect();
+        assert_eq!(
+            ids,
+            vec![DrawerId::Session, DrawerId::Context, DrawerId::Tasks]
+        );
+        assert!(s.drawer(DrawerId::Repo).is_none());
+        // Removing an absent drawer is a no-op (idempotent).
+        s.remove_drawer(DrawerId::Repo);
+        assert_eq!(s.drawers.len(), 3);
     }
 
     #[test]

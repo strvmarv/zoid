@@ -432,6 +432,20 @@ fn current_branch() -> String {
         .unwrap_or_else(|| "main".into())
 }
 
+/// Whether the current working directory is inside a git work tree. Asks git
+/// directly (`rev-parse --is-inside-work-tree`) rather than probing `./.git`, so
+/// it is correct from a subdirectory of a repo and false in a bare/absent one.
+/// Any failure (git missing, not a repo) reads as "no repo".
+fn in_git_repo() -> bool {
+    std::process::Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
+        .unwrap_or(false)
+}
+
 /// Parse `git diff --numstat` output → (added, removed, files). Binary files
 /// show `-` for both counts (counted as a file, zero lines). Pure.
 fn parse_numstat(out: &str) -> (usize, usize, usize) {
@@ -696,16 +710,24 @@ async fn main() -> Result<()> {
     let (provider, provider_name, has_key) = select_provider(&config, &secrets);
 
     let mut shell = zoid_tui::ShellState::new();
-    shell.branch = current_branch();
     shell.reduced_motion = config.reduced_motion;
-    shell.repo_name = Path::new(&root)
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| root.clone());
-    let (boot_added, boot_removed, boot_files) = git_status();
-    shell.changes_added = boot_added;
-    shell.changes_removed = boot_removed;
-    shell.changes_files = boot_files;
+    // The Repo drawer only makes sense inside a git work tree; outside one it
+    // showed a fabricated "main" branch and zero changes (§16, task #38). Detect
+    // once at startup: populate + keep the drawer when present, drop it when not.
+    let repo_present = in_git_repo();
+    if repo_present {
+        shell.branch = current_branch();
+        shell.repo_name = Path::new(&root)
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| root.clone());
+        let (boot_added, boot_removed, boot_files) = git_status();
+        shell.changes_added = boot_added;
+        shell.changes_removed = boot_removed;
+        shell.changes_files = boot_files;
+    } else {
+        shell.remove_drawer(zoid_tui::DrawerId::Repo);
+    }
     shell.session_name = session_name;
     shell.model = model.clone();
     // Economy ⑤ denominator: config-derived (ZOID_CONTEXT_CEILING overrides via
@@ -811,18 +833,24 @@ async fn run<B: ratatui::backend::Backend>(
     // the render loop (it previously ran synchronously on the loop every second,
     // hitching typing/scrolling). The loop reads the latest value non-blocking.
     let (git_tx, mut git_rx) = tokio::sync::watch::channel((0usize, 0usize, 0usize));
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
-        loop {
-            tick.tick().await;
-            let r = tokio::task::spawn_blocking(git_status)
-                .await
-                .unwrap_or((0, 0, 0));
-            if git_tx.send(r).is_err() {
-                break; // receiver dropped — app is exiting
+    // Only poll git when the Repo drawer is actually present; outside a repo the
+    // stats are neither shown nor meaningful, so we skip the per-second `git`
+    // subprocess entirely. The drawer's presence is the git-repo signal decided
+    // at startup. The receiver still reads its initial (0, 0, 0).
+    if app.shell.drawer(zoid_tui::DrawerId::Repo).is_some() {
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+            loop {
+                tick.tick().await;
+                let r = tokio::task::spawn_blocking(git_status)
+                    .await
+                    .unwrap_or((0, 0, 0));
+                if git_tx.send(r).is_err() {
+                    break; // receiver dropped — app is exiting
+                }
             }
-        }
-    });
+        });
+    }
 
     loop {
         // Latest git status from the background watcher (non-blocking read).
