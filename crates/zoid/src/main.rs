@@ -310,11 +310,10 @@ fn build_overview_data(
     // Economy split from the same ledger the session drawer/context economy use.
     let ledger = zoid_core::economy::token_ledger(&app.events);
     // Prompt-cache hit rate = cache-read as a % of input tokens (economy).
-    let cache_hit_pct = if ledger.input == 0 {
-        0
-    } else {
-        (ledger.cached * 100 / ledger.input).min(100) as u8
-    };
+    let cache_hit_pct = (ledger.cached * 100)
+        .checked_div(ledger.input)
+        .map(|v| v.min(100) as u8)
+        .unwrap_or(0);
     // Per-turn prompt-cache sparkline: map the cached churn series onto the
     // shared glyph::SPARK ramp, exactly as the context drawer's cache spark does.
     let cache_vals: Vec<u64> = app.proj.churn.points.iter().map(|p| p.cached).collect();
@@ -352,11 +351,10 @@ fn build_overview_data(
         frame_max_ms: s.frame.window_max(),
         // Body-render cache-hit ratio (obs frame events) — distinct from the
         // prompt-cache `cache_hit_pct` above.
-        render_cache_pct: if s.cache_total == 0 {
-            0
-        } else {
-            (s.cache_hits * 100 / s.cache_total).min(100) as u8
-        },
+        render_cache_pct: (s.cache_hits * 100)
+            .checked_div(s.cache_total)
+            .map(|v| v.min(100) as u8)
+            .unwrap_or(0),
         proj_rebuilds: s.proj_rebuilds,
         event_count: app.events.len() as u64,
         errors: s
@@ -551,13 +549,11 @@ fn spawn_model_info_fetch(
     ui_tx: mpsc::Sender<AgentUpdate>,
 ) {
     tokio::spawn(async move {
-        match provider.fetch_model_info(&model).await {
-            Ok(Some(info)) => {
-                let _ = ui_tx
-                    .send(AgentUpdate::ModelInfoFetched { model, info })
-                    .await;
-            }
-            _ => {} // error or None → keep the static fallback
+        // error or None → keep the static fallback
+        if let Ok(Some(info)) = provider.fetch_model_info(&model).await {
+            let _ = ui_tx
+                .send(AgentUpdate::ModelInfoFetched { model, info })
+                .await;
         }
     });
 }
@@ -1116,7 +1112,6 @@ async fn main() -> Result<()> {
         .context_target
         .unwrap_or_else(|| capacity.min(384_000));
     shell.ctx_ceiling = capacity;
-    shell.ctx_ceiling_overridden = false;
     shell.provider = provider_label(provider_name, has_key);
     shell.cache_supported = zoid_provider::has_prompt_cache(&model);
     shell.cwd = root.clone();
@@ -1575,7 +1570,6 @@ async fn run<B: ratatui::backend::Backend>(
                             // Live-apply the capacity (model window) — always the
                             // provider's real value once known.
                             app.shell.ctx_ceiling = info.context_window;
-                            app.shell.ctx_ceiling_overridden = false;
                             // Recompute the target if it was defaulted (not an
                             // explicit config override), now that capacity landed.
                             app.context_target = app
@@ -1923,7 +1917,6 @@ fn apply_config_write(
     app.shell.model = new_model;
     // Capacity is always the model window; the target is the separate soft knob.
     app.shell.ctx_ceiling = zoid_provider::context_ceiling(&app.model);
-    app.shell.ctx_ceiling_overridden = false;
     app.context_target = app
         .config
         .economy

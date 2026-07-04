@@ -523,10 +523,9 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
     };
     let ctx = if state.ctx_ceiling > 0 {
         format!(
-            "{}/{}{}",
+            "{}/{}",
             human_tokens(state.ctx_used),
-            human_tokens(state.ctx_ceiling),
-            if state.ctx_ceiling_overridden { "*" } else { "" }
+            human_tokens(state.ctx_ceiling)
         )
     } else {
         human_tokens(state.ctx_used)

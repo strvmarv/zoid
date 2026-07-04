@@ -1402,6 +1402,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recall_tool_reports_no_matches_and_readmits_nothing() {
+        use zoid_provider::{ProviderEvent, ToolCall};
+        use zoid_core::event::{Event, EventKind};
+        use ulid::Ulid;
+        use serde_json::json;
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let e1 = Event::new(Ulid::from(1u128), None, 1, EventKind::UserMessage { text: "configure the vector backend".into() });
+        let e2 = Event::new(Ulid::from(2u128), None, 2, EventKind::UserMessage { text: "recent question".into() });
+        for e in [&e1, &e2] { session.append(e.clone()).await.unwrap(); }
+        let seed = vec![e1.clone(), e2.clone()];
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![ProviderEvent::ToolCall(ToolCall { id: "r1".into(), name: "recall".into(), args: json!({"query": "nonexistent_term_xyz"}) }), ProviderEvent::Done],
+            vec![ProviderEvent::TextDelta("thanks".into()), ProviderEvent::Done],
+        ]));
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin())));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let out = run_agent_turn(chat_turn_config(), provider, tools, std::sync::Arc::new(zoid_tools::AllowAll), session, seed, "m".into(), tx, Ulid::from(0u128), || 0).await.unwrap();
+
+        // No matches → the tool result says so …
+        assert!(out.iter().any(|e| matches!(&e.kind, EventKind::ToolResult { name, output, .. } if name == "recall" && output == "[recall: no matches]")));
+        // … and nothing is re-admitted.
+        assert!(!out.iter().any(|e| matches!(&e.kind, EventKind::TurnsReadmitted { .. })));
+    }
+
+    #[tokio::test]
     async fn evict_then_recall_round_trips() {
         use zoid_provider::{ProviderEvent, ToolCall, FakeProvider};
         use zoid_core::event::{Event, EventKind};

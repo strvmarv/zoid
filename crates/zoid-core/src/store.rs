@@ -534,6 +534,46 @@ mod tests {
     }
 
     #[test]
+    fn search_fts_ranks_denser_match_first() {
+        let store = EventStore::open(":memory:").unwrap();
+        let sid = Ulid::from(0u128);
+        // Weaker match: the term appears once amid a lot of unrelated padding.
+        store
+            .append(
+                &Event::new(
+                    Ulid::from(1u128),
+                    None,
+                    1,
+                    EventKind::UserMessage {
+                        text: "widget appears here once amid other unrelated padding content for length".into(),
+                    },
+                )
+                .with_session(sid),
+            )
+            .unwrap();
+        // Stronger match: the term repeated densely in a short document.
+        store
+            .append(
+                &Event::new(
+                    Ulid::from(2u128),
+                    None,
+                    2,
+                    EventKind::UserMessage {
+                        text: "widget widget widget".into(),
+                    },
+                )
+                .with_session(sid),
+            )
+            .unwrap();
+        let ids = store.search_fts("widget", sid, 10).unwrap();
+        assert_eq!(
+            ids,
+            vec![Ulid::from(2u128), Ulid::from(1u128)],
+            "denser match must rank first (best-first BM25 order)"
+        );
+    }
+
+    #[test]
     fn search_fts_is_session_scoped() {
         let store = EventStore::open(":memory:").unwrap();
         let sa = Ulid::from(100u128);
