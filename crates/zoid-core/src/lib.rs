@@ -2,6 +2,7 @@
 //! and pure projections over the log.
 
 pub mod agent_profile;
+pub mod skill;
 pub mod assembler;
 pub mod compaction;
 pub mod config;
