@@ -160,7 +160,10 @@ mod tests {
     }
 
     #[test]
-    fn all_items_is_flat_curated_runnable_only() {
+    fn all_items_is_flat_curated() {
+        // Runnable-only is now a *type-level* guarantee (the field is `Command`,
+        // not `Option<Command>`), so there's nothing to assert at runtime for it.
+        // This pins the flat curated set and its at-rest order.
         let items = all_items(Mode::Chat);
         let labels: Vec<&str> = items.iter().map(|i| i.label).collect();
         assert_eq!(
@@ -175,10 +178,6 @@ mod tests {
                 "Quit zoid",
             ]
         );
-        // Every row is runnable (no placeholder/disabled entries).
-        assert!(items
-            .iter()
-            .all(|i| i.command != Command::Unknown(String::new())));
     }
 
     #[test]
