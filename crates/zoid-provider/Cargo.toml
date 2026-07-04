@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+zoid-model = { path = "../zoid-model" }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }

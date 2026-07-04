@@ -2890,6 +2890,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoid-model"
+version = "0.1.2"
+
+[[package]]
 name = "zoid-provider"
 version = "0.1.2"
 dependencies = [
@@ -2901,6 +2905,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "zoid-model",
 ]
 
 [[package]]
@@ -2947,7 +2952,7 @@ dependencies = [
  "tui-textarea",
  "unicode-width 0.2.0",
  "zoid-core",
- "zoid-provider",
+ "zoid-model",
  "zoid-syntax",
 ]
 

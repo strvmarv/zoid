@@ -7,7 +7,7 @@ edition.workspace = true
 ratatui = { workspace = true }
 serde_json = { workspace = true }
 zoid-core = { path = "../zoid-core" }
-zoid-provider = { path = "../zoid-provider" }
+zoid-model = { path = "../zoid-model" }
 zoid-syntax = { path = "../zoid-syntax" }
 tui-textarea = { workspace = true }
 # Match the version ratatui 0.29 uses so our width measurement agrees with its

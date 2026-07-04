@@ -3,7 +3,7 @@
 
 use zoid_core::config::{Config, Provenance, Source};
 use zoid_core::secret::SecretStatus;
-use zoid_provider::model::{self, Status, Transport};
+use zoid_model::{self as model, Status, Transport};
 
 /// How a config field is edited/displayed (text, uint, bool, picker, or write-only secret).
 #[derive(Debug, Clone, PartialEq, Eq)]

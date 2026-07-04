@@ -4,8 +4,12 @@
 //! (no dependency on `zoid-core`) so the provider/plugin surface stays decoupled.
 
 pub mod anthropic;
-pub mod model;
 pub mod ollama;
+
+/// The shared model/provider catalog lives in the dependency-free `zoid-model`
+/// crate; re-exported here so `zoid_provider::model::…` keeps resolving for the
+/// provider internals and the bin.
+pub use zoid_model as model;
 
 use anyhow::Result;
 use async_trait::async_trait;

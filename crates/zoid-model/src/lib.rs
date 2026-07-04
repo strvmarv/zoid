@@ -2,6 +2,11 @@
 //! source of truth for known providers/models and per-model capabilities.
 //! No cost/pricing (economy is tokens-only). Wire-derived caps (Ollama
 //! /api/show) are a future refinement.
+//!
+//! This lives in its own leaf crate (no dependencies) so both `zoid-provider`
+//! and `zoid-tui` can share the catalog without the TUI reaching into the
+//! provider implementation crate, and without coupling `zoid-provider` to
+//! `zoid-core`. `zoid-provider` re-exports it as `zoid_provider::model`.
 
 /// Stable, model-agnostic capabilities of a model. No cost fields by design.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
