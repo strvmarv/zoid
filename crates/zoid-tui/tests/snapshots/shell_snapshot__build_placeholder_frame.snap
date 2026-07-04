@@ -2,7 +2,7 @@
 source: crates/zoid-tui/tests/shell_snapshot.rs
 expression: "draw(&s, &[], 100, 24)"
 ---
-"                                                zoid                                                "
+"                                                zoid                                      ^P palette"
 "                                                        ╭ ▾ repo ─────────────────────────────────╮ "
 "  ◐ BUILD mode                                          │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
 "  The autonomous loop is coming soon.                   ╰─────────────────────────────────────────╯ "

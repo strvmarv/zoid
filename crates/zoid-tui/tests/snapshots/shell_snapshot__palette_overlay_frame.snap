@@ -2,7 +2,7 @@
 source: crates/zoid-tui/tests/shell_snapshot.rs
 expression: "draw(&s, &seeded(), 100, 24)"
 ---
-"                                                zoid                                                "
+"                                                zoid                                      ^P palette"
 "┌ › build ────────────────────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
 "│SESSION                                              │ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
 "│ + New session  fresh thread + clean context budget  │ ╰─────────────────────────────────────────╯ "
@@ -25,4 +25,4 @@ expression: "draw(&s, &seeded(), 100, 24)"
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"
 "│                                                                                                  │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" CHAT                                          ● idle                      zoom normal · ^P palette "
+" CHAT                                          ● idle                                   zoom normal "

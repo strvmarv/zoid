@@ -2,7 +2,7 @@
 source: crates/zoid-tui/tests/session_snapshot.rs
 expression: "draw(&s, &[], 100, 24)"
 ---
-"                                                zoid                                                "
+"                                                zoid                                      ^P palette"
 "┌ ↺ resume session ───────────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
 "│ fix 500 on GET /users  ·  12m ago  ·  58k           │ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
 "│ rail restructure       ·  3h ago   ·  120k          │ ╰─────────────────────────────────────────╯ "
@@ -25,4 +25,4 @@ expression: "draw(&s, &[], 100, 24)"
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"
 "│                                                                                                  │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" CHAT                                          ● idle                      zoom normal · ^P palette "
+" CHAT                                          ● idle                                   zoom normal "

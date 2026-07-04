@@ -5,7 +5,7 @@ expression: "format!(\"{:#?}\", terminal.backend().buffer())"
 Buffer {
     area: Rect { x: 0, y: 0, width: 100, height: 24 },
     content: [
-        "                                                zoid                                                ",
+        "                                                zoid                                      ^P palette",
         "  00:00 › how do I read a file?                       █ ╭ ▾ repo ─────────────────────────────────╮ ",
         "                                                      █ │📦 repo   ⎇ main                         │ ", // hidden by multi-width symbols: [(58, " ")]
         "  00:00 zoid Use read_file. Steps:                    █ ╰─────────────────────────────────────────╯ ",
@@ -28,12 +28,14 @@ Buffer {
         "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐",
         "│                                                                                                  │",
         "└──────────────────────────────────────────────────────────────────────────────────────────────────┘",
-        " CHAT                                          ● idle                      zoom normal · ^P palette ",
+        " CHAT                                          ● idle                                   zoom normal ",
     ],
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 48, y: 0, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 52, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 90, y: 0, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 2, y: 1, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 8, y: 1, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
         x: 10, y: 1, fg: Rgb(201, 209, 217), bg: Reset, underline: Reset, modifier: NONE,
@@ -181,6 +183,6 @@ Buffer {
         x: 6, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 47, y: 23, fg: Rgb(63, 185, 80), bg: Reset, underline: Reset, modifier: NONE,
         x: 53, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 74, y: 23, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
+        x: 87, y: 23, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
     ]
 }

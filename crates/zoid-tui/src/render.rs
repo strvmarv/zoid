@@ -187,14 +187,19 @@ fn render_build_placeholder(frame: &mut Frame, area: Rect) {
 
 fn render_title(frame: &mut Frame, _state: &ShellState, area: Rect) {
     let wordmark = "zoid";
+    let palette_hint = "^P palette";
     let w = area.width as usize;
     let wm_w = wordmark.width();
     let pad = w.saturating_sub(wm_w) / 2;
-    let line = Line::from(vec![
-        Span::styled(" ".repeat(pad), Style::new()),
-        Span::styled(wordmark.to_string(), Style::new().fg(color::DIM)),
-    ]);
-    frame.render_widget(Paragraph::new(line), area);
+    let mut spans = vec![Span::styled(" ".repeat(pad), Style::new())];
+    spans.push(Span::styled(wordmark.to_string(), Style::new().fg(color::DIM)));
+    let used = pad + wm_w;
+    let right_pad = w.saturating_sub(used).saturating_sub(palette_hint.width());
+    if right_pad > 0 {
+        spans.push(Span::styled(" ".repeat(right_pad), Style::new()));
+    }
+    spans.push(Span::styled(palette_hint.to_string(), Style::new().fg(color::DIM)));
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn render_input(frame: &mut Frame, input: &TextArea<'_>, area: Rect) {
@@ -242,9 +247,9 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
     };
     let center = format!("{icon} {label}");
 
-    // Right segment: zoom hint + palette hint (moved from the left side).
+    // Right segment: zoom hint (palette hint moved to the top-right title bar).
     let right = match state.mode {
-        Mode::Chat => format!(" zoom {} · ^P palette ", view.zoom.label()),
+        Mode::Chat => format!(" zoom {} ", view.zoom.label()),
         Mode::Build => " phase —/— · esc → Chat ".to_string(),
     };
 
