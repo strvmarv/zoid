@@ -87,7 +87,7 @@ plan_evictions(events, policy, current_tokens) -> EvictionPlan
 ### 3.4 Recall tool (effectful, bin)
 
 - New `recall` tool (`ToolKind::Local`) in the bin: `recall(query: string, limit?: int)`.
-- Backed by a sqlite **FTS5** virtual table over evicted event content (built/maintained in the bin's store alongside the `events` table).
+- Backed by a sqlite **FTS5** virtual table indexing event content **at append time** (maintained in the bin's store alongside the `events` table) — *all* events are indexed, not just evicted ones, so recall works regardless of eviction state and the index needs no rebuild when a turn is evicted. Results whose ids are already in the hot set are de-duplicated (re-admitting a still-hot turn is a no-op).
 - Returns coherent **rendered turns** (not raw `tool_use`/`tool_result` JSON), each with its original event ids.
 - Re-admission: recall appends `TurnsReadmitted { ids }` so the turns re-enter the hot set as `Retrieved` items, subject to the controller (a recall can itself age back out).
 - Miss → a normal empty/"no matches" tool result (not an error).
@@ -101,7 +101,7 @@ plan_evictions(events, policy, current_tokens) -> EvictionPlan
 ### 3.6 Config (bin + `zoid-core` `EconomyConfig`)
 
 - **Step 0:** `model.rs` context windows → 1,000,000 for claude and glm-5.2 (conservative default for unknown models unchanged).
-- Generalize the single `compact_threshold_pct` into a small ceiling policy: **setpoint / high-water / low-water** expressed as percent-of-ceiling (or absolute token counts), plus **`recent_n`** (protected recent-turn count) and a master enable. Keep back-compat: `compact_threshold_pct = 0` still disables ACM.
+- Generalize the single `compact_threshold_pct` into a small ceiling policy with **two control knobs — `high_water` and `low_water`** — expressed as percent-of-ceiling (with an absolute-token override), plus **`recent_n`** (protected recent-turn count) and a master enable. The "setpoint" (~384k) is the *descriptive midpoint* of the band, not an independent knob — it is derived, so it can never contradict the water marks. Invariant: `low_water < high_water <= ceiling`. Keep back-compat: `compact_threshold_pct = 0` still disables ACM.
 - Wire the resolved ceiling into the **live** turn config (today it only reaches the subagent path).
 
 ---
@@ -119,7 +119,7 @@ plan_evictions(events, policy, current_tokens) -> EvictionPlan
 ## 5. UX (surfaced + undoable)
 
 - Eviction marker in transcript, consistent with the existing compaction glyph treatment: **Summary** = one-line chip (`⋯ 12 turns paged out · 14k`), **Detail** = per-span breakdown with topic hints and a recall/undo affordance.
-- Context/economy drawer shows current live tokens vs band (setpoint/high/low) and count of paged-out turns.
+- Context/economy drawer shows current live tokens vs the band (low/high water, with the setpoint midpoint marked) and the count of paged-out turns.
 - Undo = re-admit the span's ids (`TurnsReadmitted`); the controller may re-evict on the next wave if still over — surfaced, not silent.
 
 ---
