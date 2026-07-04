@@ -344,3 +344,42 @@ mod plan_tests {
         assert!(!ids.contains(&Ulid::from(1u128)), "recalled turn must not immediately re-evict");
     }
 }
+
+#[cfg(test)]
+mod steady_state_tests {
+    use super::*;
+    use crate::event::{Event, EventKind};
+    use crate::context::{context_window_with, ContextOverhead};
+
+    fn apply(events: &mut Vec<Event>, plan: &EvictionPlan, seq: &mut u128) {
+        if plan.turns.is_empty() { return; }
+        let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
+        *seq += 1;
+        events.push(Event::new(Ulid::from(*seq + 1_000_000), None, *seq as i64, EventKind::TurnsEvicted {
+            ids, reclaimed_tokens: 0, marker: crate::event::EvictionMarker { spans: vec![] },
+        }));
+    }
+
+    #[test]
+    fn holds_band_over_hundreds_of_turns() {
+        let big = "x".repeat(3000); // ~1000 tokens
+        let policy = EvictionPolicy { enabled: true, capacity: 1_000_000, context_target: 20_000, band_headroom_pct: 20, recent_n: 4, max_output: None };
+        let band = policy.band();
+        let overhead = ContextOverhead::default();
+        let mut events: Vec<Event> = Vec::new();
+        let mut seq = 0u128;
+        for turn in 0..400u128 {
+            events.push(Event::new(Ulid::from(turn*2+1), None, (turn*2+1) as i64, EventKind::UserMessage { text: big.clone() }));
+            events.push(Event::new(Ulid::from(turn*2+2), None, (turn*2+2) as i64, EventKind::AssistantMessage { text: "ok".into() }));
+            let live = context_window_with(&events, overhead.clone()).total_tokens;
+            let plan = plan_evictions(&events, &policy, live, &RecencyScorer);
+            apply(&mut events, &plan, &mut seq);
+            let after = context_window_with(&events, overhead.clone()).total_tokens;
+            // HARD: never exceeds capacity.
+            assert!(after <= policy.capacity, "turn {turn}: {after} > capacity");
+            // SOFT: with evictable content present, stays at/under high_water after a wave.
+            // (Allow one turn of overshoot before the next wave; assert within high_water + one turn.)
+            assert!(after <= band.high_water + 1_100, "turn {turn}: {after} over band");
+        }
+    }
+}
