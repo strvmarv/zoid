@@ -54,6 +54,8 @@ pub struct TurnConfig {
     /// Context-management policy for this turn. Chat gets it from `[economy]`;
     /// subagents get `subagent_policy()`. Drives automatic tool-result compaction.
     pub policy: zoid_core::assembler::ContextPolicy,
+    /// Live eviction band parameters. `disabled()` for subagents/tests.
+    pub eviction: zoid_core::eviction::EvictionPolicy,
 }
 
 /// The orchestrator (Chat) turn config for an explicit mode profile + skill menu.
@@ -73,6 +75,7 @@ pub fn chat_turn_config_with(profile: &AgentProfile, skill_menu: &str) -> TurnCo
         cwd: PathBuf::from("."),
         branch: BranchId::default(),
         policy: zoid_core::assembler::ContextPolicy::default(),
+        eviction: zoid_core::eviction::EvictionPolicy::disabled(),
     }
 }
 

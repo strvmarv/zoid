@@ -2826,6 +2826,14 @@ fn spawn_turn(app: &mut App) {
     let menu = app.skills.menu();
     let mut turn_config = zoid::agent::chat_turn_config_with(profile, &menu);
     turn_config.policy = policy_from_config(&app.economy, app.context_target);
+    turn_config.eviction = zoid_core::eviction::EvictionPolicy {
+        enabled: app.economy.compact_threshold_pct > 0, // master switch (back-compat)
+        capacity: app.shell.ctx_ceiling,                // capacity = model window
+        context_target: app.context_target,             // resolved soft setpoint
+        band_headroom_pct: app.economy.band_headroom_pct,
+        recent_n: app.economy.recent_n,
+        max_output: None, // Slice-4 catalog supplies this; None → derived reserve
+    };
     // Mint a fresh cancellation token for this turn and keep a clone so
     // `Action::CancelTurn` (Esc/Ctrl-C) can fire it. Cleared on `TurnComplete`.
     let cancel = tokio_util::sync::CancellationToken::new();

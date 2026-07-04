@@ -10,6 +10,7 @@ pub mod config;
 pub mod context;
 pub mod economy;
 pub mod event;
+pub mod eviction;
 pub mod projection;
 pub mod secret;
 pub mod session;
