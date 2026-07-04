@@ -97,6 +97,57 @@ pub const PROVIDERS: &[ProviderEntry] = &[
     },
 ];
 
+/// Per-model capabilities. One entry per known model id (case-insensitive
+/// lookup). Unknown models get a conservative default (32k, no prompt cache).
+const MODEL_CAPS: &[(&str, ModelInfo)] = &[
+    (
+        "claude-sonnet-4-6",
+        ModelInfo {
+            context_window: 200_000,
+            max_output: 0,
+            tools: true,
+            prompt_cache: true,
+        },
+    ),
+    (
+        "claude-opus-4-8",
+        ModelInfo {
+            context_window: 200_000,
+            max_output: 0,
+            tools: true,
+            prompt_cache: true,
+        },
+    ),
+    (
+        "glm-5.2:cloud",
+        ModelInfo {
+            context_window: 256_000,
+            max_output: 0,
+            tools: true,
+            prompt_cache: false,
+        },
+    ),
+    (
+        "deepseek-v4-pro",
+        ModelInfo {
+            context_window: 128_000,
+            max_output: 0,
+            tools: true,
+            prompt_cache: false,
+        },
+    ),
+];
+
+/// Conservative fallback for models not in the registry. Under-estimating the
+/// window makes ACM compact a little early (safe); over-estimating risks never
+/// compacting and overflowing the real window.
+const DEFAULT_MODEL_INFO: ModelInfo = ModelInfo {
+    context_window: 32_000,
+    max_output: 0,
+    tools: true,
+    prompt_cache: false,
+};
+
 /// Resolve a stored/legacy provider id to its canonical registry id.
 /// Preserves today's behavior: bare `ollama` meant the cloud endpoint.
 pub fn canonical_id(raw: &str) -> &str {
@@ -132,27 +183,16 @@ pub fn selectable() -> impl Iterator<Item = &'static ProviderEntry> {
     PROVIDERS.iter().filter(|e| e.status == Status::Available)
 }
 
-/// Capabilities for `model`, matched by family (case-insensitive), else DEFAULT.
+/// Capabilities for `model`, looked up by exact id (case-insensitive) in the
+/// `MODEL_CAPS` table. Unknown models get a conservative default (32k, no
+/// prompt cache).
 pub fn model_info(model: &str) -> ModelInfo {
     let m = model.to_ascii_lowercase();
-    // Explicit per-family windows. Unknown models take a CONSERVATIVE default:
-    // under-estimating the window makes ACM compact a little early (safe);
-    // over-estimating risks never compacting and overflowing the real window.
-    let context_window = if m.contains("claude") {
-        200_000
-    } else if m.contains("glm") {
-        256_000
-    } else if m.contains("deepseek") {
-        128_000
-    } else {
-        32_000 // conservative default for unknown / small local models
-    };
-    ModelInfo {
-        context_window,
-        max_output: 0,
-        tools: true,
-        prompt_cache: m.contains("claude"),
-    }
+    MODEL_CAPS
+        .iter()
+        .find(|(id, _)| id.to_ascii_lowercase() == m)
+        .map(|(_, info)| *info)
+        .unwrap_or(DEFAULT_MODEL_INFO)
 }
 
 #[cfg(test)]
@@ -160,19 +200,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn model_info_windows_are_explicit_per_model() {
-        // Known models get their real window.
+    fn model_info_exact_lookup() {
         assert_eq!(model_info("claude-sonnet-4-6").context_window, 200_000);
+        assert!(model_info("claude-sonnet-4-6").prompt_cache);
         assert_eq!(model_info("claude-opus-4-8").context_window, 200_000);
         assert_eq!(model_info("glm-5.2:cloud").context_window, 256_000);
+        assert!(!model_info("glm-5.2:cloud").prompt_cache);
         assert_eq!(model_info("deepseek-v4-pro").context_window, 128_000);
-        // Case-insensitive family match still works.
-        assert_eq!(model_info("CLAUDE-sonnet-4-6").context_window, 200_000);
+        assert!(!model_info("deepseek-v4-pro").prompt_cache);
+    }
+
+    #[test]
+    fn model_info_case_insensitive() {
+        assert_eq!(model_info("CLAUDE-SONNET-4-6").context_window, 200_000);
         assert_eq!(model_info("DEEPSEEK-V4-PRO").context_window, 128_000);
-        // Unknown models take the CONSERVATIVE (small) default, never an
-        // optimistic large one — an over-high window makes ACM under-compact.
-        assert_eq!(model_info("some-tiny-local:8b").context_window, 32_000);
-        assert!(model_info("anything").tools);
+        assert_eq!(model_info("GlM-5.2:ClOuD").context_window, 256_000);
+    }
+
+    #[test]
+    fn model_info_unknown_falls_back_to_conservative_default() {
+        let info = model_info("some-tiny-local:8b");
+        assert_eq!(info.context_window, 32_000);
+        assert!(!info.prompt_cache);
+        assert!(info.tools);
     }
 
     #[test]
