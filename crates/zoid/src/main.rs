@@ -679,9 +679,11 @@ impl ProjectionCache {
 
 /// Inputs that determine the rendered conversation body. Scroll offset is NOT
 /// here — scrolling reuses the cached body — which is the whole point.
+/// `events_len` is deliberately excluded: during streaming it changes on every
+/// ModelDelta, but the message count stays the same. The cache detects this
+/// case and only re-renders the last message (O(1)) instead of the full body.
 #[derive(PartialEq, Eq)]
 struct BodyKey {
-    events_len: usize,
     zoom: zoid_tui::state::Zoom,
     width: usize,
     streaming: bool,
@@ -695,6 +697,10 @@ struct BodyKey {
 /// pass), rebuilt only when a `BodyKey` input changes. A scroll-event burst then
 /// reuses these lines every frame instead of re-rendering the whole transcript,
 /// which is what made buffered scroll events drain at ~52ms each.
+///
+/// During streaming, when the message count hasn't changed (only the last
+/// message's text is growing), only the last message is re-rendered and spliced
+/// into the cached body — O(1) per frame instead of O(n).
 #[derive(Default)]
 struct BodyCache {
     key: Option<BodyKey>,
@@ -702,24 +708,54 @@ struct BodyCache {
     /// Per-message start-line indices for the cached body (length == msgs.len()),
     /// used to re-anchor the viewport to the top message across a zoom change.
     msg_starts: Vec<usize>,
+    /// Number of ChatMsg items the cached body was built from. When this matches
+    /// during streaming, only the last message is re-rendered (incremental).
+    msg_count: usize,
 }
 
 impl BodyCache {
-    /// Rebuild the body iff `key` changed; cheap no-op otherwise.
+    /// Rebuild the body iff `key` changed; cheap no-op otherwise. During
+    /// streaming, when the message count hasn't changed (only the last
+    /// message's text is growing), only the last message is re-rendered and
+    /// spliced into the cached body — O(1) per frame instead of O(n).
     fn refresh(&mut self, key: BodyKey, msgs: &[zoid_core::projection::ChatMsg], width: usize) {
-        if self.key.as_ref() == Some(&key) {
+        if self.key.as_ref() == Some(&key) && self.msg_count == msgs.len() {
             return;
         }
         let view = ChatView {
             zoom: key.zoom,
             caret_on: key.caret,
-            reveal: None, // full body; reveal truncation is applied at paint time
+            reveal: None,
             tz_offset_secs: key.tz,
         };
+        // Incremental streaming: same message count, only the last message's
+        // text is growing. Re-render just the last message and splice it in.
+        if self.key.as_ref() == Some(&key)
+            && self.msg_count == msgs.len()
+            && self.msg_count > 0
+            && key.streaming
+        {
+            let last_idx = msgs.len() - 1;
+            let start = self.msg_starts[last_idx];
+            // Remove the old trailing blank + old last-message lines, then
+            // re-render the last message and re-append the trailing blank.
+            self.body.truncate(start);
+            let (new_lines, _) = zoid_tui::chat::conversation_view_indexed(
+                &msgs[last_idx..],
+                &view,
+                key.streaming,
+                width,
+            );
+            // conversation_view_indexed appends a trailing blank; we want it.
+            self.body.extend(new_lines);
+            return;
+        }
+        // Full rebuild.
         let (body, starts) =
             zoid_tui::chat::conversation_view_indexed(msgs, &view, key.streaming, width);
         self.body = body;
         self.msg_starts = starts;
+        self.msg_count = msgs.len();
         self.key = Some(key);
     }
 }
@@ -1068,7 +1104,6 @@ async fn run<B: ratatui::backend::Backend>(
         };
         app.body_cache.refresh(
             BodyKey {
-                events_len: app.events.len(),
                 zoom,
                 width: body_w,
                 streaming,
