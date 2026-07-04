@@ -55,6 +55,13 @@ impl EventStore {
             CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
                 content,
                 event_id UNINDEXED
+            );
+            CREATE TABLE IF NOT EXISTS event_embeddings (
+                event_id  TEXT NOT NULL,
+                model_id  TEXT NOT NULL,
+                dim       INTEGER NOT NULL,
+                vector    BLOB NOT NULL,
+                PRIMARY KEY (event_id, model_id)
             );",
         )?;
         Ok(EventStore { conn })
@@ -448,6 +455,17 @@ mod tests {
         let n: i64 = s
             .conn
             .query_row("SELECT count(*) FROM secrets", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn open_creates_event_embeddings_table() {
+        let s = EventStore::open(":memory:").unwrap();
+        // If the table exists this query succeeds (0 rows); otherwise it errors.
+        let n: i64 = s
+            .conn
+            .query_row("SELECT count(*) FROM event_embeddings", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 0);
     }
