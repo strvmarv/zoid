@@ -287,6 +287,13 @@ async fn run_turn_inner(
             .await?;
         }
 
+        // Check for tool-result compactions after every sub-turn (not just
+        // after tool execution). Without this, text-only responses (the common
+        // case) would break out of the loop before reaching record_compactions,
+        // and the context window would grow unbounded until the model happens
+        // to call a tool.
+        record_compactions(&session, &mut events, ui, config, session_id, now).await?;
+
         if pending.is_empty() {
             break 'turn; // model answered without tools — turn complete
         }
