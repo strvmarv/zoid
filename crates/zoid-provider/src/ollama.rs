@@ -153,6 +153,38 @@ pub fn parse_ollama_tags(body: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Extract context window from an Ollama `/api/show` response body. The
+/// `model_info` map carries family-specific keys like `glm.context_length`,
+/// `llama.context_length`, etc. — we try known keys and fall back to any
+/// key ending in `.context_length`. Returns `None` when unparseable.
+pub fn parse_ollama_context_window(body: &str) -> Option<u64> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let info = v.get("model_info")?;
+    // Try known family keys first, then any `*.context_length` key.
+    for key in &[
+        "glm.context_length",
+        "llama.context_length",
+        "deepseek.context_length",
+        "qwen.context_length",
+        "mistral.context_length",
+    ] {
+        if let Some(n) = info.get(key).and_then(|v| v.as_f64()) {
+            return Some(n as u64);
+        }
+    }
+    // Fallback: scan for any key ending in `.context_length`.
+    if let Some(obj) = info.as_object() {
+        for (k, v) in obj {
+            if k.ends_with(".context_length") {
+                if let Some(n) = v.as_f64() {
+                    return Some(n as u64);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Streaming Ollama Cloud provider (native Chat API).
 pub struct OllamaProvider {
     api_key: String,
@@ -259,6 +291,25 @@ impl Provider for OllamaProvider {
             .send()
             .await?;
         Ok(parse_ollama_tags(&resp.text().await?))
+    }
+
+    async fn fetch_model_info(&self, model: &str) -> Result<Option<crate::model::ModelInfo>> {
+        let resp = self
+            .client
+            .post(format!("{}/api/show", self.base_url))
+            .header("authorization", format!("Bearer {}", self.api_key))
+            .header("content-type", "application/json")
+            .json(&serde_json::json!({ "model": model }))
+            .send()
+            .await?;
+        let body = resp.text().await?;
+        let window = parse_ollama_context_window(&body);
+        Ok(window.map(|w| crate::model::ModelInfo {
+            context_window: w,
+            max_output: 0,
+            tools: true,
+            prompt_cache: false, // Ollama has no token-level prompt cache
+        }))
     }
 }
 
@@ -504,5 +555,24 @@ mod tests {
     fn ollama_tags_empty_or_bad_is_empty() {
         assert!(parse_ollama_tags("{}").is_empty());
         assert!(parse_ollama_tags("not json").is_empty());
+    }
+
+    #[test]
+    fn parse_context_window_from_show_response() {
+        let body = r#"{"model_info":{"glm.context_length":256000.0}}"#;
+        assert_eq!(parse_ollama_context_window(body), Some(256_000));
+    }
+
+    #[test]
+    fn parse_context_window_fallback_to_any_dot_context_length() {
+        let body = r#"{"model_info":{"some.family.context_length":128000.0}}"#;
+        assert_eq!(parse_ollama_context_window(body), Some(128_000));
+    }
+
+    #[test]
+    fn parse_context_window_returns_none_when_missing() {
+        assert_eq!(parse_ollama_context_window(r#"{"model_info":{}}"#), None);
+        assert_eq!(parse_ollama_context_window("{}"), None);
+        assert_eq!(parse_ollama_context_window("not json"), None);
     }
 }

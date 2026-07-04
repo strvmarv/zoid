@@ -123,6 +123,13 @@ pub trait Provider: Send + Sync {
     async fn list_models(&self) -> Result<Vec<String>> {
         Ok(Vec::new())
     }
+
+    /// Fetch capabilities for a specific model. Returns `None` when the
+    /// provider doesn't support capability introspection — the static
+    /// `MODEL_CAPS` registry is the fallback. Default: `None`.
+    async fn fetch_model_info(&self, _model: &str) -> Result<Option<model::ModelInfo>> {
+        Ok(None)
+    }
 }
 
 /// A deterministic, offline provider that replays a scripted event list.

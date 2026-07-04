@@ -84,6 +84,13 @@ pub enum AgentUpdate {
         provider: String,
         models: Vec<String>,
     },
+    /// Dynamically-fetched model capabilities (context window, prompt cache,
+    /// etc.) from the provider's introspection endpoint. Tagged with the model
+    /// id so a stale fetch for a superseded model is dropped.
+    ModelInfoFetched {
+        model: String,
+        info: zoid_provider::model::ModelInfo,
+    },
 }
 
 /// The tool specs to advertise to the provider.

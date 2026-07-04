@@ -439,6 +439,27 @@ fn select_provider(
     }
 }
 
+/// Spawn a background fetch of the active model's capabilities (context window,
+/// prompt cache, etc.) from the provider's introspection endpoint. Results
+/// arrive as `AgentUpdate::ModelInfoFetched`. Non-fatal: any error → the static
+/// MODEL_CAPS table remains the fallback.
+fn spawn_model_info_fetch(
+    provider: Arc<dyn Provider>,
+    model: String,
+    ui_tx: mpsc::Sender<AgentUpdate>,
+) {
+    tokio::spawn(async move {
+        match provider.fetch_model_info(&model).await {
+            Ok(Some(info)) => {
+                let _ = ui_tx
+                    .send(AgentUpdate::ModelInfoFetched { model, info })
+                    .await;
+            }
+            _ => {} // error or None → keep the static fallback
+        }
+    });
+}
+
 /// Spawn a background fetch of a provider's model list; the result is delivered
 /// as `AgentUpdate::ModelsFetched`. Non-fatal: any error → empty list (the
 /// picker keeps its static registry fallback).
@@ -820,6 +841,10 @@ struct App {
     /// while the question overlay is up. Dropping it (Esc-abort) makes the
     /// agent loop record a balanced "[user aborted]" result and end the turn.
     pending_answer: Option<tokio::sync::oneshot::Sender<zoid::agent::Answer>>,
+    /// Dynamically-fetched model capabilities (from Ollama `/api/show` etc.),
+    /// overriding the static MODEL_CAPS table. `None` until the first fetch
+    /// lands (or when the provider doesn't support capability introspection).
+    fetched_model_info: Option<zoid_provider::model::ModelInfo>,
 }
 
 impl App {
@@ -969,6 +994,7 @@ async fn main() -> Result<()> {
         session_ids: Vec::new(),
         delegating: false,
         pending_answer: None,
+        fetched_model_info: None,
     };
 
     enable_raw_mode()?;
@@ -987,6 +1013,15 @@ async fn main() -> Result<()> {
         );
     }
     let mut terminal = Terminal::new(CrosstermBackend::new(out))?;
+
+    // Fetch the active model's capabilities (context window, prompt cache) from
+    // the provider's introspection endpoint. The static MODEL_CAPS table is the
+    // fallback until this lands (or if the provider doesn't support it).
+    spawn_model_info_fetch(
+        app.provider.clone(),
+        app.model.clone(),
+        app.ui_tx.clone(),
+    );
 
     let result = run(&mut terminal, &mut app, &mut ui_rx).await;
 
@@ -1293,6 +1328,21 @@ async fn run<B: ratatui::backend::Backend>(
                         // the active provider, the quick-switch on its highlight.
                         apply_switch_models_fetched(app, provider.clone(), models.clone());
                         apply_models_fetched(app, provider, models);
+                    }
+                    AgentUpdate::ModelInfoFetched { model, info } => {
+                        // Drop a stale fetch: the user switched models while this
+                        // was in flight.
+                        if model == app.model {
+                            app.fetched_model_info = Some(info);
+                            // Live-apply the context ceiling (unless the user
+                            // set an explicit override in config).
+                            app.shell.ctx_ceiling = app
+                                .config
+                                .economy
+                                .context_ceiling
+                                .unwrap_or(info.context_window);
+                            app.shell.cache_supported = info.prompt_cache;
+                        }
                     }
                 }
             }
@@ -1627,6 +1677,9 @@ fn apply_config_write(
     app.provider = provider;
     app.shell.provider = provider_label(provider_name, has_key);
     app.shell.cache_supported = zoid_provider::has_prompt_cache(&app.model);
+    // Fetch the new model's capabilities from the provider; the static table
+    // is the fallback until the fetch lands.
+    spawn_model_info_fetch(app.provider.clone(), app.model.clone(), app.ui_tx.clone());
 }
 
 async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result<bool> {
@@ -2940,6 +2993,7 @@ mod tests {
             session_ids: Vec::new(),
             delegating: false,
             pending_answer: None,
+            fetched_model_info: None,
         }
     }
 
