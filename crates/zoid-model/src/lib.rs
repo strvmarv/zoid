@@ -110,7 +110,12 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
         ModelInfo {
             context_window: 200_000,
             max_output: 0,
-            tools: true,
+            // Anthropic tool-use is not wired yet: the provider's request_body
+            // doesn't send a `tools` array and can't parse `tool_use` frames, so
+            // Claude can't actually call tools here. Report false rather than
+            // advertise an unfulfilled capability (the "capability lie"). Flip to
+            // true when the tool_use/tool_result wire mapping lands.
+            tools: false,
             prompt_cache: true,
         },
     ),
@@ -119,7 +124,12 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
         ModelInfo {
             context_window: 200_000,
             max_output: 0,
-            tools: true,
+            // Anthropic tool-use is not wired yet: the provider's request_body
+            // doesn't send a `tools` array and can't parse `tool_use` frames, so
+            // Claude can't actually call tools here. Report false rather than
+            // advertise an unfulfilled capability (the "capability lie"). Flip to
+            // true when the tool_use/tool_result wire mapping lands.
+            tools: false,
             prompt_cache: true,
         },
     ),
@@ -213,6 +223,15 @@ mod tests {
         assert!(!model_info("glm-5.2:cloud").prompt_cache);
         assert_eq!(model_info("deepseek-v4-pro").context_window, 128_000);
         assert!(!model_info("deepseek-v4-pro").prompt_cache);
+    }
+
+    #[test]
+    fn tools_capability_matches_what_providers_actually_support() {
+        // Ollama's native tool-calling is wired + tested; Anthropic tool-use is
+        // NOT implemented yet, so the catalog must not claim it.
+        assert!(model_info("glm-5.2:cloud").tools);
+        assert!(!model_info("claude-sonnet-4-6").tools);
+        assert!(!model_info("claude-opus-4-8").tools);
     }
 
     #[test]
