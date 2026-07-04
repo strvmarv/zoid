@@ -54,7 +54,8 @@ impl EventStore {
             );
             CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
                 content,
-                event_id UNINDEXED
+                event_id UNINDEXED,
+                session_id UNINDEXED
             );
             CREATE TABLE IF NOT EXISTS event_embeddings (
                 event_id  TEXT NOT NULL,
@@ -87,23 +88,28 @@ impl EventStore {
         )?;
         if let Some(content) = fts_content(&event.kind) {
             tx.execute(
-                "INSERT INTO events_fts (content, event_id) VALUES (?1, ?2)",
-                params![content, event.id.to_string()],
+                "INSERT INTO events_fts (content, event_id, session_id) VALUES (?1, ?2, ?3)",
+                params![content, event.id.to_string(), event.session_id.to_string()],
             )?;
         }
         tx.commit()?;
         Ok(())
     }
 
-    /// BM25-ranked recall over all indexed content. Returns matching event ids,
-    /// best-first. The query is passed to FTS5 wrapped in double quotes so a raw
-    /// user string can't be interpreted as FTS syntax (quotes inside are escaped).
-    pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<Ulid>> {
+    /// BM25-ranked recall over the caller's session content. Returns matching
+    /// event ids, best-first, scoped to `session_id` so one session can never
+    /// surface another session's (or another repo's) indexed content. The
+    /// query is passed to FTS5 wrapped in double quotes so a raw user string
+    /// can't be interpreted as FTS syntax (quotes inside are escaped).
+    pub fn search_fts(&self, query: &str, session_id: Ulid, limit: usize) -> Result<Vec<Ulid>> {
         let safe = format!("\"{}\"", query.replace('"', "\"\""));
         let mut stmt = self.conn.prepare(
-            "SELECT event_id FROM events_fts WHERE events_fts MATCH ?1 ORDER BY rank LIMIT ?2",
+            "SELECT event_id FROM events_fts WHERE events_fts MATCH ?1 AND session_id = ?2 ORDER BY rank LIMIT ?3",
         )?;
-        let rows = stmt.query_map(params![safe, limit as i64], |r| r.get::<_, String>(0))?;
+        let rows = stmt.query_map(
+            params![safe, session_id.to_string(), limit as i64],
+            |r| r.get::<_, String>(0),
+        )?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r?.parse()?);
@@ -482,7 +488,7 @@ mod tests {
             },
         );
         store.append(&e).unwrap();
-        let hits = store.search_fts("ceiling", 10).unwrap();
+        let hits = store.search_fts("ceiling", Ulid::from(0u128), 10).unwrap();
         assert_eq!(hits, vec![Ulid::from(1u128)]);
     }
 
@@ -509,7 +515,7 @@ mod tests {
                 },
             ))
             .unwrap();
-        let ids = store.search_fts("indexing", 10).unwrap();
+        let ids = store.search_fts("indexing", Ulid::from(0u128), 10).unwrap();
         assert_eq!(ids, vec![Ulid::from(1u128)]);
         let evs = store.events_by_ids(&ids).unwrap();
         assert_eq!(evs.len(), 1);
@@ -520,7 +526,52 @@ mod tests {
     fn search_bad_query_does_not_panic() {
         let store = EventStore::open(":memory:").unwrap();
         // FTS5 special chars must not blow up recall.
-        assert!(store.search_fts("\"unbalanced", 5).is_ok() || store.search_fts("\"unbalanced", 5).is_err());
+        let sid = Ulid::from(0u128);
+        assert!(
+            store.search_fts("\"unbalanced", sid, 5).is_ok()
+                || store.search_fts("\"unbalanced", sid, 5).is_err()
+        );
+    }
+
+    #[test]
+    fn search_fts_is_session_scoped() {
+        let store = EventStore::open(":memory:").unwrap();
+        let sa = Ulid::from(100u128);
+        let sb = Ulid::from(200u128);
+        store
+            .append(
+                &Event::new(
+                    Ulid::from(1u128),
+                    None,
+                    1,
+                    EventKind::UserMessage {
+                        text: "shared secret token".into(),
+                    },
+                )
+                .with_session(sa),
+            )
+            .unwrap();
+        store
+            .append(
+                &Event::new(
+                    Ulid::from(2u128),
+                    None,
+                    2,
+                    EventKind::UserMessage {
+                        text: "shared secret token".into(),
+                    },
+                )
+                .with_session(sb),
+            )
+            .unwrap();
+        assert_eq!(
+            store.search_fts("secret", sa, 10).unwrap(),
+            vec![Ulid::from(1u128)]
+        );
+        assert_eq!(
+            store.search_fts("secret", sb, 10).unwrap(),
+            vec![Ulid::from(2u128)]
+        );
     }
 
     #[test]

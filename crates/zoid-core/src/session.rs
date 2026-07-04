@@ -41,6 +41,7 @@ enum Cmd {
     },
     Recall {
         query: String,
+        session_id: Ulid,
         limit: usize,
         reply: oneshot::Sender<Result<Vec<Event>>>,
     },
@@ -107,9 +108,14 @@ impl SessionHandle {
                         })();
                         let _ = reply.send(out);
                     }
-                    Cmd::Recall { query, limit, reply } => {
+                    Cmd::Recall {
+                        query,
+                        session_id,
+                        limit,
+                        reply,
+                    } => {
                         let out = store
-                            .search_fts(&query, limit)
+                            .search_fts(&query, session_id, limit)
                             .and_then(|ids| store.events_by_ids(&ids));
                         let _ = reply.send(out);
                     }
@@ -211,11 +217,17 @@ impl SessionHandle {
             .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
     }
 
-    /// Search the cold tier (BM25 via FTS5) and load matching events, best-first.
-    pub async fn recall(&self, query: String, limit: usize) -> Result<Vec<Event>> {
+    /// Search the cold tier (BM25 via FTS5), scoped to `session_id`, and load
+    /// matching events, best-first.
+    pub async fn recall(&self, query: String, session_id: Ulid, limit: usize) -> Result<Vec<Event>> {
         let (reply, rx) = oneshot::channel();
         self.tx
-            .send(Cmd::Recall { query, limit, reply })
+            .send(Cmd::Recall {
+                query,
+                session_id,
+                limit,
+                reply,
+            })
             .await
             .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
         rx.await
@@ -316,7 +328,7 @@ mod tests {
         ))
         .await
         .unwrap();
-        let hits = h.recall("vector".into(), 10).await.unwrap();
+        let hits = h.recall("vector".into(), Ulid::from(0u128), 10).await.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, Ulid::from(1u128));
     }
