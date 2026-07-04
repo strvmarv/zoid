@@ -4,6 +4,13 @@
 
 use serde::Deserialize;
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SkillsConfig {
+    /// Extra directories to scan for `<skill>/SKILL.md` files (beyond the
+    /// convention dirs the bin adds). Unioned across config layers.
+    pub source_dirs: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub provider: String,
@@ -11,6 +18,7 @@ pub struct Config {
     pub model: String,
     pub economy: EconomyConfig,
     pub reduced_motion: bool,
+    pub skills: SkillsConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +50,7 @@ impl Default for Config {
             model: String::new(), // empty → binary falls back to provider default_model()
             economy: EconomyConfig::default(),
             reduced_motion: false,
+            skills: SkillsConfig::default(),
         }
     }
 }
@@ -92,12 +101,19 @@ pub struct PartialEconomy {
 
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+pub struct PartialSkills {
+    pub source_dirs: Option<Vec<String>>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct PartialConfig {
     pub provider: Option<String>,
     pub base_url: Option<String>,
     pub model: Option<String>,
     pub reduced_motion: Option<bool>,
     pub economy: PartialEconomy,
+    pub skills: PartialSkills,
 }
 
 /// Parse one TOML layer. Unknown keys are rejected so typos surface early.
@@ -153,6 +169,13 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
             cfg.economy.token_ceiling = Some(v);
             prov.token_ceiling = *src;
         }
+        if let Some(dirs) = &p.skills.source_dirs {
+            for d in dirs {
+                if !cfg.skills.source_dirs.contains(d) {
+                    cfg.skills.source_dirs.push(d.clone());
+                }
+            }
+        }
     }
     (cfg, prov)
 }
@@ -187,6 +210,23 @@ mod merge_tests {
     #[test]
     fn unknown_key_is_rejected() {
         assert!(parse_toml("bogus = 1").is_err());
+    }
+
+    #[test]
+    fn parses_skills_source_dirs() {
+        let p = parse_toml("[skills]\nsource_dirs = [\"a\", \"b\"]").unwrap();
+        assert_eq!(p.skills.source_dirs, Some(vec!["a".to_string(), "b".to_string()]));
+    }
+
+    #[test]
+    fn merge_unions_source_dirs_across_layers() {
+        let user = parse_toml("[skills]\nsource_dirs = [\"a\", \"b\"]").unwrap();
+        let proj = parse_toml("[skills]\nsource_dirs = [\"b\", \"c\"]").unwrap();
+        let (cfg, _) = merge(&[(Source::UserGlobal, user), (Source::Project, proj)]);
+        assert_eq!(
+            cfg.skills.source_dirs,
+            vec!["a".to_string(), "b".to_string(), "c".to_string()] // "b" not duplicated
+        );
     }
 }
 
