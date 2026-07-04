@@ -1942,21 +1942,51 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             let n = zoid_tui::palette::selectable_matches(&items, &app.shell.palette.query).len();
             app.shell.palette.selected = zoid_tui::palette::nav(app.shell.palette.selected, d, n);
         }
-        Action::PaletteChar(c) => {
-            app.shell.palette.query.push(c);
-            app.shell.palette.selected = 0;
-        }
-        Action::PaletteBackspace => {
-            app.shell.palette.query.pop();
-            app.shell.palette.selected = 0;
-        }
-        Action::PaletteRun => {
-            let cmd = palette_selected_command(&app.shell);
-            app.shell.close_overlay();
-            if let Some(c) = cmd {
-                return exec_command(app, c).await;
+        Action::PaletteChar(c) => match &mut app.shell.palette.stage {
+            zoid_tui::state::PaletteStage::Pick => {
+                app.shell.palette.query.push(c);
+                app.shell.palette.selected = 0;
             }
-        }
+            zoid_tui::state::PaletteStage::Arg { input, .. } => input.push(c),
+        },
+        Action::PaletteBackspace => match &mut app.shell.palette.stage {
+            zoid_tui::state::PaletteStage::Pick => {
+                app.shell.palette.query.pop();
+                app.shell.palette.selected = 0;
+            }
+            zoid_tui::state::PaletteStage::Arg { input, .. } => {
+                input.pop();
+            }
+        },
+        Action::PaletteRun => match app.shell.palette.stage.clone() {
+            zoid_tui::state::PaletteStage::Pick => {
+                match palette_selected_command(&app.shell) {
+                    // Parameterized command → enter inline Arg phase, stay open.
+                    Some(cmd) => match zoid_tui::palette::arg_kind_for(&cmd) {
+                        Some(kind) => {
+                            app.shell.palette.stage = zoid_tui::state::PaletteStage::Arg {
+                                kind,
+                                input: String::new(),
+                            };
+                        }
+                        None => {
+                            app.shell.close_overlay();
+                            return exec_command(app, cmd).await;
+                        }
+                    },
+                    // No matching row → do nothing (overlay stays open).
+                    None => {}
+                }
+            }
+            zoid_tui::state::PaletteStage::Arg { kind, input } => {
+                // Empty argument is a no-op (cannot rename to empty); stay in Arg.
+                if !input.is_empty() {
+                    let cmd = kind.build(input);
+                    app.shell.close_overlay();
+                    return exec_command(app, cmd).await;
+                }
+            }
+        },
         Action::PaletteArgCancel => {
             app.shell.palette.stage = zoid_tui::state::PaletteStage::Pick;
         }
