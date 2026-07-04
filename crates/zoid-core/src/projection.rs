@@ -47,24 +47,15 @@ pub enum ChatMsg {
 /// Fold the event log into ordered `ChatMsg` items. A run of `ModelDelta` plus
 /// any `ToolCall`s before the next user/tool-result/assistant boundary collapses
 /// into one `Assistant` item; `ToolResult` events become their own items. Pure.
+///
+/// `TurnsDropped` markers do NOT filter the conversation: the transcript pane
+/// and the model request both see the full history. Turn-dropping is a
+/// `context_window`-only concern (the economy/compaction view), never a
+/// transcript or request concern — filtering here would silently wipe the
+/// visible history and the model's context, which is what compaction was
+/// doing. (See `context.rs::context_window` for the window-scoped filter.)
 pub fn conversation(events: &[Event]) -> Vec<ChatMsg> {
-    // Layer 4 (sliding window): find the last TurnsDropped marker and skip all
-    // events before it. The dropped events stay in the DB/transcript but are
-    // excluded from the provider request and the live conversation view.
-    let drop_before_ts: Option<i64> = events
-        .iter()
-        .rev()
-        .find_map(|e| match &e.kind {
-            EventKind::TurnsDropped { .. } => Some(e.ts),
-            _ => None,
-        });
-    let visible: &[Event] = match drop_before_ts {
-        Some(cutoff) => {
-            let idx = events.iter().position(|e| e.ts > cutoff).unwrap_or(events.len());
-            &events[idx..]
-        }
-        None => events,
-    };
+    let visible: &[Event] = events;
 
     // ACM-1: a tool-result whose id has a later ToolResultCompacted is emitted
     // as its summary (last write wins), both to the live request and the view.
@@ -507,6 +498,33 @@ mod tests {
             "live request must carry the summary, not the dump"
         );
         assert!(tr.1, "must be flagged compacted for the transcript");
+    }
+
+    #[test]
+    fn conversation_does_not_filter_turns_dropped() {
+        // TurnsDropped is now inert metadata — it must NOT filter the
+        // conversation (transcript + model request). All turns stay visible.
+        let ev = |id: u128, ts: i64, kind| Event::new(Ulid::from(id), None, ts, kind);
+        let events = vec![
+            ev(1, 100, EventKind::UserMessage { text: "turn 0".into() }),
+            ev(2, 200, EventKind::ModelDelta { text: "reply 0".into() }),
+            ev(3, 300, EventKind::UserMessage { text: "turn 1".into() }),
+            ev(4, 400, EventKind::ModelDelta { text: "reply 1".into() }),
+            // Marker claiming turns 0-1 were dropped.
+            ev(5, 450, EventKind::TurnsDropped { turns_dropped: 2 }),
+            ev(6, 500, EventKind::UserMessage { text: "turn 2".into() }),
+            ev(7, 600, EventKind::ModelDelta { text: "reply 2".into() }),
+        ];
+        let conv = conversation(&events);
+        // All three turns must be present — the marker does NOT filter.
+        let texts: Vec<&str> = conv
+            .iter()
+            .filter_map(|m| match m {
+                ChatMsg::User { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, vec!["turn 0", "turn 1", "turn 2"]);
     }
 
     proptest! {

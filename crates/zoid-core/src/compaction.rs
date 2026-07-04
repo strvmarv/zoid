@@ -2,7 +2,7 @@
 //! compactions. Pure — the agent loop records the results as events.
 
 use crate::assembler::ContextPolicy;
-use crate::context::{context_window, tool_id_of, ItemKind};
+use crate::context::{context_window_with, tool_id_of, ContextOverhead, ItemKind};
 use crate::economy::{estimate_tokens, tool_path};
 use crate::event::{Event, EventKind};
 use std::collections::{HashMap, HashSet};
@@ -19,14 +19,15 @@ pub struct Compaction {
 }
 
 /// The result of planning context management: tool-result compactions
-/// (layer 1) and optionally a turn-drop count (layer 4, sliding window).
+/// (layer 1). Layer 4 (turn-dropping) was removed — it cascaded and wiped
+/// history because the model's `real_input_tokens` never decreased (the
+/// conversation projection sends the full log), so the planner kept firing
+/// `TurnsDropped` until only one turn survived, then re-fired on every new
+/// message. Tool-result compaction (layer 1) is sufficient and self-limiting.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CompactionPlan {
     /// Tool results to compact (layer 1).
     pub compactions: Vec<Compaction>,
-    /// If set, drop this many of the oldest complete turns from the live
-    /// context (layer 4). 0 or None = no turn dropping.
-    pub turns_to_drop: Option<usize>,
 }
 
 /// Plan which tool-results to compact. Empty unless the window exceeds
@@ -35,19 +36,37 @@ pub struct CompactionPlan {
 /// whose summary would not actually shrink them, until back under threshold.
 ///
 /// `real_input_tokens`, when provided (from the provider's last Usage event),
-/// overrides the estimate-based `window.total_tokens` as the current context
-/// size — the chars/4 estimate significantly underestimates for code and tool
-/// results, so compaction would fire far too late without the real count.
+/// is the most accurate measure of the current context size. The chars/4
+/// estimate significantly underestimates for code and tool results (5-7x in
+/// practice), so compaction would fire far too late without the real count.
+///
+/// When `real_input_tokens` is `None` (the provider reported 0 — e.g. Ollama's
+/// `prompt_eval_count=0` when the prompt is fully cached), the estimate-based
+/// `window.total_tokens` is used, scaled by `calibration_ratio` when available.
+/// The ratio is `real_input_tokens / window.total_tokens` from a prior non-cached
+/// sub-turn; applying it to the current estimate yields a current, self-consistent
+/// approximation that reflects prior compactions (both the historical and current
+/// estimates use the same `context_window` projection, so the ratio transfers).
+/// When no calibration has been learned yet (`None`), the raw estimate is used —
+/// better to fire late than to use a stale frozen value that never decreases.
 pub fn plan_compactions(
     events: &[Event],
     policy: &ContextPolicy,
     real_input_tokens: Option<u64>,
+    calibration_ratio: Option<f64>,
+    overhead: &ContextOverhead,
 ) -> CompactionPlan {
     let Some(threshold) = policy.compact_threshold else {
         return CompactionPlan::default();
     };
-    let window = context_window(events);
-    let current = real_input_tokens.unwrap_or(window.total_tokens);
+    let window = context_window_with(events, overhead.clone());
+    let current = match real_input_tokens.filter(|&t| t > 0) {
+        Some(real) => real,
+        None => match calibration_ratio {
+            Some(ratio) if ratio > 0.0 => (window.total_tokens as f64 * ratio) as u64,
+            _ => window.total_tokens,
+        },
+    };
     if current <= threshold {
         return CompactionPlan::default();
     }
@@ -164,7 +183,13 @@ pub fn plan_compactions(
         if summary_tokens >= it.tokens {
             continue; // no gain
         }
-        running -= it.tokens - summary_tokens;
+        // Saturating: `running` is a heuristic pressure counter, not an
+        // accounting balance. When `current` comes from real provider tokens
+        // (which may be larger than the sum of estimate-based item tokens due
+        // to the 5-7x undercount), subtracting an item's estimate tokens can
+        // overshoot. Saturating to 0 is correct — it just means "enough
+        // compacted", and the `running <= threshold` break fires next iteration.
+        running = running.saturating_sub(it.tokens - summary_tokens);
         out.push(Compaction {
             id: tool_call_id.unwrap_or(id).to_string(),
             summary,
@@ -172,46 +197,16 @@ pub fn plan_compactions(
         });
     }
 
-    // Layer 4: if still over threshold after compacting tool results, drop
-    // entire old turns (sliding window). Count complete turns (UserMessage
-    // boundaries) from oldest to newest, estimating how many we need to drop
-    // to get under threshold. We can't measure the exact token savings per
-    // turn (we only have the estimate), so we drop turns one at a time until
-    // the estimated remaining context is under threshold.
-    let mut turns_to_drop = None;
-    if running > threshold {
-        // Count turns: each UserMessage starts a new turn.
-        let turn_starts: Vec<usize> = events
-            .iter()
-            .enumerate()
-            .filter_map(|(i, e)| {
-                matches!(e.kind, EventKind::UserMessage { .. }).then_some(i)
-            })
-            .collect();
-        if turn_starts.len() > 1 {
-            // Estimate per-turn token cost from the context window items.
-            // Group items by turn and sum their estimated tokens.
-            let total_estimate: u64 = window.items.iter().map(|it| it.tokens).sum();
-            let per_turn_avg = total_estimate / turn_starts.len() as u64;
-            let over = running.saturating_sub(threshold);
-            let need_to_drop = if per_turn_avg > 0 {
-                (over / per_turn_avg).max(1) as usize
-            } else {
-                1
-            };
-            // Never drop ALL turns — keep at least the last turn.
-            let max_drop = turn_starts.len().saturating_sub(1);
-            let drop = need_to_drop.min(max_drop);
-            if drop > 0 {
-                running = running.saturating_sub(per_turn_avg.saturating_mul(drop as u64));
-                turns_to_drop = Some(drop);
-            }
-        }
-    }
+    // Layer 4 (turn-dropping) was removed. It cascaded and wiped history:
+    // `real_input_tokens` reflects the full un-truncated context the model
+    // actually receives (the conversation projection sends the full log), so
+    // `current > threshold` was permanently true after the first drop, causing
+    // the planner to emit `TurnsDropped` on every sub-turn until only one turn
+    // remained, then re-fire on every new message. Tool-result compaction
+    // (layer 1 above) is self-limiting and sufficient.
 
     CompactionPlan {
         compactions: out,
-        turns_to_drop,
     }
 }
 
@@ -283,9 +278,9 @@ mod tests {
             big_tool_result("c1", "search", 100),
         ];
         // Threshold huge → nothing to do.
-        assert!(plan_compactions(&evs, &policy(1_000_000), None).compactions.is_empty());
+        assert!(plan_compactions(&evs, &policy(1_000_000), None, None, &ContextOverhead::default()).compactions.is_empty());
         // No threshold set → nothing to do.
-        assert!(plan_compactions(&evs, &ContextPolicy::default(), None).compactions.is_empty());
+        assert!(plan_compactions(&evs, &ContextPolicy::default(), None, None, &ContextOverhead::default()).compactions.is_empty());
     }
 
     #[test]
@@ -295,7 +290,7 @@ mod tests {
             big_tool_result("c1", "search", 400), // biggest
             big_tool_result("c2", "shell", 50),
         ];
-        let plan = plan_compactions(&evs, &policy(500), None);
+        let plan = plan_compactions(&evs, &policy(500), None, None, &ContextOverhead::default());
         assert_eq!(plan.compactions.len(), 1, "only the big one needs compacting");
         assert_eq!(plan.compactions[0].id, "c1");
         assert!(plan.compactions[0].original_tokens > estimate_tokens(&plan.compactions[0].summary));
@@ -313,7 +308,7 @@ mod tests {
             }),
         ];
         // c1 already compacted → nothing left to compact.
-        assert!(plan_compactions(&evs, &policy(1), None).compactions.is_empty());
+        assert!(plan_compactions(&evs, &policy(1), None, None, &ContextOverhead::default()).compactions.is_empty());
     }
 
     #[test]
@@ -378,6 +373,196 @@ mod tests {
         }
     }
 
+    #[test]
+    fn turns_dropped_no_longer_drops_turns() {
+        // Layer 4 (turn-dropping) was removed — it cascaded and wiped history
+        // because real_input_tokens (the full context the model receives)
+        // never decreased, so the planner kept dropping until one turn
+        // survived, then re-fired on every new message. Now plan_compactions
+        // must never return turns_to_drop, no matter how far over threshold.
+        let mut evs = Vec::new();
+        for i in 0..5 {
+            evs.push(Event::new(
+                Ulid::new(),
+                None,
+                1000 + i as i64 * 100,
+                EventKind::UserMessage {
+                    text: format!("turn {i}"),
+                },
+            ));
+            evs.push(Event::new(
+                Ulid::new(),
+                None,
+                1000 + i as i64 * 100 + 50,
+                EventKind::ToolResult {
+                    id: format!("c{i}"),
+                    name: "search".into(),
+                    output: "x".repeat(2000),
+                    is_error: false,
+                },
+            ));
+            // Pre-compact every tool result so layer 1 has nothing to do,
+            // forcing the plan into the (now removed) turn-drop branch.
+            evs.push(Event::new(
+                Ulid::new(),
+                None,
+                1000 + i as i64 * 100 + 60,
+                EventKind::ToolResultCompacted {
+                    id: format!("c{i}"),
+                    summary: "tiny".into(),
+                    original_tokens: 500,
+                },
+            ));
+        }
+        // Threshold = 1 token, real_input_tokens = 100000 → way over, but
+        // layer 4 is gone → no turns dropped, ever.
+        let plan = plan_compactions(&evs, &policy(1), Some(100_000), None, &ContextOverhead::default());
+        assert_eq!(
+            plan.compactions.len(),
+            0,
+            "no compaction candidates (all pre-compacted)"
+        );
+    }
+
+    #[test]
+    fn turns_dropped_marker_is_inert() {
+        // A prior TurnsDropped marker in the log must not affect planning at
+        // all — it is inert metadata now. The window sees the full history.
+        let mut evs = Vec::new();
+        for i in 0..5 {
+            evs.push(Event::new(
+                Ulid::new(),
+                None,
+                1000 + i as i64 * 1000,
+                EventKind::UserMessage {
+                    text: format!("turn {i}"),
+                },
+            ));
+            evs.push(Event::new(
+                Ulid::new(),
+                None,
+                1000 + i as i64 * 1000 + 50,
+                EventKind::ToolResult {
+                    id: format!("c{i}"),
+                    name: "search".into(),
+                    output: "x".repeat(2000),
+                    is_error: false,
+                },
+            ));
+        }
+        // A TurnsDropped marker at ts=4100 — now inert, never filters.
+        evs.push(Event::new(
+            Ulid::new(),
+            None,
+            4100,
+            EventKind::TurnsDropped {
+                turns_dropped: 4,
+            },
+        ));
+        // Even with a huge real_input_tokens, no turns are dropped.
+        let plan = plan_compactions(&evs, &policy(1), Some(100_000), None, &ContextOverhead::default());
+        assert!(
+            plan.compactions.iter().all(|c| c.id.starts_with('c')),
+            "marker must not cause turn-dropping; only tool-result compaction runs"
+        );
+    }
+
+    #[test]
+    fn context_window_ignores_turns_dropped() {
+        use crate::context::context_window;
+        let mut evs = Vec::new();
+        for i in 0..3 {
+            evs.push(Event::new(
+                Ulid::new(),
+                None,
+                1000 + i as i64 * 1000,
+                EventKind::UserMessage {
+                    text: format!("turn {i}"),
+                },
+            ));
+            evs.push(Event::new(
+                Ulid::new(),
+                None,
+                1000 + i as i64 * 1000 + 50,
+                EventKind::ToolResult {
+                    id: format!("c{i}"),
+                    name: "search".into(),
+                    output: format!("output {i}").repeat(100),
+                    is_error: false,
+                },
+            ));
+        }
+        // A TurnsDropped marker — now inert: all turns must remain in the window.
+        evs.push(Event::new(
+            Ulid::new(),
+            None,
+            2100,
+            EventKind::TurnsDropped {
+                turns_dropped: 2,
+            },
+        ));
+        let w = context_window(&evs);
+        let labels: Vec<&str> = w.items.iter().map(|i| i.label.as_str()).collect();
+        // All turns must be present — the marker does NOT filter.
+        assert!(
+            labels.iter().any(|l| l.contains("turn 0")),
+            "dropped turn 0 must still appear in context window (marker is inert)"
+        );
+        assert!(
+            labels.iter().any(|l| l.contains("turn 1")),
+            "dropped turn 1 must still appear in context window (marker is inert)"
+        );
+        assert!(
+            labels.iter().any(|l| l.contains("turn 2")),
+            "surviving turn 2 must appear in context window"
+        );
+    }
+
+    #[test]
+    fn calibration_ratio_scales_estimate_when_real_tokens_absent() {
+        // When the provider reports 0 (cached) and no real_input_tokens is
+        // available, the estimate is scaled by the calibration ratio. The
+        // raw estimate (chars/3 + tool-call args) is already substantial for
+        // a 400-line tool result; with a 3x ratio it triples, enough to trip
+        // a threshold the raw estimate alone wouldn't.
+        let evs = vec![
+            ev(EventKind::UserMessage { text: "go".into() }),
+            big_tool_result("c1", "search", 400),
+        ];
+        // Use a threshold high enough that the raw estimate is below it but
+        // the 3x-calibrated estimate is above it.
+        let raw_window = crate::context::context_window(&evs);
+        let raw = raw_window.total_tokens;
+        // Without calibration: raw estimate < threshold → no compaction.
+        let threshold = raw + 100;
+        let plan = plan_compactions(&evs, &policy(threshold), None, None, &ContextOverhead::default());
+        assert!(plan.compactions.is_empty(), "uncalibrated estimate below threshold");
+
+        // With 3x calibration: raw * 3 > threshold → compaction fires.
+        let plan = plan_compactions(&evs, &policy(threshold), None, Some(3.0), &ContextOverhead::default());
+        assert_eq!(
+            plan.compactions.len(),
+            1,
+            "calibrated estimate must trip threshold"
+        );
+    }
+
+    #[test]
+    fn real_input_tokens_overrides_calibration() {
+        // When real_input_tokens is provided and non-zero, it wins regardless
+        // of the ratio — it's the ground truth from the provider.
+        let evs = vec![
+            ev(EventKind::UserMessage { text: "go".into() }),
+            big_tool_result("c1", "search", 400),
+        ];
+        // Real says 100 (below 200 threshold) even with a 5x ratio → no compaction.
+        let plan = plan_compactions(&evs, &policy(200), Some(100), Some(5.0), &ContextOverhead::default());
+        assert!(plan.compactions.is_empty(), "real tokens override calibration");
+        // Real says 300 (above 200) → compaction fires.
+        let plan = plan_compactions(&evs, &policy(200), Some(300), Some(5.0), &ContextOverhead::default());
+        assert_eq!(plan.compactions.len(), 1);
+    }
+
     proptest! {
         #[test]
         fn planned_ids_are_unique_and_never_already_done(lines in proptest::collection::vec(20usize..300, 1..6)) {
@@ -385,7 +570,7 @@ mod tests {
             for (i, n) in lines.iter().enumerate() {
                 evs.push(big_tool_result(&format!("c{i}"), "search", *n));
             }
-            let plan = plan_compactions(&evs, &policy(100), None);
+            let plan = plan_compactions(&evs, &policy(100), None, None, &ContextOverhead::default());
             let mut ids: Vec<&str> = plan.compactions.iter().map(|c| c.id.as_str()).collect();
             ids.sort_unstable();
             let n = ids.len();

@@ -29,13 +29,15 @@ pub fn token_ledger(events: &[Event]) -> TokenLedger {
     l
 }
 
-/// Estimate the token cost of a string as `ceil(chars / 4)` — the standard
-/// rough heuristic (≈4 chars/token). Aggregate ledger numbers use real
-/// provider `Usage`; this is for per-item context sizing where the provider
-/// gives no breakdown.
+/// Estimate the token cost of a string as `ceil(chars / 3)` — a closer
+/// approximation for BPE tokenizers on code-heavy content (identifiers,
+/// operators, brackets → shorter tokens than natural language). The old
+/// chars/4 heuristic undercounted 5-7x for code-heavy tool results. Aggregate
+/// ledger numbers use real provider `Usage`; this is for per-item context
+/// sizing where the provider gives no breakdown.
 pub fn estimate_tokens(s: &str) -> u64 {
     let chars = s.chars().count() as u64;
-    chars.div_ceil(4)
+    chars.div_ceil(3)
 }
 
 /// One turn's churn (spec §8 ⑤c).
@@ -129,12 +131,14 @@ mod tests {
     use ulid::Ulid;
 
     #[test]
-    fn estimate_tokens_is_chars_over_four_rounded_up() {
+    fn estimate_tokens_is_chars_over_three_rounded_up() {
         assert_eq!(estimate_tokens(""), 0);
-        assert_eq!(estimate_tokens("a"), 1); // ceil(1/4)
-        assert_eq!(estimate_tokens("abcd"), 1); // 4/4
-        assert_eq!(estimate_tokens("abcde"), 2); // ceil(5/4)
-                                                 // counts chars, not bytes
+        assert_eq!(estimate_tokens("a"), 1); // ceil(1/3)
+        assert_eq!(estimate_tokens("abc"), 1); // 3/3
+        assert_eq!(estimate_tokens("abcd"), 2); // ceil(4/3)
+        assert_eq!(estimate_tokens("abcdef"), 2); // 6/3
+        assert_eq!(estimate_tokens("abcdefg"), 3); // ceil(7/3)
+        // counts chars, not bytes
         assert_eq!(estimate_tokens("é"), 1);
     }
 
@@ -227,8 +231,8 @@ mod tests {
         assert_eq!(t.points[0].resent_tokens, 0); // first sight of a.rs
         assert_eq!(t.points[1].turn, 1);
         assert_eq!(t.points[1].tokens, 170); // 140+30
-                                             // "src/a.rs" is 8 chars → ceil(8/4) = 2 tokens re-sent
-        assert_eq!(t.points[1].resent_tokens, 2);
+                                             // "src/a.rs" is 8 chars → ceil(8/3) = 3 tokens re-sent
+        assert_eq!(t.points[1].resent_tokens, 3);
     }
 
     #[test]
@@ -305,7 +309,7 @@ mod tests {
         let t = churn_timeline(&evs);
         assert_eq!(t.points.len(), 2);
         assert_eq!(t.points[0].resent_tokens, 0); // same-turn dup not counted
-                                                  // "dup.rs" is 6 chars → ceil(6/4) = 2 tokens
+                                                  // "dup.rs" is 6 chars → ceil(6/3) = 2 tokens
         assert_eq!(t.points[1].resent_tokens, 2);
     }
 }

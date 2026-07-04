@@ -82,10 +82,14 @@ pub enum EventKind {
     Tasks {
         items: Vec<crate::tasks::TaskItem>,
     },
-    /// Marks all events before this one (by timestamp) as dropped from the
-    /// live context — they stay in the DB/transcript but are excluded from the
-    /// provider request. `turns_dropped` is how many complete turns were
-    /// truncated. Driven by layer-4 compaction (sliding window).
+    /// **Inert.** Marks a prior layer-4 turn-drop compaction. Layer 4
+    /// (turn-dropping) was removed — it cascaded and wiped history because the
+    /// model's `real_input_tokens` never decreased while the conversation
+    /// projection sent the full log, so the planner kept firing until one turn
+    /// survived. The variant is kept for backward-compatible deserialization of
+    /// old DBs; existing `TurnsDropped` events are now inert metadata that no
+    /// projection filters on. `turns_dropped` is how many complete turns were
+    /// truncated at the time.
     TurnsDropped {
         turns_dropped: usize,
     },

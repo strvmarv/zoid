@@ -7,6 +7,19 @@ use crate::economy::{estimate_tokens, tool_path};
 use crate::event::{Event, EventKind};
 use std::collections::HashMap;
 
+/// Tokens sent to the provider that are NOT derivable from the event log:
+/// the system prompt and the tool spec schemas. These are constant for a
+/// turn but absent from the event stream, so `context_window` can't infer
+/// them. The caller (agent loop) supplies them so the window's `total_tokens`
+/// reflects the full request size, not just the conversation items.
+#[derive(Debug, Clone, Default)]
+pub struct ContextOverhead {
+    /// Estimated tokens in the system prompt (0 if none).
+    pub system_tokens: u64,
+    /// Estimated tokens across all tool spec JSON schemas (0 if no tools).
+    pub tools_tokens: u64,
+}
+
 pub const HOT_REFS: u32 = 3;
 pub const WARM_REFS: u32 = 2;
 pub const COLD_RECENCY_TURNS: usize = 3;
@@ -82,23 +95,45 @@ fn upsert(
 }
 
 /// Flush any accumulated ModelDelta text as a single assistant Message item.
+/// `pending_call_args_tokens` is the token cost of any tool-call args in this
+/// assistant turn (sent to the provider as serialized tool_calls); it's folded
+/// into the message's token estimate and reset.
 fn flush_delta(
     delta_text: &mut Option<String>,
     order: &mut Vec<String>,
     acc: &mut HashMap<String, Acc>,
     msg_seq: &mut usize,
     turn: usize,
+    pending_call_args_tokens: &mut u64,
 ) {
     if let Some(text) = delta_text.take() {
         let key = format!("msg:{msg_seq}");
         *msg_seq += 1;
+        let tokens = estimate_tokens(&text) + *pending_call_args_tokens;
+        *pending_call_args_tokens = 0;
         upsert(
             order,
             acc,
             key,
             truncate(&text, 40),
             ItemKind::Message,
-            estimate_tokens(&text),
+            tokens,
+            turn,
+        );
+    } else if *pending_call_args_tokens > 0 {
+        // Tool calls with no preceding text delta still constitute an assistant
+        // turn whose serialized tool_calls cost tokens.
+        let key = format!("msg:{msg_seq}");
+        *msg_seq += 1;
+        let tokens = *pending_call_args_tokens;
+        *pending_call_args_tokens = 0;
+        upsert(
+            order,
+            acc,
+            key,
+            "(tool calls)".to_string(),
+            ItemKind::Message,
+            tokens,
             turn,
         );
     }
@@ -116,15 +151,37 @@ pub fn tool_id_of(key: &str) -> Option<&str> {
 /// on its own `subagent:<id>` branch (mirrors `conversation()` in
 /// `projection.rs`) and is not part of the main conversation's actual
 /// context, so non-default-branch events are skipped entirely here.
+///
+/// `TurnsDropped` markers are NOT applied here. Layer-4 turn-dropping was
+/// removed (it cascaded and wiped history — see `compaction.rs`); old
+/// `TurnsDropped` events in existing DBs are now inert metadata, never
+/// filtering the window. This also ensures the economy/compaction view
+/// reflects the same full history the transcript and model request see.
+///
+/// `overhead` carries the system prompt + tool spec token costs — tokens the
+/// provider counts against the context ceiling but which are not derivable
+/// from the event log. They are folded into `total_tokens` (and an `ItemKind::System`
+/// item is emitted so the window is honest about the full request size).
 pub fn context_window(events: &[Event]) -> ContextWindow {
+    context_window_with(events, ContextOverhead::default())
+}
+
+/// Like `context_window` but with caller-supplied overhead (system prompt +
+/// tool specs). The overhead is added as a single `System` item and folded
+/// into `total_tokens`, so the window reflects the full request the provider
+/// actually tokenizes — not just the conversation items.
+pub fn context_window_with(events: &[Event], overhead: ContextOverhead) -> ContextWindow {
+    let visible: &[Event] = events;
+
     let mut order: Vec<String> = Vec::new(); // first-seen order of keys
     let mut acc: HashMap<String, Acc> = HashMap::new();
     let mut call_path: HashMap<String, String> = HashMap::new(); // tool id → path
     let mut turn: usize = 0;
     let mut msg_seq: usize = 0;
     let mut delta_text: Option<String> = None; // accumulates consecutive ModelDelta runs
+    let mut pending_call_args_tokens: u64 = 0; // tool-call args cost, folded into the assistant message
 
-    for e in events {
+    for e in visible {
         // Subagent work lives on its own branch and is not part of the main
         // context window (mirrors `conversation()`); only main-branch events count.
         if e.branch != crate::event::BranchId::default() {
@@ -132,7 +189,7 @@ pub fn context_window(events: &[Event]) -> ContextWindow {
         }
         match &e.kind {
             EventKind::UserMessage { text } => {
-                flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn);
+                flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn, &mut pending_call_args_tokens);
                 turn += 1;
                 let key = format!("msg:{msg_seq}");
                 msg_seq += 1;
@@ -147,7 +204,7 @@ pub fn context_window(events: &[Event]) -> ContextWindow {
                 );
             }
             EventKind::AssistantMessage { text } => {
-                flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn);
+                flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn, &mut pending_call_args_tokens);
                 let key = format!("msg:{msg_seq}");
                 msg_seq += 1;
                 upsert(
@@ -171,11 +228,16 @@ pub fn context_window(events: &[Event]) -> ContextWindow {
                     // place refs is incremented (one ref per read, not two).
                     call_path.insert(id.clone(), path.clone());
                 }
+                // The tool-call args JSON is sent to the provider as part of
+                // the assistant message (serialized tool_calls). Track its
+                // token cost to fold into the current assistant message item
+                // when it flushes.
+                pending_call_args_tokens += estimate_tokens(args);
             }
             EventKind::ToolResult {
                 id, name, output, ..
             } => {
-                flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn);
+                flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn, &mut pending_call_args_tokens);
                 if let Some(path) = call_path.get(id) {
                     let key = format!("file:{path}");
                     let path = path.clone();
@@ -205,7 +267,7 @@ pub fn context_window(events: &[Event]) -> ContextWindow {
         }
     }
     // Flush any trailing assistant delta after the last event.
-    flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn);
+    flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn, &mut pending_call_args_tokens);
 
     let last_turn_global = turn;
     let mut items: Vec<ContextItem> = order
@@ -226,7 +288,9 @@ pub fn context_window(events: &[Event]) -> ContextWindow {
         .collect();
 
     // Fold mutations + compactions (log order; last write wins per item).
-    for e in events {
+    // Only visible events contribute — a compaction or mutation from a
+    // dropped turn must not fold onto items that survived the drop.
+    for e in visible {
         match &e.kind {
             EventKind::ContextMutation { item, op } => {
                 if let Some(it) = items.iter_mut().find(|i| &i.key == item) {
@@ -252,7 +316,27 @@ pub fn context_window(events: &[Event]) -> ContextWindow {
         }
     }
 
-    // Sort by tokens desc, then key asc (deterministic for snapshots).
+    // Prepend the overhead (system prompt + tool specs) as a single System
+    // item. It's always present in every request and counts against the
+    // context ceiling, so the window must reflect it.
+    let overhead_tokens = overhead.system_tokens + overhead.tools_tokens;
+    if overhead_tokens > 0 {
+        items.insert(
+            0,
+            ContextItem {
+                key: "system+tools".into(),
+                label: "system + tools".into(),
+                kind: ItemKind::System,
+                tokens: overhead_tokens,
+                heat: Heat::Hot, // always present → always hot
+                pinned: false,
+                evicted: false,
+                compacted: false,
+            },
+        );
+    }
+
+    // Re-sort by tokens desc, then key asc (deterministic for snapshots).
     items.sort_by(|a, b| b.tokens.cmp(&a.tokens).then_with(|| a.key.cmp(&b.key)));
     let total_tokens = items.iter().map(|i| i.tokens).sum();
     ContextWindow {

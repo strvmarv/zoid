@@ -186,9 +186,9 @@ pub fn build_request(
 ///
 /// `TurnComplete` is sent on EVERY exit path — including session/IO errors —
 /// so the UI never gets stuck in the `streaming` state.
-// These 9 params thread the full turn context (turn config, provider, tools,
-// session, seed events, model, ui channel, session_id, clock); a params
-// struct would add indirection without adding clarity.
+// These 10 params thread the full turn context (turn config, provider, tools,
+// session, seed events, model, ui channel, session_id, clock, calibration);
+// a params struct would add indirection without adding clarity.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_agent_turn(
     config: TurnConfig,
@@ -202,8 +202,44 @@ pub async fn run_agent_turn(
     session_id: Ulid,
     now: fn() -> i64,
 ) -> Result<Vec<Event>> {
+    // Calibration ratio: real_input_tokens / context_window.total_tokens from
+    // the last non-cached sub-turn. The chars/4 estimate undercounts 5-7x for
+    // code/tool output, so when the provider reports 0 (Ollama cached prompt)
+    // we scale the current estimate by this ratio to approximate the real
+    // context size. Updated on every sub-turn where the provider reports a
+    // non-zero input. Mutable, lives for the turn (across sub-turns).
+    let mut calibration_ratio: Option<f64> = None;
+
+    // Compute the context overhead (system prompt + tool specs) once for the
+    // turn — it's constant across sub-turns. These are tokens the provider
+    // counts against the context ceiling that are not derivable from the event
+    // log. The tool-call args are event-derived and counted per-call inside
+    // context_window_with; the system prompt and tool schemas are not.
+    let overhead = {
+        let system_tokens = zoid_core::economy::estimate_tokens(&config.system);
+        let tools_tokens: u64 = tools
+            .iter()
+            .map(|t| {
+                let spec = t.spec();
+                let spec_str = format!(
+                    "{}\n{}\n{}",
+                    spec.name,
+                    spec.description,
+                    serde_json::to_string(&spec.parameters).unwrap_or_default()
+                );
+                zoid_core::economy::estimate_tokens(&spec_str)
+            })
+            .sum();
+        zoid_core::context::ContextOverhead {
+            system_tokens,
+            tools_tokens,
+        }
+    };
+
     let result = run_turn_inner(
         &config, provider, tools, gate, session, events, model, &ui, session_id, now,
+        &mut calibration_ratio,
+        &overhead,
     )
     .await;
     // Best-effort: if the receiver is already gone we still return the inner result.
@@ -213,7 +249,8 @@ pub async fn run_agent_turn(
 
 /// Inner loop — separated so `run_agent_turn` can send `TurnComplete` regardless
 /// of whether this returns `Ok` or `Err`.
-// Same 9-arg turn context as `run_agent_turn` above; see that comment.
+// Same 10-arg turn context as `run_agent_turn` above plus the mutable calibration
+// ratio; see that comment.
 #[allow(clippy::too_many_arguments)]
 async fn run_turn_inner(
     config: &TurnConfig,
@@ -226,6 +263,8 @@ async fn run_turn_inner(
     ui: &mpsc::Sender<AgentUpdate>,
     session_id: Ulid,
     now: fn() -> i64,
+    calibration_ratio: &mut Option<f64>,
+    overhead: &zoid_core::context::ContextOverhead,
 ) -> Result<Vec<Event>> {
     let turn_start = std::time::Instant::now();
     let mut iterations: u32 = 0;
@@ -332,6 +371,8 @@ async fn run_turn_inner(
             session_id,
             now,
             if turn_usage.input > 0 { Some(turn_usage.input) } else { None },
+            calibration_ratio,
+            overhead,
         )
         .await?;
 
@@ -633,7 +674,7 @@ async fn run_turn_inner(
                 }
             }
         }
-        record_compactions(&session, &mut events, ui, config, session_id, now, if turn_usage.input > 0 { Some(turn_usage.input) } else { None }).await?;
+        record_compactions(&session, &mut events, ui, config, session_id, now, if turn_usage.input > 0 { Some(turn_usage.input) } else { None }, calibration_ratio, overhead).await?;
         // loop: re-request with the tool results now in context
     }
 
@@ -665,6 +706,13 @@ async fn emit(
 /// Record `ToolResultCompacted` events for any tool-results the policy says
 /// should be compacted given the current log. Idempotent: `plan_compactions`
 /// skips already-compacted ids, so calling this each round is safe.
+///
+/// **Calibration:** when the provider reports a non-zero `real_input_tokens`,
+/// we learn the ratio `real_input / context_window.total_tokens` and store it
+/// in `calibration_ratio`. The chars/3 estimate is closer to the real tokenizer
+/// ratio than the old chars/4, but it's still an estimate; this ratio lets us
+/// fine-tune on cached sub-turns (where the provider reports 0): we scale the
+/// current estimate by the last known ratio.
 async fn record_compactions(
     session: &SessionHandle,
     events: &mut Vec<Event>,
@@ -673,17 +721,28 @@ async fn record_compactions(
     session_id: Ulid,
     now: fn() -> i64,
     real_input_tokens: Option<u64>,
+    calibration_ratio: &mut Option<f64>,
+    overhead: &zoid_core::context::ContextOverhead,
 ) -> Result<()> {
-    // When the current turn's input tokens are 0 (e.g. Ollama reports
-    // prompt_eval_count=0 when the prompt is cached), fall back to the last
-    // non-zero input from any prior Usage event in the log.
-    let effective_tokens = real_input_tokens.filter(|&t| t > 0).or_else(|| {
-        events
-            .iter()
-            .rev()
-            .find_map(|e| e.tokens.map(|t| t.input).filter(|&t| t > 0))
-    });
-    let plan = zoid_core::compaction::plan_compactions(events, &config.policy, effective_tokens);
+    // When the provider reports a non-zero input, learn the calibration ratio:
+    // real tokens / estimated tokens. This is the ground-truth correction factor
+    // for the chars/3 estimate.
+    let effective_tokens = real_input_tokens.filter(|&t| t > 0);
+    if let Some(real) = effective_tokens {
+        let window = zoid_core::context::context_window_with(events, overhead.clone());
+        if window.total_tokens > 0 {
+            *calibration_ratio = Some(real as f64 / window.total_tokens as f64);
+        }
+    }
+    // When cached (0), pass None — plan_compactions scales the estimate by the
+    // calibration ratio if one has been learned, else uses the raw estimate.
+    let plan = zoid_core::compaction::plan_compactions(
+        events,
+        &config.policy,
+        effective_tokens,
+        *calibration_ratio,
+        overhead,
+    );
     for c in &plan.compactions {
         emit(
             session,
@@ -699,22 +758,6 @@ async fn record_compactions(
             now,
         )
         .await?;
-    }
-    if let Some(turns) = plan.turns_to_drop {
-        if turns > 0 {
-            emit(
-                session,
-                events,
-                ui,
-                &config.branch,
-                EventKind::TurnsDropped {
-                    turns_dropped: turns,
-                },
-                session_id,
-                now,
-            )
-            .await?;
-        }
     }
     Ok(())
 }
