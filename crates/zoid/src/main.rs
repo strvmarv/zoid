@@ -458,6 +458,62 @@ fn spawn_model_fetch(
     });
 }
 
+/// Build a `Provider` for an *arbitrary* registry id — not necessarily the
+/// active one — so the quick-switch can live-fetch a highlighted provider's
+/// models before the provider change is committed. Uses the registry's default
+/// base URL for the id (the uncommitted highlight must not inherit the active
+/// provider's `base_url` override) plus the family's key from env / secret
+/// store. Returns `None` when a key-requiring provider has no key available
+/// (nothing to fetch with → keep the static registry list).
+fn provider_for_id(
+    id: &str,
+    secrets: &Option<std::sync::Arc<zoid_core::secret::EncryptedDb>>,
+) -> Option<Arc<dyn Provider>> {
+    let canon = zoid_provider::model::canonical_id(id);
+    let base_url = zoid_provider::model::default_base_url(canon)
+        .map(str::to_string)
+        .unwrap_or_default();
+    let key_for = |name: &str| -> Option<String> {
+        if let Ok(v) = std::env::var(name) {
+            if !v.is_empty() {
+                return Some(v);
+            }
+        }
+        secrets.as_ref().and_then(|s| {
+            use zoid_core::secret::SecretStore;
+            s.get(name)
+        })
+    };
+    if canon == "ollama-local" {
+        return Some(Arc::new(
+            zoid_provider::ollama::OllamaProvider::new(String::new()).with_base_url(base_url),
+        ));
+    }
+    let family = zoid_provider::model::entry(canon)
+        .map(|e| e.family)
+        .unwrap_or("ollama");
+    match family {
+        "anthropic" => key_for("ANTHROPIC_API_KEY").map(|k| {
+            Arc::new(zoid_provider::anthropic::AnthropicProvider::new(k).with_base_url(base_url))
+                as Arc<dyn Provider>
+        }),
+        _ => key_for("OLLAMA_API_KEY").map(|k| {
+            Arc::new(zoid_provider::ollama::OllamaProvider::new(k).with_base_url(base_url))
+                as Arc<dyn Provider>
+        }),
+    }
+}
+
+/// Spawn a live model fetch for the quick-switch's currently-highlighted
+/// provider, if one can be built (has a key / is keyless). Results arrive as
+/// `AgentUpdate::ModelsFetched` and are routed into `switch_models` by
+/// `apply_switch_models_fetched`. No-op for a `Planned`/unbuildable provider.
+fn spawn_switch_model_fetch(app: &App, provider_id: &str) {
+    if let Some(p) = provider_for_id(provider_id, &app.secrets) {
+        spawn_model_fetch(p, provider_id.to_string(), app.ui_tx.clone());
+    }
+}
+
 /// Build the economy `ContextPolicy` (spec §7.2) from the loaded config's
 /// `[economy]` table, resolving `compact_threshold_pct` (0–100) against the
 /// resolved token `ceiling` — 0 disables compaction (`None`), else the
@@ -1145,6 +1201,9 @@ async fn run<B: ratatui::backend::Backend>(
                         app.pending_answer = Some(reply);
                     }
                     AgentUpdate::ModelsFetched { provider, models } => {
+                        // At most one surface acts: the config picker guards on
+                        // the active provider, the quick-switch on its highlight.
+                        apply_switch_models_fetched(app, provider.clone(), models.clone());
                         apply_models_fetched(app, provider, models);
                     }
                 }
@@ -1335,6 +1394,52 @@ fn apply_models_fetched(app: &mut App, provider: String, models: Vec<String>) {
         .config_picker
         .iter()
         .position(|o| o.is_current)
+        .unwrap_or(0);
+}
+
+/// Deliver a live model fetch into the quick-switch model pane. No-op unless
+/// the `ProviderSwitch` overlay is open and the fetch is tagged with the
+/// provider currently highlighted in the provider pane — a stale fetch from a
+/// provider the user has since scrolled past must not clobber the visible list.
+/// An empty result keeps the static registry fallback. The user's highlighted
+/// model is preserved across the refresh when it survives in the live list.
+fn apply_switch_models_fetched(app: &mut App, provider: String, models: Vec<String>) {
+    use zoid_tui::state::Overlay;
+    if app.shell.overlay != Overlay::ProviderSwitch || models.is_empty() {
+        return;
+    }
+    let highlighted = app
+        .shell
+        .switch_providers
+        .get(app.shell.switch_provider_sel)
+        .map(|o| o.id.as_str());
+    if highlighted != Some(provider.as_str()) {
+        return;
+    }
+    let prev_id = app
+        .shell
+        .switch_models
+        .get(app.shell.switch_model_sel)
+        .map(|o| o.id.clone());
+    let cur = app.config.model.clone();
+    app.shell.switch_models = models
+        .into_iter()
+        .map(|m| zoid_tui::config_view::PickOption {
+            is_current: m == cur,
+            id: m.clone(),
+            label: m,
+            detail: String::new(),
+            selectable: true,
+        })
+        .collect();
+    // Keep the user's highlight if it still exists, else the current model,
+    // else the top of the list.
+    app.shell.switch_model_sel = app
+        .shell
+        .switch_models
+        .iter()
+        .position(|o| Some(o.id.as_str()) == prev_id.as_deref())
+        .or_else(|| app.shell.switch_models.iter().position(|o| o.is_current))
         .unwrap_or(0);
 }
 
@@ -2008,6 +2113,10 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 .unwrap_or_else(|| app.config.provider.clone());
             app.shell.switch_models =
                 zoid_tui::config_view::model_options(&highlighted_provider_id, &app.config.model);
+            // Live-fetch the highlighted provider's real model list (Ollama
+            // `/api/tags`, Anthropic `/v1/models`); the static list above is the
+            // offline fallback until the fetch lands.
+            spawn_switch_model_fetch(app, &highlighted_provider_id);
         }
         Action::SwitchPaneMove(_) => {
             use zoid_tui::state::SwitchPane;
@@ -2040,6 +2149,10 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                             &app.config.model,
                         );
                         app.shell.switch_model_sel = 0;
+                        // Refresh the live model list for the newly-highlighted
+                        // provider; a stale in-flight fetch for the previous
+                        // highlight is dropped by the guard in the reducer.
+                        spawn_switch_model_fetch(app, &highlighted_provider_id);
                     }
                 }
                 SwitchPane::Model => {
@@ -2811,6 +2924,73 @@ mod tests {
         assert_eq!(app.shell.config_picker.len(), 2);
         assert_eq!(app.shell.config_picker[0].id, "live-a");
         assert_eq!(app.shell.config_picker[1].id, "live-b");
+    }
+
+    /// The quick-switch model pane live-fetches the *highlighted* provider's
+    /// models (not the active one). A fetch tagged with the highlighted id
+    /// replaces the static fallback; an empty result keeps it; a fetch for a
+    /// provider the user has scrolled past is dropped; and the reducer no-ops
+    /// entirely when the overlay is closed.
+    #[tokio::test]
+    async fn switch_model_pane_takes_live_fetch_for_highlighted_provider() {
+        use zoid_tui::config_view::provider_options;
+        use zoid_tui::state::Overlay;
+
+        let mut app = test_app().await;
+        app.shell.overlay = Overlay::ProviderSwitch;
+        app.shell.switch_providers = provider_options(&app.config.provider);
+        // Highlight ollama-cloud explicitly (regardless of the default active).
+        let sel = app
+            .shell
+            .switch_providers
+            .iter()
+            .position(|o| o.id == "ollama-cloud")
+            .expect("registry must offer ollama-cloud");
+        app.shell.switch_provider_sel = sel;
+        app.shell.switch_models =
+            zoid_tui::config_view::model_options("ollama-cloud", &app.config.model);
+        app.shell.switch_model_sel = 0;
+        let fallback_len = app.shell.switch_models.len();
+
+        // A fetch for a DIFFERENT (scrolled-past) provider is dropped.
+        apply_switch_models_fetched(
+            &mut app,
+            "anthropic-api".to_string(),
+            vec!["ignored".to_string()],
+        );
+        assert_eq!(
+            app.shell.switch_models.len(),
+            fallback_len,
+            "a fetch for a non-highlighted provider must not touch the pane"
+        );
+
+        // A fetch for the highlighted provider replaces the fallback list.
+        apply_switch_models_fetched(
+            &mut app,
+            "ollama-cloud".to_string(),
+            vec!["glm-5.2:cloud".to_string(), "qwen3-coder:cloud".to_string()],
+        );
+        assert_eq!(app.shell.switch_models.len(), 2);
+        assert_eq!(app.shell.switch_models[0].id, "glm-5.2:cloud");
+        assert_eq!(app.shell.switch_models[1].id, "qwen3-coder:cloud");
+        assert!(app.shell.switch_models.iter().all(|o| o.selectable));
+
+        // An empty fetch keeps the live list (offline/error → no clobber).
+        apply_switch_models_fetched(&mut app, "ollama-cloud".to_string(), Vec::new());
+        assert_eq!(app.shell.switch_models.len(), 2);
+
+        // Overlay closed → the reducer is inert.
+        app.shell.overlay = Overlay::None;
+        apply_switch_models_fetched(
+            &mut app,
+            "ollama-cloud".to_string(),
+            vec!["late".to_string()],
+        );
+        assert_eq!(
+            app.shell.switch_models.len(),
+            2,
+            "a fetch landing after the overlay closed must not reopen/rewrite it"
+        );
     }
 
     /// A fetch tagged with a provider id that no longer matches
