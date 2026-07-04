@@ -35,8 +35,8 @@ another skill (A→B), then act?
 
 ## Recorded outcome
 
-- Date run:
-- Model / build commit:
-- Observed tool-call sequence:
-- Verdict (PASS / PARTIAL / FAIL):
-- Notes / next action:
+- Date run: 2026-07-03
+- Model / build commit: `glm-5.2:cloud` (Ollama Cloud native) / build `72cab11`
+- Observed tool-call sequence: `invoke_skill("spike-plan")` → (following that body) `invoke_skill("spike-implement")` → `write_file(./spike-artifact.txt)`. Confirmed by `./spike-artifact.txt` containing exactly `spike ok` — content only producible by completing the full A→B→work chain.
+- Verdict (PASS / PARTIAL / FAIL): **PASS** — full A→B→work chain, unattended.
+- Notes / next action: The "consume the methodology" thesis holds on a small local model: `glm-5.2:cloud` will call `invoke_skill` and follow a skill body's instruction to invoke another skill, then act. Decision gate → **GO**: build the SKILL.md importer + Shift+Tab quick-switch slices with confidence. This spike (Slice 0 foundation: SkillRegistry, AgentProfileRegistry, invoke_skill tool, default_profile, chat_turn_config_with, App/turn wiring) is validated end-to-end.
