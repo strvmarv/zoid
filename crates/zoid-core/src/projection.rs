@@ -159,6 +159,10 @@ pub fn conversation(events: &[Event]) -> Vec<ChatMsg> {
             EventKind::TurnsDropped { .. } => {
                 // Metadata marker; not a conversation item.
             }
+            EventKind::TurnsEvicted { .. } | EventKind::TurnsReadmitted { .. } => {
+                // Metadata marker; not a conversation item. (Out of scope: rendering
+                // the in-context breadcrumb / recall filtering is a later slice.)
+            }
         }
     }
     flush(&mut text, &mut calls, &mut turn_ts, &mut out);

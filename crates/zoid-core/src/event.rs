@@ -25,6 +25,20 @@ pub enum MutationOp {
     Restore,
 }
 
+/// One paged-out span, for the in-context breadcrumb and the audit view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvictedSpan {
+    pub id_range_label: String,
+    pub token_estimate: u64,
+    pub topic_hint: String,
+}
+
+/// The data an eviction wave renders (transcript) and the model reads (breadcrumb).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvictionMarker {
+    pub spans: Vec<EvictedSpan>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
     UserMessage {
@@ -92,6 +106,18 @@ pub enum EventKind {
     /// truncated at the time.
     TurnsDropped {
         turns_dropped: usize,
+    },
+    /// Whole turns paged to the cold tier. Append-only; the original events are
+    /// retained (reversible). Projections skip these ids (minus any later
+    /// `TurnsReadmitted`). `marker` backs the in-context breadcrumb.
+    TurnsEvicted {
+        ids: Vec<Ulid>,
+        reclaimed_tokens: u64,
+        marker: EvictionMarker,
+    },
+    /// Undo / recall re-admission: projections stop skipping these ids.
+    TurnsReadmitted {
+        ids: Vec<Ulid>,
     },
 }
 
@@ -294,5 +320,24 @@ mod tests {
         let json = serde_json::to_string(&ev).unwrap();
         let back: Event = serde_json::from_str(&json).unwrap();
         assert_eq!(back.kind, k);
+    }
+
+    #[test]
+    fn turns_evicted_round_trips_json() {
+        let m = EvictionMarker {
+            spans: vec![EvictedSpan {
+                id_range_label: "turns 1–3".into(),
+                token_estimate: 4200,
+                topic_hint: "read config".into(),
+            }],
+        };
+        let k = EventKind::TurnsEvicted {
+            ids: vec![Ulid::from(1u128), Ulid::from(2u128)],
+            reclaimed_tokens: 4200,
+            marker: m,
+        };
+        let s = serde_json::to_string(&k).unwrap();
+        let back: EventKind = serde_json::from_str(&s).unwrap();
+        assert_eq!(k, back);
     }
 }
