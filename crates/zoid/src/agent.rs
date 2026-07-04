@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use ulid::Ulid;
 
+use zoid_core::agent_profile::AgentProfile;
 use zoid_core::event::{BranchId, Event, EventKind};
 use zoid_core::projection::{conversation, ChatMsg};
 use zoid_core::session::SessionHandle;
@@ -26,6 +27,20 @@ pub const SYSTEM_PROMPT: &str =
     "You are zoid, a terminal coding assistant. Be concise and precise. \
      You can call tools to read, write, edit, and search files and run shell \
      commands in the user's working directory. Use them when helpful.";
+
+/// The default Chat mode profile: the standard zoid system prompt with an
+/// unrestricted tool set (empty allow-list = every tool permitted, per
+/// `AgentProfile::allows`). Seeds the `AgentProfileRegistry`; reproduces
+/// pre-mode behavior exactly.
+pub fn default_profile() -> AgentProfile {
+    AgentProfile {
+        name: "default".into(),
+        description: "General terminal coding assistant.".into(),
+        system_prompt: SYSTEM_PROMPT.to_string(),
+        tools: vec![], // empty = every tool permitted
+        model: None,
+    }
+}
 
 /// How one agent turn is run: its system prompt, working directory, and the
 /// event branch its output is recorded on. Chat uses the main branch + process
@@ -599,6 +614,16 @@ mod tests {
     fn build_request_uses_the_given_system_prompt() {
         let req = build_request(&[], "m", &zoid_tools::registry(), "CUSTOM SYS");
         assert_eq!(req.system.as_deref(), Some("CUSTOM SYS"));
+    }
+
+    #[test]
+    fn default_profile_carries_system_prompt_and_allows_all_tools() {
+        let p = default_profile();
+        assert_eq!(p.name, "default");
+        assert_eq!(p.system_prompt, SYSTEM_PROMPT);
+        assert!(p.tools.is_empty(), "empty allow-list = all tools permitted");
+        assert!(p.allows("invoke_skill"));
+        assert!(p.allows("write_file"));
     }
 
     #[test]
