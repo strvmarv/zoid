@@ -2311,6 +2311,11 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             refresh_config_sections(app);
             Ok(false)
         }
+        Command::ShowOverview => {
+            app.shell.zoom = zoid_tui::state::Zoom::Overview;
+            app.shell.conversation_scroll = 0;
+            Ok(false)
+        }
         Command::Unknown(_) => Ok(false),
     }
 }
