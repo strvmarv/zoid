@@ -9,6 +9,7 @@ pub mod layout;
 pub mod markdown;
 pub mod motion;
 pub mod objects;
+pub mod overview;
 pub mod palette;
 pub mod question;
 pub mod render;
