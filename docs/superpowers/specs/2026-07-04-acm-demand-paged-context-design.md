@@ -6,13 +6,13 @@
 
 ## One-line goal
 
-Hold the **live request** (tokens actually sent to the model each turn) near a user-set **context target** (default ~384k) within an operating band (~300–500k on 1M-capacity models), across **indefinite** sessions, auto-managed, surfaced, and undoable, with **nothing truly forgotten**: evicted history stays queryable — and do it on a foundation of **data-driven model metadata** and **pluggable ML seams** (embedding / re-ranking) so later phases upgrade retrieval quality without rearchitecture.
+Hold the **live request** (tokens actually sent to the model each turn) at or below a user-set **context target** (default `min(capacity, 384k)`), with an eviction wave dropping to `target − headroom` (~307k at a 384k target / 20% headroom) so steady state hovers in `[low_water, target]` across **indefinite** sessions — auto-managed, surfaced, and undoable, with **nothing truly forgotten** (evicted history stays queryable). Built on **data-driven model metadata** and **pluggable ML seams** (embedding / re-ranking) so later phases upgrade retrieval quality without rearchitecture.
 
 ## Terminology (locked)
 
 - **Capacity** — the model's physical maximum context (e.g. 1,000,000). The hard bound; never exceeded. Sourced from the **model-metadata catalog** (§3.0), never hardcoded in logic.
 - **Context target** (`context_target`, the primary user knob — renamed from `context_ceiling`) — the token count the controller *manages toward*. A **soft setpoint** (~384k), always `≤ capacity`.
-- **Band** — `high_water = target + headroom`, `low_water = target − headroom`, both clamped to `≤ capacity`. `headroom` is one advanced knob (default ~20%). Crossing `high_water` triggers an eviction wave down to `low_water`; steady state hovers in the band.
+- **Band (asymmetric)** — `high_water = target` (clamped `≤ capacity`), `low_water = target − headroom`. `headroom` is one advanced knob (default ~20%). Crossing `high_water` (i.e. reaching the target) triggers an eviction wave down to `low_water`, so the live request **never routinely sits above the target you set** — steady state hovers in `[low_water, target]`, with only transient within-turn overshoot before the gate fires.
 - **Hot working set** — events the projections replay and send. **Cold tier** — evicted events, retained in sqlite (FTS5-indexed), not replayed, queryable via `recall()`.
 
 ## Architecture in one paragraph
@@ -100,7 +100,7 @@ plan_evictions(events, policy, current_tokens, scorer: &dyn EvictionScorer) -> E
 ```
 
 - Operates on the projected hot working set (post-compaction).
-- **Trigger:** only when `current_tokens > high_water` (= `target + headroom`).
+- **Trigger:** only when `current_tokens >= high_water` (= `target`).
 - **Selection:** rank evictable **turns** by `scorer` (default `RecencyScorer` = oldest-first), evict lowest-ranked first, accumulating reclaimed tokens until `current_tokens - reclaimed <= low_water` (= `target − headroom`). The scorer seam (§3.7) is where Slice 4 swaps recency for relevance-to-current-goal without touching the controller.
 - **Evictable turn** = a contiguous message group whose items are all `Normal` protection, not `pinned`, not System/`Immutable`, and **older than the most-recent-*N*-turns window**.
 - **Idempotent:** turns already evicted (their ids present in a prior `TurnsEvicted`) are skipped; re-running with no new pressure yields an empty plan.
@@ -139,8 +139,8 @@ plan_evictions(events, policy, current_tokens, scorer: &dyn EvictionScorer) -> E
 ### 3.6 Config (bin + `zoid-core` `EconomyConfig`)
 
 - **`capacity`** is not configured — it is resolved from the catalog (§3.0), config override available.
-- **`context_target`** (renamed from `context_ceiling`) — the primary user knob: the soft setpoint the controller manages toward. Absolute tokens, or percent-of-capacity. If unset, default = `min(capacity, DEFAULT_TARGET)` where `DEFAULT_TARGET ≈ 400k` (so a fresh 1M-capacity model doesn't silently balloon to fill the whole window — cost/latency guard). **[OPEN: default policy — see §12.]**
-- **`band_headroom`** (advanced, default ~20%) — derives `high_water = min(target + headroom, capacity)` and `low_water = max(target − headroom, 0)`. One number to widen/narrow the operating band. Invariant enforced at load: `0 < low_water < high_water ≤ capacity`.
+- **`context_target`** (renamed from `context_ceiling`) — the primary user knob: the soft setpoint the controller manages toward. Absolute tokens, or percent-of-capacity. If unset, default = **`min(capacity, 384_000)`** (so a fresh 1M-capacity model doesn't silently balloon to fill the whole window — cost/latency guard — while small-capacity models just use their capacity).
+- **`band_headroom`** (advanced, default ~20% of target) — the band is **asymmetric**: `high_water = min(target, capacity)`, `low_water = max(target − headroom, 0)`. One number sets how far below target an eviction wave drops (the re-trigger hysteresis). Invariant enforced at load: `0 < low_water < high_water ≤ capacity`.
 - **`recent_n`** — protected recent-turn count (never evictable).
 - **Master enable** — back-compat: `compact_threshold_pct = 0` still disables all ACM (compaction + eviction). The old `token_ceiling` field is retired/folded (capacity is the hard bound; target is the soft knob).
 - Wire the resolved target/capacity into the **live** turn config (today the ceiling only reaches the subagent path).
@@ -241,9 +241,13 @@ The seams above exist so these become additive, not rewrites. This is where "ahe
 - **Per-kind token-budget allocation.** Sub-budgets (system / recent conversation / recalled / tool-results) so a large recall can't starve the conversation spine and vice-versa — the ceiling becomes an allocator, not a single cut line.
 - **Explainable context.** Because every compaction/eviction/recall is an append-only event, zoid has a complete, replayable audit of *why* each item left or returned. "Explainable context management," surfaced through the existing semantic-zoom UI, is a genuine differentiator for trust.
 
-## 12. Open questions (decide before/inside the plan)
+## 12. Open questions
 
-- **Default `context_target` policy** when unset: `min(capacity, ~400k)` absolute, or a fraction of capacity (e.g. 40%)? (Leaning absolute-cap so behavior is predictable across models.)
-- **Vector search backend** (Slice 4): `sqlite-vec` extension vs brute-force in-process cosine over the bounded cold set. (Defer; both respect the seam.)
-- **Async maintainer trigger constants** (§3.8): the N-events / T-idle thresholds and whether Slice 0 catalog-refresh piggybacks the same lane or is purely on-demand.
-- **`headroom` default** and whether the band is symmetric (`target ± headroom`) or asymmetric (`low = target − headroom`, `high = target`). Symmetric is the current spec assumption.
+**Resolved (2026-07-04):**
+- **Default `context_target`** = `min(capacity, 384_000)`. ✓
+- **Band shape** = **asymmetric**: `high_water = target`, `low_water = target − headroom`. Never routinely exceed the dialed target. ✓
+
+**Still open (decide inside the plan / Slice 4):**
+- **Vector search backend** (Slice 4): `sqlite-vec` extension vs brute-force in-process cosine over the bounded cold set. (Both respect the seam.)
+- **Async maintainer trigger constants** (§3.8): the N-events / T-idle thresholds, and whether Slice 0 catalog-refresh piggybacks the same lane or stays purely on-demand.
+- **`headroom` default magnitude** (~20% of target assumed) — tune against real sessions.
