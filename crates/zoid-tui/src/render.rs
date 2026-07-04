@@ -44,9 +44,8 @@ pub fn render_shell(
     // dead-scroll-up zone. 0 unless the Chat conversation is drawn this frame.
     let mut conv_max_scroll = 0u16;
 
-    // The top row is intentionally blank: the app name was removed from the
-    // title bar and the activity indicator now lives in the status bar (right).
-    // The empty row doubles as top breathing room.
+    // The top row carries the centered "zoid" wordmark (render_title below).
+    // The activity indicator lives in the status bar (center).
 
     match state.mode {
         Mode::Chat => {
@@ -123,6 +122,9 @@ pub fn render_shell(
         Mode::Build => render_build_placeholder(frame, layout.conversation),
     }
 
+    // Top bar: centered wordmark (moved from the bottom-right status bar).
+    render_title(frame, state, layout.title);
+
     if layout.rail.is_some() {
         render_rail(frame, state, economy, tasks, &layout);
     }
@@ -183,6 +185,18 @@ fn render_build_placeholder(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
+fn render_title(frame: &mut Frame, _state: &ShellState, area: Rect) {
+    let wordmark = "zoid";
+    let w = area.width as usize;
+    let wm_w = wordmark.width();
+    let pad = w.saturating_sub(wm_w) / 2;
+    let line = Line::from(vec![
+        Span::styled(" ".repeat(pad), Style::new()),
+        Span::styled(wordmark.to_string(), Style::new().fg(color::DIM)),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
+}
+
 fn render_input(frame: &mut Frame, input: &TextArea<'_>, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -197,25 +211,16 @@ fn render_input(frame: &mut Frame, input: &TextArea<'_>, area: Rect) {
 }
 
 fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: Rect) {
-    // Left segment: mode badge + hints.
+    // Left segment: mode badge only (zoom hint moved to the right side).
     let mut left = match state.mode {
-        Mode::Chat => vec![
-            Span::styled(
-                " CHAT ",
-                Style::new().fg(color::CHAT_ACCENT).bg(color::CHAT_BG),
-            ),
-            Span::styled(
-                format!(" zoom {} · ^P palette", view.zoom.label()),
-                Style::new().fg(color::DIM),
-            ),
-        ],
-        Mode::Build => vec![
-            Span::styled(
-                " BUILD ",
-                Style::new().fg(color::BUILD_ACCENT).bg(color::BUILD_BG),
-            ),
-            Span::styled(" phase —/— · esc → Chat", Style::new().fg(color::DIM)),
-        ],
+        Mode::Chat => vec![Span::styled(
+            " CHAT ",
+            Style::new().fg(color::CHAT_ACCENT).bg(color::CHAT_BG),
+        )],
+        Mode::Build => vec![Span::styled(
+            " BUILD ",
+            Style::new().fg(color::BUILD_ACCENT).bg(color::BUILD_BG),
+        )],
     };
     // Transient ④ hint (e.g. "queued · runs as a subagent in P5"), set by a
     // verb pick (P4d T4). Pure-renderer-readable since it lives on ShellState.
@@ -237,17 +242,20 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
     };
     let center = format!("{icon} {label}");
 
-    // Right segment: the wordmark, where the activity indicator used to live.
-    let right = "zoid ";
+    // Right segment: zoom hint + palette hint (moved from the left side).
+    let right = match state.mode {
+        Mode::Chat => format!(" zoom {} · ^P palette ", view.zoom.label()),
+        Mode::Build => " phase —/— · esc → Chat ".to_string(),
+    };
 
     let w = area.width as usize;
     let left_w: usize = left.iter().map(|s| s.content.width()).sum();
     let center_w = center.width();
     let right_w = right.width();
 
-    // Center the activity indicator in the bar and pin the wordmark to the right
-    // edge. Saturating math means a narrow terminal clips the padding (segments
-    // just abut) instead of panicking.
+    // Center the activity indicator in the bar and pin the zoom hint to the
+    // right edge. Saturating math means a narrow terminal clips the padding
+    // (segments just abut) instead of panicking.
     let center_start = w.saturating_sub(center_w) / 2;
     let right_start = w.saturating_sub(right_w);
 

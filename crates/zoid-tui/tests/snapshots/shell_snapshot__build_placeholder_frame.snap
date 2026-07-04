@@ -1,9 +1,8 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
-assertion_line: 291
 expression: "draw(&s, &[], 100, 24)"
 ---
-"                                                                                                    "
+"                                                zoid                                                "
 "                                                        ╭ ▾ repo ─────────────────────────────────╮ "
 "  ◐ BUILD mode                                          │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
 "  The autonomous loop is coming soon.                   ╰─────────────────────────────────────────╯ "
@@ -26,4 +25,4 @@ expression: "draw(&s, &[], 100, 24)"
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"
 "│                                                                                                  │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" BUILD  phase —/— · esc → Chat                 ● idle                                          zoid "
+" BUILD                                         ● idle                        phase —/— · esc → Chat "

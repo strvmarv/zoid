@@ -1,9 +1,8 @@
 ---
 source: crates/zoid-tui/tests/session_snapshot.rs
-assertion_line: 88
 expression: out
 ---
-"                                                                                                    "
+"                                                zoid                                                "
 "    (no messages yet)                                 █ ╭ ▾ repo ─────────────────────────────────╮ "
 "                                                      █ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ │🔧 worktree (none)                       │ " Hidden by multi-width symbols: [(58, " ")]
@@ -42,4 +41,4 @@ expression: out
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"
 "│                                                                                                  │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" CHAT  zoom normal · ^P palette                ● idle                                          zoid "
+" CHAT                                          ● idle                      zoom normal · ^P palette "

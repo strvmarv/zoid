@@ -1,9 +1,8 @@
 ---
 source: crates/zoid-tui/tests/session_snapshot.rs
-assertion_line: 65
 expression: "draw(&s, &[], 100, 24)"
 ---
-"                                                                                                    "
+"                                                zoid                                                "
 "    (no messages yet)                                 █ ╭ ▾ repo ─────────────────────────────────╮ "
 "                                                      █ │📦 zoid   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ ╰─────────────────────────────────────────╯ "
@@ -26,4 +25,4 @@ expression: "draw(&s, &[], 100, 24)"
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"
 "│                                                                                                  │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" CHAT  zoom normal · ^P palette                ● idle                                          zoid "
+" CHAT                                          ● idle                      zoom normal · ^P palette "

@@ -1,9 +1,8 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
-assertion_line: 276
 expression: out
 ---
-"                                                                                                    "
+"                                                zoid                                                "
 "┌ ›  ─────────────────────────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
 "│ ↺ Resume session…  this repo, most-recent first  ⏎  │ ╰─────────────────────────────────────────╯ "
 "│ ✎ Rename session…  rename the current thread  :renam│                                             "
@@ -22,4 +21,4 @@ expression: out
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"
 "│                                                                                                  │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" CHAT  zoom normal · ^P palette                ● idle                                          zoid "
+" CHAT                                          ● idle                      zoom normal · ^P palette "
