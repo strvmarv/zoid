@@ -298,7 +298,7 @@ fn build_overview_data(
     let cache_hit_pct = if ledger.input == 0 {
         0
     } else {
-        ((ledger.cached * 100 / ledger.input) as u8).min(100)
+        (ledger.cached * 100 / ledger.input).min(100) as u8
     };
     // Per-turn prompt-cache sparkline: map the cached churn series onto the
     // shared glyph::SPARK ramp, exactly as the context drawer's cache spark does.
@@ -340,7 +340,7 @@ fn build_overview_data(
         render_cache_pct: if s.cache_total == 0 {
             0
         } else {
-            ((s.cache_hits * 100 / s.cache_total) as u8).min(100)
+            (s.cache_hits * 100 / s.cache_total).min(100) as u8
         },
         proj_rebuilds: s.proj_rebuilds,
         event_count: app.events.len() as u64,
@@ -1132,12 +1132,16 @@ async fn run<B: ratatui::backend::Backend>(
         // conversation body. Consuming `obs.state` here is also what puts the shared
         // aggregate to work in the render loop.
         let is_overview = zoom == zoid_tui::state::Zoom::Overview;
+        // `None` at Overview: the body is rebuilt fresh every frame (no
+        // `BodyCache` lookup happens at all), so there's no cache signal to
+        // report — Overview frames must not participate in the body-render
+        // cache ratio (`render_cache_pct`), only in frame timing.
         let cache_hit = if is_overview {
             let data = build_overview_data(app, obs_state);
             app.overview_body = zoid_tui::overview::overview_lines(&data, body_w);
-            true
+            None
         } else {
-            app.body_cache.refresh(
+            Some(app.body_cache.refresh(
                 BodyKey {
                     events_len: app.events.len(),
                     zoom,
@@ -1148,7 +1152,7 @@ async fn run<B: ratatui::backend::Backend>(
                 },
                 &app.proj.msgs,
                 body_w,
-            )
+            ))
         };
 
         // Tail-follow: when engaged, pin the viewport to the latest line before
@@ -1249,13 +1253,25 @@ async fn run<B: ratatui::backend::Backend>(
                 &view,
             );
         })?;
-        tracing::trace!(
-            kind = "frame",
-            ms = frame_start.elapsed().as_millis() as u64,
-            cache_hit = cache_hit,
-            proj_rebuilt = proj_rebuilt,
-            "frame"
-        );
+        // The `cache_hit` field is present only for transcript frames (a real
+        // body-cache lookup happened); Overview frames omit it entirely so
+        // `ObsLayer`'s `FieldGrab::cache_hit_present` stays false and the
+        // frame is excluded from the cache ratio while still timing it.
+        match cache_hit {
+            Some(hit) => tracing::trace!(
+                kind = "frame",
+                ms = frame_start.elapsed().as_millis() as u64,
+                cache_hit = hit,
+                proj_rebuilt = proj_rebuilt,
+                "frame"
+            ),
+            None => tracing::trace!(
+                kind = "frame",
+                ms = frame_start.elapsed().as_millis() as u64,
+                proj_rebuilt = proj_rebuilt,
+                "frame"
+            ),
+        }
         app.last_conv_max_scroll = frame_conv_max;
         // End the zoom animation only once a settled (reveal-complete) frame has
         // actually been painted, so the final full-body frame is never skipped.

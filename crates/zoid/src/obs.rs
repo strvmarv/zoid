@@ -63,11 +63,13 @@ impl ObsState {
         self.provider_ttft.record(ttft_ms);
         self.provider_total.record(total_ms);
     }
-    pub fn record_frame(&mut self, ms: u64, cache_hit: bool, proj_rebuilt: bool) {
+    pub fn record_frame(&mut self, ms: u64, cache_hit: Option<bool>, proj_rebuilt: bool) {
         self.frame.record(ms);
-        self.cache_total += 1;
-        if cache_hit {
-            self.cache_hits += 1;
+        if let Some(hit) = cache_hit {
+            self.cache_total += 1;
+            if hit {
+                self.cache_hits += 1;
+            }
         }
         if proj_rebuilt {
             self.proj_rebuilds += 1;
@@ -222,6 +224,12 @@ struct FieldGrab {
     total_ms: u64,
     iterations: u64,
     cache_hit: bool,
+    /// Whether the `cache_hit` field was actually present on the event (as
+    /// opposed to left at its `bool` default of `false`). Overview frames omit
+    /// `cache_hit` entirely so they don't participate in the body-render cache
+    /// ratio; this is how `on_event` tells "absent" apart from "present and
+    /// false".
+    cache_hit_present: bool,
     proj_rebuilt: bool,
 }
 
@@ -237,7 +245,10 @@ impl Visit for FieldGrab {
     }
     fn record_bool(&mut self, field: &Field, value: bool) {
         match field.name() {
-            "cache_hit" => self.cache_hit = value,
+            "cache_hit" => {
+                self.cache_hit = value;
+                self.cache_hit_present = true;
+            }
             "proj_rebuilt" => self.proj_rebuilt = value,
             _ => {}
         }
@@ -276,7 +287,15 @@ impl<S: tracing::Subscriber> Layer<S> for ObsLayer {
             Some("turn") => s.record_turn(g.ms, g.iterations),
             Some("tool") => s.record_tool(g.name.as_deref().unwrap_or("?"), g.ms),
             Some("provider") => s.record_provider(g.ttft_ms, g.total_ms),
-            Some("frame") => s.record_frame(g.ms, g.cache_hit, g.proj_rebuilt),
+            Some("frame") => s.record_frame(
+                g.ms,
+                if g.cache_hit_present {
+                    Some(g.cache_hit)
+                } else {
+                    None
+                },
+                g.proj_rebuilt,
+            ),
             _ => {}
         }
         let level = *event.metadata().level();
@@ -407,13 +426,21 @@ mod tests {
     #[test]
     fn obsstate_folds_frame_cache_ratio() {
         let mut s = ObsState::default();
-        s.record_frame(7, true, false);
-        s.record_frame(11, true, true);
-        s.record_frame(16, false, false);
+        s.record_frame(7, Some(true), false);
+        s.record_frame(11, Some(true), true);
+        s.record_frame(16, Some(false), false);
         assert_eq!(s.frame.count(), 3);
         assert_eq!(s.cache_total, 3);
         assert_eq!(s.cache_hits, 2);
         assert_eq!(s.proj_rebuilds, 1);
+
+        // An Overview frame (no cache signal at all) still records timing but
+        // must NOT participate in the cache ratio: cache_total/cache_hits are
+        // untouched even though frame.count() advances.
+        s.record_frame(5, None, false);
+        assert_eq!(s.frame.count(), 4);
+        assert_eq!(s.cache_total, 3);
+        assert_eq!(s.cache_hits, 2);
     }
 
     #[test]
