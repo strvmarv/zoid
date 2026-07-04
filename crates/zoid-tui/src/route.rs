@@ -383,12 +383,15 @@ pub fn route_mouse(state: &ShellState, layout: &ShellLayout, m: MouseEvent) -> A
             _ => Action::Noop,
         };
     }
-    // Other (transient) overlays dismiss on any click or scroll.
+    // Overlays are keyboard-driven. A stray mouse click or scroll outside the
+    // overlay must NOT silently dismiss it — accidental clicks are common, and
+    // losing an in-progress edit buffer, query, or selection position is
+    // jarring. Dismissal happens only via Esc (every overlay) or Enter (pickers
+    // that commit). Mouse input is a Noop while any overlay is up.
     if state.overlay != Overlay::None {
         return match m.kind {
-            MouseEventKind::Down(MouseButton::Left)
-            | MouseEventKind::ScrollDown
-            | MouseEventKind::ScrollUp => Action::CloseOverlay,
+            MouseEventKind::ScrollDown => Action::ScrollConversation(1),
+            MouseEventKind::ScrollUp => Action::ScrollConversation(-1),
             _ => Action::Noop,
         };
     }
@@ -771,7 +774,7 @@ mod tests {
     }
 
     #[test]
-    fn click_outside_overlay_dismisses() {
+    fn click_outside_overlay_is_ignored() {
         let mut s = ShellState::new();
         s.overlay = Overlay::Palette;
         let l = compute(
@@ -789,7 +792,8 @@ mod tests {
             row: 23,
             modifiers: KeyModifiers::NONE,
         };
-        assert_eq!(route_mouse(&s, &l, click), Action::CloseOverlay);
+        // Overlays are keyboard-driven — accidental clicks must NOT dismiss.
+        assert_eq!(route_mouse(&s, &l, click), Action::Noop);
     }
 
     #[test]
@@ -864,10 +868,10 @@ mod tests {
             route_mouse(&s, &l, scroll_up),
             Action::ScrollConversation(-1)
         );
-        // With overlay up: scroll dismisses instead of leaking through to the conversation.
+        // With overlay up: scroll still drives the conversation (doesn't dismiss).
         let mut s2 = ShellState::new();
         s2.overlay = Overlay::Palette;
-        assert_eq!(route_mouse(&s2, &l, scroll_down), Action::CloseOverlay);
+        assert_eq!(route_mouse(&s2, &l, scroll_down), Action::ScrollConversation(1));
     }
 
     #[test]
