@@ -11,7 +11,43 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
+
+/// Connect-phase timeout (TCP + TLS handshake) for provider HTTP clients.
+const CONNECT_TIMEOUT_SECS: u64 = 20;
+
+/// Default stream idle timeout: the maximum gap with no bytes from the provider
+/// — applied both to the initial response and between streamed chunks — before
+/// the stream is abandoned with a `ProviderEvent::Error`. A silent mid-stream
+/// stall (dropped TCP, hung cloud worker) would otherwise block the turn
+/// forever, and the only recovery would be killing the process. Overridable via
+/// `ZOID_HTTP_IDLE_SECS`. This is an *idle* deadline, not a total-request cap,
+/// so a long-but-live generation is never cut off — the deadline re-arms on
+/// every chunk. It also gates the wait for the *first* byte after `200 OK`, so
+/// a model whose cold weight-load exceeds this between the response headers and
+/// its first token needs a higher `ZOID_HTTP_IDLE_SECS`.
+const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 120;
+
+/// The configured stream idle timeout: `ZOID_HTTP_IDLE_SECS` (a positive
+/// integer, seconds) or the 120s default.
+pub(crate) fn stream_idle_timeout() -> Duration {
+    std::env::var("ZOID_HTTP_IDLE_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS))
+}
+
+/// Build a provider HTTP client with a bounded connect timeout. Falls back to
+/// the default client if the builder fails (it won't in practice).
+pub(crate) fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MsgRole {

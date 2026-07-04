@@ -14,4 +14,6 @@ futures-util = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+# `net` + `io-util` power the local hang-server timeout tests (a TcpListener that
+# accepts then stalls); not needed by the crate itself.
+tokio = { workspace = true, features = ["net", "io-util"] }
