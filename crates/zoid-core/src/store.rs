@@ -36,6 +36,10 @@ impl EventStore {
                 ciphertext  BLOB NOT NULL,
                 nonce       BLOB NOT NULL,
                 created_ts  INTEGER NOT NULL
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
+                content,
+                event_id UNINDEXED
             );",
         )?;
         Ok(EventStore { conn })
@@ -387,6 +391,17 @@ mod tests {
         let n: i64 = s
             .conn
             .query_row("SELECT count(*) FROM secrets", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn fts5_virtual_table_is_available() {
+        let store = EventStore::open(":memory:").unwrap();
+        // If FTS5 is compiled in, this query against the events_fts table succeeds.
+        let n: i64 = store
+            .conn
+            .query_row("SELECT count(*) FROM events_fts", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 0);
     }
