@@ -1045,6 +1045,10 @@ fn render_recalled(events: &[Event]) -> String {
 /// ratio than the old chars/4, but it's still an estimate; this ratio lets us
 /// fine-tune on cached sub-turns (where the provider reports 0): we scale the
 /// current estimate by the last known ratio.
+// Pre-existing 9-arg signature (predates the companion feature); a refactor is
+// out of scope for companion lifecycle wiring, so the lint is suppressed here
+// rather than reshaping unrelated agent-loop plumbing.
+#[allow(clippy::too_many_arguments)]
 async fn record_compactions(
     session: &SessionHandle,
     events: &mut crate::eventlog::EventLog,

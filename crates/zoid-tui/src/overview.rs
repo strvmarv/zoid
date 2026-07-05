@@ -125,7 +125,7 @@ fn commas(n: u64) -> String {
     let len = s.len();
     let mut out = String::with_capacity(len + len / 3);
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
+        if i > 0 && (len - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -324,7 +324,7 @@ pub fn overview_lines(data: &OverviewData, width: usize) -> Vec<Line<'static>> {
         while right.len() < rows {
             right.push(empty());
         }
-        for (l, r) in left.into_iter().zip(right.into_iter()) {
+        for (l, r) in left.into_iter().zip(right) {
             lines.push(compose(l, r, col_width));
         }
 

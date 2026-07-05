@@ -19,6 +19,24 @@ pub struct Config {
     pub economy: EconomyConfig,
     pub reduced_motion: bool,
     pub skills: SkillsConfig,
+    pub companion: CompanionConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompanionConfig {
+    /// TCP port for the companion server; 0 = OS-assigned ephemeral.
+    pub port: u16,
+    /// Auto-open the browser when the companion is enabled.
+    pub open: bool,
+}
+
+impl Default for CompanionConfig {
+    fn default() -> Self {
+        Self {
+            port: 0,
+            open: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +74,7 @@ impl Default for Config {
             economy: EconomyConfig::default(),
             reduced_motion: false,
             skills: SkillsConfig::default(),
+            companion: CompanionConfig::default(),
         }
     }
 }
@@ -73,6 +92,20 @@ mod tests {
         assert!(c.economy.context_target.is_none());
         assert_eq!(c.economy.band_headroom_pct, 20);
         assert_eq!(c.economy.recent_n, 4);
+    }
+
+    #[test]
+    fn companion_section_parses_and_merges() {
+        let p = parse_toml("[companion]\nport = 9123\nopen = false").unwrap();
+        assert_eq!(p.companion.port, Some(9123));
+        assert_eq!(p.companion.open, Some(false));
+        let (cfg, _prov) = merge(&[(Source::UserGlobal, p)]);
+        assert_eq!(cfg.companion.port, 9123);
+        assert!(!cfg.companion.open);
+        // default when absent
+        let (dflt, _) = merge(&[]);
+        assert_eq!(dflt.companion.port, 0);
+        assert!(dflt.companion.open);
     }
 }
 
@@ -116,6 +149,13 @@ pub struct PartialSkills {
 
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+pub struct PartialCompanion {
+    pub port: Option<u16>,
+    pub open: Option<bool>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct PartialConfig {
     pub provider: Option<String>,
     pub base_url: Option<String>,
@@ -123,6 +163,7 @@ pub struct PartialConfig {
     pub reduced_motion: Option<bool>,
     pub economy: PartialEconomy,
     pub skills: PartialSkills,
+    pub companion: PartialCompanion,
 }
 
 /// Parse one TOML layer. Unknown keys are rejected so typos surface early.
@@ -189,6 +230,12 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
                     cfg.skills.source_dirs.push(d.clone());
                 }
             }
+        }
+        if let Some(v) = p.companion.port {
+            cfg.companion.port = v;
+        }
+        if let Some(v) = p.companion.open {
+            cfg.companion.open = v;
         }
     }
     (cfg, prov)

@@ -20,6 +20,10 @@ pub enum Command {
     OpenConfig,
     /// Jump straight to the `Zoom::Overview` altitude from anywhere.
     ShowOverview,
+    /// Enable the companion server (start it if needed, open the browser).
+    CompanionEnable,
+    /// Disable (stop) the companion server.
+    CompanionDisable,
     Unknown(String),
 }
 
@@ -44,6 +48,8 @@ pub fn parse_command(raw: &str) -> Command {
         }
         "config" => Command::OpenConfig,
         "overview" => Command::ShowOverview,
+        "companion" => Command::CompanionEnable,
+        "companion off" => Command::CompanionDisable,
         other => Command::Unknown(other.to_string()),
     }
 }
@@ -95,6 +101,12 @@ mod tests {
     fn parses_overview_command() {
         assert_eq!(parse_command(":overview"), Command::ShowOverview);
         assert_eq!(parse_command("overview"), Command::ShowOverview);
+    }
+
+    #[test]
+    fn parses_companion_commands() {
+        assert_eq!(parse_command("companion"), Command::CompanionEnable);
+        assert_eq!(parse_command(":companion off"), Command::CompanionDisable);
     }
 
     #[test]

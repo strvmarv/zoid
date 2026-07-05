@@ -128,6 +128,14 @@ fn load_config() -> (zoid_core::config::Config, zoid_core::config::Provenance) {
     {
         envp.reduced_motion = Some(true);
     }
+    if let Ok(v) = std::env::var("ZOID_COMPANION_PORT") {
+        if let Ok(n) = v.trim().parse::<u16>() {
+            envp.companion.port = Some(n);
+        }
+    }
+    if let Ok(v) = std::env::var("ZOID_COMPANION_OPEN") {
+        envp.companion.open = Some(matches!(v.trim(), "1" | "true" | "yes"));
+    }
     layers.push((Source::Env, envp));
     merge(&layers)
 }
@@ -1075,7 +1083,7 @@ impl App {
 async fn main() -> Result<()> {
     let obs = obs::init();
 
-    match zoid::cli::parse_args(std::env::args().skip(1)) {
+    let companion_at_boot = match zoid::cli::parse_args(std::env::args().skip(1)) {
         zoid::cli::Cli::Version => {
             println!("{}", zoid::cli::version_string());
             return Ok(());
@@ -1094,8 +1102,8 @@ async fn main() -> Result<()> {
             );
             std::process::exit(2);
         }
-        zoid::cli::Cli::Run => {}
-    }
+        zoid::cli::Cli::Run { companion } => companion,
+    };
 
     let path = db_path()?;
     let root = repo_root();
@@ -1240,6 +1248,10 @@ async fn main() -> Result<()> {
         companion: None,
         companion_hub: zoid_companion::CompanionHub::new(),
     };
+
+    if companion_at_boot {
+        enable_companion(&mut app);
+    }
 
     enable_raw_mode()?;
     let mut out = stdout();
@@ -2771,6 +2783,54 @@ fn answer_question(app: &mut App, ans: zoid::agent::Answer) {
     app.shell.overlay = zoid_tui::state::Overlay::None;
 }
 
+/// Open `url` in the platform's default browser. Best-effort: a missing
+/// launcher or spawn failure is silently ignored — never blocks or panics.
+fn open_url(url: &str) {
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd")
+        .args(["/c", "start", "", url])
+        .spawn();
+}
+
+/// Turn the companion server on. Idempotent — if it's already running this
+/// just re-opens the browser (when configured to). On bind failure the error
+/// is surfaced via the status hint; it never panics.
+fn enable_companion(app: &mut App) {
+    if let Some(server) = &app.companion {
+        if app.config.companion.open {
+            open_url(&server.url);
+        }
+        return;
+    }
+    let token = Ulid::new().to_string();
+    match zoid_companion::start(app.companion_hub.clone(), app.config.companion.port, token) {
+        Ok(server) => {
+            app.companion_hub.set_enabled(true);
+            if app.config.companion.open {
+                open_url(&server.url);
+            } else {
+                app.shell.status_hint = Some(format!("companion: {}", server.url));
+            }
+            app.companion = Some(server);
+        }
+        Err(e) => {
+            app.shell.status_hint = Some(format!("companion: {e}"));
+        }
+    }
+}
+
+/// Turn the companion server off (no-op if it wasn't running).
+fn disable_companion(app: &mut App) {
+    if let Some(server) = app.companion.take() {
+        app.companion_hub.set_enabled(false);
+        server.shutdown();
+    }
+}
+
 async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<bool> {
     use zoid_tui::command::Command;
     match cmd {
@@ -2858,6 +2918,14 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
         Command::ShowOverview => {
             app.shell.zoom = zoid_tui::state::Zoom::Overview;
             app.shell.conversation_scroll = 0;
+            Ok(false)
+        }
+        Command::CompanionEnable => {
+            enable_companion(app);
+            Ok(false)
+        }
+        Command::CompanionDisable => {
+            disable_companion(app);
             Ok(false)
         }
         Command::Unknown(_) => Ok(false),

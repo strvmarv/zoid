@@ -43,7 +43,7 @@ pub fn start(
     token: String,
 ) -> std::io::Result<CompanionServer> {
     let server = Server::http(("127.0.0.1", port))
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        .map_err(std::io::Error::other)?;
     let bound = server
         .server_addr()
         .to_ip()
