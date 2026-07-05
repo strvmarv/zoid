@@ -41,19 +41,39 @@ pub struct DashboardSnapshot {
 /// timestamp changed.
 impl PartialEq for DashboardSnapshot {
     fn eq(&self, other: &Self) -> bool {
-        self.session_name == other.session_name
-            && self.model == other.model
-            && self.provider == other.provider
-            && self.cwd == other.cwd
-            && self.ctx_used == other.ctx_used
-            && self.ctx_ceiling == other.ctx_ceiling
-            && self.session_tokens == other.session_tokens
-            && self.cached_tokens == other.cached_tokens
-            && self.cache_supported == other.cache_supported
-            && self.tasks_len == other.tasks_len
-            && self.busy == other.busy
-            && self.tiers == other.tiers
-            && self.churn == other.churn
+        // Destructure exhaustively so a future field addition is a COMPILE error
+        // here rather than a silently-dropped comparison (which would let a real
+        // dashboard update be deduped away). `updated_ms` is the one deliberate
+        // exclusion; every other field must be weighed.
+        let Self {
+            session_name,
+            model,
+            provider,
+            cwd,
+            ctx_used,
+            ctx_ceiling,
+            session_tokens,
+            cached_tokens,
+            cache_supported,
+            tasks_len,
+            busy,
+            tiers,
+            churn,
+            updated_ms: _,
+        } = self;
+        *session_name == other.session_name
+            && *model == other.model
+            && *provider == other.provider
+            && *cwd == other.cwd
+            && *ctx_used == other.ctx_used
+            && *ctx_ceiling == other.ctx_ceiling
+            && *session_tokens == other.session_tokens
+            && *cached_tokens == other.cached_tokens
+            && *cache_supported == other.cache_supported
+            && *tasks_len == other.tasks_len
+            && *busy == other.busy
+            && *tiers == other.tiers
+            && *churn == other.churn
     }
 }
 

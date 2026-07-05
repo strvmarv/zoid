@@ -13,7 +13,7 @@
 - **Bind address:** `127.0.0.1` only. Never `0.0.0.0`.
 - **`zoid-companion` dependencies:** exactly `tiny_http`, `serde`, `serde_json`. It MUST NOT depend on `zoid-core`, `zoid-tui`, `tokio`, `ulid`, or any C/OpenSSL-linked library. The dependency arrow is one-way: `zoid → zoid-companion`.
 - **Token:** minted in the bin with `ulid::Ulid::new().to_string()` and passed into `start`. 128-bit, URL-safe Crockford base32.
-- **CSP header** on the shell page, verbatim: `default-src 'self'; connect-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'`
+- **CSP header** on the shell page, verbatim (as shipped — supersedes the original `connect-src 'none'`, which blocked the dashboard's own SSE + inline script): `default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; form-action 'self'; base-uri 'self'` (shell JS is served as same-origin `app.js`; see the design doc's CSP-correction note)
 - **Token/404:** any missing or wrong token, or any unknown path, returns HTTP `404` with an empty body. Never `401`/`403`.
 - **Default off:** the server starts only on explicit enable (palette `companion`, `--companion` flag). `show` while disabled is a no-op ack; it never auto-starts.
 - **No tokio in the server:** all server threads are `std::thread`; all cross-thread state moves through `CompanionHub`.
