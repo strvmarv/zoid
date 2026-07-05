@@ -66,7 +66,7 @@ async fn ask_user_answer_becomes_the_tool_result() {
         tools,
         Arc::new(zoid_tools::AllowAll),
         session.clone(),
-        seed,
+        zoid::eventlog::EventLog::from_vec(seed),
         "fake".into(),
         ui_tx,
         ulid::Ulid::new(),
@@ -76,7 +76,7 @@ async fn ask_user_answer_becomes_the_tool_result() {
     .unwrap();
     responder.abort();
 
-    let results = zoid_testkit::tool_results(&events);
+    let results = zoid_testkit::tool_results(events.iter());
     assert!(
         results
             .iter()
@@ -114,7 +114,7 @@ async fn ask_user_dropped_sender_aborts_turn_with_balanced_result() {
         tools,
         Arc::new(zoid_tools::AllowAll),
         session.clone(),
-        seed,
+        zoid::eventlog::EventLog::from_vec(seed),
         "fake".into(),
         ui_tx,
         ulid::Ulid::new(),
@@ -126,7 +126,7 @@ async fn ask_user_dropped_sender_aborts_turn_with_balanced_result() {
 
     // The turn ended, and the pending ask_user call has a balanced
     // "[user aborted]" result — no dangling ToolCall with no result.
-    let results = zoid_testkit::tool_results(&events);
+    let results = zoid_testkit::tool_results(events.iter());
     assert!(
         results
             .iter()
@@ -168,7 +168,7 @@ async fn abort_drains_remaining_batched_tool_calls() {
         tools,
         Arc::new(zoid_tools::AllowAll),
         session.clone(),
-        seed,
+        zoid::eventlog::EventLog::from_vec(seed),
         "fake".into(),
         ui_tx,
         ulid::Ulid::new(),
@@ -178,7 +178,7 @@ async fn abort_drains_remaining_batched_tool_calls() {
     .unwrap();
     responder.abort();
 
-    let results = zoid_testkit::tool_results(&events);
+    let results = zoid_testkit::tool_results(events.iter());
 
     assert!(
         results

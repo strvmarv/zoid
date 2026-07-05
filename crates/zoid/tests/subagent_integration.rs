@@ -91,7 +91,7 @@ async fn subagent_writes_inside_its_worktree_not_the_main_copy() {
         wt_path = wt.path().to_path_buf();
         let res = run_subagent(
             "create out.txt",
-            &[],
+            &zoid::eventlog::EventLog::new(),
             &AgentProfile::builtin(),
             provider,
             wt.path().to_path_buf(), // subagent cwd = the worktree (B1 seam)

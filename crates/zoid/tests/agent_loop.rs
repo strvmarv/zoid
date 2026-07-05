@@ -107,7 +107,7 @@ async fn agent_loop_runs_tool_then_finishes() {
         tools,
         std::sync::Arc::new(zoid_tools::AllowAll),
         session.clone(),
-        seed,
+        zoid::eventlog::EventLog::from_vec(seed),
         "fake".into(),
         tx,
         ulid::Ulid::new(),
@@ -206,7 +206,7 @@ async fn gate_deny_blocks_tool_and_feeds_reason_back() {
         tools,
         Arc::new(DenyAll),
         session.clone(),
-        seed,
+        zoid::eventlog::EventLog::from_vec(seed),
         "fake".into(),
         tx,
         ulid::Ulid::new(),
@@ -267,7 +267,7 @@ async fn agent_loop_returns_ok_and_emits_turn_complete_on_error_event() {
         tools,
         std::sync::Arc::new(zoid_tools::AllowAll),
         session.clone(),
-        seed,
+        zoid::eventlog::EventLog::from_vec(seed),
         "fake".into(),
         tx,
         ulid::Ulid::new(),
@@ -373,7 +373,7 @@ async fn cancel_mid_stream_drains_pending_tool_calls_without_running_them() {
         tools,
         std::sync::Arc::new(zoid_tools::AllowAll),
         session.clone(),
-        seed,
+        zoid::eventlog::EventLog::from_vec(seed),
         "fake".into(),
         tx,
         ulid::Ulid::new(),
@@ -384,7 +384,10 @@ async fn cancel_mid_stream_drains_pending_tool_calls_without_running_them() {
     .unwrap();
 
     let complete = drain.await.unwrap();
-    assert!(complete, "TurnComplete must fire even when the turn is cancelled");
+    assert!(
+        complete,
+        "TurnComplete must fire even when the turn is cancelled"
+    );
 
     // The tool must NOT have executed.
     assert!(!path.exists(), "a cancelled tool call must not run");
@@ -440,7 +443,7 @@ async fn truncated_event_surfaces_a_warning_and_still_completes() {
         tools,
         std::sync::Arc::new(zoid_tools::AllowAll),
         session.clone(),
-        seed,
+        zoid::eventlog::EventLog::from_vec(seed),
         "fake".into(),
         tx,
         ulid::Ulid::new(),
@@ -449,7 +452,10 @@ async fn truncated_event_surfaces_a_warning_and_still_completes() {
     .await
     .unwrap();
 
-    assert!(drain.await.unwrap(), "TurnComplete must fire after a truncation");
+    assert!(
+        drain.await.unwrap(),
+        "TurnComplete must fire after a truncation"
+    );
 
     // Exactly one sub-turn: a truncation must not trigger a spurious re-request.
     assert_eq!(
@@ -459,12 +465,12 @@ async fn truncated_event_surfaces_a_warning_and_still_completes() {
     );
 
     let log = session.snapshot().await.unwrap();
-    let text_idx = log.iter().position(|e| {
-        matches!(&e.kind, EventKind::ModelDelta { text } if text.contains("partial ans"))
-    });
-    let warn_idx = log.iter().position(|e| {
-        matches!(&e.kind, EventKind::AssistantMessage { text } if text.contains("truncated"))
-    });
+    let text_idx = log.iter().position(
+        |e| matches!(&e.kind, EventKind::ModelDelta { text } if text.contains("partial ans")),
+    );
+    let warn_idx = log.iter().position(
+        |e| matches!(&e.kind, EventKind::AssistantMessage { text } if text.contains("truncated")),
+    );
     assert!(text_idx.is_some(), "the partial reply must be logged");
     assert!(
         warn_idx.is_some(),

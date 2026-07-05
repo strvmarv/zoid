@@ -43,15 +43,15 @@ pub fn subagent_policy() -> ContextPolicy {
 /// transcripts are intentionally excluded (spec §4.4/§5.4: never session history).
 pub fn build_subagent_request(
     task: &str,
-    events: &[Event],
+    events: &crate::eventlog::EventLog,
     policy: &ContextPolicy,
     profile: &AgentProfile,
     model: &str,
     tools: &[Box<dyn Tool>],
 ) -> CompletionRequest {
-    let window = context_window(events);
+    let window = context_window(events.iter());
     let selection = assemble_context(&window, policy);
-    let contents = file_contents(events);
+    let contents = file_contents(events.iter());
 
     let mut ctx = String::new();
     for item in selection
@@ -101,7 +101,7 @@ pub struct SubagentResult {
 #[allow(clippy::too_many_arguments)]
 pub async fn run_subagent(
     task: &str,
-    context_events: &[Event],
+    context_events: &crate::eventlog::EventLog,
     profile: &AgentProfile,
     provider: Arc<dyn Provider>,
     cwd: PathBuf,
@@ -156,7 +156,7 @@ pub async fn run_subagent(
         tools,
         std::sync::Arc::new(zoid_tools::AllowAll),
         session,
-        vec![seed],
+        crate::eventlog::EventLog::from_vec(vec![seed]),
         model,
         ui,
         session_id,
@@ -221,13 +221,13 @@ mod tests {
 
     #[test]
     fn request_carries_task_and_relevant_file_never_history() {
-        let evs = vec![
+        let evs = crate::eventlog::EventLog::from_vec(vec![
             ev(EventKind::UserMessage {
                 text: "secret chat history".into(),
             }),
             call("c1", "src/ast.rs"),
             result("c1", "fn parse() {}"),
-        ];
+        ]);
         let profile = AgentProfile::builtin();
         let tools = zoid_tools::registry();
         let req = build_subagent_request(
@@ -280,7 +280,7 @@ mod tests {
 
         let req = build_subagent_request(
             "do a thing",
-            &[],
+            &crate::eventlog::EventLog::new(),
             &subagent_policy(),
             &profile,
             "glm",
@@ -296,7 +296,7 @@ mod tests {
     fn request_without_files_is_just_the_task() {
         let req = build_subagent_request(
             "do a thing",
-            &[],
+            &crate::eventlog::EventLog::new(),
             &subagent_policy(),
             &AgentProfile::builtin(),
             "glm",
@@ -340,7 +340,7 @@ mod tests {
 
         let res = run_subagent(
             "refactor parse()",
-            &[],
+            &crate::eventlog::EventLog::new(),
             &AgentProfile::builtin(),
             provider,
             std::path::PathBuf::from("."),
