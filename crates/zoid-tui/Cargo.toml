@@ -17,5 +17,11 @@ unicode-width = "0.2"
 # default features off (drops the html/getopts extras) to respect the size budget.
 pulldown-cmark = { version = "0.13", default-features = false }
 
+[features]
+# Opt-in: compiles the buffer→HTML converter used only by the `web_capture`
+# example + the marketing site build. Never enabled by the product binary,
+# so it costs zero bytes in a default `cargo build -p zoid`.
+web-capture = []
+
 [dev-dependencies]
 insta = { workspace = true }

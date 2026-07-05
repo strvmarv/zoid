@@ -20,6 +20,9 @@ pub mod syntax_view;
 pub(crate) mod text;
 pub mod tokens;
 
+#[cfg(feature = "web-capture")]
+pub mod web_capture;
+
 pub use economy_view::EconomyView;
 pub use motion::{
     caret_on, ease_out_cubic, reveal_count, spinner_frame, zoom_reveal, Anim, MOTION_FPS,
