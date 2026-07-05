@@ -81,17 +81,40 @@ fn resolve_secret_key_path(env: impl Fn(&str) -> Option<String>) -> PathBuf {
     base.join("zoid").join("secret.key")
 }
 
+/// Format one unknown-key warning for the log, qualified by its source file.
+fn layer_warning_line(file: &str, key: &str) -> String {
+    format!("{file}: ignored unknown key {key}")
+}
+
+/// One-line status-bar summary of ignored config keys, or None when there were
+/// none. A single key is named inline; several defer to the log.
+fn config_warning_hint(keys: &[String]) -> Option<String> {
+    match keys {
+        [] => None,
+        [one] => Some(format!("config: 1 key ignored ({one})")),
+        _ => Some(format!("config: {} keys ignored — see log", keys.len())),
+    }
+}
+
 /// Load config from files + env, in precedence order (user-global < project <
 /// local < env). Missing files are skipped (empty layer); a malformed file is
 /// skipped with a stderr note (non-fatal — the process still starts).
-fn load_config() -> (zoid_core::config::Config, zoid_core::config::Provenance) {
+fn load_config() -> (zoid_core::config::Config, zoid_core::config::Provenance, Vec<String>) {
     use zoid_core::config::{merge, parse_toml, PartialConfig, Source};
     let env = |k: &str| std::env::var(k).ok();
     let cfg_dir = resolve_config_dir(env);
-    let read = |p: PathBuf| -> Option<PartialConfig> {
+    let mut warnings: Vec<String> = Vec::new();
+    let mut read = |p: PathBuf| -> Option<PartialConfig> {
         let text = std::fs::read_to_string(&p).ok()?;
+        let file = p.file_name().and_then(|n| n.to_str()).unwrap_or("config.toml");
         match parse_toml(&text) {
-            Ok(pc) => Some(pc),
+            Ok((pc, unknown)) => {
+                for k in unknown {
+                    eprintln!("zoid: {}", layer_warning_line(file, &k));
+                    warnings.push(k);
+                }
+                Some(pc)
+            }
             Err(e) => {
                 eprintln!("zoid: ignoring {}: {e}", p.display());
                 None
@@ -129,7 +152,8 @@ fn load_config() -> (zoid_core::config::Config, zoid_core::config::Provenance) {
         envp.reduced_motion = Some(true);
     }
     layers.push((Source::Env, envp));
-    merge(&layers)
+    let (cfg, prov) = merge(&layers);
+    (cfg, prov, warnings)
 }
 
 /// Wall-clock millis since the epoch — supplied by the binary (core stays clock-free).
@@ -1074,7 +1098,7 @@ async fn main() -> Result<()> {
     // session doesn't re-inflate RAM to the pre-#6b footprint.
     events.clear_compacted_bodies();
 
-    let (config, prov) = load_config();
+    let (config, prov, cfg_warnings) = load_config();
     let model = if config.model.is_empty() {
         default_model().to_string()
     } else {
@@ -1089,6 +1113,7 @@ async fn main() -> Result<()> {
 
     let mut shell = zoid_tui::ShellState::new();
     shell.reduced_motion = config.reduced_motion;
+    shell.status_hint = config_warning_hint(&cfg_warnings);
     // The Repo drawer only makes sense inside a git work tree; outside one it
     // showed a fabricated "main" branch and zero changes (§16, task #38). Detect
     // once at startup: populate + keep the drawer when present, drop it when not.
@@ -1911,7 +1936,7 @@ fn apply_config_write(
         return;
     }
     // Reload the whole layered config so provenance + merged view stay honest.
-    let (c, p) = load_config();
+    let (c, p, _cfg_warnings) = load_config();
     app.config = c;
     app.prov = p;
     app.economy = app.config.economy;
@@ -3165,22 +3190,43 @@ mod tests {
     }
 
     #[test]
+    fn layer_warning_line_is_file_qualified() {
+        assert_eq!(
+            layer_warning_line("config.toml", "economy.context_ceiling"),
+            "config.toml: ignored unknown key economy.context_ceiling"
+        );
+    }
+
+    #[test]
+    fn config_warning_hint_none_one_many() {
+        assert_eq!(config_warning_hint(&[]), None);
+        assert_eq!(
+            config_warning_hint(&["economy.context_ceiling".to_string()]),
+            Some("config: 1 key ignored (economy.context_ceiling)".to_string())
+        );
+        assert_eq!(
+            config_warning_hint(&["a".to_string(), "b".to_string()]),
+            Some("config: 2 keys ignored — see log".to_string())
+        );
+    }
+
+    #[test]
     fn write_config_file_round_trips_through_temp_dir() {
         use zoid_core::config::{parse_toml, TomlValue};
         let dir = tempfile::tempdir().unwrap();
         // Parent dir does not exist yet — write_config_file must create it.
         let path = dir.path().join("nested").join("config.toml");
         write_config_file(&path, "reduced_motion", TomlValue::Bool(true)).unwrap();
-        let parsed = parse_toml(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let (parsed, _) = parse_toml(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(parsed.reduced_motion, Some(true));
         // A nested-table write preserves the earlier top-level key.
         write_config_file(&path, "economy.context_target", TomlValue::Int(200_000)).unwrap();
-        let parsed = parse_toml(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let (parsed, _) = parse_toml(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(parsed.reduced_motion, Some(true));
         assert_eq!(parsed.economy.context_target, Some(200_000));
         // Unset removes the key again.
         write_config_file(&path, "economy.context_target", TomlValue::Unset).unwrap();
-        let parsed = parse_toml(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let (parsed, _) = parse_toml(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(parsed.economy.context_target, None);
     }
 
