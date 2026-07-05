@@ -247,6 +247,18 @@ fn event_tokens(kind: &EventKind) -> u64 {
 /// so an interleaved inert event can't fragment a tool_use/tool_result pair).
 fn group_turns(events: &[&Event], evicted: &HashSet<Ulid>, recent_n: usize) -> Vec<TurnView> {
     let mut turns: Vec<TurnView> = Vec::new();
+    // A compacted ToolResult's ranking weight must match what the request
+    // actually carries — the summary — not the raw (possibly since-cleared,
+    // #6b) body and not the pre-compaction `original_tokens`.
+    let compacted: HashMap<&str, &str> = events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::ToolResultCompacted { id, summary, .. } => {
+                Some((id.as_str(), summary.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
     // M10 (spec §3.1): a turn re-admitted via recall gets a COOLDOWN — for each
     // re-admitted id, `readmit_mark` records how many turns had started when its
     // `TurnsReadmitted` event fired (the marker is inert, so we capture it before
@@ -284,7 +296,13 @@ fn group_turns(events: &[&Event], evicted: &HashSet<Ulid>, recent_n: usize) -> V
         }
         let t = turns.last_mut().unwrap();
         t.ids.push(e.id);
-        t.token_estimate += event_tokens(&e.kind);
+        let tokens = match &e.kind {
+            EventKind::ToolResult { id, .. } if compacted.contains_key(id.as_str()) => {
+                crate::economy::estimate_tokens(compacted[id.as_str()])
+            }
+            _ => event_tokens(&e.kind),
+        };
+        t.token_estimate += tokens;
     }
     let n = turns.len();
     for (i, t) in turns.iter_mut().enumerate() {
@@ -522,6 +540,45 @@ mod plan_tests {
             ids.contains(&Ulid::from(1u128)),
             "recalled turn is evictable again once its cooldown lapses"
         );
+    }
+
+    #[test]
+    fn compacted_turn_weighs_summary_not_raw_or_zero() {
+        use crate::economy::estimate_tokens;
+        use std::collections::HashSet;
+
+        // A ToolResult whose body has ALREADY been cleared by #6b (output empty),
+        // plus its compaction marker carrying the summary the request actually holds.
+        let tr = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::ToolResult {
+                id: "call-1".into(),
+                name: "bash".into(),
+                output: String::new(),
+                is_error: false,
+            },
+        );
+        let summary = "row 0\n… (compacted: 199 more lines, ~700 tokens elided)".to_string();
+        let comp = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::ToolResultCompacted {
+                id: "call-1".into(),
+                summary: summary.clone(),
+                original_tokens: 4242,
+            },
+        );
+
+        let events: Vec<&Event> = vec![&tr, &comp];
+        let turns = group_turns(&events, &HashSet::new(), 0);
+
+        assert_eq!(turns.len(), 1);
+        // Weighed by the summary the request carries — not 0 (cleared body) and not
+        // 4242 (the pre-compaction original_tokens).
+        assert_eq!(turns[0].token_estimate, estimate_tokens(&summary));
     }
 }
 
