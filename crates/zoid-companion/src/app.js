@@ -36,9 +36,12 @@ es.addEventListener("dashboard", (e) => {
 });
 
 // The card is raw, agent-authored HTML by design (the `show` tool) — rendered
-// as innerHTML for rich content (tables, SVG, layout). Under CSP the blast
-// radius is contained: `script-src 'self'` makes any inline <script> or event
-// handler in the card inert, and `connect-src 'self'` blocks external exfil.
+// as innerHTML for rich content (tables, SVG, layout). Blast radius is
+// contained: <script> tags inserted via innerHTML never execute (a DOM rule,
+// not CSP), and `script-src 'self'` additionally neutralizes inline event-
+// handler attributes and `javascript:` URIs; `connect-src`/`form-action` 'self'
+// block script- and form-driven egress. (Top-level navigation is a residual —
+// see the CSP note in server.rs.)
 es.addEventListener("card", (e) => {
   card.innerHTML = JSON.parse(e.data);
 });
