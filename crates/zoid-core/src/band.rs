@@ -30,7 +30,11 @@ pub fn derive_band(
     let effective_target = context_target.min(usable);
     let headroom = effective_target.saturating_mul(headroom_pct as u64) / 100;
     let low_water = effective_target.saturating_sub(headroom);
-    Band { high_water: effective_target, low_water, effective_target }
+    Band {
+        high_water: effective_target,
+        low_water,
+        effective_target,
+    }
 }
 
 #[cfg(test)]

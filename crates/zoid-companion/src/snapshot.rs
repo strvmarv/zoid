@@ -134,7 +134,10 @@ mod tests {
         let a = base_snap();
         let mut b = base_snap();
         b.updated_ms = a.updated_ms + 1000; // only the timestamp differs
-        assert_eq!(a, b, "updated_ms alone must not break equality (dedup relies on this)");
+        assert_eq!(
+            a, b,
+            "updated_ms alone must not break equality (dedup relies on this)"
+        );
 
         let mut c = base_snap();
         c.busy = !c.busy; // a real content change

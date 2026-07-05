@@ -42,13 +42,23 @@ mod tests {
     struct NoopReranker;
     impl Reranker for NoopReranker {
         fn rerank(&self, _q: &str, cands: &[RecallCandidate]) -> Vec<Scored> {
-            cands.iter().map(|c| Scored { candidate: c.clone(), score: c.lexical_score }).collect()
+            cands
+                .iter()
+                .map(|c| Scored {
+                    candidate: c.clone(),
+                    score: c.lexical_score,
+                })
+                .collect()
         }
     }
     #[test]
     fn seams_are_object_safe() {
         let r: Box<dyn Reranker> = Box::new(NoopReranker);
-        let c = RecallCandidate { event_id: Ulid::from(1u128), content: "x".into(), lexical_score: 1.0 };
+        let c = RecallCandidate {
+            event_id: Ulid::from(1u128),
+            content: "x".into(),
+            lexical_score: 1.0,
+        };
         assert_eq!(r.rerank("q", &[c]).len(), 1);
     }
 }

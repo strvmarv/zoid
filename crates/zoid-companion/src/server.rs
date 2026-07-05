@@ -54,13 +54,8 @@ pub struct CompanionServer {
 
 /// Bind `127.0.0.1:port` (0 = OS-assigned), spawn the accept loop, return the
 /// handle. `token` is minted by the caller (the bin) and gates every route.
-pub fn start(
-    hub: Arc<CompanionHub>,
-    port: u16,
-    token: String,
-) -> std::io::Result<CompanionServer> {
-    let server = Server::http(("127.0.0.1", port))
-        .map_err(std::io::Error::other)?;
+pub fn start(hub: Arc<CompanionHub>, port: u16, token: String) -> std::io::Result<CompanionServer> {
+    let server = Server::http(("127.0.0.1", port)).map_err(std::io::Error::other)?;
     let bound = server
         .server_addr()
         .to_ip()
@@ -259,7 +254,8 @@ impl Read for SseReader {
                 self.started = true;
                 self.hub.current()
             } else {
-                self.hub.wait_after(self.last_version, Duration::from_secs(1))
+                self.hub
+                    .wait_after(self.last_version, Duration::from_secs(1))
             };
             if !self.running.load(Ordering::Relaxed) {
                 return Ok(0);
@@ -307,8 +303,14 @@ mod tests {
         // CSP must permit the app's own SSE, else the dashboard is dead on
         // arrival: connect-src is 'self' (not 'none'), and the shell pulls its
         // JS from a same-origin file so script-src can stay 'self'.
-        assert!(resp.contains("connect-src 'self'"), "SSE-blocking CSP: {resp}");
-        assert!(resp.contains("src=\"app.js\""), "shell not wired to app.js: {resp}");
+        assert!(
+            resp.contains("connect-src 'self'"),
+            "SSE-blocking CSP: {resp}"
+        );
+        assert!(
+            resp.contains("src=\"app.js\""),
+            "shell not wired to app.js: {resp}"
+        );
         server.shutdown();
     }
 
@@ -318,7 +320,10 @@ mod tests {
         let server = start(hub, 0, "tok123".into()).unwrap();
         let resp = raw_get(server.port, "/s/tok123/app.js");
         assert!(resp.starts_with("HTTP/1.1 200"), "got: {resp}");
-        assert!(resp.contains("text/javascript"), "wrong content-type: {resp}");
+        assert!(
+            resp.contains("text/javascript"),
+            "wrong content-type: {resp}"
+        );
         assert!(resp.contains("EventSource"), "missing script body: {resp}");
         server.shutdown();
     }
@@ -350,7 +355,11 @@ mod tests {
 
         let mut s = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        write!(s, "GET /s/tok123/events HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
+        write!(
+            s,
+            "GET /s/tok123/events HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        )
+        .unwrap();
 
         // Accumulate a couple of reads; each must return promptly (the timeout is
         // the failure mode). The status line + dashboard frame arrive right away.
@@ -367,8 +376,14 @@ mod tests {
             }
         }
         assert!(acc.starts_with("HTTP/1.1 200"), "bad status: {acc}");
-        assert!(acc.contains("text/event-stream"), "wrong content-type: {acc}");
-        assert!(acc.contains("event: dashboard"), "no dashboard frame: {acc}");
+        assert!(
+            acc.contains("text/event-stream"),
+            "wrong content-type: {acc}"
+        );
+        assert!(
+            acc.contains("event: dashboard"),
+            "no dashboard frame: {acc}"
+        );
         assert!(
             acc.contains("\"session_name\":\"e2e\""),
             "frame missing data: {acc}"
@@ -383,7 +398,10 @@ mod tests {
         let server = start(hub, 0, "tok123".into()).unwrap();
         let resp = raw_get(server.port, "/s/tok123");
         assert!(resp.starts_with("HTTP/1.1 301"), "got: {resp}");
-        assert!(resp.contains("Location: /s/tok123/"), "missing Location: {resp}");
+        assert!(
+            resp.contains("Location: /s/tok123/"),
+            "missing Location: {resp}"
+        );
         server.shutdown();
     }
 

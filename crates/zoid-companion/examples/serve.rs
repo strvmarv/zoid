@@ -31,8 +31,20 @@ fn main() {
         tasks_len: 2,
         busy: false,
         tiers: vec![
-            TierRow { label: "system".into(), tokens: 1200, heat: 2, cold: false, pinned: true },
-            TierRow { label: "older turns".into(), tokens: 4200, heat: 0, cold: true, pinned: false },
+            TierRow {
+                label: "system".into(),
+                tokens: 1200,
+                heat: 2,
+                cold: false,
+                pinned: true,
+            },
+            TierRow {
+                label: "older turns".into(),
+                tokens: 4200,
+                heat: 0,
+                cold: true,
+                pinned: false,
+            },
         ],
         churn: vec![10, 40, 25, 60, 30, 80],
         updated_ms: 1_700_000_000_000,

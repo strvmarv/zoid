@@ -146,7 +146,10 @@ mod tests {
     fn truncate_start_keeps_end() {
         // "src/main.rs" is 11 cols; max 10 → budget 9 → drop 2 cols ("sr") → "…c/main.rs"
         assert_eq!(truncate_start("src/main.rs", 10), "…c/main.rs");
-        assert_eq!(UnicodeWidthStr::width(truncate_start("src/main.rs", 10).as_str()), 10);
+        assert_eq!(
+            UnicodeWidthStr::width(truncate_start("src/main.rs", 10).as_str()),
+            10
+        );
         // Longer path: the filename at the end is preserved.
         let long = "crates/zoid-tui/src/render.rs";
         let out = truncate_start(long, 20);

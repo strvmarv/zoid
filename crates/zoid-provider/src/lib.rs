@@ -339,7 +339,9 @@ mod tests {
         assert!(is_context_length_error(
             "This model's maximum context length is 200000 tokens"
         ));
-        assert!(is_context_length_error("input length exceeds context window"));
+        assert!(is_context_length_error(
+            "input length exceeds context window"
+        ));
         assert!(!is_context_length_error("rate limit exceeded"));
         assert!(!is_context_length_error("connection reset"));
     }
