@@ -3,6 +3,7 @@
 **Date:** 2026-07-04
 **Status:** Approved (brainstorm), ready for implementation plan
 **Targets:** backlog #6a (per-turn `app.events` deep clone) + #6b (free compacted `ToolResult.output` bodies from RAM)
+**Line refs synced against:** `f50191b` (post-ACM-follow-ups main). All correctness-critical seams (`main.rs:2850/2802/916`, `eviction.rs:189`, `context.rs:254/265/315`, `projection.rs:135-137`) verified unchanged; supporting line numbers refreshed.
 
 ## Problem
 
@@ -10,7 +11,7 @@ Two related working-set costs survive the ACM demand-paged-context feature (whic
 
 1. **#6a — per-turn deep clone.** `spawn_turn` does `let seed = app.events.clone()` (`crates/zoid/src/main.rs:2850`; a second clone at the subagent spawn path `main.rs:2802`). `App.events: Vec<Event>` and `Event: Clone`, so this deep-copies every `String` body — including every `ToolResult.output` — once per turn. The returned `Vec<Event>` from the turn is discarded (`let _ = run_agent_turn_cancellable(...)`); new events flow back via the `session` actor + `AgentUpdate::Appended` UI channel. The clone exists solely to hand the spawned task an owned `'static` snapshot for request-building and in-turn projection recomputes. Cost grows O(total tool-output chars) per turn, unbounded.
 
-2. **#6b — raw bodies resident forever.** `EventKind::ToolResult { output: String, .. }` (`crates/zoid-core/src/event.rs:61-66`) is never cleared. `ToolResultCompacted { id, summary, original_tokens }` (`event.rs:81-85`) and `TurnsEvicted` (`event.rs:113-117`) are append-only/reversible — consumers only skip evicted ids or substitute summaries at request-build time. So a compacted tool result keeps its full raw body live in RAM (and it is re-cloned every turn per #6a).
+2. **#6b — raw bodies resident forever.** `EventKind::ToolResult { output: String, .. }` (`crates/zoid-core/src/event.rs:60-65`) is never cleared. `ToolResultCompacted { id, summary, original_tokens }` (`event.rs:80-84`) and `TurnsEvicted` (`event.rs:112-116`) are append-only/reversible — consumers only skip evicted ids or substitute summaries at request-build time. So a compacted tool result keeps its full raw body live in RAM (and it is re-cloned every turn per #6a).
 
 ACM does **not** address either: it changed neither the clone nor the resident raw bodies (confirmed by code survey).
 
@@ -60,7 +61,7 @@ impl EventLog {
 zoid-core's projection entry points — `conversation`, `context_window` (`context.rs`), and `plan_evictions` / `evicted_ids` (`eviction.rs`) — currently take `&[Event]`. They shift to accept borrowed events without an `Arc` dependency, via one of:
 
 - **Preferred:** change the signatures to `impl IntoIterator<Item = &Event>` (or a generic `E: AsRef<[…]>`-style bound is not possible over `Arc`, so an iterator bound is the clean choice). `EventLog::iter()` feeds them directly, no per-turn allocation.
-- The turn's in-loop recomputes (`agent.rs` around the tool loop, e.g. the `events.push` at `agent.rs:1107`) operate on a local `EventLog` seeded from the snapshot; appends push `Arc::new(ev)`.
+- The turn's in-loop recomputes (`agent.rs` around the tool loop, e.g. the `events.push` at `agent.rs:1116`) operate on a local `EventLog` seeded from the snapshot; appends push `Arc::new(ev)`.
 
 This is the only signature ripple: ~3 core functions plus their unit tests. The bin's callers change from passing `&events` to `events.iter()`.
 
@@ -71,10 +72,10 @@ This is the only signature ripple: ~3 core functions plus their unit tests. The 
 **Reader redirects (correctness-critical).** After clearing, the only code that still reads the raw compacted body must not depend on it:
 
 - `context.rs` — `context_window` computes each item's tokens via `estimate_tokens(output)` (`context.rs:254/265`) and then **overrides** compacted items to the summary's token count (`context.rs:315`). Because the result is overridden for compacted ids, a cleared body (→ `estimate_tokens("") ≈ 0`) does not change the final number. Correctness already holds; as a cleanup, skip the now-wasted pre-override estimate for ids known to be compacted.
-- `eviction.rs` — `plan_evictions` estimates a `ToolResult`'s tokens from raw `output` (`eviction.rs:189`) with **no** override. A cleared body would make a compacted turn count as ~0 tokens and mis-rank eviction (a compacted turn would look "free" to evict, or conversely never be prioritized). **Fix:** for an id that has a `ToolResultCompacted`, account its in-context size as `estimate_tokens(summary)` — matching `context.rs:315`, i.e. the number actually present in the request. **Not** the raw (now-empty) body, and **not** `original_tokens` (that field is the *pre-compaction raw* count, used for reclaimed-tokens reporting — using it here would over-count a compacted turn by its full raw size and skew eviction ranking).
+- `eviction.rs` — the per-event size helper `event_tokens` (`eviction.rs:182`) estimates a `ToolResult`'s tokens from raw `output` (`eviction.rs:189`) with **no** override, and `plan_evictions` (`eviction.rs:250`) ranks turns by that helper. Critically, `ToolResultCompacted` is itself listed in `is_inert` (`eviction.rs:174`) → it contributes 0 tokens and forms no turn, so a compacted turn's **entire** eviction-ranking weight flows solely through its underlying `ToolResult` at `:189`. A cleared body would therefore make a compacted turn count as ~0 tokens and mis-rank eviction (it would look "free" to evict, or conversely never be prioritized). **Fix:** in `event_tokens` (or its caller), for an id that has a `ToolResultCompacted`, account its in-context size as `estimate_tokens(summary)` — matching `context.rs:315`, i.e. the number actually present in the request. **Not** the raw (now-empty) body, and **not** `original_tokens` (that field is the *pre-compaction raw* count, used for reclaimed-tokens reporting — using it here would over-count a compacted turn by its full raw size and skew eviction ranking).
 - `projection.rs` — `conversation()` renders the **summary** for a compacted id (`projection.rs:136`) and only reads raw `output` in the non-compacted branch (`projection.rs:135-137`). No change needed; a cleared compacted body is never rendered.
 - FTS index (`store.rs`) writes `{name}\n{output}` at **append** time (persisted copy) — not a per-turn in-memory read. Unaffected.
-- Recall / readmit (`agent.rs:686-697` recall tool; `render_recalled` `agent.rs:924`) read the raw body from **SQLite** via `SessionHandle::recall()`, not the in-memory Vec. Unaffected.
+- Recall / readmit (recall tool around `agent.rs:675-725`, the session-scoped `session.recall(query, session_id, limit)` at `agent.rs:683`; `render_recalled` at `agent.rs:918`) read the raw body from **SQLite** via `SessionHandle::recall()`, not the in-memory Vec. The ACM follow-up `8f92263` further scopes `events_by_ids` to `session_id` (defense-in-depth), so recall never touches the hot `EventLog`. Unaffected.
 
 **Resume path.** When a session is opened and its persisted log materializes into `App.events`, apply the same clear: for every `ToolResult` whose id has a matching `ToolResultCompacted` in the loaded log, load it with an empty body (or clear immediately after load). Without this, reopening a long session re-inflates RAM to the pre-#6b footprint. The exact load site is located during planning (the session-open/resume path that builds `App.events` from the store).
 
