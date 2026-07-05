@@ -23,5 +23,9 @@ pulldown-cmark = { version = "0.13", default-features = false }
 # so it costs zero bytes in a default `cargo build -p zoid`.
 web-capture = []
 
+[[example]]
+name = "web_capture"
+required-features = ["web-capture"]
+
 [dev-dependencies]
 insta = { workspace = true }
