@@ -86,6 +86,11 @@ impl EventStore {
                     .transpose()?,
             ],
         )?;
+        // The cold tier is a STANDING capability: every content-bearing event is
+        // indexed here unconditionally, independent of `eviction.enabled`. Gating
+        // indexing on the eviction toggle would leave un-searchable gaps in the
+        // corpus (turns appended while disabled), so a later re-enable + recall
+        // would silently miss them. Recall stays reliable by always indexing.
         if let Some(content) = fts_content(&event.kind) {
             tx.execute(
                 "INSERT INTO events_fts (content, event_id, session_id) VALUES (?1, ?2, ?3)",
