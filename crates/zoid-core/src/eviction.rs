@@ -42,7 +42,7 @@ mod tests {
 
 use crate::economy::estimate_tokens;
 use crate::event::{Event, EventKind, EvictionMarker, EvictedSpan};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use ulid::Ulid;
 
 /// The set of currently-evicted event ids: every `TurnsEvicted.ids`, minus any
@@ -197,8 +197,23 @@ fn event_tokens(kind: &EventKind) -> u64 {
 /// so an interleaved inert event can't fragment a tool_use/tool_result pair).
 fn group_turns(events: &[Event], evicted: &HashSet<Ulid>, recent_n: usize) -> Vec<TurnView> {
     let mut turns: Vec<TurnView> = Vec::new();
+    // M10 (spec §3.1): a turn re-admitted via recall gets a COOLDOWN — for each
+    // re-admitted id, `readmit_mark` records how many turns had started when its
+    // `TurnsReadmitted` event fired (the marker is inert, so we capture it before
+    // the inert-skip below, on the main branch only). It is protected while fewer
+    // than `recent_n` turns have started since, then becomes evictable again.
+    let mut readmit_mark: HashMap<Ulid, usize> = HashMap::new();
     for e in events {
-        if e.branch != crate::event::BranchId::default() || is_inert(&e.kind) {
+        if e.branch != crate::event::BranchId::default() {
+            continue;
+        }
+        if let EventKind::TurnsReadmitted { ids } = &e.kind {
+            // latest re-admission wins (resets the cooldown clock)
+            for id in ids {
+                readmit_mark.insert(*id, turns.len());
+            }
+        }
+        if is_inert(&e.kind) {
             continue;
         }
         let starts_turn = matches!(e.kind, EventKind::UserMessage { .. });
@@ -213,23 +228,18 @@ fn group_turns(events: &[Event], evicted: &HashSet<Ulid>, recent_n: usize) -> Ve
         t.ids.push(e.id);
         t.token_estimate += event_tokens(&e.kind);
     }
-    // M10 (spec §3.1): a turn re-admitted via recall is protected from immediate
-    // re-eviction, so recall→evict→recall can't oscillate. (v1 simplification:
-    // permanent protection rather than a timed cooldown — safe, and §6 handles the
-    // case where protected content alone exceeds the band.)
-    let readmitted: HashSet<Ulid> = events
-        .iter()
-        .flat_map(|e| match &e.kind {
-            EventKind::TurnsReadmitted { ids } => ids.clone(),
-            _ => Vec::new(),
-        })
-        .collect();
     let n = turns.len();
     for (i, t) in turns.iter_mut().enumerate() {
         let is_recent = i + recent_n >= n;
         let is_evicted = t.ids.iter().any(|id| evicted.contains(id));
-        let is_readmitted = t.ids.iter().any(|id| readmitted.contains(id));
-        t.protected = is_recent || is_evicted || is_readmitted;
+        // Within the re-admit cooldown: protected only for `recent_n` turns after
+        // the re-admission, so recall→evict→recall can't oscillate but recalled
+        // content can never form a permanent unevictable floor (final-review M10).
+        let in_readmit_cooldown = t
+            .ids
+            .iter()
+            .any(|id| readmit_mark.get(id).is_some_and(|mark| n - mark < recent_n));
+        t.protected = is_recent || is_evicted || in_readmit_cooldown;
     }
     turns
 }
@@ -342,6 +352,25 @@ mod plan_tests {
         let plan = plan_evictions(&events, &policy(1_000, 2), 5_000, &RecencyScorer);
         let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
         assert!(!ids.contains(&Ulid::from(1u128)), "recalled turn must not immediately re-evict");
+    }
+
+    #[test]
+    fn readmitted_turn_evictable_after_cooldown_lapses() {
+        // M10 cooldown (final-review): re-admit protection is a COOLDOWN, not
+        // permanent. Turn 0 is evicted+recalled while only 1 turn exists (mark=1),
+        // then `recent_n`+ more turns start — its cooldown window lapses, so it is
+        // eligible for eviction again and can never form an unevictable floor.
+        let big = "x".repeat(3000);
+        let mut events = vec![user(1, &big), asst(2, "ok")];
+        events.push(Event::new(Ulid::from(90u128), None, 90, EventKind::TurnsEvicted {
+            ids: vec![Ulid::from(1u128)], reclaimed_tokens: 1000, marker: crate::event::EvictionMarker { spans: vec![] },
+        }));
+        events.push(Event::new(Ulid::from(91u128), None, 91, EventKind::TurnsReadmitted { ids: vec![Ulid::from(1u128)] }));
+        // recent_n = 2 → four more turns start, well past the cooldown window.
+        for i in 1..5u128 { events.push(user(i*2+1, &big)); events.push(asst(i*2+2, "ok")); }
+        let plan = plan_evictions(&events, &policy(3_000, 2), 6_000, &RecencyScorer);
+        let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
+        assert!(ids.contains(&Ulid::from(1u128)), "recalled turn is evictable again once its cooldown lapses");
     }
 }
 
