@@ -60,7 +60,7 @@ mod tests {
 }
 
 use crate::economy::estimate_tokens;
-use crate::event::{Event, EventKind, EvictedSpan, EvictionMarker};
+use crate::event::{Event, EventKind, EvictedSpan};
 use std::collections::{HashMap, HashSet};
 use ulid::Ulid;
 
