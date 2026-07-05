@@ -140,8 +140,15 @@ mod tests {
         let snap = log.snapshot();
         assert_eq!(log.len(), snap.len());
         for (a, b) in log.arcs().iter().zip(snap.arcs().iter()) {
-            assert!(Arc::ptr_eq(a, b), "snapshot must share the Arc, not clone the Event");
-            assert_eq!(Arc::strong_count(a), 2, "one refcount bump per shared event");
+            assert!(
+                Arc::ptr_eq(a, b),
+                "snapshot must share the Arc, not clone the Event"
+            );
+            assert_eq!(
+                Arc::strong_count(a),
+                2,
+                "one refcount bump per shared event"
+            );
         }
     }
 
