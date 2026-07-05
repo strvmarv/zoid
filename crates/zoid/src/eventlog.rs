@@ -25,7 +25,7 @@ impl EventLog {
         self.0.push(Arc::new(e));
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &Event> + '_ {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Event> + '_ {
         self.0.iter().map(|a| a.as_ref())
     }
 
@@ -208,5 +208,27 @@ mod tests {
             })
             .collect();
         assert_eq!(bodies, vec![("t1", ""), ("t2", "LIVE BODY")]);
+    }
+
+    #[test]
+    fn cleared_compacted_body_still_renders_summary() {
+        use zoid_core::projection::{conversation, ChatMsg};
+        let mut log = EventLog::new();
+        log.push(tool_result(
+            "call-9",
+            "HUGE RAW OUTPUT that must never render",
+        ));
+        log.push(compacted("call-9", "tiny summary"));
+        log.clear_tool_output("call-9"); // simulate the #6b trigger
+        let msgs = conversation(log.iter());
+        let rendered = msgs.iter().find_map(|m| match m {
+            ChatMsg::ToolResult { id, output, .. } if id == "call-9" => Some(output.clone()),
+            _ => None,
+        });
+        assert_eq!(
+            rendered.as_deref(),
+            Some("tiny summary"),
+            "summary renders; cleared raw body never does"
+        );
     }
 }

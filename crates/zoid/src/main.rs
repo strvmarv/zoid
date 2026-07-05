@@ -763,10 +763,8 @@ impl ProjectionCache {
         self.cached_total = ledger.cached;
         // Find the last Usage event's real input token count — the provider's
         // actual prompt size, far more accurate than the chars/4 estimate.
-        // `EventLog::iter()` isn't double-ended, so collect first (mirrors the
-        // zoid-core migration recipe's double-ended-needs case).
-        let all: Vec<&Event> = events.iter().collect();
-        self.last_input_tokens = all
+        // `EventLog::iter()` is double-ended, so `.rev()` works directly.
+        self.last_input_tokens = events
             .iter()
             .rev()
             .find_map(|e| e.tokens.map(|t| t.input))
@@ -1524,7 +1522,19 @@ async fn run<B: ratatui::backend::Backend>(
                             app.proj.events_len = None;
                             app.body_cache.key = None;
                         }
+                        // #6b: when a compaction marker arrives, free the raw body
+                        // of the ToolResult it summarizes. Safe: request/render carry
+                        // the summary (projection.rs), file_contents & window are
+                        // redirected (Task 3), eviction weighs the summary (Task 4),
+                        // recall reads SQLite. Capture the id before `*ev` is moved.
+                        let compacted_id = match &ev.kind {
+                            EventKind::ToolResultCompacted { id, .. } => Some(id.clone()),
+                            _ => None,
+                        };
                         app.events.push(*ev);
+                        if let Some(id) = compacted_id {
+                            app.events.clear_tool_output(&id);
+                        }
                     }
                     AgentUpdate::ToolStarted { name } => {
                         app.shell.set_active_tool(name);
@@ -2182,6 +2192,9 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 app.session.touch_session(sid, now_ms()).await.ok();
                 app.session_id = sid;
                 app.events = zoid::eventlog::EventLog::from_vec(loaded);
+                // #6b resume: free any compacted ToolResult bodies immediately
+                // instead of re-inflating RAM to the pre-#6b footprint.
+                app.events.clear_compacted_bodies();
                 // Wholesale event-log replacement: reset the caches so they
                 // can't serve the previous session's data at an equal length.
                 app.proj = ProjectionCache::default();
