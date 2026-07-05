@@ -44,7 +44,7 @@ Every migrated function follows this recipe. It relies on two facts:
 
 **Recipe:**
 - Change the parameter `events: &[Event]` → `events: impl IntoIterator<Item = &'a Event>` and add `<'a>` to the function's generics. (Other parameters keep their types.)
-- **Single-pass function** — `events` is consumed by exactly one `for e in events { … }` loop (or one iterator chain) and used nowhere else: **do not** add a collect prelude. `for e in events` iterates the `IntoIterator` directly and yields `&Event`. (Applies to `evicted_ids`, `token_ledger`, `churn_timeline`, `eviction_breadcrumb`. `evicted_ids` is hot — called inside `conversation`, `context_window_with`, `plan_evictions` — so skipping the throwaway `Vec` matters.)
+- **Single-pass function** — `events` is consumed by exactly one `for e in events { … }` loop (or one iterator chain) and used nowhere else: **do not** add a collect prelude. `for e in events` iterates the `IntoIterator` directly and yields `&Event`. (Applies to `evicted_ids`, `token_ledger`, `churn_timeline`. `evicted_ids` is hot — called inside `conversation`, `context_window_with`, `plan_evictions` — so skipping the throwaway `Vec` matters. NOTE: `eviction_breadcrumb` is NOT single-pass — it calls `evicted_ids(events)` then loops again, so it is multi-use; see below.)
 - **`.rev()` / other `DoubleEndedIterator` needs** (`tasks`): a generic `IntoIterator` is not double-ended, so collect first: `let events: Vec<&Event> = events.into_iter().collect();` then `events.into_iter()…rev()` (Vec's iterator is double-ended).
 - **Multi-use function** — `events` is used more than once (a sub-call plus a loop, or two loops: `conversation`, `context_window_with`, `plan_evictions`, `file_contents`, `plan_compactions`): add `let events: Vec<&Event> = events.into_iter().collect();`, then `let visible: &[&Event] = &events;`, feed any sub-call `events.iter().copied()` (yields `&Event`), and iterate `for e in visible` (yields `&&Event`; field access auto-derefs).
 
@@ -339,7 +339,7 @@ Apply **The zoid-core migration recipe** (top of this plan). Per-function classi
 
 - [ ] **Step 1: Single-pass functions (no collect prelude)**
 
-`token_ledger` (`economy.rs:19`), `churn_timeline` (`economy.rs:76`), `evicted_ids` (`eviction.rs:50`), `eviction_breadcrumb` (`eviction.rs:68`): each is one `for e in events` loop (or one chain) using `events` once. Change signature only:
+`token_ledger` (`economy.rs:19`), `churn_timeline` (`economy.rs:76`), `evicted_ids` (`eviction.rs:50`): each is one `for e in events` loop (or one chain) using `events` once. Change signature only. (`eviction_breadcrumb` at `eviction.rs:68` is multi-use — migrate it with the collect-form in Step 2.)
 
 ```rust
 pub fn token_ledger<'a>(events: impl IntoIterator<Item = &'a Event>) -> TokenLedger {
@@ -347,7 +347,7 @@ pub fn token_ledger<'a>(events: impl IntoIterator<Item = &'a Event>) -> TokenLed
 }
 ```
 
-Same shape for `churn_timeline`, `evicted_ids`, `eviction_breadcrumb` — signature change, body untouched.
+Same shape for `churn_timeline`, `evicted_ids` — signature change, body untouched.
 
 `tasks` (`tasks.rs:49`) uses `.rev()`, so collect first (double-ended):
 
@@ -876,7 +876,7 @@ git commit -m "perf(eventlog): free compacted ToolResult/file bodies on compacti
 
 - **Spec coverage:** #6a (snapshot, Task 5) ✔; #6b clear-on-compaction (Task 6) ✔; #6b resume clear (Task 6) ✔; eviction summary-accounting (Task 4) ✔; **compacted-File correctness — `file_contents` + `context_window` (Task 3)** ✔ (spec safety-argument correction: compaction covers File items, so two extra readers exist); `conversation` renders summary by id, no change (Task 6 guard) ✔; FTS/recall read SQLite (no change) ✔; non-goals (no cold-paging / windowed resume) respected ✔.
 - **Core surface (corrected after review):** the real surface is **11** functions (`conversation`, `context_window`, `context_window_with`, `file_contents`, `plan_evictions`, `evicted_ids`, `eviction_breadcrumb`, `plan_compactions`, `token_ledger`, `churn_timeline`, `tasks`) + the private `group_turns` + the local `estimate` closure — not 8. Task 2 migrates all 11 mechanically; because `&Vec<Event>` satisfies the new bound, existing call sites and tests compile unchanged.
-- **Allocation note:** single-pass fns (`evicted_ids`, `token_ledger`, `churn_timeline`, `eviction_breadcrumb`) skip the collect prelude and iterate the `IntoIterator` directly — `evicted_ids` is hot (called inside `conversation`/`context_window_with`/`plan_evictions`), so the throwaway `Vec` is avoided there.
+- **Allocation note:** single-pass fns (`evicted_ids`, `token_ledger`, `churn_timeline`) skip the collect prelude and iterate the `IntoIterator` directly — `evicted_ids` is hot (called inside `conversation`/`context_window_with`/`plan_evictions`), so the throwaway `Vec` is avoided there. (`eviction_breadcrumb` is multi-use — corrected after Task 2 review — and takes the collect-form.)
 - **Test correctness:** Task 4's fixture is a lone `ToolResult` + marker (no `UserMessage`), so the turn weight is exactly `estimate_tokens(summary)` — `estimate_tokens("hi")` would be `1`, not `0`, under `div_ceil(3)`.
 - **Type consistency:** `EventLog::{push, iter, snapshot, clear_tool_output, clear_compacted_bodies, from_vec, new}` used identically across Tasks 1/5/6. `group_turns(&[&Event], …)` (Task 2) is what Task 4 edits.
 - **Module placement (verified):** lib target exists (`Cargo.toml [lib] name=zoid`), `agent`/`subagent` are lib modules; `EventLog` in `lib.rs`, referenced `crate::eventlog` in lib, `zoid::eventlog` in bin.
