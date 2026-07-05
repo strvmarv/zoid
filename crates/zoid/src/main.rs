@@ -2884,6 +2884,10 @@ fn spawn_turn(app: &mut App) {
     // `Action::CancelTurn` (Esc/Ctrl-C) can fire it. Cleared on `TurnComplete`.
     let cancel = tokio_util::sync::CancellationToken::new();
     app.turn_cancel = Some(cancel.clone());
+    // TEMPORARY (Task 5 bridge): Task 6 adds `App.companion_hub` and this
+    // becomes `app.companion_hub.clone()`. Until then this is a fresh,
+    // disabled hub local to each turn.
+    let companion_hub = zoid_companion::CompanionHub::new();
     tokio::spawn(async move {
         let _ = run_agent_turn_cancellable(
             turn_config,
@@ -2895,6 +2899,7 @@ fn spawn_turn(app: &mut App) {
             model,
             ui,
             session_id,
+            companion_hub,
             now_ms,
             cancel,
         )

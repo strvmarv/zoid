@@ -2895,6 +2895,7 @@ dependencies = [
  "tui-textarea",
  "ulid",
  "zip",
+ "zoid-companion",
  "zoid-core",
  "zoid-provider",
  "zoid-testkit",

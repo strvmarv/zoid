@@ -8,6 +8,7 @@ pub mod read;
 pub mod recall;
 pub mod search;
 pub mod shell;
+pub mod show;
 pub mod tasks;
 pub mod write;
 

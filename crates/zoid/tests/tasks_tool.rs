@@ -62,6 +62,7 @@ async fn update_tasks_appends_a_tasks_event_and_acks() {
         "fake".into(),
         tx,
         ulid::Ulid::new(),
+        zoid_companion::CompanionHub::new(),
         fixed_now,
     )
     .await

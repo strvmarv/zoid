@@ -111,6 +111,7 @@ async fn agent_loop_runs_tool_then_finishes() {
         "fake".into(),
         tx,
         ulid::Ulid::new(),
+        zoid_companion::CompanionHub::new(),
         fixed_now,
     )
     .await
@@ -210,6 +211,7 @@ async fn gate_deny_blocks_tool_and_feeds_reason_back() {
         "fake".into(),
         tx,
         ulid::Ulid::new(),
+        zoid_companion::CompanionHub::new(),
         fixed_now,
     )
     .await
@@ -271,6 +273,7 @@ async fn agent_loop_returns_ok_and_emits_turn_complete_on_error_event() {
         "fake".into(),
         tx,
         ulid::Ulid::new(),
+        zoid_companion::CompanionHub::new(),
         fixed_now,
     )
     .await;
@@ -377,6 +380,7 @@ async fn cancel_mid_stream_drains_pending_tool_calls_without_running_them() {
         "fake".into(),
         tx,
         ulid::Ulid::new(),
+        zoid_companion::CompanionHub::new(),
         fixed_now,
         cancel,
     )
@@ -447,6 +451,7 @@ async fn truncated_event_surfaces_a_warning_and_still_completes() {
         "fake".into(),
         tx,
         ulid::Ulid::new(),
+        zoid_companion::CompanionHub::new(),
         fixed_now,
     )
     .await
