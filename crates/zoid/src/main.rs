@@ -376,6 +376,66 @@ fn build_overview_data(
     }
 }
 
+/// Rank a `Heat` value for the companion dashboard's `TierRow.heat` field
+/// (2 = hot, 1 = warm, 0 = cold — hotter sorts higher).
+fn heat_rank(h: zoid_core::context::Heat) -> u8 {
+    use zoid_core::context::Heat;
+    match h {
+        Heat::Hot => 2,
+        Heat::Warm => 1,
+        Heat::Cold => 0,
+    }
+}
+
+/// Project the live session state into the companion's `DashboardSnapshot`
+/// (a plain-serde, `zoid-core`-free type the browser dashboard renders).
+#[allow(clippy::too_many_arguments)]
+fn dashboard_snapshot(
+    session_name: &str,
+    model: &str,
+    provider: &str,
+    cwd: &str,
+    ctx_used: u64,
+    ctx_ceiling: u64,
+    session_tokens: u64,
+    cached_tokens: u64,
+    cache_supported: bool,
+    tasks_len: usize,
+    busy: bool,
+    window: &zoid_core::context::ContextWindow,
+    churn: &zoid_core::economy::ChurnTimeline,
+    updated_ms: i64,
+) -> zoid_companion::DashboardSnapshot {
+    use zoid_core::context::Heat;
+    let tiers = window
+        .items
+        .iter()
+        .map(|i| zoid_companion::TierRow {
+            label: i.label.clone(),
+            tokens: i.tokens,
+            heat: heat_rank(i.heat),
+            cold: i.heat == Heat::Cold,
+            pinned: i.pinned,
+        })
+        .collect();
+    zoid_companion::DashboardSnapshot {
+        session_name: session_name.to_string(),
+        model: model.to_string(),
+        provider: provider.to_string(),
+        cwd: cwd.to_string(),
+        ctx_used,
+        ctx_ceiling,
+        session_tokens,
+        cached_tokens,
+        cache_supported,
+        tasks_len,
+        busy,
+        tiers,
+        churn: churn.points.iter().map(|p| p.tokens).collect(),
+        updated_ms,
+    }
+}
+
 /// Last 4 chars of a string (short session id for the dashboard header).
 fn last4(s: &str) -> String {
     let v: Vec<char> = s.chars().collect();
@@ -992,6 +1052,12 @@ struct App {
     /// overriding the static MODEL_CAPS table. `None` until the first fetch
     /// lands (or when the provider doesn't support capability introspection).
     fetched_model_info: Option<zoid_provider::model::ModelInfo>,
+    /// Optional companion HTTP server (None = disabled). Managed via the command
+    /// palette (`companion` / `companion off`) or the `--companion` launch flag.
+    companion: Option<zoid_companion::CompanionServer>,
+    /// The state hub feeding the companion. Always present (cheap); the server is
+    /// the optional part. `is_enabled()` gates snapshot publishing and `show`.
+    companion_hub: std::sync::Arc<zoid_companion::CompanionHub>,
 }
 
 impl App {
@@ -1171,6 +1237,8 @@ async fn main() -> Result<()> {
         pending_answer: None,
         turn_cancel: None,
         fetched_model_info: None,
+        companion: None,
+        companion_hub: zoid_companion::CompanionHub::new(),
     };
 
     enable_raw_mode()?;
@@ -1386,6 +1454,27 @@ async fn run<B: ratatui::backend::Backend>(
         // (kept out of the pure renderer for snapshot determinism); the motion
         // tick below redraws at MOTION_FPS while busy so it actually animates.
         app.shell.busy = app.streaming || app.delegating;
+        // Feed the companion dashboard when it's enabled. The hub dedupes, so
+        // unchanged frames (e.g. motion ticks) don't wake SSE clients.
+        if app.companion_hub.is_enabled() {
+            let snap = dashboard_snapshot(
+                &app.shell.session_name,
+                &app.shell.model,
+                &app.shell.provider,
+                &app.shell.cwd,
+                app.shell.ctx_used,
+                app.shell.ctx_ceiling,
+                app.shell.session_tokens,
+                app.shell.cached_tokens,
+                app.shell.cache_supported,
+                app.shell.tasks_len as usize,
+                app.shell.busy,
+                &app.proj.window,
+                &app.proj.churn,
+                now_ms(),
+            );
+            app.companion_hub.publish_snapshot(snap);
+        }
         // Only a chat turn carries a cancellation token; delegation has none, so
         // Esc/Ctrl-C routes to CancelTurn only while this is true (and keeps its
         // normal focus behavior during a delegation).
@@ -2884,10 +2973,7 @@ fn spawn_turn(app: &mut App) {
     // `Action::CancelTurn` (Esc/Ctrl-C) can fire it. Cleared on `TurnComplete`.
     let cancel = tokio_util::sync::CancellationToken::new();
     app.turn_cancel = Some(cancel.clone());
-    // TEMPORARY (Task 5 bridge): Task 6 adds `App.companion_hub` and this
-    // becomes `app.companion_hub.clone()`. Until then this is a fresh,
-    // disabled hub local to each turn.
-    let companion_hub = zoid_companion::CompanionHub::new();
+    let companion_hub = app.companion_hub.clone();
     tokio::spawn(async move {
         let _ = run_agent_turn_cancellable(
             turn_config,
@@ -2912,6 +2998,58 @@ mod tests {
     use super::*;
     use ratatui::{backend::TestBackend, style::Modifier, Terminal};
     use tui_textarea::TextArea;
+
+    #[test]
+    fn heat_rank_orders_hot_warm_cold() {
+        use zoid_core::context::Heat;
+        assert_eq!(super::heat_rank(Heat::Hot), 2);
+        assert_eq!(super::heat_rank(Heat::Warm), 1);
+        assert_eq!(super::heat_rank(Heat::Cold), 0);
+    }
+
+    #[test]
+    fn dashboard_snapshot_maps_scalars_and_churn() {
+        use zoid_core::context::ContextWindow;
+        use zoid_core::economy::{ChurnPoint, ChurnTimeline};
+        let window = ContextWindow {
+            items: vec![],
+            total_tokens: 0,
+        };
+        let churn = ChurnTimeline {
+            points: vec![
+                ChurnPoint {
+                    turn: 0,
+                    tokens: 10,
+                    cached: 1,
+                    resent_tokens: 0,
+                },
+                ChurnPoint {
+                    turn: 1,
+                    tokens: 20,
+                    cached: 2,
+                    resent_tokens: 0,
+                },
+            ],
+        };
+        let snap = super::dashboard_snapshot(
+            "sess", "glm", "ollama", "/home/x", 300, 384, 90, 20, true, 3, true, &window,
+            &churn, 42,
+        );
+        assert_eq!(snap.session_name, "sess");
+        assert_eq!(snap.model, "glm");
+        assert_eq!(snap.provider, "ollama");
+        assert_eq!(snap.cwd, "/home/x");
+        assert_eq!(snap.ctx_used, 300);
+        assert_eq!(snap.ctx_ceiling, 384);
+        assert_eq!(snap.session_tokens, 90);
+        assert_eq!(snap.cached_tokens, 20);
+        assert!(snap.cache_supported);
+        assert_eq!(snap.tasks_len, 3);
+        assert!(snap.busy);
+        assert_eq!(snap.churn, vec![10, 20]);
+        assert!(snap.tiers.is_empty());
+        assert_eq!(snap.updated_ms, 42);
+    }
 
     #[test]
     fn zoom_anchor_maps_top_message_across_altitudes() {
@@ -3355,6 +3493,8 @@ mod tests {
             pending_answer: None,
             turn_cancel: None,
             fetched_model_info: None,
+            companion: None,
+            companion_hub: zoid_companion::CompanionHub::new(),
         }
     }
 
