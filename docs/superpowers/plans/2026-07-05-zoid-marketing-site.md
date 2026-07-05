@@ -4,13 +4,13 @@
 
 **Goal:** Build a single self-contained, terminal-authentic teaser page for zoid, with real TUI frames rendered by zoid's own renderer, hostable on GitHub Pages with no build step at serve time.
 
-**Architecture:** A reusable `buffer_to_html` converter (in `zoid-tui`, behind a `web-capture` cargo feature so it never enters the product binary) turns a rendered `TestBackend` buffer into a faithful colored HTML `<pre>`. A `web_capture` example renders each marketing scene (reusing `preview.rs`'s fixtures, extracted into a shared `examples/scenes/` module) and prints its fragment. A shell script captures each scene into `site/frames/*.html`, and a build script injects those fragments into `site/template.html` to produce the shipped `site/index.html`.
+**Architecture:** A reusable `buffer_to_html` converter (in `zoid-tui`, behind a `web-capture` cargo feature so it never enters the product binary) turns a rendered `TestBackend` buffer into a faithful colored HTML `<pre>`. A `web_capture` example renders each marketing scene (reusing `preview.rs`'s fixtures, extracted into a shared `examples/scenes/` module) and prints its fragment. A shell script captures each scene into `public/frames/*.html`, and a build script injects those fragments into `public/template.html` to produce the shipped `public/index.html`.
 
 **Tech Stack:** Rust (ratatui 0.30 / ratatui-core 0.1, `TestBackend`), `unicode-width 0.2` (already a direct dep of `zoid-tui`), plain HTML/CSS/JS (no framework, no SSG, no web-font fetch), POSIX shell for the build.
 
 ## Global Constraints
 
-- **Self-contained artifact:** the shipped `site/index.html` MUST have zero external `http(s)://` references — no CDN scripts, external stylesheets, web-font fetches, or remote images. All CSS/JS/frames inlined.
+- **Self-contained artifact:** the shipped `public/index.html` MUST have zero external `http(s)://` references — no CDN scripts, external stylesheets, web-font fetches, or remote images. All CSS/JS/frames inlined.
 - **No web-font fetch:** font stack is `"JetBrains Mono","SF Mono",Menlo,Consolas,monospace` (system fallback only).
 - **Design tokens (verbatim):** bg `#0d1117` · panel `#161b22` · gutter `#0b0e13` · line `#30363d` · line2 `#21262d` · text `#c9d1d9` · muted `#8b949e` · dim `#6e7681` · accent `#58a6ff` · accent2 `#79c0ff` · chip-bg `#0d2a4d` · ok `#3fb950` · warn `#d29922` · error `#f85149` · branch `#bc8cff` · pink `#f778ba`.
 - **Tone:** soft "coming soon". No pricing, plans, subscription, or waitlist/data-capture copy. No download links or "get it now" CTA.
@@ -295,16 +295,16 @@ git commit -m "refactor(tui): extract shared scene fixtures for example reuse"
 
 ### Task 3: `web_capture` example + capture script
 
-The example renders a scene and prints its HTML fragment; the script captures each marketing scene to `site/frames/`.
+The example renders a scene and prints its HTML fragment; the script captures each marketing scene to `public/frames/`.
 
 **Files:**
 - Modify: `crates/zoid-tui/Cargo.toml` (declare the example with `required-features`)
 - Create: `crates/zoid-tui/examples/web_capture.rs`
-- Create: `site/capture.sh`
+- Create: `public/capture.sh`
 
 **Interfaces:**
 - Consumes: `scenes::render_shell_scene` (Task 2), `zoid_tui::web_capture::buffer_to_html` (Task 1).
-- Produces: `site/frames/{hero,economy,palette,summary,detail}.html`, each a `<pre class="tui">…</pre>` fragment.
+- Produces: `public/frames/{hero,economy,palette,summary,detail}.html`, each a `<pre class="tui">…</pre>` fragment.
 
 - [ ] **Step 1: Declare the example (feature-gated)**
 
@@ -345,15 +345,15 @@ Expected: output begins `<pre class="tui">` and contains at least one `color:#` 
 
 - [ ] **Step 4: Write the capture script**
 
-Create `site/capture.sh` (executable):
+Create `public/capture.sh` (executable):
 
 ```sh
 #!/bin/sh
-# Capture each marketing scene into site/frames/<scene>.html.
-# Run from repo root: sh site/capture.sh
+# Capture each marketing scene into public/frames/<scene>.html.
+# Run from repo root: sh public/capture.sh
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-OUT="$ROOT/site/frames"
+OUT="$ROOT/public/frames"
 mkdir -p "$OUT"
 RUN="cargo run -q -p zoid-tui --features web-capture --example web_capture --"
 
@@ -368,13 +368,13 @@ echo "captured: $(ls "$OUT")"
 
 - [ ] **Step 5: Run the capture script**
 
-Run: `chmod +x site/capture.sh && sh site/capture.sh`
+Run: `chmod +x public/capture.sh && sh public/capture.sh`
 Expected: prints `captured: detail.html economy.html hero.html palette.html summary.html`; each file starts with `<pre class="tui">`.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/zoid-tui/Cargo.toml crates/zoid-tui/examples/web_capture.rs site/capture.sh site/frames
+git add crates/zoid-tui/Cargo.toml crates/zoid-tui/examples/web_capture.rs public/capture.sh public/frames
 git commit -m "feat(site): web_capture example + scene capture script"
 ```
 
@@ -382,20 +382,20 @@ git commit -m "feat(site): web_capture example + scene capture script"
 
 ### Task 4: The teaser page template (uses the **frontend-design** skill)
 
-Author `site/template.html` — hero + four flagship sections + "how it's built" strip + footer — self-contained (inline CSS/JS), terminal-authentic, responsive, motion opt-out, accessible. Frame slots are HTML comment markers filled by Task 5.
+Author `public/template.html` — hero + four flagship sections + "how it's built" strip + footer — self-contained (inline CSS/JS), terminal-authentic, responsive, motion opt-out, accessible. Frame slots are HTML comment markers filled by Task 5.
 
 > **Use the `frontend-design` skill for the visual execution.** This task pins the structure, exact copy (spec §3), tokens, marker names, and acceptance criteria; frontend-design carries the aesthetic (spacing, rhythm, hierarchy, motion).
 
 **Files:**
-- Create: `crates/… n/a` — Create: `site/template.html`
+- Create: `crates/… n/a` — Create: `public/template.html`
 
 **Interfaces:**
 - Consumes: frame markers filled by Task 5.
-- Produces: markers `<!--FRAME:hero-->`, `<!--FRAME:economy-->`, `<!--FRAME:palette-->`, `<!--FRAME:summary-->`, `<!--FRAME:detail-->` — each on its own line, to be replaced by the matching `site/frames/*.html` fragment.
+- Produces: markers `<!--FRAME:hero-->`, `<!--FRAME:economy-->`, `<!--FRAME:palette-->`, `<!--FRAME:summary-->`, `<!--FRAME:detail-->` — each on its own line, to be replaced by the matching `public/frames/*.html` fragment.
 
 - [ ] **Step 1: Scaffold the document with inline token CSS**
 
-Create `site/template.html`. Head + token `:root` (copy the token block verbatim from Global Constraints) + base `.tui` styling:
+Create `public/template.html`. Head + token `:root` (copy the token block verbatim from Global Constraints) + base `.tui` styling:
 
 ```html
 <!doctype html>
@@ -512,13 +512,13 @@ Use **frontend-design** to refine spacing rhythm, section alternation, type hier
 
 - [ ] **Step 7: Verify structure (markers present, no external assets yet)**
 
-Run: `grep -c 'FRAME:' site/template.html` → Expected: `5`.
-Run: `grep -nE 'https?://' site/template.html` → Expected: no matches (exit 1 / empty).
+Run: `grep -c 'FRAME:' public/template.html` → Expected: `5`.
+Run: `grep -nE 'https?://' public/template.html` → Expected: no matches (exit 1 / empty).
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add site/template.html
+git add public/template.html
 git commit -m "feat(site): terminal-authentic teaser page template"
 ```
 
@@ -529,22 +529,22 @@ git commit -m "feat(site): terminal-authentic teaser page template"
 Inject the captured frames into the template to produce the shipped self-contained page, then verify.
 
 **Files:**
-- Create: `site/build.sh`
-- Create (generated): `site/index.html`
-- Create: `site/README.md` (how to regenerate + hosting note)
+- Create: `public/build.sh`
+- Create (generated): `public/index.html`
+- Create: `public/README.md` (how to regenerate + hosting note)
 
 **Interfaces:**
-- Consumes: `site/template.html` markers (Task 4), `site/frames/*.html` (Task 3).
-- Produces: `site/index.html` (final artifact, zero external references).
+- Consumes: `public/template.html` markers (Task 4), `public/frames/*.html` (Task 3).
+- Produces: `public/index.html` (final artifact, zero external references).
 
 - [ ] **Step 1: Write the build script**
 
-Create `site/build.sh` (executable) — replace each `<!--FRAME:x-->` marker with the contents of `site/frames/x.html`:
+Create `public/build.sh` (executable) — replace each `<!--FRAME:x-->` marker with the contents of `public/frames/x.html`:
 
 ```sh
 #!/bin/sh
-# Assemble site/index.html from template.html + captured frames.
-# Regenerate frames first with: sh site/capture.sh
+# Assemble public/index.html from template.html + captured frames.
+# Regenerate frames first with: sh public/capture.sh
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT/site"
@@ -558,27 +558,27 @@ for f in frames/*.html; do
     { print }
   ' index.html > index.html.tmp && mv index.html.tmp index.html
 done
-echo "built site/index.html"
+echo "built public/index.html"
 ```
 
 - [ ] **Step 2: Build the page**
 
-Run: `chmod +x site/build.sh && sh site/build.sh`
-Expected: prints `built site/index.html`.
+Run: `chmod +x public/build.sh && sh public/build.sh`
+Expected: prints `built public/index.html`.
 
 - [ ] **Step 3: Verify self-contained (Global Constraint)**
 
-Run: `grep -nE 'src=|href=|url\(|https?://' site/index.html | grep -vE '#|mailto:'`
+Run: `grep -nE 'src=|href=|url\(|https?://' public/index.html | grep -vE '#|mailto:'`
 Expected: no external asset references (no `http(s)://`, no remote `src`/`href`). Empty result.
-Run: `grep -c 'FRAME:' site/index.html` → Expected: `0` (all markers replaced).
+Run: `grep -c 'FRAME:' public/index.html` → Expected: `0` (all markers replaced).
 
 - [ ] **Step 4: Visual verification in a browser**
 
-Per the `verify` discipline, open `site/index.html` and confirm by observation: hero frame renders in zoid colors; all five frames present and colored; page has no horizontal body scroll at ~1440px and ~390px (frames scroll within their `.frame` containers); with reduced-motion emulated, the caret does not blink. (Use the chrome-devtools / claude-in-chrome tooling or a local file open.)
+Per the `verify` discipline, open `public/index.html` and confirm by observation: hero frame renders in zoid colors; all five frames present and colored; page has no horizontal body scroll at ~1440px and ~390px (frames scroll within their `.frame` containers); with reduced-motion emulated, the caret does not blink. (Use the chrome-devtools / claude-in-chrome tooling or a local file open.)
 
-- [ ] **Step 5: Write `site/README.md`**
+- [ ] **Step 5: Write `public/README.md`**
 
-Create `site/README.md`:
+Create `public/README.md`:
 
 ```markdown
 # zoid teaser site
@@ -588,8 +588,8 @@ Self-contained, terminal-authentic teaser page. No build step at serve time —
 
 ## Regenerate
 ```sh
-sh site/capture.sh   # re-render TUI frames from the live renderer → site/frames/
-sh site/build.sh     # inject frames into template.html → site/index.html
+sh public/capture.sh   # re-render TUI frames from the live renderer → public/frames/
+sh public/build.sh     # inject frames into template.html → public/index.html
 ```
 
 ## Hosting
@@ -601,7 +601,7 @@ Do not enable Pages on the private source repo.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add site/build.sh site/index.html site/README.md
+git add public/build.sh public/index.html public/README.md
 git commit -m "feat(site): assemble self-contained index.html + docs"
 ```
 
@@ -616,7 +616,7 @@ git commit -m "feat(site): assemble self-contained index.html + docs"
 - §4 site structure (alternating, frames-as-hero) → Task 4 Step 3 + frontend-design (Step 6). ✓
 - §5 capture harness (shared scenes, feature-gated converter, honesty rule) → Tasks 1–3 + Global Constraints. ✓
 - §6 design system tokens/glyphs/font → Task 4 Step 1 (verbatim tokens) + Global Constraints. ✓
-- §7 build & hosting (Approach A, single file, portable) → Task 5 + `site/README.md`. ✓
+- §7 build & hosting (Approach A, single file, portable) → Task 5 + `public/README.md`. ✓
 - §8 responsive / motion / a11y → Task 4 Steps 1,5 (overflow, reduced-motion, `role="img"`/labels) + Task 5 Step 4. ✓
 - §9 testing (fidelity, self-contained grep, responsive, reduced-motion) → Task 2 Step 3, Task 5 Steps 3–4. ✓
 - §10 out of scope — no backend/pricing/SSG introduced. ✓

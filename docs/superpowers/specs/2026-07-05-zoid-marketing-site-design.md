@@ -112,7 +112,7 @@ promise a download or a signup.
 
 ## 4. Site structure
 
-Single vertical-scroll page, self-contained `site/index.html`:
+Single vertical-scroll page, self-contained `public/index.html`:
 
 ```
 ┌ hero ─────────────────────────────────────────────┐
@@ -151,8 +151,8 @@ fragments** using the real renderer, so frames are authentic and refreshable.
   (§1), `palette` (§2), `summary` + `detail` (§3). Widths chosen per section
   (hero/economy/palette at 140×24; zoom pair narrower to sit side-by-side).
 - **Output:** the example prints one fragment to stdout; a tiny wrapper
-  (Makefile target or shell script `site/capture.sh`) runs it per scene and
-  writes `site/frames/<scene>.html`, which the build step inlines.
+  (Makefile target or shell script `public/capture.sh`) runs it per scene and
+  writes `public/frames/<scene>.html`, which the build step inlines.
 - **Honesty rule for Modes (§2):** the Shift+Tab mode registry is Slice 3
   (designed, not fully built). Capture the **current** palette frame (the
   "Switch mode ▸" group exists in the design; if not yet in code at build time,
@@ -185,9 +185,9 @@ Reuse zoid's tokens verbatim (from `docs/ux` / the design-tokens module):
 ## 7. Build & hosting
 
 - **Approach A — single self-contained page.** The deliverable is
-  `site/index.html` with **all CSS, JS, and TUI frame fragments inlined**. A
-  small build script (`site/build.sh`) concatenates the captured
-  `site/frames/*.html` into the page template so authoring stays modular while
+  `public/index.html` with **all CSS, JS, and TUI frame fragments inlined**. A
+  small build script (`public/build.sh`) concatenates the captured
+  `public/frames/*.html` into the page template so authoring stays modular while
   the shipped artifact is one file. (Matches the project's own
   self-contained-HTML convention in `docs/ux/`.)
 - **No serve-time build / no runtime deps.** Open `index.html` in a browser or
@@ -196,7 +196,7 @@ Reuse zoid's tokens verbatim (from `docs/ux` / the design-tokens module):
   source repo must **not** serve Pages. Recommended: a dedicated **public
   `zoid-site` repo** (or the existing public *releases* repo) with GitHub Pages
   enabled on `main` (root or `/docs`). The build targets a portable
-  `site/index.html` so the eventual host is a copy step. A `.github/workflows`
+  `public/index.html` so the eventual host is a copy step. A `.github/workflows`
   Pages deploy can be added when the destination repo is chosen.
 
 ---
@@ -224,7 +224,7 @@ Reuse zoid's tokens verbatim (from `docs/ux` / the design-tokens module):
 - **Frame fidelity:** the `web_capture` output for a scene must match its
   `preview.rs` text content (same renderer, same fixtures) — a quick diff guards
   against a broken walker.
-- **Self-contained check:** grep the built `site/index.html` for external
+- **Self-contained check:** grep the built `public/index.html` for external
   `http(s)://` asset references (script/link/img/font) — there must be none.
 - **Responsive smoke:** render the page at ~1440px and ~390px widths and confirm
   no horizontal body scroll and that frames scroll within their containers.
