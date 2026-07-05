@@ -12,12 +12,12 @@ use crossterm::{
 };
 use futures_util::StreamExt;
 use ratatui::{layout::Rect, prelude::CrosstermBackend, text::Line, Terminal};
+use ratatui_textarea::{CursorMove, TextArea};
 use std::io::stdout;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
-use ratatui_textarea::{CursorMove, TextArea};
 use ulid::Ulid;
 
 mod obs;
@@ -99,14 +99,21 @@ fn config_warning_hint(keys: &[String]) -> Option<String> {
 /// Load config from files + env, in precedence order (user-global < project <
 /// local < env). Missing files are skipped (empty layer); a malformed file is
 /// skipped with a stderr note (non-fatal — the process still starts).
-fn load_config() -> (zoid_core::config::Config, zoid_core::config::Provenance, Vec<String>) {
+fn load_config() -> (
+    zoid_core::config::Config,
+    zoid_core::config::Provenance,
+    Vec<String>,
+) {
     use zoid_core::config::{merge, parse_toml, PartialConfig, Source};
     let env = |k: &str| std::env::var(k).ok();
     let cfg_dir = resolve_config_dir(env);
     let mut warnings: Vec<String> = Vec::new();
     let mut read = |p: PathBuf| -> Option<PartialConfig> {
         let text = std::fs::read_to_string(&p).ok()?;
-        let file = p.file_name().and_then(|n| n.to_str()).unwrap_or("config.toml");
+        let file = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("config.toml");
         match parse_toml(&text) {
             Ok((pc, unknown)) => {
                 for k in unknown {
@@ -1008,10 +1015,18 @@ struct App {
     session_id: Ulid,
     events: zoid::eventlog::EventLog,
     provider: Arc<dyn Provider>,
+    /// No longer read by `spawn_turn` (which now binds a fresh, per-turn
+    /// `invoke_skill` tool to the mode snapshot — see `active_turn`); kept as a
+    /// harmless default so this refactor stays behavior-preserving. Slated for
+    /// removal in Task 7.
+    #[allow(dead_code)]
     tools: Arc<Vec<Box<dyn Tool>>>,
-    /// Available mode profiles with the active one marked; drives the turn's
-    /// system prompt. v1 holds only the default profile.
-    profiles: zoid_core::agent_profile::AgentProfileRegistry,
+    /// The active mode + all discovered modes; drives the turn's system prompt,
+    /// the effective skill menu, and the mode chip. Index 0 is always Chat.
+    modes: zoid_core::mode::ModeRegistry,
+    /// The base coding-agent profile (Chat). Kept so mode reload / broken-mode
+    /// fallback can recompose without re-reading a const.
+    base_profile: zoid_core::agent_profile::AgentProfile,
     /// Skills the `invoke_skill` tool can load; also rendered as the menu the
     /// active mode's system prompt advertises.
     skills: std::sync::Arc<zoid_core::skill::SkillRegistry>,
@@ -1223,9 +1238,9 @@ async fn main() -> Result<()> {
 
     let (ui_tx, mut ui_rx) = mpsc::channel::<AgentUpdate>(256);
 
+    let cfg_dir = resolve_config_dir(|k: &str| std::env::var(k).ok());
+    let home = std::env::var("HOME").ok().map(std::path::PathBuf::from);
     let skills = {
-        let cfg_dir = resolve_config_dir(|k: &str| std::env::var(k).ok());
-        let home = std::env::var("HOME").ok().map(std::path::PathBuf::from);
         let dirs = zoid::skill_import::resolve_skill_dirs(
             &config.skills.source_dirs,
             &cfg_dir,
@@ -1235,15 +1250,25 @@ async fn main() -> Result<()> {
         std::sync::Arc::new(zoid::skill_import::build_registry(&dirs))
     };
 
+    let base_profile = zoid::agent::default_profile();
+    let modes = {
+        let mode_dirs = zoid::mode_import::resolve_mode_dirs(
+            &config.modes.source_dirs,
+            &cfg_dir,
+            std::path::Path::new(&root),
+            home.as_deref(),
+        );
+        zoid::mode_import::build_mode_registry(&base_profile, &mode_dirs)
+    };
+
     let mut app = App {
         session,
         session_id,
         events,
         provider,
         tools: Arc::new(zoid::invoke_skill::chat_tools(skills.clone())),
-        profiles: zoid_core::agent_profile::AgentProfileRegistry::new(vec![
-            zoid::agent::default_profile(),
-        ]),
+        modes,
+        base_profile,
         skills,
         model,
         economy: config.economy,
@@ -3046,15 +3071,21 @@ fn start_delegation(app: &mut App, task: String) {
 
 fn spawn_turn(app: &mut App) {
     let provider = app.provider.clone();
-    let tools = app.tools.clone();
     let session = app.session.clone();
     let seed = app.events.snapshot();
     let model = app.model.clone();
     let ui = app.ui_tx.clone();
     let session_id = app.session_id;
-    let profile = app.profiles.active();
-    let menu = app.skills.menu();
-    let mut turn_config = zoid::agent::chat_turn_config_with(profile, &menu);
+    // Per-turn snapshot: pick the active mode's profile + effective skills ONCE,
+    // and bind a fresh invoke_skill tool to that snapshot. A mid-turn mode switch
+    // or reload cannot mutate this in-flight turn (spec §5 / risk 1–2).
+    let (profile, effective) =
+        zoid_core::mode::active_turn(&app.modes, &app.skills, &app.base_profile);
+    let menu = effective.menu();
+    let tools = std::sync::Arc::new(zoid::invoke_skill::chat_tools(std::sync::Arc::new(
+        effective,
+    )));
+    let mut turn_config = zoid::agent::chat_turn_config_with(&profile, &menu);
     turn_config.policy = policy_from_config(&app.economy, app.context_target);
     turn_config.eviction = zoid_core::eviction::EvictionPolicy {
         enabled: app.economy.compact_threshold_pct > 0, // master switch (back-compat)
@@ -3127,8 +3158,8 @@ mod tests {
             ],
         };
         let snap = super::dashboard_snapshot(
-            "sess", "glm", "ollama", "/home/x", 300, 384, 90, 20, true, 3, true, &window,
-            &churn, 42,
+            "sess", "glm", "ollama", "/home/x", 300, 384, 90, 20, true, 3, true, &window, &churn,
+            42,
         );
         assert_eq!(snap.session_name, "sess");
         assert_eq!(snap.model, "glm");
@@ -3567,9 +3598,10 @@ mod tests {
             events: zoid::eventlog::EventLog::new(),
             provider: Arc::new(zoid_provider::FakeProvider::new(Vec::new())),
             tools: Arc::new(Vec::new()),
-            profiles: zoid_core::agent_profile::AgentProfileRegistry::new(vec![
+            base_profile: zoid::agent::default_profile(),
+            modes: zoid_core::mode::ModeRegistry::new(vec![zoid_core::mode::Mode::chat(
                 zoid::agent::default_profile(),
-            ]),
+            )]),
             skills: std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
             model: "test-model".into(),
             economy: zoid_core::config::EconomyConfig::default(),
