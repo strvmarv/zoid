@@ -1073,7 +1073,6 @@ async fn emit_eviction(
     for t in plan.turns {
         reclaimed += t.token_estimate;
         spans.push(zoid_core::event::EvictedSpan {
-            id_range_label: format!("{} events", t.ids.len()),
             token_estimate: t.token_estimate,
             topic_hint: t.topic_hint,
         });
@@ -1148,7 +1147,6 @@ mod tests {
                     reclaimed_tokens: 4200,
                     marker: EvictionMarker {
                         spans: vec![EvictedSpan {
-                            id_range_label: "t1".into(),
                             token_estimate: 4200,
                             topic_hint: "setup".into(),
                         }],

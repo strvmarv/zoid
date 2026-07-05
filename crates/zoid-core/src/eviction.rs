@@ -117,7 +117,7 @@ mod fold_tests {
         assert!(eviction_breadcrumb(&[]).is_none());
         let events = vec![ev(10, EventKind::TurnsEvicted {
             ids: vec![Ulid::from(1u128)], reclaimed_tokens: 4200,
-            marker: EvictionMarker { spans: vec![EvictedSpan { id_range_label: "turns 1–2".into(), token_estimate: 4200, topic_hint: "read config".into() }] },
+            marker: EvictionMarker { spans: vec![EvictedSpan { token_estimate: 4200, topic_hint: "read config".into() }] },
         })];
         let bc = eviction_breadcrumb(&events).unwrap();
         assert!(bc.contains("recall"));

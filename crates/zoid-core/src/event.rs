@@ -28,7 +28,6 @@ pub enum MutationOp {
 /// One paged-out span, for the in-context breadcrumb and the audit view.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvictedSpan {
-    pub id_range_label: String,
     pub token_estimate: u64,
     pub topic_hint: String,
 }
@@ -326,7 +325,6 @@ mod tests {
     fn turns_evicted_round_trips_json() {
         let m = EvictionMarker {
             spans: vec![EvictedSpan {
-                id_range_label: "turns 1–3".into(),
                 token_estimate: 4200,
                 topic_hint: "read config".into(),
             }],
