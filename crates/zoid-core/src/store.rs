@@ -1,7 +1,7 @@
 use crate::event::{BranchId, Event};
 use crate::sessions::SessionRow;
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use ulid::Ulid;
 
 /// Single-writer, append-only event log backed by SQLite. The store owns the
@@ -65,6 +65,18 @@ impl EventStore {
                 PRIMARY KEY (event_id, model_id)
             );",
         )?;
+        // First-ever schema migration (spec §11). `CREATE TABLE IF NOT EXISTS`
+        // above is a no-op for an existing DB, so a NEW column must be added with
+        // ALTER TABLE — probed so re-open is idempotent (SQLite has no
+        // ADD COLUMN IF NOT EXISTS).
+        let has_active_mode: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'active_mode'",
+            [],
+            |r| r.get(0),
+        )?;
+        if has_active_mode == 0 {
+            conn.execute("ALTER TABLE sessions ADD COLUMN active_mode TEXT", [])?;
+        }
         Ok(EventStore { conn })
     }
 
@@ -111,10 +123,9 @@ impl EventStore {
         let mut stmt = self.conn.prepare(
             "SELECT event_id FROM events_fts WHERE events_fts MATCH ?1 AND session_id = ?2 ORDER BY rank LIMIT ?3",
         )?;
-        let rows = stmt.query_map(
-            params![safe, session_id.to_string(), limit as i64],
-            |r| r.get::<_, String>(0),
-        )?;
+        let rows = stmt.query_map(params![safe, session_id.to_string(), limit as i64], |r| {
+            r.get::<_, String>(0)
+        })?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r?.parse()?);
@@ -131,7 +142,9 @@ impl EventStore {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let placeholders = std::iter::repeat_n("?", ids.len()).collect::<Vec<_>>().join(",");
+        let placeholders = std::iter::repeat_n("?", ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
         let sql = format!(
             "{} WHERE id IN ({placeholders}) AND session_id = ? ORDER BY rowid ASC",
             Self::SELECT_COLS
@@ -222,6 +235,29 @@ impl EventStore {
             params![id.to_string(), last_touched_ts],
         )?;
         Ok(())
+    }
+
+    /// Persist the active mode name for a session (per-session state, spec §11).
+    pub fn set_active_mode(&self, id: Ulid, mode: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET active_mode = ?1 WHERE id = ?2",
+            params![mode, id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// The stored active mode for a session, or `None` if never set.
+    pub fn get_active_mode(&self, id: Ulid) -> Result<Option<String>> {
+        let v = self
+            .conn
+            .query_row(
+                "SELECT active_mode FROM sessions WHERE id = ?1",
+                params![id.to_string()],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(v)
     }
 
     pub fn list_session_rows(&self) -> Result<Vec<SessionRow>> {
@@ -619,6 +655,65 @@ mod tests {
             store.search_fts("secret", sb, 10).unwrap(),
             vec![Ulid::from(2u128)]
         );
+    }
+
+    #[test]
+    fn active_mode_round_trips_and_defaults_none() {
+        let store = EventStore::open(":memory:").unwrap();
+        let id = Ulid::new();
+        store.insert_session(id, "s", "/repo", 1, 1).unwrap();
+        assert_eq!(store.get_active_mode(id).unwrap(), None); // fresh session
+        store.set_active_mode(id, "Superpowers").unwrap();
+        assert_eq!(
+            store.get_active_mode(id).unwrap(),
+            Some("Superpowers".to_string())
+        );
+    }
+
+    #[test]
+    fn migration_is_idempotent_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("z.db");
+        let p = path.to_str().unwrap();
+        // First open creates the column; second open must NOT error on re-migrate.
+        {
+            let s = EventStore::open(p).unwrap();
+            let id = Ulid::new();
+            s.insert_session(id, "s", "/r", 1, 1).unwrap();
+            s.set_active_mode(id, "M").unwrap();
+        }
+        let s2 = EventStore::open(p).unwrap(); // re-open: column already exists
+                                               // A value written before still reads back.
+        let rows = s2.list_session_rows().unwrap();
+        assert_eq!(rows.len(), 1);
+        // The persisted active_mode value survives the reopen (not just the row).
+        let id: Ulid = rows[0].id; // SessionRow.id is Ulid (Copy) — no .parse()
+        assert_eq!(s2.get_active_mode(id).unwrap(), Some("M".to_string()));
+    }
+
+    #[test]
+    fn migrates_an_old_shape_db_without_active_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.db");
+        let p = path.to_str().unwrap();
+        // Simulate a pre-slice-3 DB: sessions table WITHOUT active_mode.
+        {
+            let conn = rusqlite::Connection::open(p).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE sessions (id TEXT PRIMARY KEY, name TEXT NOT NULL, \
+                 root_path TEXT NOT NULL, created_ts INTEGER NOT NULL, last_touched_ts INTEGER NOT NULL);"
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id,name,root_path,created_ts,last_touched_ts) VALUES (?1,'s','/r',1,1)",
+                rusqlite::params![Ulid::new().to_string()],
+            ).unwrap();
+        }
+        // Opening must add the column (not throw) and reads default to None.
+        let store = EventStore::open(p).unwrap();
+        let rows = store.list_session_rows().unwrap();
+        assert_eq!(rows.len(), 1);
+        let id: Ulid = rows[0].id;
+        assert_eq!(store.get_active_mode(id).unwrap(), None);
     }
 
     #[test]

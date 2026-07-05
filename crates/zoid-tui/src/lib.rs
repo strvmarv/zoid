@@ -27,5 +27,5 @@ pub use motion::{
 pub use objects::{selectable_objects, Obj, ObjectKind};
 pub use render::render_shell;
 pub use scrollbar::{line_of_msg, msg_at_line, scrollbar_thumb};
-pub use state::{DrawerId, Focus, Mode, Overlay, ShellState};
+pub use state::{DrawerId, Focus, Overlay, ShellState};
 pub use syntax_view::{highlight_lines, syn_color};

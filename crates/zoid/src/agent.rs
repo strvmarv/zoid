@@ -31,8 +31,8 @@ pub const SYSTEM_PROMPT: &str =
 
 /// The default Chat mode profile: the standard zoid system prompt with an
 /// unrestricted tool set (empty allow-list = every tool permitted, per
-/// `AgentProfile::allows`). Seeds the `AgentProfileRegistry`; reproduces
-/// pre-mode behavior exactly.
+/// `AgentProfile::allows`). The base profile for the `Chat` floor of the mode
+/// registry; reproduces pre-mode behavior exactly.
 pub fn default_profile() -> AgentProfile {
     AgentProfile {
         name: "default".into(),
@@ -1012,8 +1012,7 @@ pub(crate) fn companion_show(hub: &zoid_companion::CompanionHub, html: String) -
         ("card shown in companion".to_string(), false)
     } else {
         (
-            "Companion is disabled; enable it from the command palette to view cards."
-                .to_string(),
+            "Companion is disabled; enable it from the command palette to view cards.".to_string(),
             false,
         )
     }

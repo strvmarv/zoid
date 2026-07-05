@@ -35,6 +35,15 @@ enum Cmd {
         ts: i64,
         reply: oneshot::Sender<Result<()>>,
     },
+    SetActiveMode {
+        id: Ulid,
+        mode: String,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    GetActiveMode {
+        id: Ulid,
+        reply: oneshot::Sender<Result<Option<String>>>,
+    },
     ListSessions {
         root_filter: Option<String>,
         reply: oneshot::Sender<Result<Vec<SessionInfo>>>,
@@ -95,6 +104,12 @@ impl SessionHandle {
                     }
                     Cmd::TouchSession { id, ts, reply } => {
                         let _ = reply.send(store.touch_session(id, ts));
+                    }
+                    Cmd::SetActiveMode { id, mode, reply } => {
+                        let _ = reply.send(store.set_active_mode(id, &mode));
+                    }
+                    Cmd::GetActiveMode { id, reply } => {
+                        let _ = reply.send(store.get_active_mode(id));
                     }
                     Cmd::ListSessions { root_filter, reply } => {
                         let out = (|| {
@@ -206,6 +221,28 @@ impl SessionHandle {
             .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
     }
 
+    /// Persist the active mode for a session.
+    pub async fn set_active_mode(&self, id: Ulid, mode: String) -> Result<()> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Cmd::SetActiveMode { id, mode, reply })
+            .await
+            .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
+    }
+
+    /// Read the stored active mode for a session (None if never set).
+    pub async fn get_active_mode(&self, id: Ulid) -> Result<Option<String>> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Cmd::GetActiveMode { id, reply })
+            .await
+            .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
+    }
+
     /// List sessions (optionally filtered by root path) for the resume picker.
     pub async fn list_sessions(&self, root_filter: Option<String>) -> Result<Vec<SessionInfo>> {
         let (reply, rx) = oneshot::channel();
@@ -219,7 +256,12 @@ impl SessionHandle {
 
     /// Search the cold tier (BM25 via FTS5), scoped to `session_id`, and load
     /// matching events, best-first.
-    pub async fn recall(&self, query: String, session_id: Ulid, limit: usize) -> Result<Vec<Event>> {
+    pub async fn recall(
+        &self,
+        query: String,
+        session_id: Ulid,
+        limit: usize,
+    ) -> Result<Vec<Event>> {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(Cmd::Recall {
@@ -328,7 +370,10 @@ mod tests {
         ))
         .await
         .unwrap();
-        let hits = h.recall("vector".into(), Ulid::from(0u128), 10).await.unwrap();
+        let hits = h
+            .recall("vector".into(), Ulid::from(0u128), 10)
+            .await
+            .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, Ulid::from(1u128));
     }

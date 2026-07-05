@@ -5,6 +5,7 @@ pub mod agent;
 pub mod cli;
 pub mod eventlog;
 pub mod invoke_skill;
+pub mod mode_import;
 pub mod skill_import;
 pub mod subagent;
 pub mod update;

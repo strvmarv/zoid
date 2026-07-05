@@ -81,7 +81,7 @@ pub fn parse_skill_md(text: &str) -> Result<ParsedSkill, String> {
 }
 
 /// The skills available to the current session.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SkillRegistry {
     skills: Vec<Skill>,
 }
@@ -142,6 +142,11 @@ impl SkillRegistry {
     /// All skill names in registry order.
     pub fn names(&self) -> Vec<String> {
         self.skills.iter().map(|s| s.name.clone()).collect()
+    }
+
+    /// All skills in registry order (for composing scoped views).
+    pub fn all(&self) -> &[Skill] {
+        &self.skills
     }
 
     /// The menu injected into a mode's system prompt: one `- name: description`
@@ -250,5 +255,12 @@ mod tests {
     fn single_quoted_description_is_unquoted() {
         let md = "---\nname: n\ndescription: 'hi there'\n---\nb\n";
         assert_eq!(parse_skill_md(md).unwrap().description, "hi there");
+    }
+
+    #[test]
+    fn all_exposes_every_skill_in_order() {
+        let r = SkillRegistry::builtin();
+        let names: Vec<&str> = r.all().iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["spike-plan", "spike-implement"]);
     }
 }

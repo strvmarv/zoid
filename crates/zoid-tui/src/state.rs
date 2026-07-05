@@ -3,12 +3,6 @@
 //! and routing all read from this; the `zoid` bin owns the side effects.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    Chat,
-    Build,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Conversation,
     Input,
@@ -120,7 +114,13 @@ pub struct ObjectState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellState {
-    pub mode: Mode,
+    /// Active mode name, mirrored from the bin's `ModeRegistry` (the renderer is
+    /// pure and can't reach `App`). Set on switch/cycle/reload.
+    pub active_mode: String,
+    /// Whether the active mode failed to load (renders the ⚠ chip + error card).
+    pub active_mode_broken: bool,
+    /// All mode names in cycle order, for the palette "Switch mode" rows.
+    pub mode_names: Vec<String>,
     pub focus: Focus,
     pub overlay: Overlay,
     pub drawers: Vec<Drawer>,
@@ -285,7 +285,9 @@ impl ShellState {
             },
         ];
         Self {
-            mode: Mode::Chat,
+            active_mode: "Chat".to_string(),
+            active_mode_broken: false,
+            mode_names: vec!["Chat".to_string()],
             focus: Focus::Input,
             overlay: Overlay::None,
             drawers,
@@ -367,17 +369,6 @@ impl ShellState {
         };
         let i = ring.iter().position(|f| *f == self.focus).unwrap_or(0);
         self.focus = ring[(i + 1) % ring.len()];
-    }
-
-    pub fn toggle_mode(&mut self) {
-        self.mode = match self.mode {
-            Mode::Chat => Mode::Build,
-            Mode::Build => Mode::Chat,
-        };
-    }
-
-    pub fn set_mode(&mut self, mode: Mode) {
-        self.mode = mode;
     }
 
     pub fn toggle_drawer(&mut self, id: DrawerId) {
@@ -492,7 +483,9 @@ mod tests {
     #[test]
     fn new_is_calm_chat_with_repo_session_context_rail() {
         let s = ShellState::new();
-        assert_eq!(s.mode, Mode::Chat);
+        assert_eq!(s.active_mode, "Chat");
+        assert!(!s.active_mode_broken);
+        assert_eq!(s.mode_names, vec!["Chat".to_string()]);
         assert!(s.rail_visible);
         assert_eq!(s.branch, "main");
         let ids: Vec<DrawerId> = s.drawers.iter().map(|d| d.id).collect();
@@ -562,15 +555,6 @@ mod tests {
         s.focus = Focus::Input;
         s.focus_next();
         assert_eq!(s.focus, Focus::Conversation); // Rail not in the ring
-    }
-
-    #[test]
-    fn toggle_mode_flips_chat_build() {
-        let mut s = ShellState::new();
-        s.toggle_mode();
-        assert_eq!(s.mode, Mode::Build);
-        s.toggle_mode();
-        assert_eq!(s.mode, Mode::Chat);
     }
 
     #[test]

@@ -5,7 +5,7 @@ use zoid_core::economy::ChurnTimeline;
 use zoid_core::projection::ChatMsg;
 use zoid_tui::chat::ChatView;
 use zoid_tui::render_shell;
-use zoid_tui::state::{DrawerId, Focus, Mode, Overlay, ShellState, Zoom};
+use zoid_tui::state::{DrawerId, Focus, Overlay, ShellState, Zoom};
 use zoid_tui::EconomyView;
 
 fn normal_view() -> ChatView {
@@ -80,7 +80,17 @@ fn draw_body(
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|f| {
-            render_shell(f, state, &empty_economy(), msgs, body, &[], &input, false, view);
+            render_shell(
+                f,
+                state,
+                &empty_economy(),
+                msgs,
+                body,
+                &[],
+                &input,
+                false,
+                view,
+            );
         })
         .unwrap();
     terminal.backend().to_string()
@@ -287,6 +297,29 @@ fn active_tool_spinner_frame() {
     insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
 }
 
+/// Mode-chip fidelity (Task 7): the status bar's chip shows the active mode
+/// name, uppercased, when the mode loaded cleanly.
+#[test]
+fn status_chip_shows_active_mode() {
+    let mut s = ShellState::new();
+    s.active_mode = "Superpowers".into();
+    s.mode_names = vec!["Chat".into(), "Superpowers".into()];
+    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+}
+
+/// Broken-mode fidelity (Task 7): when the active mode failed to load, the
+/// chip shows a `⚠` warning glyph + the mode name, and the main surface is
+/// replaced entirely by the mode-error card with the `:mode reload` hint
+/// (spec §9).
+#[test]
+fn broken_mode_shows_warn_chip_and_error_card() {
+    let mut s = ShellState::new();
+    s.active_mode = "Superpowers".into();
+    s.mode_names = vec!["Chat".into(), "Superpowers".into()];
+    s.active_mode_broken = true;
+    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+}
+
 /// Rail drawer headers show title + chevron only — no keybind labels (spec §2.1).
 #[test]
 fn rail_headers_have_no_keybind_labels() {
@@ -369,6 +402,7 @@ fn session_drawer_open_frame() {
 #[test]
 fn palette_overlay_frame() {
     let mut s = ShellState::new();
+    s.mode_names = vec!["Chat".into(), "Build".into()];
     s.overlay = Overlay::Palette;
     s.palette.query = "build".into();
     insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
@@ -391,13 +425,6 @@ fn command_line_frame() {
     s.overlay = Overlay::CommandLine;
     s.cmdline.buffer = "build".into();
     insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
-}
-
-#[test]
-fn build_placeholder_frame() {
-    let mut s = ShellState::new();
-    s.set_mode(Mode::Build);
-    insta::assert_snapshot!(draw(&s, &[], 100, 24));
 }
 
 #[test]

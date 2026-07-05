@@ -1,14 +1,14 @@
-//! `render_shell` — the modal Chat/Build frame: mode-aware title + status, the
-//! main surface (conversation or the P6 Build placeholder), the rail of drawers,
-//! the input box, and palette / command-line overlays. Every glyph/color comes
-//! from `tokens` (spec §16). Geometry comes from `layout::compute` — the same
-//! rects mouse hit-testing uses.
+//! `render_shell` — the shell frame: the active-mode title + status chip, the
+//! main surface (the conversation, or a mode-error card when the active mode
+//! failed to load), the rail of drawers, the input box, and palette /
+//! command-line overlays. Every glyph/color comes from `tokens` (spec §16).
+//! Geometry comes from `layout::compute` — the same rects mouse hit-testing uses.
 
 use crate::chat::{conversation_view, ChatView};
 use crate::economy_view::EconomyView;
 use crate::layout::{compute, ShellLayout, CONV_PAD};
 use crate::palette::{all_items, nav, selectable_matches, PaletteItem};
-use crate::state::{DrawerId, Focus, Mode, Overlay, PaletteStage, ShellState};
+use crate::state::{DrawerId, Focus, Overlay, PaletteStage, ShellState};
 use crate::tokens::{color, glyph};
 use ratatui::{
     layout::{Margin, Rect},
@@ -60,8 +60,10 @@ pub fn render_shell(
     // The top row carries the centered "zoid" wordmark (render_title below).
     // The activity indicator lives in the status bar (center).
 
-    match state.mode {
-        Mode::Chat => {
+    if state.active_mode_broken {
+        render_mode_error(frame, state, layout.conversation);
+    } else {
+        {
             // Inset the stream by CONV_PAD columns for left/right breathing room.
             // `conversation_view` has already wrapped prose (with the hanging
             // indent) and padded code to this exact width, so every line fits on
@@ -99,13 +101,14 @@ pub fn render_shell(
                         None => full.len(),
                     };
                     let total = base_len + has_tool as usize;
-                    let max_scroll =
-                        total.saturating_sub(text.height as usize).min(u16::MAX as usize) as u16;
+                    let max_scroll = total
+                        .saturating_sub(text.height as usize)
+                        .min(u16::MAX as usize) as u16;
                     let scroll = state.conversation_scroll.min(max_scroll);
                     let content_len = total.min(u16::MAX as usize) as u16;
 
-                    let spinner =
-                        has_tool.then(|| tool_spinner_line(state.active_tool.as_deref().unwrap_or("")));
+                    let spinner = has_tool
+                        .then(|| tool_spinner_line(state.active_tool.as_deref().unwrap_or("")));
                     // Equivalence to a no-wrap Paragraph relies on every body
                     // line being LEFT-aligned (set_line always starts at text.x;
                     // Paragraph would honor per-line alignment). conversation_view
@@ -136,7 +139,9 @@ pub fn render_shell(
                 None => {
                     let mut body = conversation_view(msgs, view, streaming, text.width as usize);
                     if has_tool {
-                        body.push(tool_spinner_line(state.active_tool.as_deref().unwrap_or("")));
+                        body.push(tool_spinner_line(
+                            state.active_tool.as_deref().unwrap_or(""),
+                        ));
                     }
                     let max_scroll = body
                         .len()
@@ -170,7 +175,6 @@ pub fn render_shell(
                 }
             }
         }
-        Mode::Build => render_build_placeholder(frame, layout.conversation),
     }
 
     // Top bar: centered wordmark (moved from the bottom-right status bar).
@@ -217,23 +221,21 @@ pub fn render_shell(
     conv_max_scroll
 }
 
-fn render_build_placeholder(frame: &mut Frame, area: Rect) {
+/// The crafted error card shown when the active mode failed to load (spec §9).
+fn render_mode_error(frame: &mut Frame, state: &ShellState, area: Rect) {
     let lines = vec![
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            format!("  {} BUILD mode", glyph::RUNNING),
-            Style::new().fg(color::BUILD_ACCENT).bold(),
-        )]),
-        Line::from(vec![Span::styled(
-            "  The autonomous loop is coming soon.",
+        Line::from(Span::styled(
+            format!("⚠ mode '{}' failed to load", state.active_mode),
+            Style::new().fg(color::BUILD_ACCENT),
+        )),
+        Line::from(Span::styled(
+            "Fix its mode.md, then run  :mode reload",
             Style::new().fg(color::DIM),
-        )]),
-        Line::from(vec![Span::styled(
-            format!("  {}Tab / :chat → back to Chat", glyph::SHIFT),
-            Style::new().fg(color::DIM),
-        )]),
+        )),
     ];
-    frame.render_widget(Paragraph::new(lines), area);
+    let p =
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" mode error "));
+    frame.render_widget(p, area);
 }
 
 fn render_title(frame: &mut Frame, _state: &ShellState, area: Rect) {
@@ -273,17 +275,18 @@ fn render_input(frame: &mut Frame, input: &TextArea<'_>, area: Rect) {
 }
 
 fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: Rect) {
-    // Left segment: mode badge only (zoom hint moved to the right side).
-    let mut left = match state.mode {
-        Mode::Chat => vec![Span::styled(
-            " CHAT ",
-            Style::new().fg(color::CHAT_ACCENT).bg(color::CHAT_BG),
-        )],
-        Mode::Build => vec![Span::styled(
-            " BUILD ",
-            Style::new().fg(color::BUILD_ACCENT).bg(color::BUILD_BG),
-        )],
+    // Left segment: mode badge only (zoom hint moved to the right side). The chip
+    // is dynamic — the active mode name, uppercased; a ⚠-prefixed variant when the
+    // active mode failed to load.
+    let chip = if state.active_mode_broken {
+        format!(" ⚠ {} ", state.active_mode)
+    } else {
+        format!(" {} ", state.active_mode.to_uppercase())
     };
+    let mut left = vec![Span::styled(
+        chip,
+        Style::new().fg(color::CHAT_ACCENT).bg(color::CHAT_BG),
+    )];
     // Transient ④ hint (e.g. "queued · runs as a subagent in P5"), set by a
     // verb pick (P4d T4). Pure-renderer-readable since it lives on ShellState.
     if let Some(hint) = &state.status_hint {
@@ -305,10 +308,7 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
     let center = format!("{icon} {label}");
 
     // Right segment: zoom hint (palette hint moved to the top-right title bar).
-    let right = match state.mode {
-        Mode::Chat => format!(" zoom {} ", view.zoom.label()),
-        Mode::Build => " phase —/— · esc → Chat ".to_string(),
-    };
+    let right = format!(" zoom {} ", view.zoom.label());
 
     let w = area.width as usize;
     let left_w: usize = left.iter().map(|s| s.content.width()).sum();
@@ -563,7 +563,11 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
                 Style::new().fg(color::TXT),
             ),
             Span::styled(
-                if state.cache_supported { "tok " } else { "tok/cac " },
+                if state.cache_supported {
+                    "tok "
+                } else {
+                    "tok/cac "
+                },
                 Style::new().fg(color::DIM),
             ),
             Span::styled(
@@ -688,7 +692,7 @@ fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
             frame.render_widget(Paragraph::new(vec![hint]), inner);
         }
         PaletteStage::Pick => {
-            let items = all_items(state.mode, state.companion_on);
+            let items = all_items(&state.active_mode, &state.mode_names, state.companion_on);
             let matches = selectable_matches(&items, &state.palette.query);
             let sel = nav(state.palette.selected, 0, matches.len());
 

@@ -12,12 +12,12 @@ use crossterm::{
 };
 use futures_util::StreamExt;
 use ratatui::{layout::Rect, prelude::CrosstermBackend, text::Line, Terminal};
+use ratatui_textarea::{CursorMove, TextArea};
 use std::io::stdout;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
-use ratatui_textarea::{CursorMove, TextArea};
 use ulid::Ulid;
 
 mod obs;
@@ -28,7 +28,6 @@ use zoid_core::projection::conversation;
 use zoid_core::session::SessionHandle;
 use zoid_provider::Provider;
 use zoid_provider::{default_model, default_provider};
-use zoid_tools::Tool;
 use zoid_tui::chat::ChatView;
 use zoid_tui::layout::compute;
 use zoid_tui::render_shell;
@@ -99,14 +98,21 @@ fn config_warning_hint(keys: &[String]) -> Option<String> {
 /// Load config from files + env, in precedence order (user-global < project <
 /// local < env). Missing files are skipped (empty layer); a malformed file is
 /// skipped with a stderr note (non-fatal — the process still starts).
-fn load_config() -> (zoid_core::config::Config, zoid_core::config::Provenance, Vec<String>) {
+fn load_config() -> (
+    zoid_core::config::Config,
+    zoid_core::config::Provenance,
+    Vec<String>,
+) {
     use zoid_core::config::{merge, parse_toml, PartialConfig, Source};
     let env = |k: &str| std::env::var(k).ok();
     let cfg_dir = resolve_config_dir(env);
     let mut warnings: Vec<String> = Vec::new();
     let mut read = |p: PathBuf| -> Option<PartialConfig> {
         let text = std::fs::read_to_string(&p).ok()?;
-        let file = p.file_name().and_then(|n| n.to_str()).unwrap_or("config.toml");
+        let file = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("config.toml");
         match parse_toml(&text) {
             Ok((pc, unknown)) => {
                 for k in unknown {
@@ -1008,10 +1014,15 @@ struct App {
     session_id: Ulid,
     events: zoid::eventlog::EventLog,
     provider: Arc<dyn Provider>,
-    tools: Arc<Vec<Box<dyn Tool>>>,
-    /// Available mode profiles with the active one marked; drives the turn's
-    /// system prompt. v1 holds only the default profile.
-    profiles: zoid_core::agent_profile::AgentProfileRegistry,
+    /// The active mode + all discovered modes; drives the turn's system prompt,
+    /// the effective skill menu, and the mode chip. Index 0 is always Chat.
+    modes: zoid_core::mode::ModeRegistry,
+    /// The base coding-agent profile (Chat). Kept so mode reload / broken-mode
+    /// fallback can recompose without re-reading a const.
+    base_profile: zoid_core::agent_profile::AgentProfile,
+    /// The resolved mode-source directories, computed once at startup. Stashed so
+    /// `:mode reload` can rebuild the registry without recomputing paths.
+    mode_dirs: Vec<PathBuf>,
     /// Skills the `invoke_skill` tool can load; also rendered as the menu the
     /// active mode's system prompt advertises.
     skills: std::sync::Arc<zoid_core::skill::SkillRegistry>,
@@ -1223,9 +1234,9 @@ async fn main() -> Result<()> {
 
     let (ui_tx, mut ui_rx) = mpsc::channel::<AgentUpdate>(256);
 
+    let cfg_dir = resolve_config_dir(|k: &str| std::env::var(k).ok());
+    let home = std::env::var("HOME").ok().map(std::path::PathBuf::from);
     let skills = {
-        let cfg_dir = resolve_config_dir(|k: &str| std::env::var(k).ok());
-        let home = std::env::var("HOME").ok().map(std::path::PathBuf::from);
         let dirs = zoid::skill_import::resolve_skill_dirs(
             &config.skills.source_dirs,
             &cfg_dir,
@@ -1235,15 +1246,23 @@ async fn main() -> Result<()> {
         std::sync::Arc::new(zoid::skill_import::build_registry(&dirs))
     };
 
+    let base_profile = zoid::agent::default_profile();
+    let mode_dirs = zoid::mode_import::resolve_mode_dirs(
+        &config.modes.source_dirs,
+        &cfg_dir,
+        std::path::Path::new(&root),
+        home.as_deref(),
+    );
+    let modes = zoid::mode_import::build_mode_registry(&base_profile, &mode_dirs);
+
     let mut app = App {
         session,
         session_id,
         events,
         provider,
-        tools: Arc::new(zoid::invoke_skill::chat_tools(skills.clone())),
-        profiles: zoid_core::agent_profile::AgentProfileRegistry::new(vec![
-            zoid::agent::default_profile(),
-        ]),
+        modes,
+        base_profile,
+        mode_dirs,
         skills,
         model,
         economy: config.economy,
@@ -1273,6 +1292,11 @@ async fn main() -> Result<()> {
         companion: None,
         companion_hub: zoid_companion::CompanionHub::new(),
     };
+
+    // Restore the resumed session's persisted active mode (a no-op if that mode
+    // no longer exists ⇒ stays Chat) and mirror it onto the shell so the
+    // chip/palette are correct before the event loop begins.
+    restore_mode_for_session(&mut app).await;
 
     if companion_at_boot {
         enable_companion(&mut app);
@@ -2085,7 +2109,11 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
     use zoid_tui::Overlay;
     match action {
         Action::Quit => return Ok(true),
-        Action::SwitchMode => app.shell.toggle_mode(),
+        Action::CycleMode => {
+            app.modes.cycle_next();
+            sync_mode_mirror(app);
+            persist_active_mode(app).await;
+        }
         Action::FocusNext => app.shell.focus_next(),
         Action::FocusRegion(f) => app.shell.focus = f,
         Action::OpenPalette => {
@@ -2106,7 +2134,11 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::ToggleDrawer(id) => app.shell.toggle_drawer(id),
         Action::PaletteMove(d) => {
-            let items = zoid_tui::palette::all_items(app.shell.mode, app.shell.companion_on);
+            let items = zoid_tui::palette::all_items(
+                &app.shell.active_mode,
+                &app.shell.mode_names,
+                app.shell.companion_on,
+            );
             let n = zoid_tui::palette::selectable_matches(&items, &app.shell.palette.query).len();
             app.shell.palette.selected = zoid_tui::palette::nav(app.shell.palette.selected, d, n);
         }
@@ -2337,6 +2369,9 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 app.body_cache = BodyCache::default();
                 app.shell.conversation_scroll = 0;
                 app.shell.follow_tail = true; // jump to the latest of the loaded session
+                                              // The resumed session runs with ITS OWN mode, never the
+                                              // previous session's overlay prompt + scoped skills.
+                restore_mode_for_session(app).await;
                 if let Some(info) = app
                     .session
                     .list_sessions(Some(repo_root()))
@@ -2867,8 +2902,17 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
     use zoid_tui::command::Command;
     match cmd {
         Command::Quit => Ok(true),
-        Command::SwitchMode(m) => {
-            app.shell.set_mode(m);
+        Command::SwitchMode(name) => {
+            app.modes.set_active(&name);
+            sync_mode_mirror(app);
+            persist_active_mode(app).await;
+            Ok(false)
+        }
+        Command::ReloadModes => {
+            let prev = app.modes.active_name().to_string();
+            app.modes = zoid::mode_import::build_mode_registry(&app.base_profile, &app.mode_dirs);
+            app.modes.set_active(&prev); // preserve by name; no-op ⇒ Chat
+            sync_mode_mirror(app);
             Ok(false)
         }
         Command::OpenDrawer(id) => {
@@ -2897,6 +2941,9 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             app.body_cache = BodyCache::default();
             app.shell.conversation_scroll = 0;
             app.shell.follow_tail = true; // new session starts pinned to the latest
+                                          // A fresh session has no saved mode yet ⇒ this resets to Chat rather
+                                          // than carrying over the previous session's active mode.
+            restore_mode_for_session(app).await;
             Ok(false)
         }
         Command::RenameSession(name) => {
@@ -3044,17 +3091,51 @@ fn start_delegation(app: &mut App, task: String) {
     });
 }
 
+/// Mirror the active mode + names onto the shell for the pure renderer/palette.
+fn sync_mode_mirror(app: &mut App) {
+    app.shell.active_mode = app.modes.active_name().to_string();
+    app.shell.active_mode_broken = app.modes.active_is_broken();
+    app.shell.mode_names = app.modes.names();
+}
+
+/// Persist the active mode name onto the current session row (best-effort).
+async fn persist_active_mode(app: &App) {
+    let _ = app
+        .session
+        .set_active_mode(app.session_id, app.modes.active_name().to_string())
+        .await;
+}
+
+/// Reset to the Chat floor, then apply the session's saved mode if it still
+/// exists, and refresh the shell mirror. Called at boot AND on every mid-run
+/// session change so a resumed/new session runs with ITS OWN mode (spec §11),
+/// never the previously-active session's overlay + scoped skills.
+async fn restore_mode_for_session(app: &mut App) {
+    // Reset to Chat (index 0); its name == base_profile.name.
+    app.modes.set_active(app.base_profile.name.as_str());
+    if let Ok(Some(saved)) = app.session.get_active_mode(app.session_id).await {
+        app.modes.set_active(&saved); // no-op if the saved mode vanished ⇒ stays Chat
+    }
+    sync_mode_mirror(app);
+}
+
 fn spawn_turn(app: &mut App) {
     let provider = app.provider.clone();
-    let tools = app.tools.clone();
     let session = app.session.clone();
     let seed = app.events.snapshot();
     let model = app.model.clone();
     let ui = app.ui_tx.clone();
     let session_id = app.session_id;
-    let profile = app.profiles.active();
-    let menu = app.skills.menu();
-    let mut turn_config = zoid::agent::chat_turn_config_with(profile, &menu);
+    // Per-turn snapshot: pick the active mode's profile + effective skills ONCE,
+    // and bind a fresh invoke_skill tool to that snapshot. A mid-turn mode switch
+    // or reload cannot mutate this in-flight turn (spec §5 / risk 1–2).
+    let (profile, effective) =
+        zoid_core::mode::active_turn(&app.modes, &app.skills, &app.base_profile);
+    let menu = effective.menu();
+    let tools = std::sync::Arc::new(zoid::invoke_skill::chat_tools(std::sync::Arc::new(
+        effective,
+    )));
+    let mut turn_config = zoid::agent::chat_turn_config_with(&profile, &menu);
     turn_config.policy = policy_from_config(&app.economy, app.context_target);
     turn_config.eviction = zoid_core::eviction::EvictionPolicy {
         enabled: app.economy.compact_threshold_pct > 0, // master switch (back-compat)
@@ -3127,8 +3208,8 @@ mod tests {
             ],
         };
         let snap = super::dashboard_snapshot(
-            "sess", "glm", "ollama", "/home/x", 300, 384, 90, 20, true, 3, true, &window,
-            &churn, 42,
+            "sess", "glm", "ollama", "/home/x", 300, 384, 90, 20, true, 3, true, &window, &churn,
+            42,
         );
         assert_eq!(snap.session_name, "sess");
         assert_eq!(snap.model, "glm");
@@ -3566,10 +3647,11 @@ mod tests {
             session_id,
             events: zoid::eventlog::EventLog::new(),
             provider: Arc::new(zoid_provider::FakeProvider::new(Vec::new())),
-            tools: Arc::new(Vec::new()),
-            profiles: zoid_core::agent_profile::AgentProfileRegistry::new(vec![
+            base_profile: zoid::agent::default_profile(),
+            modes: zoid_core::mode::ModeRegistry::new(vec![zoid_core::mode::Mode::chat(
                 zoid::agent::default_profile(),
-            ]),
+            )]),
+            mode_dirs: Vec::new(),
             skills: std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
             model: "test-model".into(),
             economy: zoid_core::config::EconomyConfig::default(),
@@ -3925,6 +4007,92 @@ mod tests {
             app.shell.status_hint.as_deref(),
             Some("finish the current turn first"),
             "blocked NewSession should surface the busy hint"
+        );
+    }
+
+    /// Regression for the whole-branch review's Important #1: the two mid-run
+    /// session-change sites (`Action::SessionPick`, `Command::NewSession`) must
+    /// call `restore_mode_for_session` so a resumed/new session runs with ITS
+    /// OWN mode, never the previous session's mode carried over in-memory.
+    /// This test exercises the shared helper directly: a session with no saved
+    /// mode degrades to Chat even if `app.modes` is currently parked on a
+    /// non-Chat mode (proving the reset-then-restore order, not just a
+    /// no-op), a session with a saved mode is restored, and a saved mode that
+    /// no longer exists in the registry degrades cleanly to Chat with no panic.
+    #[tokio::test]
+    async fn restore_mode_for_session_applies_saved_and_degrades_to_chat() {
+        let mut app = test_app().await;
+        // The Chat floor's name is whatever the base profile is named (`"default"`
+        // for `zoid::agent::default_profile()`); capture it rather than hardcoding
+        // the literal, since `restore_mode_for_session` resets to
+        // `app.base_profile.name`, not a hardcoded `"Chat"` string.
+        let chat_name = app.base_profile.name.clone();
+        app.modes = zoid_core::mode::ModeRegistry::new(vec![
+            zoid_core::mode::Mode::chat(app.base_profile.clone()),
+            zoid_core::mode::Mode::Ready {
+                profile: zoid_core::agent_profile::AgentProfile {
+                    name: "SP".into(),
+                    description: "d".into(),
+                    system_prompt: "BASE\n\nOVER".into(),
+                    tools: vec![],
+                    model: None,
+                },
+                skills: zoid_core::skill::SkillRegistry::new(vec![]),
+            },
+        ]);
+
+        // Session A: persist "SP" as its active mode.
+        let session_a = app.session_id;
+        app.session
+            .set_active_mode(session_a, "SP".to_string())
+            .await
+            .unwrap();
+
+        // Create session B with no saved mode.
+        let session_b = Ulid::new();
+        app.session
+            .new_session(session_b, "b".into(), "/repo".into(), 0)
+            .await
+            .unwrap();
+        app.session_id = session_b;
+
+        // Simulate the carried-over in-memory state a mid-run swap would leave
+        // behind if the reset were missing: active mode still "SP" from A.
+        app.modes.set_active("SP");
+        restore_mode_for_session(&mut app).await;
+        assert_eq!(
+            app.modes.active_name(),
+            chat_name,
+            "session B has no saved mode, so it must NOT inherit A's carried-over SP"
+        );
+        assert_eq!(
+            app.shell.active_mode, chat_name,
+            "the shell mirror must reflect the degraded-to-Chat state"
+        );
+
+        // Persist "SP" for session B; restoring should now pick it up.
+        app.session
+            .set_active_mode(session_b, "SP".to_string())
+            .await
+            .unwrap();
+        app.modes.set_active(&chat_name);
+        restore_mode_for_session(&mut app).await;
+        assert_eq!(
+            app.modes.active_name(),
+            "SP",
+            "session B's saved mode must be restored"
+        );
+
+        // A saved mode that no longer exists in the registry degrades to Chat.
+        app.session
+            .set_active_mode(session_b, "Ghost".to_string())
+            .await
+            .unwrap();
+        restore_mode_for_session(&mut app).await;
+        assert_eq!(
+            app.modes.active_name(),
+            chat_name,
+            "a vanished saved mode must degrade cleanly to Chat, not panic"
         );
     }
 

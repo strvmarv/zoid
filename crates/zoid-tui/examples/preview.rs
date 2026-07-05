@@ -12,7 +12,7 @@ use ratatui_textarea::TextArea;
 use zoid_core::projection::{ChatMsg, ToolCallRef};
 use zoid_tui::chat::ChatView;
 use zoid_tui::render_shell;
-use zoid_tui::state::{DrawerId, Mode, Overlay, ShellState, Zoom};
+use zoid_tui::state::{DrawerId, Overlay, ShellState, Zoom};
 use zoid_tui::EconomyView;
 
 fn seeded() -> Vec<ChatMsg> {
@@ -188,7 +188,7 @@ fn scene(name: &str) -> (ShellState, Vec<ChatMsg>, EconomyView) {
             s.cmdline.buffer = "build".into();
         }
         "build" => {
-            s.set_mode(Mode::Build);
+            s.active_mode = "Build".into();
             return (s, vec![], empty_economy());
         }
         "economy" => {
