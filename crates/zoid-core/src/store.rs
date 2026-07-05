@@ -686,6 +686,9 @@ mod tests {
                                                // A value written before still reads back.
         let rows = s2.list_session_rows().unwrap();
         assert_eq!(rows.len(), 1);
+        // The persisted active_mode value survives the reopen (not just the row).
+        let id: Ulid = rows[0].id; // SessionRow.id is Ulid (Copy) — no .parse()
+        assert_eq!(s2.get_active_mode(id).unwrap(), Some("M".to_string()));
     }
 
     #[test]
