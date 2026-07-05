@@ -1067,7 +1067,12 @@ async fn main() -> Result<()> {
             .await?;
         (id, name, boot_ts)
     };
-    let events = zoid::eventlog::EventLog::from_vec(session.snapshot_session(session_id).await?);
+    let mut events =
+        zoid::eventlog::EventLog::from_vec(session.snapshot_session(session_id).await?);
+    // #6b: free compacted tool-result bodies on the boot auto-resume path too
+    // (mirrors the interactive session-switch clear), so reopening a long
+    // session doesn't re-inflate RAM to the pre-#6b footprint.
+    events.clear_compacted_bodies();
 
     let (config, prov) = load_config();
     let model = if config.model.is_empty() {
