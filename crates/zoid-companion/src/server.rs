@@ -1,7 +1,8 @@
 //! Blocking `tiny_http` server: serves the shell page (token-gated, CSP) and an
 //! SSE `/events` stream. All threads are std threads — no tokio.
 
-use crate::hub::CompanionHub;
+use crate::hub::{CompanionHub, Frame};
+use crate::snapshot::DashboardSnapshot;
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -146,23 +147,87 @@ fn handle(
     }
 }
 
-/// Stub in Task 3; filled with real streaming in Task 4.
+/// A blocking `Read` that turns hub updates into an SSE byte stream. tiny_http
+/// pulls from it (chunked) for the connection's lifetime; each `read` either
+/// drains the pending buffer, emits changed frames after a version bump, or
+/// emits a heartbeat on idle. Returns `Ok(0)` (EOF) once `running` is false.
 pub(crate) struct SseReader {
-    #[allow(dead_code)]
     hub: Arc<CompanionHub>,
-    #[allow(dead_code)]
     running: Arc<AtomicBool>,
+    last_version: u64,
+    last_snapshot: Option<DashboardSnapshot>,
+    last_card: Option<String>,
+    buf: Vec<u8>,
+    pos: usize,
+    started: bool,
 }
 
 impl SseReader {
     pub(crate) fn new(hub: Arc<CompanionHub>, running: Arc<AtomicBool>) -> Self {
-        Self { hub, running }
+        Self {
+            hub,
+            running,
+            last_version: 0,
+            last_snapshot: None,
+            last_card: None,
+            buf: Vec::new(),
+            pos: 0,
+            started: false,
+        }
+    }
+
+    fn absorb(&mut self, frame: Frame) {
+        if frame.snapshot != self.last_snapshot {
+            if let Some(s) = &frame.snapshot {
+                let json = serde_json::to_string(s).unwrap_or_default();
+                self.buf
+                    .extend_from_slice(format!("event: dashboard\ndata: {json}\n\n").as_bytes());
+            }
+            self.last_snapshot = frame.snapshot.clone();
+        }
+        if frame.card != self.last_card {
+            if let Some(c) = &frame.card {
+                let json = serde_json::to_string(c).unwrap_or_default();
+                self.buf
+                    .extend_from_slice(format!("event: card\ndata: {json}\n\n").as_bytes());
+            }
+            self.last_card = frame.card.clone();
+        }
+        self.last_version = frame.version;
     }
 }
 
 impl Read for SseReader {
-    fn read(&mut self, _out: &mut [u8]) -> std::io::Result<usize> {
-        Ok(0) // Task 4 replaces this with real SSE framing.
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            if self.pos < self.buf.len() {
+                let n = (self.buf.len() - self.pos).min(out.len());
+                out[..n].copy_from_slice(&self.buf[self.pos..self.pos + n]);
+                self.pos += n;
+                return Ok(n);
+            }
+            if !self.running.load(Ordering::Relaxed) {
+                return Ok(0);
+            }
+            self.buf.clear();
+            self.pos = 0;
+
+            let frame = if !self.started {
+                self.started = true;
+                self.hub.current()
+            } else {
+                self.hub.wait_after(self.last_version, Duration::from_secs(1))
+            };
+            if !self.running.load(Ordering::Relaxed) {
+                return Ok(0);
+            }
+            self.absorb(frame);
+            if self.buf.is_empty() {
+                // Heartbeat: keeps the connection live and lets the write side
+                // notice a disconnected client.
+                self.buf.extend_from_slice(b": ping\n\n");
+            }
+        }
     }
 }
 
@@ -241,5 +306,48 @@ mod tests {
         let server = start(hub, 0, "tok123".into()).unwrap();
         // Reaching the line after shutdown() proves the accept thread joined.
         server.shutdown();
+    }
+
+    #[test]
+    fn sse_reader_emits_dashboard_then_card_frames() {
+        use crate::snapshot::DashboardSnapshot;
+        let hub = CompanionHub::new();
+        // Publish a snapshot BEFORE the reader starts, so the first read returns
+        // it immediately from `current()` without blocking.
+        hub.publish_snapshot(DashboardSnapshot {
+            session_name: "s".into(),
+            model: "m".into(),
+            provider: "p".into(),
+            cwd: "/".into(),
+            ctx_used: 5,
+            ctx_ceiling: 10,
+            session_tokens: 0,
+            cached_tokens: 0,
+            cache_supported: false,
+            tasks_len: 0,
+            busy: false,
+            tiers: vec![],
+            churn: vec![1, 2],
+            updated_ms: 0,
+        });
+        let running = Arc::new(AtomicBool::new(true));
+        let mut reader = SseReader::new(hub.clone(), running.clone());
+
+        let mut buf = [0u8; 4096];
+        let n = reader.read(&mut buf).unwrap();
+        let frame = String::from_utf8_lossy(&buf[..n]).to_string();
+        assert!(frame.contains("event: dashboard"), "got: {frame}");
+        assert!(frame.contains("\"churn\":[1,2]"), "got: {frame}");
+
+        // Now push a card; the next read should surface it.
+        hub.publish_card("<b>card</b>".into());
+        let n = reader.read(&mut buf).unwrap();
+        let frame = String::from_utf8_lossy(&buf[..n]).to_string();
+        assert!(frame.contains("event: card"), "got: {frame}");
+        assert!(frame.contains("<b>card</b>"), "got: {frame}");
+
+        // When running flips false, read returns EOF.
+        running.store(false, Ordering::Relaxed);
+        assert_eq!(reader.read(&mut buf).unwrap(), 0);
     }
 }
