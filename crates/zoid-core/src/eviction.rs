@@ -17,11 +17,23 @@ pub struct EvictionPolicy {
 
 impl EvictionPolicy {
     pub fn disabled() -> Self {
-        Self { enabled: false, capacity: 0, context_target: 0, band_headroom_pct: 0, recent_n: 0, max_output: None }
+        Self {
+            enabled: false,
+            capacity: 0,
+            context_target: 0,
+            band_headroom_pct: 0,
+            recent_n: 0,
+            max_output: None,
+        }
     }
     /// The band for this policy (spec §3.6a).
     pub fn band(&self) -> Band {
-        derive_band(self.capacity, self.context_target, self.max_output, self.band_headroom_pct)
+        derive_band(
+            self.capacity,
+            self.context_target,
+            self.max_output,
+            self.band_headroom_pct,
+        )
     }
 }
 
@@ -35,25 +47,34 @@ mod tests {
     }
     #[test]
     fn enabled_policy_band_matches_derivation() {
-        let p = EvictionPolicy { enabled: true, capacity: 1_000_000, context_target: 384_000, band_headroom_pct: 20, recent_n: 4, max_output: None };
+        let p = EvictionPolicy {
+            enabled: true,
+            capacity: 1_000_000,
+            context_target: 384_000,
+            band_headroom_pct: 20,
+            recent_n: 4,
+            max_output: None,
+        };
         assert_eq!(p.band().high_water, 384_000);
     }
 }
 
 use crate::economy::estimate_tokens;
-use crate::event::{Event, EventKind, EvictionMarker, EvictedSpan};
+use crate::event::{Event, EventKind, EvictedSpan, EvictionMarker};
 use std::collections::{HashMap, HashSet};
 use ulid::Ulid;
 
 /// The set of currently-evicted event ids: every `TurnsEvicted.ids`, minus any
 /// later `TurnsReadmitted.ids`. Projections skip this set (spec §3.3).
-pub fn evicted_ids(events: &[Event]) -> HashSet<Ulid> {
+pub fn evicted_ids<'a>(events: impl IntoIterator<Item = &'a Event>) -> HashSet<Ulid> {
     let mut set = HashSet::new();
     for e in events {
         match &e.kind {
             EventKind::TurnsEvicted { ids, .. } => set.extend(ids.iter().copied()),
             EventKind::TurnsReadmitted { ids } => {
-                for id in ids { set.remove(id); }
+                for id in ids {
+                    set.remove(id);
+                }
             }
             _ => {}
         }
@@ -65,8 +86,10 @@ pub fn evicted_ids(events: &[Event]) -> HashSet<Ulid> {
 /// prompt so the model knows history was paged out and how to reach it. NOT a
 /// standalone message (that would break Anthropic alternation). None when the
 /// currently-evicted set is empty.
-pub fn eviction_breadcrumb(events: &[Event]) -> Option<String> {
-    let live = evicted_ids(events);
+pub fn eviction_breadcrumb<'a>(events: impl IntoIterator<Item = &'a Event>) -> Option<String> {
+    let events: Vec<&Event> = events.into_iter().collect();
+    let visible: &[&Event] = &events;
+    let live = evicted_ids(events.iter().copied());
     if live.is_empty() {
         return None;
     }
@@ -74,7 +97,7 @@ pub fn eviction_breadcrumb(events: &[Event]) -> Option<String> {
     let mut spans: Vec<&EvictedSpan> = Vec::new();
     let mut turns = 0usize;
     let mut tokens = 0u64;
-    for e in events {
+    for e in visible {
         if let EventKind::TurnsEvicted { ids, marker, .. } = &e.kind {
             if ids.iter().any(|id| live.contains(id)) {
                 for s in &marker.spans {
@@ -85,7 +108,11 @@ pub fn eviction_breadcrumb(events: &[Event]) -> Option<String> {
             }
         }
     }
-    let topics: Vec<&str> = spans.iter().take(5).map(|s| s.topic_hint.as_str()).collect();
+    let topics: Vec<&str> = spans
+        .iter()
+        .take(5)
+        .map(|s| s.topic_hint.as_str())
+        .collect();
     Some(format!(
         "Earlier context ({turns} spans, ~{}k tokens; topics: {}) has been paged out. \
          Call recall(query) to retrieve any of it.",
@@ -98,14 +125,28 @@ pub fn eviction_breadcrumb(events: &[Event]) -> Option<String> {
 mod fold_tests {
     use super::*;
 
-    fn ev(id: u128, kind: EventKind) -> Event { Event::new(Ulid::from(id), None, id as i64, kind) }
+    fn ev(id: u128, kind: EventKind) -> Event {
+        Event::new(Ulid::from(id), None, id as i64, kind)
+    }
 
     #[test]
     fn evicted_minus_readmitted() {
         let marker = EvictionMarker { spans: vec![] };
         let events = vec![
-            ev(10, EventKind::TurnsEvicted { ids: vec![Ulid::from(1u128), Ulid::from(2u128)], reclaimed_tokens: 5, marker: marker.clone() }),
-            ev(11, EventKind::TurnsReadmitted { ids: vec![Ulid::from(2u128)] }),
+            ev(
+                10,
+                EventKind::TurnsEvicted {
+                    ids: vec![Ulid::from(1u128), Ulid::from(2u128)],
+                    reclaimed_tokens: 5,
+                    marker: marker.clone(),
+                },
+            ),
+            ev(
+                11,
+                EventKind::TurnsReadmitted {
+                    ids: vec![Ulid::from(2u128)],
+                },
+            ),
         ];
         let set = evicted_ids(&events);
         assert!(set.contains(&Ulid::from(1u128)));
@@ -115,10 +156,19 @@ mod fold_tests {
     #[test]
     fn breadcrumb_present_when_evicted_absent_when_not() {
         assert!(eviction_breadcrumb(&[]).is_none());
-        let events = vec![ev(10, EventKind::TurnsEvicted {
-            ids: vec![Ulid::from(1u128)], reclaimed_tokens: 4200,
-            marker: EvictionMarker { spans: vec![EvictedSpan { token_estimate: 4200, topic_hint: "read config".into() }] },
-        })];
+        let events = vec![ev(
+            10,
+            EventKind::TurnsEvicted {
+                ids: vec![Ulid::from(1u128)],
+                reclaimed_tokens: 4200,
+                marker: EvictionMarker {
+                    spans: vec![EvictedSpan {
+                        token_estimate: 4200,
+                        topic_hint: "read config".into(),
+                    }],
+                },
+            },
+        )];
         let bc = eviction_breadcrumb(&events).unwrap();
         assert!(bc.contains("recall"));
         assert!(bc.contains("read config"));
@@ -195,7 +245,7 @@ fn event_tokens(kind: &EventKind) -> u64 {
 /// Group the main-branch, non-inert log into positional turns. A turn begins at
 /// each `UserMessage` (spec §3.1 / M6: grouping is over the non-inert projection,
 /// so an interleaved inert event can't fragment a tool_use/tool_result pair).
-fn group_turns(events: &[Event], evicted: &HashSet<Ulid>, recent_n: usize) -> Vec<TurnView> {
+fn group_turns(events: &[&Event], evicted: &HashSet<Ulid>, recent_n: usize) -> Vec<TurnView> {
     let mut turns: Vec<TurnView> = Vec::new();
     // M10 (spec §3.1): a turn re-admitted via recall gets a COOLDOWN — for each
     // re-admitted id, `readmit_mark` records how many turns had started when its
@@ -219,10 +269,18 @@ fn group_turns(events: &[Event], evicted: &HashSet<Ulid>, recent_n: usize) -> Ve
         let starts_turn = matches!(e.kind, EventKind::UserMessage { .. });
         if starts_turn || turns.is_empty() {
             let topic_hint = match &e.kind {
-                EventKind::UserMessage { text } => text.lines().next().unwrap_or("").chars().take(60).collect(),
+                EventKind::UserMessage { text } => {
+                    text.lines().next().unwrap_or("").chars().take(60).collect()
+                }
                 _ => String::new(),
             };
-            turns.push(TurnView { ids: Vec::new(), index: turns.len(), token_estimate: 0, topic_hint, protected: false });
+            turns.push(TurnView {
+                ids: Vec::new(),
+                index: turns.len(),
+                token_estimate: 0,
+                topic_hint,
+                protected: false,
+            });
         }
         let t = turns.last_mut().unwrap();
         t.ids.push(e.id);
@@ -247,8 +305,8 @@ fn group_turns(events: &[Event], evicted: &HashSet<Ulid>, recent_n: usize) -> Ve
 /// Plan an eviction wave (spec §3.1). Empty unless `current_tokens >= high_water`.
 /// Ranks evictable turns by `scorer` (lowest first), evicting until
 /// `current_tokens - reclaimed <= low_water`, never touching protected turns.
-pub fn plan_evictions(
-    events: &[Event],
+pub fn plan_evictions<'a>(
+    events: impl IntoIterator<Item = &'a Event>,
     policy: &EvictionPolicy,
     current_tokens: u64,
     scorer: &dyn EvictionScorer,
@@ -260,13 +318,20 @@ pub fn plan_evictions(
     if current_tokens < band.high_water {
         return EvictionPlan::default();
     }
-    let evicted = evicted_ids(events);
-    let turns = group_turns(events, &evicted, policy.recent_n);
+    let events: Vec<&Event> = events.into_iter().collect();
+    let evicted = evicted_ids(events.iter().copied());
+    let turns = group_turns(&events, &evicted, policy.recent_n);
     let ctx = GoalContext::default();
 
-    let mut candidates: Vec<&TurnView> = turns.iter().filter(|t| !t.protected && !t.ids.is_empty()).collect();
+    let mut candidates: Vec<&TurnView> = turns
+        .iter()
+        .filter(|t| !t.protected && !t.ids.is_empty())
+        .collect();
     candidates.sort_by(|a, b| {
-        scorer.score(a, &ctx).partial_cmp(&scorer.score(b, &ctx)).unwrap_or(std::cmp::Ordering::Equal)
+        scorer
+            .score(a, &ctx)
+            .partial_cmp(&scorer.score(b, &ctx))
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let mut reclaimed = 0u64;
@@ -276,7 +341,11 @@ pub fn plan_evictions(
             break;
         }
         reclaimed += t.token_estimate;
-        plan.turns.push(EvictedTurn { ids: t.ids.clone(), token_estimate: t.token_estimate, topic_hint: t.topic_hint.clone() });
+        plan.turns.push(EvictedTurn {
+            ids: t.ids.clone(),
+            token_estimate: t.token_estimate,
+            topic_hint: t.topic_hint.clone(),
+        });
     }
     plan
 }
@@ -286,11 +355,32 @@ mod plan_tests {
     use super::*;
     use crate::event::{Event, EventKind};
 
-    fn user(id: u128, t: &str) -> Event { Event::new(Ulid::from(id), None, id as i64, EventKind::UserMessage { text: t.into() }) }
-    fn asst(id: u128, t: &str) -> Event { Event::new(Ulid::from(id), None, id as i64, EventKind::AssistantMessage { text: t.into() }) }
+    fn user(id: u128, t: &str) -> Event {
+        Event::new(
+            Ulid::from(id),
+            None,
+            id as i64,
+            EventKind::UserMessage { text: t.into() },
+        )
+    }
+    fn asst(id: u128, t: &str) -> Event {
+        Event::new(
+            Ulid::from(id),
+            None,
+            id as i64,
+            EventKind::AssistantMessage { text: t.into() },
+        )
+    }
 
     fn policy(target: u64, recent_n: usize) -> EvictionPolicy {
-        EvictionPolicy { enabled: true, capacity: 1_000_000, context_target: target, band_headroom_pct: 20, recent_n, max_output: None }
+        EvictionPolicy {
+            enabled: true,
+            capacity: 1_000_000,
+            context_target: target,
+            band_headroom_pct: 20,
+            recent_n,
+            max_output: None,
+        }
     }
 
     #[test]
@@ -305,24 +395,41 @@ mod plan_tests {
         // 6 turns, each ~1000 tokens estimate; recent_n=2 protects the last two.
         let big = "x".repeat(3000); // ~1000 tokens (chars/3)
         let mut events = Vec::new();
-        for i in 0..6u128 { events.push(user(i*2+1, &big)); events.push(asst(i*2+2, "ok")); }
+        for i in 0..6u128 {
+            events.push(user(i * 2 + 1, &big));
+            events.push(asst(i * 2 + 2, "ok"));
+        }
         // current well over high_water forces a wave; low_water = target - 20%.
         let plan = plan_evictions(&events, &policy(3_000, 2), 6_000, &RecencyScorer);
         assert!(!plan.turns.is_empty());
         // never evicts the protected (newest) turns
         let evicted_ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
         assert!(!evicted_ids.contains(&Ulid::from(11u128))); // 6th user msg (newest)
-        // oldest turn is evicted first
+                                                             // oldest turn is evicted first
         assert!(evicted_ids.contains(&Ulid::from(1u128)));
     }
 
     #[test]
     fn idempotent_skips_already_evicted() {
         let big = "x".repeat(3000);
-        let mut events = vec![user(1, &big), asst(2, "ok"), user(3, &big), asst(4, "ok"), user(5, "recent"), asst(6, "ok")];
-        events.push(Event::new(Ulid::from(99u128), None, 99, EventKind::TurnsEvicted {
-            ids: vec![Ulid::from(1u128), Ulid::from(2u128)], reclaimed_tokens: 1000, marker: crate::event::EvictionMarker { spans: vec![] },
-        }));
+        let mut events = vec![
+            user(1, &big),
+            asst(2, "ok"),
+            user(3, &big),
+            asst(4, "ok"),
+            user(5, "recent"),
+            asst(6, "ok"),
+        ];
+        events.push(Event::new(
+            Ulid::from(99u128),
+            None,
+            99,
+            EventKind::TurnsEvicted {
+                ids: vec![Ulid::from(1u128), Ulid::from(2u128)],
+                reclaimed_tokens: 1000,
+                marker: crate::event::EvictionMarker { spans: vec![] },
+            },
+        ));
         // turn 1 already evicted → not re-selected
         let plan = plan_evictions(&events, &policy(1_000, 2), 5_000, &RecencyScorer);
         let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
@@ -343,15 +450,39 @@ mod plan_tests {
         // M10: an old, low-recency turn that was re-admitted via recall must not be
         // the immediate next eviction victim.
         let big = "x".repeat(3000);
-        let mut events = vec![user(1, &big), asst(2, "ok"), user(3, &big), asst(4, "ok"), user(5, "recent"), asst(6, "ok")];
+        let mut events = vec![
+            user(1, &big),
+            asst(2, "ok"),
+            user(3, &big),
+            asst(4, "ok"),
+            user(5, "recent"),
+            asst(6, "ok"),
+        ];
         // turn 1 was evicted then recalled back.
-        events.push(Event::new(Ulid::from(90u128), None, 90, EventKind::TurnsEvicted {
-            ids: vec![Ulid::from(1u128), Ulid::from(2u128)], reclaimed_tokens: 1000, marker: crate::event::EvictionMarker { spans: vec![] },
-        }));
-        events.push(Event::new(Ulid::from(91u128), None, 91, EventKind::TurnsReadmitted { ids: vec![Ulid::from(1u128), Ulid::from(2u128)] }));
+        events.push(Event::new(
+            Ulid::from(90u128),
+            None,
+            90,
+            EventKind::TurnsEvicted {
+                ids: vec![Ulid::from(1u128), Ulid::from(2u128)],
+                reclaimed_tokens: 1000,
+                marker: crate::event::EvictionMarker { spans: vec![] },
+            },
+        ));
+        events.push(Event::new(
+            Ulid::from(91u128),
+            None,
+            91,
+            EventKind::TurnsReadmitted {
+                ids: vec![Ulid::from(1u128), Ulid::from(2u128)],
+            },
+        ));
         let plan = plan_evictions(&events, &policy(1_000, 2), 5_000, &RecencyScorer);
         let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
-        assert!(!ids.contains(&Ulid::from(1u128)), "recalled turn must not immediately re-evict");
+        assert!(
+            !ids.contains(&Ulid::from(1u128)),
+            "recalled turn must not immediately re-evict"
+        );
     }
 
     #[test]
@@ -362,44 +493,90 @@ mod plan_tests {
         // eligible for eviction again and can never form an unevictable floor.
         let big = "x".repeat(3000);
         let mut events = vec![user(1, &big), asst(2, "ok")];
-        events.push(Event::new(Ulid::from(90u128), None, 90, EventKind::TurnsEvicted {
-            ids: vec![Ulid::from(1u128)], reclaimed_tokens: 1000, marker: crate::event::EvictionMarker { spans: vec![] },
-        }));
-        events.push(Event::new(Ulid::from(91u128), None, 91, EventKind::TurnsReadmitted { ids: vec![Ulid::from(1u128)] }));
+        events.push(Event::new(
+            Ulid::from(90u128),
+            None,
+            90,
+            EventKind::TurnsEvicted {
+                ids: vec![Ulid::from(1u128)],
+                reclaimed_tokens: 1000,
+                marker: crate::event::EvictionMarker { spans: vec![] },
+            },
+        ));
+        events.push(Event::new(
+            Ulid::from(91u128),
+            None,
+            91,
+            EventKind::TurnsReadmitted {
+                ids: vec![Ulid::from(1u128)],
+            },
+        ));
         // recent_n = 2 → four more turns start, well past the cooldown window.
-        for i in 1..5u128 { events.push(user(i*2+1, &big)); events.push(asst(i*2+2, "ok")); }
+        for i in 1..5u128 {
+            events.push(user(i * 2 + 1, &big));
+            events.push(asst(i * 2 + 2, "ok"));
+        }
         let plan = plan_evictions(&events, &policy(3_000, 2), 6_000, &RecencyScorer);
         let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
-        assert!(ids.contains(&Ulid::from(1u128)), "recalled turn is evictable again once its cooldown lapses");
+        assert!(
+            ids.contains(&Ulid::from(1u128)),
+            "recalled turn is evictable again once its cooldown lapses"
+        );
     }
 }
 
 #[cfg(test)]
 mod steady_state_tests {
     use super::*;
-    use crate::event::{Event, EventKind};
     use crate::context::{context_window_with, ContextOverhead};
+    use crate::event::{Event, EventKind};
 
     fn apply(events: &mut Vec<Event>, plan: &EvictionPlan, seq: &mut u128) {
-        if plan.turns.is_empty() { return; }
+        if plan.turns.is_empty() {
+            return;
+        }
         let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
         *seq += 1;
-        events.push(Event::new(Ulid::from(*seq + 1_000_000), None, *seq as i64, EventKind::TurnsEvicted {
-            ids, reclaimed_tokens: 0, marker: crate::event::EvictionMarker { spans: vec![] },
-        }));
+        events.push(Event::new(
+            Ulid::from(*seq + 1_000_000),
+            None,
+            *seq as i64,
+            EventKind::TurnsEvicted {
+                ids,
+                reclaimed_tokens: 0,
+                marker: crate::event::EvictionMarker { spans: vec![] },
+            },
+        ));
     }
 
     #[test]
     fn holds_band_over_hundreds_of_turns() {
         let big = "x".repeat(3000); // ~1000 tokens
-        let policy = EvictionPolicy { enabled: true, capacity: 1_000_000, context_target: 20_000, band_headroom_pct: 20, recent_n: 4, max_output: None };
+        let policy = EvictionPolicy {
+            enabled: true,
+            capacity: 1_000_000,
+            context_target: 20_000,
+            band_headroom_pct: 20,
+            recent_n: 4,
+            max_output: None,
+        };
         let band = policy.band();
         let overhead = ContextOverhead::default();
         let mut events: Vec<Event> = Vec::new();
         let mut seq = 0u128;
         for turn in 0..400u128 {
-            events.push(Event::new(Ulid::from(turn*2+1), None, (turn*2+1) as i64, EventKind::UserMessage { text: big.clone() }));
-            events.push(Event::new(Ulid::from(turn*2+2), None, (turn*2+2) as i64, EventKind::AssistantMessage { text: "ok".into() }));
+            events.push(Event::new(
+                Ulid::from(turn * 2 + 1),
+                None,
+                (turn * 2 + 1) as i64,
+                EventKind::UserMessage { text: big.clone() },
+            ));
+            events.push(Event::new(
+                Ulid::from(turn * 2 + 2),
+                None,
+                (turn * 2 + 2) as i64,
+                EventKind::AssistantMessage { text: "ok".into() },
+            ));
             let live = context_window_with(&events, overhead.clone()).total_tokens;
             let plan = plan_evictions(&events, &policy, live, &RecencyScorer);
             apply(&mut events, &plan, &mut seq);
@@ -408,7 +585,10 @@ mod steady_state_tests {
             assert!(after <= policy.capacity, "turn {turn}: {after} > capacity");
             // SOFT: with evictable content present, stays at/under high_water after a wave.
             // (Allow one turn of overshoot before the next wave; assert within high_water + one turn.)
-            assert!(after <= band.high_water + 1_100, "turn {turn}: {after} over band");
+            assert!(
+                after <= band.high_water + 1_100,
+                "turn {turn}: {after} over band"
+            );
         }
     }
 }

@@ -162,7 +162,7 @@ pub fn tool_id_of(key: &str) -> Option<&str> {
 /// provider counts against the context ceiling but which are not derivable
 /// from the event log. They are folded into `total_tokens` (and an `ItemKind::System`
 /// item is emitted so the window is honest about the full request size).
-pub fn context_window(events: &[Event]) -> ContextWindow {
+pub fn context_window<'a>(events: impl IntoIterator<Item = &'a Event>) -> ContextWindow {
     context_window_with(events, ContextOverhead::default())
 }
 
@@ -170,9 +170,13 @@ pub fn context_window(events: &[Event]) -> ContextWindow {
 /// tool specs). The overhead is added as a single `System` item and folded
 /// into `total_tokens`, so the window reflects the full request the provider
 /// actually tokenizes — not just the conversation items.
-pub fn context_window_with(events: &[Event], overhead: ContextOverhead) -> ContextWindow {
-    let visible: &[Event] = events;
-    let evicted = crate::eviction::evicted_ids(events);
+pub fn context_window_with<'a>(
+    events: impl IntoIterator<Item = &'a Event>,
+    overhead: ContextOverhead,
+) -> ContextWindow {
+    let events: Vec<&Event> = events.into_iter().collect();
+    let evicted = crate::eviction::evicted_ids(events.iter().copied());
+    let visible: &[&Event] = &events;
 
     let mut order: Vec<String> = Vec::new(); // first-seen order of keys
     let mut acc: HashMap<String, Acc> = HashMap::new();
@@ -193,7 +197,14 @@ pub fn context_window_with(events: &[Event], overhead: ContextOverhead) -> Conte
         }
         match &e.kind {
             EventKind::UserMessage { text } => {
-                flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn, &mut pending_call_args_tokens);
+                flush_delta(
+                    &mut delta_text,
+                    &mut order,
+                    &mut acc,
+                    &mut msg_seq,
+                    turn,
+                    &mut pending_call_args_tokens,
+                );
                 turn += 1;
                 let key = format!("msg:{msg_seq}");
                 msg_seq += 1;
@@ -208,7 +219,14 @@ pub fn context_window_with(events: &[Event], overhead: ContextOverhead) -> Conte
                 );
             }
             EventKind::AssistantMessage { text } => {
-                flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn, &mut pending_call_args_tokens);
+                flush_delta(
+                    &mut delta_text,
+                    &mut order,
+                    &mut acc,
+                    &mut msg_seq,
+                    turn,
+                    &mut pending_call_args_tokens,
+                );
                 let key = format!("msg:{msg_seq}");
                 msg_seq += 1;
                 upsert(
@@ -241,7 +259,14 @@ pub fn context_window_with(events: &[Event], overhead: ContextOverhead) -> Conte
             EventKind::ToolResult {
                 id, name, output, ..
             } => {
-                flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn, &mut pending_call_args_tokens);
+                flush_delta(
+                    &mut delta_text,
+                    &mut order,
+                    &mut acc,
+                    &mut msg_seq,
+                    turn,
+                    &mut pending_call_args_tokens,
+                );
                 if let Some(path) = call_path.get(id) {
                     let key = format!("file:{path}");
                     let path = path.clone();
@@ -271,7 +296,14 @@ pub fn context_window_with(events: &[Event], overhead: ContextOverhead) -> Conte
         }
     }
     // Flush any trailing assistant delta after the last event.
-    flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn, &mut pending_call_args_tokens);
+    flush_delta(
+        &mut delta_text,
+        &mut order,
+        &mut acc,
+        &mut msg_seq,
+        turn,
+        &mut pending_call_args_tokens,
+    );
 
     let last_turn_global = turn;
     let mut items: Vec<ContextItem> = order
@@ -353,10 +385,12 @@ pub fn context_window_with(events: &[Event], overhead: ContextOverhead) -> Conte
 /// non-error tool-result output for that path. Mirrors `context_window`'s File
 /// keying so a `ContextItem.key` looks up here. Used by the subagent context
 /// builder (P5) to fetch relevant code WITHOUT the chat transcript.
-pub fn file_contents(events: &[Event]) -> HashMap<String, String> {
+pub fn file_contents<'a>(events: impl IntoIterator<Item = &'a Event>) -> HashMap<String, String> {
+    let events: Vec<&Event> = events.into_iter().collect();
+    let visible: &[&Event] = &events;
     let mut call_path: HashMap<String, String> = HashMap::new(); // tool id → path
     let mut out: HashMap<String, String> = HashMap::new();
-    for e in events {
+    for e in visible {
         match &e.kind {
             EventKind::ToolCall { id, args, .. } => {
                 if let Some(p) = tool_path(args) {
@@ -709,13 +743,30 @@ mod tests {
         use crate::event::{Event, EventKind, EvictionMarker};
         use ulid::Ulid;
         let big = "x".repeat(3000); // ~1000 tokens
-        let base = vec![Event::new(Ulid::from(1u128), None, 1, EventKind::UserMessage { text: big.clone() })];
+        let base = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage { text: big.clone() },
+        )];
         let with_evict = vec![
             base[0].clone(),
-            Event::new(Ulid::from(9u128), None, 9, EventKind::TurnsEvicted { ids: vec![Ulid::from(1u128)], reclaimed_tokens: 1000, marker: EvictionMarker { spans: vec![] } }),
+            Event::new(
+                Ulid::from(9u128),
+                None,
+                9,
+                EventKind::TurnsEvicted {
+                    ids: vec![Ulid::from(1u128)],
+                    reclaimed_tokens: 1000,
+                    marker: EvictionMarker { spans: vec![] },
+                },
+            ),
         ];
         let full = context_window_with(&base, ContextOverhead::default()).total_tokens;
         let after = context_window_with(&with_evict, ContextOverhead::default()).total_tokens;
-        assert!(after < full, "evicted event's tokens must be excluded from the window");
+        assert!(
+            after < full,
+            "evicted event's tokens must be excluded from the window"
+        );
     }
 }

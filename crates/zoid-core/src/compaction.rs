@@ -49,8 +49,8 @@ pub struct CompactionPlan {
 /// estimates use the same `context_window` projection, so the ratio transfers).
 /// When no calibration has been learned yet (`None`), the raw estimate is used —
 /// better to fire late than to use a stale frozen value that never decreases.
-pub fn plan_compactions(
-    events: &[Event],
+pub fn plan_compactions<'a>(
+    events: impl IntoIterator<Item = &'a Event>,
     policy: &ContextPolicy,
     real_input_tokens: Option<u64>,
     calibration_ratio: Option<f64>,
@@ -59,7 +59,9 @@ pub fn plan_compactions(
     let Some(threshold) = policy.compact_threshold else {
         return CompactionPlan::default();
     };
-    let window = context_window_with(events, overhead.clone());
+    let events: Vec<&Event> = events.into_iter().collect();
+    let visible: &[&Event] = &events;
+    let window = context_window_with(events.iter().copied(), overhead.clone());
     let current = match real_input_tokens.filter(|&t| t > 0) {
         Some(real) => real,
         None => match calibration_ratio {
@@ -71,7 +73,7 @@ pub fn plan_compactions(
         return CompactionPlan::default();
     }
 
-    let done: HashSet<&str> = events
+    let done: HashSet<&str> = visible
         .iter()
         .filter_map(|e| match &e.kind {
             EventKind::ToolResultCompacted { id, .. } => Some(id.as_str()),
@@ -81,7 +83,7 @@ pub fn plan_compactions(
 
     // Latest non-error output per tool-result id.
     let mut output_of: HashMap<&str, &str> = HashMap::new();
-    for e in events {
+    for e in visible {
         if let EventKind::ToolResult {
             id,
             output,
@@ -99,7 +101,7 @@ pub fn plan_compactions(
     let mut path_id_of: HashMap<String, String> = HashMap::new();
     {
         let mut call_path: HashMap<String, String> = HashMap::new();
-        for e in events {
+        for e in visible {
             match &e.kind {
                 EventKind::ToolCall { id, args, .. } => {
                     if let Some(p) = tool_path(args) {
@@ -122,7 +124,7 @@ pub fn plan_compactions(
     let mut path_output_of: HashMap<String, &str> = HashMap::new();
     {
         let mut call_path: HashMap<String, String> = HashMap::new(); // tool id → path
-        for e in events {
+        for e in visible {
             match &e.kind {
                 EventKind::ToolCall { id, args, .. } => {
                     if let Some(p) = tool_path(args) {
@@ -130,7 +132,10 @@ pub fn plan_compactions(
                     }
                 }
                 EventKind::ToolResult {
-                    id, output, is_error: false, ..
+                    id,
+                    output,
+                    is_error: false,
+                    ..
                 } => {
                     if let Some(p) = call_path.get(id) {
                         path_output_of.insert(p.clone(), output.as_str());
@@ -205,9 +210,7 @@ pub fn plan_compactions(
     // remained, then re-fire on every new message. Tool-result compaction
     // (layer 1 above) is self-limiting and sufficient.
 
-    CompactionPlan {
-        compactions: out,
-    }
+    CompactionPlan { compactions: out }
 }
 
 /// Summarize an oversized tool-result body: keep the first `head_lines` lines
@@ -278,9 +281,25 @@ mod tests {
             big_tool_result("c1", "search", 100),
         ];
         // Threshold huge → nothing to do.
-        assert!(plan_compactions(&evs, &policy(1_000_000), None, None, &ContextOverhead::default()).compactions.is_empty());
+        assert!(plan_compactions(
+            &evs,
+            &policy(1_000_000),
+            None,
+            None,
+            &ContextOverhead::default()
+        )
+        .compactions
+        .is_empty());
         // No threshold set → nothing to do.
-        assert!(plan_compactions(&evs, &ContextPolicy::default(), None, None, &ContextOverhead::default()).compactions.is_empty());
+        assert!(plan_compactions(
+            &evs,
+            &ContextPolicy::default(),
+            None,
+            None,
+            &ContextOverhead::default()
+        )
+        .compactions
+        .is_empty());
     }
 
     #[test]
@@ -291,9 +310,15 @@ mod tests {
             big_tool_result("c2", "shell", 50),
         ];
         let plan = plan_compactions(&evs, &policy(500), None, None, &ContextOverhead::default());
-        assert_eq!(plan.compactions.len(), 1, "only the big one needs compacting");
+        assert_eq!(
+            plan.compactions.len(),
+            1,
+            "only the big one needs compacting"
+        );
         assert_eq!(plan.compactions[0].id, "c1");
-        assert!(plan.compactions[0].original_tokens > estimate_tokens(&plan.compactions[0].summary));
+        assert!(
+            plan.compactions[0].original_tokens > estimate_tokens(&plan.compactions[0].summary)
+        );
     }
 
     #[test]
@@ -308,7 +333,11 @@ mod tests {
             }),
         ];
         // c1 already compacted → nothing left to compact.
-        assert!(plan_compactions(&evs, &policy(1), None, None, &ContextOverhead::default()).compactions.is_empty());
+        assert!(
+            plan_compactions(&evs, &policy(1), None, None, &ContextOverhead::default())
+                .compactions
+                .is_empty()
+        );
     }
 
     #[test]
@@ -416,7 +445,13 @@ mod tests {
         }
         // Threshold = 1 token, real_input_tokens = 100000 → way over, but
         // layer 4 is gone → no turns dropped, ever.
-        let plan = plan_compactions(&evs, &policy(1), Some(100_000), None, &ContextOverhead::default());
+        let plan = plan_compactions(
+            &evs,
+            &policy(1),
+            Some(100_000),
+            None,
+            &ContextOverhead::default(),
+        );
         assert_eq!(
             plan.compactions.len(),
             0,
@@ -455,12 +490,16 @@ mod tests {
             Ulid::new(),
             None,
             4100,
-            EventKind::TurnsDropped {
-                turns_dropped: 4,
-            },
+            EventKind::TurnsDropped { turns_dropped: 4 },
         ));
         // Even with a huge real_input_tokens, no turns are dropped.
-        let plan = plan_compactions(&evs, &policy(1), Some(100_000), None, &ContextOverhead::default());
+        let plan = plan_compactions(
+            &evs,
+            &policy(1),
+            Some(100_000),
+            None,
+            &ContextOverhead::default(),
+        );
         assert!(
             plan.compactions.iter().all(|c| c.id.starts_with('c')),
             "marker must not cause turn-dropping; only tool-result compaction runs"
@@ -497,9 +536,7 @@ mod tests {
             Ulid::new(),
             None,
             2100,
-            EventKind::TurnsDropped {
-                turns_dropped: 2,
-            },
+            EventKind::TurnsDropped { turns_dropped: 2 },
         ));
         let w = context_window(&evs);
         let labels: Vec<&str> = w.items.iter().map(|i| i.label.as_str()).collect();
@@ -535,11 +572,26 @@ mod tests {
         let raw = raw_window.total_tokens;
         // Without calibration: raw estimate < threshold → no compaction.
         let threshold = raw + 100;
-        let plan = plan_compactions(&evs, &policy(threshold), None, None, &ContextOverhead::default());
-        assert!(plan.compactions.is_empty(), "uncalibrated estimate below threshold");
+        let plan = plan_compactions(
+            &evs,
+            &policy(threshold),
+            None,
+            None,
+            &ContextOverhead::default(),
+        );
+        assert!(
+            plan.compactions.is_empty(),
+            "uncalibrated estimate below threshold"
+        );
 
         // With 3x calibration: raw * 3 > threshold → compaction fires.
-        let plan = plan_compactions(&evs, &policy(threshold), None, Some(3.0), &ContextOverhead::default());
+        let plan = plan_compactions(
+            &evs,
+            &policy(threshold),
+            None,
+            Some(3.0),
+            &ContextOverhead::default(),
+        );
         assert_eq!(
             plan.compactions.len(),
             1,
@@ -556,10 +608,25 @@ mod tests {
             big_tool_result("c1", "search", 400),
         ];
         // Real says 100 (below 200 threshold) even with a 5x ratio → no compaction.
-        let plan = plan_compactions(&evs, &policy(200), Some(100), Some(5.0), &ContextOverhead::default());
-        assert!(plan.compactions.is_empty(), "real tokens override calibration");
+        let plan = plan_compactions(
+            &evs,
+            &policy(200),
+            Some(100),
+            Some(5.0),
+            &ContextOverhead::default(),
+        );
+        assert!(
+            plan.compactions.is_empty(),
+            "real tokens override calibration"
+        );
         // Real says 300 (above 200) → compaction fires.
-        let plan = plan_compactions(&evs, &policy(200), Some(300), Some(5.0), &ContextOverhead::default());
+        let plan = plan_compactions(
+            &evs,
+            &policy(200),
+            Some(300),
+            Some(5.0),
+            &ContextOverhead::default(),
+        );
         assert_eq!(plan.compactions.len(), 1);
     }
 
