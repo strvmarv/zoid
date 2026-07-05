@@ -12,12 +12,12 @@ use crate::state::{DrawerId, Focus, Mode, Overlay, PaletteStage, ShellState};
 use crate::tokens::{color, glyph};
 use ratatui::{
     layout::{Margin, Rect},
-    style::{Style, Stylize},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
     Frame,
 };
-use tui_textarea::TextArea;
+use ratatui_textarea::TextArea;
 use unicode_width::UnicodeWidthStr;
 use zoid_core::projection::ChatMsg;
 

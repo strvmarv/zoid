@@ -1,5 +1,5 @@
 use ratatui::{backend::TestBackend, widgets::Paragraph, Terminal};
-use tui_textarea::TextArea;
+use ratatui_textarea::TextArea;
 use zoid_core::projection::{ChatMsg, ToolCallRef};
 use zoid_tui::chat::{conversation_view, render_chat, ChatView};
 use zoid_tui::state::Zoom;

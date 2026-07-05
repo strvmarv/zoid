@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
-use tui_textarea::{CursorMove, TextArea};
+use ratatui_textarea::{CursorMove, TextArea};
 use ulid::Ulid;
 
 mod obs;
@@ -201,7 +201,7 @@ fn import_legacy_if_present(
     Ok(true)
 }
 
-/// Build the message input with the tui-textarea cursor-line **underline**
+/// Build the message input with the ratatui-textarea cursor-line **underline**
 /// disabled (spec §2.2/§9): the default underline clutters the calm box.
 fn make_input(textarea: TextArea<'static>) -> TextArea<'static> {
     let mut textarea = textarea;
@@ -215,11 +215,11 @@ fn make_input(textarea: TextArea<'static>) -> TextArea<'static> {
 ///
 /// The subtlety: `delete_line_by_end()` is not purely "clear to end of line" —
 /// on a line with nothing left to clear it *eagerly merges the next line up*
-/// (tui-textarea 0.7 textarea.rs:1206). Composing it with an unconditional
+/// (ratatui-textarea's `delete_line_by_end`). Composing it with an unconditional
 /// second merge therefore double-deletes on empty lines. We branch on the line's
 /// emptiness (captured before mutating) and handle the three positions explicitly.
 fn input_delete_line(textarea: &mut TextArea<'static>) {
-    let (row, _) = textarea.cursor();
+    let row = textarea.cursor().0;
     let n = textarea.lines().len();
     let line_empty = textarea.lines()[row].is_empty();
     textarea.move_cursor(CursorMove::Head);
@@ -1336,7 +1336,10 @@ async fn run<B: ratatui::backend::Backend>(
     app: &mut App,
     ui_rx: &mut mpsc::Receiver<AgentUpdate>,
     obs_state: &std::sync::Arc<std::sync::Mutex<obs::ObsState>>,
-) -> Result<()> {
+) -> Result<()>
+where
+    <B as ratatui::backend::Backend>::Error: Send + Sync + 'static,
+{
     let mut term_events = EventStream::new();
 
     let tick_period = std::time::Duration::from_millis(1000 / zoid_tui::motion::MOTION_FPS);
@@ -3092,7 +3095,7 @@ fn spawn_turn(app: &mut App) {
 mod tests {
     use super::*;
     use ratatui::{backend::TestBackend, style::Modifier, Terminal};
-    use tui_textarea::TextArea;
+    use ratatui_textarea::TextArea;
 
     #[test]
     fn heat_rank_orders_hot_warm_cold() {

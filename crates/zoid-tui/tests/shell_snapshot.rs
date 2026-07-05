@@ -1,5 +1,5 @@
 use ratatui::{backend::TestBackend, Terminal};
-use tui_textarea::TextArea;
+use ratatui_textarea::TextArea;
 use zoid_core::context::ContextWindow;
 use zoid_core::economy::ChurnTimeline;
 use zoid_core::projection::ChatMsg;
