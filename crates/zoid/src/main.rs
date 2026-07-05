@@ -110,7 +110,7 @@ fn load_config() -> (zoid_core::config::Config, zoid_core::config::Provenance, V
         match parse_toml(&text) {
             Ok((pc, unknown)) => {
                 for k in unknown {
-                    eprintln!("zoid: {}", layer_warning_line(file, &k));
+                    tracing::warn!("{}", layer_warning_line(file, &k));
                     warnings.push(k);
                 }
                 Some(pc)
@@ -1936,6 +1936,9 @@ fn apply_config_write(
         return;
     }
     // Reload the whole layered config so provenance + merged view stay honest.
+    // Warnings are intentionally discarded here: status_hint is transient and
+    // gets cleared/overwritten by the next turn or keypress, so config-write
+    // reloads deliberately do not re-surface them (the startup hint is one-shot).
     let (c, p, _cfg_warnings) = load_config();
     app.config = c;
     app.prov = p;

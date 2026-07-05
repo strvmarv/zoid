@@ -80,8 +80,8 @@ reported. Adds one dependency (`serde_ignored`) to the workspace and to
   `shell.status_hint`:
   - one key → `"config: 1 key ignored (economy.context_ceiling)"`
   - many keys → `"config: N keys ignored — see log"`
-- Also keep a durable record: `eprintln!` / log each full warning (harmless, and
-  it lands in `ZOID_LOG`).
+- Also keep a durable record: each full warning is emitted via `tracing::warn!`
+  (harmless, and it lands in `ZOID_LOG` and the in-memory obs layer).
 
 ### 4. Error-handling boundaries (explicit)
 
