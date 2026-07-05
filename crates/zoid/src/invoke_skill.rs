@@ -86,6 +86,10 @@ fn body_with_anchor(skill: &zoid_core::skill::Skill) -> String {
 pub fn chat_tools(skills: Arc<SkillRegistry>) -> Vec<Box<dyn Tool>> {
     let mut tools = zoid_tools::registry();
     tools.push(Box::new(InvokeSkillTool::new(skills)));
+    // `recall` is always offered in chat (never gated on eviction.enabled): the
+    // cold tier is a standing capability, and a prior session may hold paged-out
+    // turns worth recalling even when eviction is currently off. It is NOT in the
+    // subagent `registry()`, so subagents (which have no session) can't call it.
     tools.push(Box::new(zoid_tools::recall::Recall));
     tools
 }
@@ -134,6 +138,9 @@ mod tests {
         assert!(names.contains(&"invoke_skill"));
         assert!(names.contains(&"write_file"));
         assert!(names.contains(&"read_file"));
+        // recall is a chat-only tool; it must be registered here (and never in the
+        // subagent registry — see chat_tools).
+        assert!(names.contains(&"recall"));
     }
 
     #[test]

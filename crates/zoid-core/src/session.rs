@@ -116,7 +116,7 @@ impl SessionHandle {
                     } => {
                         let out = store
                             .search_fts(&query, session_id, limit)
-                            .and_then(|ids| store.events_by_ids(&ids));
+                            .and_then(|ids| store.events_by_ids(&ids, session_id));
                         let _ = reply.send(out);
                     }
                 }

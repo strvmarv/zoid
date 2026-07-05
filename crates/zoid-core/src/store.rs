@@ -86,6 +86,11 @@ impl EventStore {
                     .transpose()?,
             ],
         )?;
+        // The cold tier is a STANDING capability: every content-bearing event is
+        // indexed here unconditionally, independent of `eviction.enabled`. Gating
+        // indexing on the eviction toggle would leave un-searchable gaps in the
+        // corpus (turns appended while disabled), so a later re-enable + recall
+        // would silently miss them. Recall stays reliable by always indexing.
         if let Some(content) = fts_content(&event.kind) {
             tx.execute(
                 "INSERT INTO events_fts (content, event_id, session_id) VALUES (?1, ?2, ?3)",
@@ -117,21 +122,23 @@ impl EventStore {
         Ok(out)
     }
 
-    /// Load full events for `ids`, in append (rowid) order. Ids not present are skipped.
-    pub fn events_by_ids(&self, ids: &[Ulid]) -> Result<Vec<Event>> {
+    /// Load full events for `ids`, in append (rowid) order, scoped to `session_id`.
+    /// Ids not present (or belonging to another session) are skipped. The session
+    /// filter is defense-in-depth: `search_fts` already returns only same-session
+    /// ids, but scoping here too means a stray id from any other source can never
+    /// load a foreign session's event.
+    pub fn events_by_ids(&self, ids: &[Ulid], session_id: Ulid) -> Result<Vec<Event>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let placeholders = std::iter::repeat("?")
-            .take(ids.len())
-            .collect::<Vec<_>>()
-            .join(",");
+        let placeholders = std::iter::repeat_n("?", ids.len()).collect::<Vec<_>>().join(",");
         let sql = format!(
-            "{} WHERE id IN ({placeholders}) ORDER BY rowid ASC",
+            "{} WHERE id IN ({placeholders}) AND session_id = ? ORDER BY rowid ASC",
             Self::SELECT_COLS
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let params: Vec<String> = ids.iter().map(|i| i.to_string()).collect();
+        let mut params: Vec<String> = ids.iter().map(|i| i.to_string()).collect();
+        params.push(session_id.to_string());
         Self::decode_rows(&mut stmt, rusqlite::params_from_iter(params.iter()))
     }
 
@@ -517,7 +524,7 @@ mod tests {
             .unwrap();
         let ids = store.search_fts("indexing", Ulid::from(0u128), 10).unwrap();
         assert_eq!(ids, vec![Ulid::from(1u128)]);
-        let evs = store.events_by_ids(&ids).unwrap();
+        let evs = store.events_by_ids(&ids, Ulid::from(0u128)).unwrap();
         assert_eq!(evs.len(), 1);
         assert_eq!(evs[0].id, Ulid::from(1u128));
     }

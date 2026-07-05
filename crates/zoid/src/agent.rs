@@ -1022,32 +1022,42 @@ async fn preflight_gate(
         (scaled as f64 * OVERCOUNT_BIAS) as u64
     };
 
+    // Compute the estimate once and refresh it only after a step actually mutates
+    // `events` (each `estimate` re-walks the whole log). Behavior is identical to
+    // recomputing on every check — every check still sees the current state.
+    let mut est = estimate(events);
+
     // (1) Compaction first (largest-first; spec §3.9 rule 2). Reuse plan_compactions
     // with the band's high_water as the threshold.
-    if estimate(events) >= band.high_water {
+    if est >= band.high_water {
         let gate_policy = zoid_core::assembler::ContextPolicy {
             compact_threshold: Some(band.high_water),
             ..config.policy
         };
         let plan = zoid_core::compaction::plan_compactions(events, &gate_policy, None, *calibration_ratio, overhead);
+        let compacted = !plan.compactions.is_empty();
         for c in &plan.compactions {
             emit(session, events, ui, &config.branch, EventKind::ToolResultCompacted {
                 id: c.id.clone(), summary: c.summary.clone(), original_tokens: c.original_tokens,
             }, session_id, now).await?;
         }
+        if compacted {
+            est = estimate(events);
+        }
     }
 
     // (2) Eviction to low_water.
-    if estimate(events) >= band.high_water {
-        let plan = zoid_core::eviction::plan_evictions(events, policy, estimate(events), &zoid_core::eviction::RecencyScorer);
+    if est >= band.high_water {
+        let plan = zoid_core::eviction::plan_evictions(events, policy, est, &zoid_core::eviction::RecencyScorer);
         emit_eviction(session, events, ui, config, session_id, now, plan).await?;
+        est = estimate(events);
     }
 
     // (3) Hard floor: if still near capacity, evict harder toward the safety margin.
     let hard = policy.capacity.saturating_sub(zoid_core::band::CAPACITY_SAFETY_MARGIN);
-    if estimate(events) >= hard {
+    if est >= hard {
         // Re-run with the same policy; low_water already targets below capacity.
-        let plan = zoid_core::eviction::plan_evictions(events, policy, estimate(events), &zoid_core::eviction::RecencyScorer);
+        let plan = zoid_core::eviction::plan_evictions(events, policy, est, &zoid_core::eviction::RecencyScorer);
         emit_eviction(session, events, ui, config, session_id, now, plan).await?;
     }
     Ok(())
@@ -1073,7 +1083,6 @@ async fn emit_eviction(
     for t in plan.turns {
         reclaimed += t.token_estimate;
         spans.push(zoid_core::event::EvictedSpan {
-            id_range_label: format!("{} events", t.ids.len()),
             token_estimate: t.token_estimate,
             topic_hint: t.topic_hint,
         });
@@ -1148,7 +1157,6 @@ mod tests {
                     reclaimed_tokens: 4200,
                     marker: EvictionMarker {
                         spans: vec![EvictedSpan {
-                            id_range_label: "t1".into(),
                             token_estimate: 4200,
                             topic_hint: "setup".into(),
                         }],
