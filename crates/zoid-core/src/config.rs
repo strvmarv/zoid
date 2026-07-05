@@ -11,6 +11,13 @@ pub struct SkillsConfig {
     pub source_dirs: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ModesConfig {
+    /// Extra directories to scan for `<mode>/mode.md` folders (beyond the two
+    /// convention dirs the bin adds). Unioned across config layers.
+    pub source_dirs: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub provider: String,
@@ -19,6 +26,7 @@ pub struct Config {
     pub economy: EconomyConfig,
     pub reduced_motion: bool,
     pub skills: SkillsConfig,
+    pub modes: ModesConfig,
     pub companion: CompanionConfig,
 }
 
@@ -74,6 +82,7 @@ impl Default for Config {
             economy: EconomyConfig::default(),
             reduced_motion: false,
             skills: SkillsConfig::default(),
+            modes: ModesConfig::default(),
             companion: CompanionConfig::default(),
         }
     }
@@ -149,6 +158,12 @@ pub struct PartialSkills {
 
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default)]
+pub struct PartialModes {
+    pub source_dirs: Option<Vec<String>>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(default)]
 pub struct PartialCompanion {
     pub port: Option<u16>,
     pub open: Option<bool>,
@@ -163,6 +178,7 @@ pub struct PartialConfig {
     pub reduced_motion: Option<bool>,
     pub economy: PartialEconomy,
     pub skills: PartialSkills,
+    pub modes: PartialModes,
     pub companion: PartialCompanion,
 }
 
@@ -173,8 +189,7 @@ pub struct PartialConfig {
 pub fn parse_toml(s: &str) -> anyhow::Result<(PartialConfig, Vec<String>)> {
     let de = toml::Deserializer::new(s);
     let mut unknown: Vec<String> = Vec::new();
-    let cfg: PartialConfig =
-        serde_ignored::deserialize(de, |path| unknown.push(path.to_string()))?;
+    let cfg: PartialConfig = serde_ignored::deserialize(de, |path| unknown.push(path.to_string()))?;
     Ok((cfg, unknown))
 }
 
@@ -238,6 +253,13 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
                 }
             }
         }
+        if let Some(dirs) = &p.modes.source_dirs {
+            for d in dirs {
+                if !cfg.modes.source_dirs.contains(d) {
+                    cfg.modes.source_dirs.push(d.clone());
+                }
+            }
+        }
         if let Some(v) = p.companion.port {
             cfg.companion.port = v;
         }
@@ -293,7 +315,8 @@ mod merge_tests {
 
     #[test]
     fn regression_stale_ceiling_does_not_drop_model_or_provider() {
-        let toml = "model = \"glm-5.2\"\nprovider = \"ollama-cloud\"\n[economy]\ncontext_ceiling = 512000";
+        let toml =
+            "model = \"glm-5.2\"\nprovider = \"ollama-cloud\"\n[economy]\ncontext_ceiling = 512000";
         let (pc, warn) = parse_toml(toml).unwrap();
         assert_eq!(pc.model.as_deref(), Some("glm-5.2"));
         assert_eq!(pc.provider.as_deref(), Some("ollama-cloud"));
@@ -334,6 +357,26 @@ mod merge_tests {
         assert_eq!(
             cfg.skills.source_dirs,
             vec!["a".to_string(), "b".to_string(), "c".to_string()] // "b" not duplicated
+        );
+    }
+
+    #[test]
+    fn parses_modes_source_dirs() {
+        let (p, _) = parse_toml("[modes]\nsource_dirs = [\"m1\", \"m2\"]").unwrap();
+        assert_eq!(
+            p.modes.source_dirs,
+            Some(vec!["m1".to_string(), "m2".to_string()])
+        );
+    }
+
+    #[test]
+    fn merge_unions_modes_source_dirs() {
+        let (user, _) = parse_toml("[modes]\nsource_dirs = [\"a\", \"b\"]").unwrap();
+        let (proj, _) = parse_toml("[modes]\nsource_dirs = [\"b\", \"c\"]").unwrap();
+        let (cfg, _) = merge(&[(Source::UserGlobal, user), (Source::Project, proj)]);
+        assert_eq!(
+            cfg.modes.source_dirs,
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
         );
     }
 }
