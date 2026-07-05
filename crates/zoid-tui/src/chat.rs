@@ -5,12 +5,12 @@ use crate::text::truncate;
 use crate::tokens::{color, glyph};
 use ratatui::{
     layout::{Constraint, Layout},
-    style::{Style, Stylize},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
-use tui_textarea::TextArea;
+use ratatui_textarea::TextArea;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use zoid_core::economy::tool_path;
 use zoid_core::projection::ChatMsg;

@@ -8,7 +8,7 @@
 //! width/height default to 140×24 (wide enough to expose gutter bugs).
 
 use ratatui::{backend::TestBackend, Terminal};
-use tui_textarea::TextArea;
+use ratatui_textarea::TextArea;
 use zoid_core::projection::{ChatMsg, ToolCallRef};
 use zoid_tui::chat::ChatView;
 use zoid_tui::render_shell;

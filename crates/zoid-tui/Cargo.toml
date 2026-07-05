@@ -9,8 +9,8 @@ serde_json = { workspace = true }
 zoid-core = { path = "../zoid-core" }
 zoid-model = { path = "../zoid-model" }
 zoid-syntax = { path = "../zoid-syntax" }
-tui-textarea = { workspace = true }
-# Match the version ratatui 0.29 uses so our width measurement agrees with its
+ratatui-textarea = { workspace = true }
+# Match the version ratatui-core uses so our width measurement agrees with its
 # own truncator — a mismatch would let a row we think fits get clipped.
 unicode-width = "0.2"
 # Message-body markdown → styled spans (spec §3.5). Pure-Rust, no runtime;
