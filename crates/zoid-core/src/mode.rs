@@ -130,6 +130,10 @@ impl ModeRegistry {
     pub fn names(&self) -> Vec<String> {
         self.modes.iter().map(|m| m.name().to_string()).collect()
     }
+    /// Read-only view of all modes, in order. For importer/bin tests.
+    pub fn modes(&self) -> &[Mode] {
+        &self.modes
+    }
 }
 
 #[cfg(test)]
