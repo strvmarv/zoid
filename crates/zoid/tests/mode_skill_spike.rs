@@ -86,7 +86,7 @@ async fn invoke_skill_body_flows_back_into_the_loop() {
         tools,
         std::sync::Arc::new(zoid_tools::AllowAll),
         session.clone(),
-        seed,
+        zoid::eventlog::EventLog::from_vec(seed),
         "fake".into(),
         tx,
         ulid::Ulid::new(),

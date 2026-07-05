@@ -16,7 +16,7 @@ pub struct TokenLedger {
 }
 
 /// Fold the log into a `TokenLedger` by summing every event's `tokens`.
-pub fn token_ledger(events: &[Event]) -> TokenLedger {
+pub fn token_ledger<'a>(events: impl IntoIterator<Item = &'a Event>) -> TokenLedger {
     let mut l = TokenLedger::default();
     for e in events {
         if let Some(t) = e.tokens {
@@ -73,7 +73,7 @@ pub fn tool_path(args_json: &str) -> Option<String> {
     None
 }
 
-pub fn churn_timeline(events: &[Event]) -> ChurnTimeline {
+pub fn churn_timeline<'a>(events: impl IntoIterator<Item = &'a Event>) -> ChurnTimeline {
     let mut points: Vec<ChurnPoint> = Vec::new();
     // `seen_paths`: paths referenced in any COMPLETED (prior) turn.
     // `turn_paths`: paths referenced in the CURRENT turn only.
@@ -138,7 +138,7 @@ mod tests {
         assert_eq!(estimate_tokens("abcd"), 2); // ceil(4/3)
         assert_eq!(estimate_tokens("abcdef"), 2); // 6/3
         assert_eq!(estimate_tokens("abcdefg"), 3); // ceil(7/3)
-        // counts chars, not bytes
+                                                   // counts chars, not bytes
         assert_eq!(estimate_tokens("é"), 1);
     }
 

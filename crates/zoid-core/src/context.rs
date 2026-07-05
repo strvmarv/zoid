@@ -162,7 +162,7 @@ pub fn tool_id_of(key: &str) -> Option<&str> {
 /// provider counts against the context ceiling but which are not derivable
 /// from the event log. They are folded into `total_tokens` (and an `ItemKind::System`
 /// item is emitted so the window is honest about the full request size).
-pub fn context_window(events: &[Event]) -> ContextWindow {
+pub fn context_window<'a>(events: impl IntoIterator<Item = &'a Event>) -> ContextWindow {
     context_window_with(events, ContextOverhead::default())
 }
 
@@ -170,9 +170,13 @@ pub fn context_window(events: &[Event]) -> ContextWindow {
 /// tool specs). The overhead is added as a single `System` item and folded
 /// into `total_tokens`, so the window reflects the full request the provider
 /// actually tokenizes — not just the conversation items.
-pub fn context_window_with(events: &[Event], overhead: ContextOverhead) -> ContextWindow {
-    let visible: &[Event] = events;
-    let evicted = crate::eviction::evicted_ids(events);
+pub fn context_window_with<'a>(
+    events: impl IntoIterator<Item = &'a Event>,
+    overhead: ContextOverhead,
+) -> ContextWindow {
+    let events: Vec<&Event> = events.into_iter().collect();
+    let evicted = crate::eviction::evicted_ids(events.iter().copied());
+    let visible: &[&Event] = &events;
 
     let mut order: Vec<String> = Vec::new(); // first-seen order of keys
     let mut acc: HashMap<String, Acc> = HashMap::new();
@@ -193,7 +197,14 @@ pub fn context_window_with(events: &[Event], overhead: ContextOverhead) -> Conte
         }
         match &e.kind {
             EventKind::UserMessage { text } => {
-                flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn, &mut pending_call_args_tokens);
+                flush_delta(
+                    &mut delta_text,
+                    &mut order,
+                    &mut acc,
+                    &mut msg_seq,
+                    turn,
+                    &mut pending_call_args_tokens,
+                );
                 turn += 1;
                 let key = format!("msg:{msg_seq}");
                 msg_seq += 1;
@@ -208,7 +219,14 @@ pub fn context_window_with(events: &[Event], overhead: ContextOverhead) -> Conte
                 );
             }
             EventKind::AssistantMessage { text } => {
-                flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn, &mut pending_call_args_tokens);
+                flush_delta(
+                    &mut delta_text,
+                    &mut order,
+                    &mut acc,
+                    &mut msg_seq,
+                    turn,
+                    &mut pending_call_args_tokens,
+                );
                 let key = format!("msg:{msg_seq}");
                 msg_seq += 1;
                 upsert(
@@ -241,7 +259,14 @@ pub fn context_window_with(events: &[Event], overhead: ContextOverhead) -> Conte
             EventKind::ToolResult {
                 id, name, output, ..
             } => {
-                flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn, &mut pending_call_args_tokens);
+                flush_delta(
+                    &mut delta_text,
+                    &mut order,
+                    &mut acc,
+                    &mut msg_seq,
+                    turn,
+                    &mut pending_call_args_tokens,
+                );
                 if let Some(path) = call_path.get(id) {
                     let key = format!("file:{path}");
                     let path = path.clone();
@@ -271,7 +296,14 @@ pub fn context_window_with(events: &[Event], overhead: ContextOverhead) -> Conte
         }
     }
     // Flush any trailing assistant delta after the last event.
-    flush_delta(&mut delta_text, &mut order, &mut acc, &mut msg_seq, turn, &mut pending_call_args_tokens);
+    flush_delta(
+        &mut delta_text,
+        &mut order,
+        &mut acc,
+        &mut msg_seq,
+        turn,
+        &mut pending_call_args_tokens,
+    );
 
     let last_turn_global = turn;
     let mut items: Vec<ContextItem> = order
@@ -308,9 +340,15 @@ pub fn context_window_with(events: &[Event], overhead: ContextOverhead) -> Conte
                 }
             }
             EventKind::ToolResultCompacted { id, summary, .. } => {
-                // Item keys for non-file tool results are "tool:{name}:{id}".
+                // Item keys for non-file tool results are "tool:{name}:{id}";
+                // a compacted File item is instead keyed "file:{path}" — resolve
+                // via the same `call_path` map the File upsert used, so a
+                // compacted file's window tokens are redirected to the summary
+                // too (compaction covers File items, not just ToolResult).
+                let file_key = call_path.get(id).map(|p| format!("file:{p}"));
                 if let Some(it) = items.iter_mut().find(|i| {
-                    i.kind == ItemKind::ToolResult && tool_id_of(&i.key) == Some(id.as_str())
+                    (i.kind == ItemKind::ToolResult && tool_id_of(&i.key) == Some(id.as_str()))
+                        || file_key.as_deref() == Some(i.key.as_str())
                 }) {
                     it.tokens = crate::economy::estimate_tokens(summary);
                     it.compacted = true;
@@ -353,10 +391,25 @@ pub fn context_window_with(events: &[Event], overhead: ContextOverhead) -> Conte
 /// non-error tool-result output for that path. Mirrors `context_window`'s File
 /// keying so a `ContextItem.key` looks up here. Used by the subagent context
 /// builder (P5) to fetch relevant code WITHOUT the chat transcript.
-pub fn file_contents(events: &[Event]) -> HashMap<String, String> {
+pub fn file_contents<'a>(events: impl IntoIterator<Item = &'a Event>) -> HashMap<String, String> {
+    let events: Vec<&Event> = events.into_iter().collect();
+    let visible: &[&Event] = &events;
+    // Compacted (id → summary): a compacted file read must inline its summary,
+    // never the raw body — mirrors `projection.rs`'s `conversation()` fold, and
+    // is required so #6b (clearing a compacted body) can't hand a subagent an
+    // empty file.
+    let compacted: HashMap<&str, &str> = visible
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::ToolResultCompacted { id, summary, .. } => {
+                Some((id.as_str(), summary.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
     let mut call_path: HashMap<String, String> = HashMap::new(); // tool id → path
     let mut out: HashMap<String, String> = HashMap::new();
-    for e in events {
+    for e in visible {
         match &e.kind {
             EventKind::ToolCall { id, args, .. } => {
                 if let Some(p) = tool_path(args) {
@@ -370,7 +423,11 @@ pub fn file_contents(events: &[Event]) -> HashMap<String, String> {
                 ..
             } => {
                 if let Some(p) = call_path.get(id) {
-                    out.insert(format!("file:{p}"), output.clone()); // latest wins
+                    let body = match compacted.get(id.as_str()) {
+                        Some(sum) => (*sum).to_string(),
+                        None => output.clone(),
+                    };
+                    out.insert(format!("file:{p}"), body); // latest wins
                 }
             }
             _ => {}
@@ -474,6 +531,25 @@ mod tests {
         ];
         let map = file_contents(&evs);
         assert!(!map.contains_key("file:x.rs"));
+    }
+
+    #[test]
+    fn file_contents_substitutes_summary_for_compacted_file() {
+        let evs = vec![
+            call("call-1", "read_file", "/src/x.rs"),
+            result("call-1", "read_file", "FULL FILE BODY"),
+            ev(EventKind::ToolResultCompacted {
+                id: "call-1".into(),
+                summary: "file summary".into(),
+                original_tokens: 500,
+            }),
+        ];
+        let map = file_contents(&evs);
+        assert_eq!(
+            map.get("file:/src/x.rs").map(String::as_str),
+            Some("file summary"),
+            "compacted file must inline its summary, never the raw/cleared body"
+        );
     }
 
     #[test]
@@ -682,6 +758,33 @@ mod tests {
         assert_eq!(it.tokens, estimate_tokens(&summary));
     }
 
+    #[test]
+    fn context_window_overrides_compacted_file_tokens() {
+        use crate::economy::estimate_tokens;
+        let summary = "y summary".to_string();
+        let evs = vec![
+            call("call-2", "read_file", "/src/y.rs"),
+            result("call-2", "read_file", &"x".repeat(3000)),
+            ev(EventKind::ToolResultCompacted {
+                id: "call-2".into(),
+                summary: summary.clone(),
+                original_tokens: 1000,
+            }),
+        ];
+        let w = context_window(&evs);
+        let file_item = w
+            .items
+            .iter()
+            .find(|i| i.key == "file:/src/y.rs")
+            .expect("file item present");
+        assert_eq!(
+            file_item.tokens,
+            estimate_tokens(&summary),
+            "compacted file item weighs its summary, not the raw body or 0"
+        );
+        assert!(file_item.compacted);
+    }
+
     use proptest::prelude::*;
 
     proptest! {
@@ -709,13 +812,30 @@ mod tests {
         use crate::event::{Event, EventKind, EvictionMarker};
         use ulid::Ulid;
         let big = "x".repeat(3000); // ~1000 tokens
-        let base = vec![Event::new(Ulid::from(1u128), None, 1, EventKind::UserMessage { text: big.clone() })];
+        let base = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage { text: big.clone() },
+        )];
         let with_evict = vec![
             base[0].clone(),
-            Event::new(Ulid::from(9u128), None, 9, EventKind::TurnsEvicted { ids: vec![Ulid::from(1u128)], reclaimed_tokens: 1000, marker: EvictionMarker { spans: vec![] } }),
+            Event::new(
+                Ulid::from(9u128),
+                None,
+                9,
+                EventKind::TurnsEvicted {
+                    ids: vec![Ulid::from(1u128)],
+                    reclaimed_tokens: 1000,
+                    marker: EvictionMarker { spans: vec![] },
+                },
+            ),
         ];
         let full = context_window_with(&base, ContextOverhead::default()).total_tokens;
         let after = context_window_with(&with_evict, ContextOverhead::default()).total_tokens;
-        assert!(after < full, "evicted event's tokens must be excluded from the window");
+        assert!(
+            after < full,
+            "evicted event's tokens must be excluded from the window"
+        );
     }
 }

@@ -39,7 +39,7 @@ async fn delegated_result_folds_into_main_conversation() {
     let (tx, mut rx) = mpsc::channel(64);
     tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
-    let seed = session.snapshot().await.unwrap();
+    let seed = zoid::eventlog::EventLog::from_vec(session.snapshot().await.unwrap());
     let res = run_subagent(
         "add fn",
         &seed,
@@ -109,7 +109,7 @@ async fn delegation_spend_lands_in_the_session_ledger() {
     let sid = ulid::Ulid::new();
     let _res = run_subagent(
         "do the unit",
-        &[],
+        &zoid::eventlog::EventLog::new(),
         &AgentProfile::builtin(),
         provider,
         std::path::PathBuf::from("."),

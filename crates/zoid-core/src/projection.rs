@@ -54,9 +54,10 @@ pub enum ChatMsg {
 /// transcript or request concern — filtering here would silently wipe the
 /// visible history and the model's context, which is what compaction was
 /// doing. (See `context.rs::context_window` for the window-scoped filter.)
-pub fn conversation(events: &[Event]) -> Vec<ChatMsg> {
-    let visible: &[Event] = events;
-    let evicted = crate::eviction::evicted_ids(events);
+pub fn conversation<'a>(events: impl IntoIterator<Item = &'a Event>) -> Vec<ChatMsg> {
+    let events: Vec<&Event> = events.into_iter().collect();
+    let visible: &[&Event] = &events;
+    let evicted = crate::eviction::evicted_ids(events.iter().copied());
 
     // ACM-1: a tool-result whose id has a later ToolResultCompacted is emitted
     // as its summary (last write wins), both to the live request and the view.
@@ -514,14 +515,50 @@ mod tests {
         // conversation (transcript + model request). All turns stay visible.
         let ev = |id: u128, ts: i64, kind| Event::new(Ulid::from(id), None, ts, kind);
         let events = vec![
-            ev(1, 100, EventKind::UserMessage { text: "turn 0".into() }),
-            ev(2, 200, EventKind::ModelDelta { text: "reply 0".into() }),
-            ev(3, 300, EventKind::UserMessage { text: "turn 1".into() }),
-            ev(4, 400, EventKind::ModelDelta { text: "reply 1".into() }),
+            ev(
+                1,
+                100,
+                EventKind::UserMessage {
+                    text: "turn 0".into(),
+                },
+            ),
+            ev(
+                2,
+                200,
+                EventKind::ModelDelta {
+                    text: "reply 0".into(),
+                },
+            ),
+            ev(
+                3,
+                300,
+                EventKind::UserMessage {
+                    text: "turn 1".into(),
+                },
+            ),
+            ev(
+                4,
+                400,
+                EventKind::ModelDelta {
+                    text: "reply 1".into(),
+                },
+            ),
             // Marker claiming turns 0-1 were dropped.
             ev(5, 450, EventKind::TurnsDropped { turns_dropped: 2 }),
-            ev(6, 500, EventKind::UserMessage { text: "turn 2".into() }),
-            ev(7, 600, EventKind::ModelDelta { text: "reply 2".into() }),
+            ev(
+                6,
+                500,
+                EventKind::UserMessage {
+                    text: "turn 2".into(),
+                },
+            ),
+            ev(
+                7,
+                600,
+                EventKind::ModelDelta {
+                    text: "reply 2".into(),
+                },
+            ),
         ];
         let conv = conversation(&events);
         // All three turns must be present — the marker does NOT filter.
@@ -550,9 +587,21 @@ mod tests {
         let mk = |id: u128, k| Event::new(Ulid::from(id), None, id as i64, k);
         let events = vec![
             mk(1, EventKind::UserMessage { text: "old".into() }),
-            mk(2, EventKind::AssistantMessage { text: "old-reply".into() }),
+            mk(
+                2,
+                EventKind::AssistantMessage {
+                    text: "old-reply".into(),
+                },
+            ),
             mk(3, EventKind::UserMessage { text: "new".into() }),
-            mk(9, EventKind::TurnsEvicted { ids: vec![Ulid::from(1u128), Ulid::from(2u128)], reclaimed_tokens: 5, marker: EvictionMarker { spans: vec![] } }),
+            mk(
+                9,
+                EventKind::TurnsEvicted {
+                    ids: vec![Ulid::from(1u128), Ulid::from(2u128)],
+                    reclaimed_tokens: 5,
+                    marker: EvictionMarker { spans: vec![] },
+                },
+            ),
         ];
         let msgs = conversation(&events);
         assert_eq!(msgs.len(), 1); // only the "new" user message survives

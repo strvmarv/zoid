@@ -170,19 +170,22 @@ fn map_msg(m: ChatMsg) -> Message {
 
 /// Build a completion request from the current event log.
 pub fn build_request(
-    events: &[Event],
+    events: &crate::eventlog::EventLog,
     model: &str,
     tools: &[Box<dyn Tool>],
     system: &str,
 ) -> CompletionRequest {
-    let system = match zoid_core::eviction::eviction_breadcrumb(events) {
+    let system = match zoid_core::eviction::eviction_breadcrumb(events.iter()) {
         Some(bc) => format!("{system}\n\n{bc}"),
         None => system.to_string(),
     };
     CompletionRequest {
         model: model.to_string(),
         system: Some(system),
-        messages: conversation(events).into_iter().map(map_msg).collect(),
+        messages: conversation(events.iter())
+            .into_iter()
+            .map(map_msg)
+            .collect(),
         max_tokens: 4096,
         tools: tool_specs(tools),
     }
@@ -209,12 +212,12 @@ pub async fn run_agent_turn(
     tools: Arc<Vec<Box<dyn Tool>>>,
     gate: Arc<dyn ToolGate>,
     session: SessionHandle,
-    events: Vec<Event>,
+    events: crate::eventlog::EventLog,
     model: String,
     ui: mpsc::Sender<AgentUpdate>,
     session_id: Ulid,
     now: fn() -> i64,
-) -> Result<Vec<Event>> {
+) -> Result<crate::eventlog::EventLog> {
     // Not externally cancellable: a token that never fires. The TUI uses
     // `run_agent_turn_cancellable` to wire Esc/Ctrl-C; subagents and tests use
     // this convenience wrapper.
@@ -246,13 +249,13 @@ pub async fn run_agent_turn_cancellable(
     tools: Arc<Vec<Box<dyn Tool>>>,
     gate: Arc<dyn ToolGate>,
     session: SessionHandle,
-    events: Vec<Event>,
+    events: crate::eventlog::EventLog,
     model: String,
     ui: mpsc::Sender<AgentUpdate>,
     session_id: Ulid,
     now: fn() -> i64,
     cancel: CancellationToken,
-) -> Result<Vec<Event>> {
+) -> Result<crate::eventlog::EventLog> {
     // Calibration ratio: real_input_tokens / context_window.total_tokens from
     // the last non-cached sub-turn. The chars/4 estimate undercounts 5-7x for
     // code/tool output, so when the provider reports 0 (Ollama cached prompt)
@@ -288,7 +291,16 @@ pub async fn run_agent_turn_cancellable(
     };
 
     let result = run_turn_inner(
-        &config, provider, tools, gate, session, events, model, &ui, session_id, now,
+        &config,
+        provider,
+        tools,
+        gate,
+        session,
+        events,
+        model,
+        &ui,
+        session_id,
+        now,
         &mut calibration_ratio,
         &overhead,
         &cancel,
@@ -310,7 +322,7 @@ async fn run_turn_inner(
     tools: Arc<Vec<Box<dyn Tool>>>,
     gate: Arc<dyn ToolGate>,
     session: SessionHandle,
-    mut events: Vec<Event>,
+    mut events: crate::eventlog::EventLog,
     model: String,
     ui: &mpsc::Sender<AgentUpdate>,
     session_id: Ulid,
@@ -318,7 +330,7 @@ async fn run_turn_inner(
     calibration_ratio: &mut Option<f64>,
     overhead: &zoid_core::context::ContextOverhead,
     cancel: &CancellationToken,
-) -> Result<Vec<Event>> {
+) -> Result<crate::eventlog::EventLog> {
     let turn_start = std::time::Instant::now();
     let mut iterations: u32 = 0;
     let mut context_retries: u32 = 0;
@@ -331,7 +343,17 @@ async fn run_turn_inner(
             break 'turn;
         }
         // PRE-FLIGHT GATE (spec §3.8): shrink to fit BEFORE building the request.
-        preflight_gate(&session, &mut events, ui, config, session_id, now, &*calibration_ratio, overhead).await?;
+        preflight_gate(
+            &session,
+            &mut events,
+            ui,
+            config,
+            session_id,
+            now,
+            &*calibration_ratio,
+            overhead,
+        )
+        .await?;
         let req = build_request(&events, &model, &tools, &config.system);
 
         // Stream one model turn. Spawn the provider so a missing terminal Done
@@ -401,9 +423,19 @@ async fn run_turn_inner(
                     {
                         context_retries += 1;
                         // The estimate under-read reality: force a wave toward low_water and retry.
-                        let est = zoid_core::context::context_window_with(&events, overhead.clone()).total_tokens;
-                        let plan = zoid_core::eviction::plan_evictions(&events, &config.eviction, est, &zoid_core::eviction::RecencyScorer);
-                        emit_eviction(&session, &mut events, ui, config, session_id, now, plan).await?;
+                        let est = zoid_core::context::context_window_with(
+                            events.iter(),
+                            overhead.clone(),
+                        )
+                        .total_tokens;
+                        let plan = zoid_core::eviction::plan_evictions(
+                            events.iter(),
+                            &config.eviction,
+                            est,
+                            &zoid_core::eviction::RecencyScorer,
+                        );
+                        emit_eviction(&session, &mut events, ui, config, session_id, now, plan)
+                            .await?;
                         tracing::warn!(ctx = "provider", "context-length error; forced eviction, retrying ({context_retries}/{MAX_CONTEXT_RETRIES})");
                         continue 'turn;
                     }
@@ -501,7 +533,11 @@ async fn run_turn_inner(
             config,
             session_id,
             now,
-            if turn_usage.input > 0 { Some(turn_usage.input) } else { None },
+            if turn_usage.input > 0 {
+                Some(turn_usage.input)
+            } else {
+                None
+            },
             calibration_ratio,
             overhead,
         )
@@ -680,9 +716,12 @@ async fn run_turn_inner(
                         .unwrap_or("")
                         .to_string();
                     let limit = tc.args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
-                    let hits = session.recall(query, session_id, limit).await.unwrap_or_default();
+                    let hits = session
+                        .recall(query, session_id, limit)
+                        .await
+                        .unwrap_or_default();
                     // Re-admit any currently-evicted originals so they re-enter the projection.
-                    let live_evicted = zoid_core::eviction::evicted_ids(&events);
+                    let live_evicted = zoid_core::eviction::evicted_ids(events.iter());
                     let readmit: Vec<Ulid> = hits
                         .iter()
                         .map(|e| e.id)
@@ -885,7 +924,22 @@ async fn run_turn_inner(
                 }
             }
         }
-        record_compactions(&session, &mut events, ui, config, session_id, now, if turn_usage.input > 0 { Some(turn_usage.input) } else { None }, calibration_ratio, overhead).await?;
+        record_compactions(
+            &session,
+            &mut events,
+            ui,
+            config,
+            session_id,
+            now,
+            if turn_usage.input > 0 {
+                Some(turn_usage.input)
+            } else {
+                None
+            },
+            calibration_ratio,
+            overhead,
+        )
+        .await?;
         // loop: re-request with the tool results now in context
     }
 
@@ -904,7 +958,7 @@ async fn run_turn_inner(
 /// Persist one event and announce it to the UI, keeping the local log in sync.
 async fn emit(
     session: &SessionHandle,
-    events: &mut Vec<Event>,
+    events: &mut crate::eventlog::EventLog,
     ui: &mpsc::Sender<AgentUpdate>,
     branch: &BranchId,
     kind: EventKind,
@@ -921,7 +975,9 @@ fn render_recalled(events: &[Event]) -> String {
         match &e.kind {
             EventKind::UserMessage { text } => out.push_str(&format!("[user] {text}\n")),
             EventKind::AssistantMessage { text } => out.push_str(&format!("[assistant] {text}\n")),
-            EventKind::ToolResult { name, output, .. } => out.push_str(&format!("[{name}] {output}\n")),
+            EventKind::ToolResult { name, output, .. } => {
+                out.push_str(&format!("[{name}] {output}\n"))
+            }
             _ => {}
         }
     }
@@ -940,7 +996,7 @@ fn render_recalled(events: &[Event]) -> String {
 /// current estimate by the last known ratio.
 async fn record_compactions(
     session: &SessionHandle,
-    events: &mut Vec<Event>,
+    events: &mut crate::eventlog::EventLog,
     ui: &mpsc::Sender<AgentUpdate>,
     config: &TurnConfig,
     session_id: Ulid,
@@ -954,7 +1010,7 @@ async fn record_compactions(
     // for the chars/3 estimate.
     let effective_tokens = real_input_tokens.filter(|&t| t > 0);
     if let Some(real) = effective_tokens {
-        let window = zoid_core::context::context_window_with(events, overhead.clone());
+        let window = zoid_core::context::context_window_with(events.iter(), overhead.clone());
         if window.total_tokens > 0 {
             *calibration_ratio = Some(real as f64 / window.total_tokens as f64);
         }
@@ -962,7 +1018,7 @@ async fn record_compactions(
     // When cached (0), pass None — plan_compactions scales the estimate by the
     // calibration ratio if one has been learned, else uses the raw estimate.
     let plan = zoid_core::compaction::plan_compactions(
-        events,
+        events.iter(),
         &config.policy,
         effective_tokens,
         *calibration_ratio,
@@ -999,7 +1055,7 @@ const OVERCOUNT_BIAS: f64 = 1.15;
 #[allow(clippy::too_many_arguments)]
 async fn preflight_gate(
     session: &SessionHandle,
-    events: &mut Vec<Event>,
+    events: &mut crate::eventlog::EventLog,
     ui: &mpsc::Sender<AgentUpdate>,
     config: &TurnConfig,
     session_id: Ulid,
@@ -1013,8 +1069,9 @@ async fn preflight_gate(
     }
     let band = policy.band();
 
-    let estimate = |events: &[Event]| -> u64 {
-        let raw = zoid_core::context::context_window_with(events, overhead.clone()).total_tokens;
+    let estimate = |events: &crate::eventlog::EventLog| -> u64 {
+        let raw =
+            zoid_core::context::context_window_with(events.iter(), overhead.clone()).total_tokens;
         let scaled = match calibration_ratio {
             Some(r) if *r > 0.0 => (raw as f64 * r) as u64,
             _ => raw,
@@ -1034,12 +1091,29 @@ async fn preflight_gate(
             compact_threshold: Some(band.high_water),
             ..config.policy
         };
-        let plan = zoid_core::compaction::plan_compactions(events, &gate_policy, None, *calibration_ratio, overhead);
+        let plan = zoid_core::compaction::plan_compactions(
+            events.iter(),
+            &gate_policy,
+            None,
+            *calibration_ratio,
+            overhead,
+        );
         let compacted = !plan.compactions.is_empty();
         for c in &plan.compactions {
-            emit(session, events, ui, &config.branch, EventKind::ToolResultCompacted {
-                id: c.id.clone(), summary: c.summary.clone(), original_tokens: c.original_tokens,
-            }, session_id, now).await?;
+            emit(
+                session,
+                events,
+                ui,
+                &config.branch,
+                EventKind::ToolResultCompacted {
+                    id: c.id.clone(),
+                    summary: c.summary.clone(),
+                    original_tokens: c.original_tokens,
+                },
+                session_id,
+                now,
+            )
+            .await?;
         }
         if compacted {
             est = estimate(events);
@@ -1048,16 +1122,28 @@ async fn preflight_gate(
 
     // (2) Eviction to low_water.
     if est >= band.high_water {
-        let plan = zoid_core::eviction::plan_evictions(events, policy, est, &zoid_core::eviction::RecencyScorer);
+        let plan = zoid_core::eviction::plan_evictions(
+            events.iter(),
+            policy,
+            est,
+            &zoid_core::eviction::RecencyScorer,
+        );
         emit_eviction(session, events, ui, config, session_id, now, plan).await?;
         est = estimate(events);
     }
 
     // (3) Hard floor: if still near capacity, evict harder toward the safety margin.
-    let hard = policy.capacity.saturating_sub(zoid_core::band::CAPACITY_SAFETY_MARGIN);
+    let hard = policy
+        .capacity
+        .saturating_sub(zoid_core::band::CAPACITY_SAFETY_MARGIN);
     if est >= hard {
         // Re-run with the same policy; low_water already targets below capacity.
-        let plan = zoid_core::eviction::plan_evictions(events, policy, est, &zoid_core::eviction::RecencyScorer);
+        let plan = zoid_core::eviction::plan_evictions(
+            events.iter(),
+            policy,
+            est,
+            &zoid_core::eviction::RecencyScorer,
+        );
         emit_eviction(session, events, ui, config, session_id, now, plan).await?;
     }
     Ok(())
@@ -1067,7 +1153,7 @@ async fn preflight_gate(
 #[allow(clippy::too_many_arguments)]
 async fn emit_eviction(
     session: &SessionHandle,
-    events: &mut Vec<Event>,
+    events: &mut crate::eventlog::EventLog,
     ui: &mpsc::Sender<AgentUpdate>,
     config: &TurnConfig,
     session_id: Ulid,
@@ -1088,9 +1174,20 @@ async fn emit_eviction(
         });
         ids.extend(t.ids);
     }
-    emit(session, events, ui, &config.branch, EventKind::TurnsEvicted {
-        ids, reclaimed_tokens: reclaimed, marker: zoid_core::event::EvictionMarker { spans },
-    }, session_id, now).await?;
+    emit(
+        session,
+        events,
+        ui,
+        &config.branch,
+        EventKind::TurnsEvicted {
+            ids,
+            reclaimed_tokens: reclaimed,
+            marker: zoid_core::event::EvictionMarker { spans },
+        },
+        session_id,
+        now,
+    )
+    .await?;
     Ok(())
 }
 
@@ -1101,7 +1198,7 @@ async fn emit_eviction(
 #[allow(clippy::too_many_arguments)]
 async fn emit_with_tokens(
     session: &SessionHandle,
-    events: &mut Vec<Event>,
+    events: &mut crate::eventlog::EventLog,
     ui: &mpsc::Sender<AgentUpdate>,
     branch: &BranchId,
     kind: EventKind,
@@ -1134,14 +1231,19 @@ mod tests {
 
     #[test]
     fn build_request_uses_the_given_system_prompt() {
-        let req = build_request(&[], "m", &zoid_tools::registry(), "CUSTOM SYS");
+        let req = build_request(
+            &crate::eventlog::EventLog::new(),
+            "m",
+            &zoid_tools::registry(),
+            "CUSTOM SYS",
+        );
         assert_eq!(req.system.as_deref(), Some("CUSTOM SYS"));
     }
 
     #[test]
     fn build_request_appends_breadcrumb_when_evicted() {
         use zoid_core::event::{EvictedSpan, EvictionMarker};
-        let events = vec![
+        let events = crate::eventlog::EventLog::from_vec(vec![
             Event::new(
                 Ulid::from(1u128),
                 None,
@@ -1163,7 +1265,7 @@ mod tests {
                     },
                 },
             ),
-        ];
+        ]);
         let req = build_request(&events, "m", &zoid_tools::registry(), "SYS");
         let sys = req.system.unwrap();
         assert!(sys.starts_with("SYS"));
@@ -1183,7 +1285,7 @@ mod tests {
     #[test]
     fn build_request_carries_compacted_summary_into_live_messages() {
         let ts = 1700000000i64;
-        let events = vec![
+        let events = crate::eventlog::EventLog::from_vec(vec![
             Event::new(
                 Ulid::new(),
                 None,
@@ -1223,7 +1325,7 @@ mod tests {
                     original_tokens: 500,
                 },
             ),
-        ];
+        ]);
 
         let req = build_request(&events, "test-model", &zoid_tools::registry(), "SYS");
 
@@ -1263,8 +1365,8 @@ mod tests {
 
     #[tokio::test]
     async fn preflight_gate_evicts_before_send() {
-        use zoid_core::event::{Event, EventKind};
         use ulid::Ulid;
+        use zoid_core::event::{Event, EventKind};
         // 8 fat turns, target tiny so the gate must evict.
         let big = "x".repeat(3000);
         let mut seed = Vec::new();
@@ -1307,7 +1409,7 @@ mod tests {
             std::sync::Arc::new(zoid_tools::registry()),
             std::sync::Arc::new(zoid_tools::AllowAll),
             session,
-            seed,
+            crate::eventlog::EventLog::from_vec(seed),
             "m".into(),
             tx,
             Ulid::new(),
@@ -1316,11 +1418,12 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            out.iter().any(|e| matches!(e.kind, EventKind::TurnsEvicted { .. })),
+            out.iter()
+                .any(|e| matches!(e.kind, EventKind::TurnsEvicted { .. })),
             "gate must evict pre-flight"
         );
         // and the surviving conversation is under the seed size
-        assert!(zoid_core::projection::conversation(&out).len() < 16);
+        assert!(zoid_core::projection::conversation(out.iter()).len() < 16);
     }
 
     // Test double: replays a different script per stream() call (retry / multi-request turns).
@@ -1329,7 +1432,9 @@ mod tests {
     }
     impl SequencedProvider {
         fn new(scripts: Vec<Vec<zoid_provider::ProviderEvent>>) -> Self {
-            Self { scripts: std::sync::Mutex::new(scripts.into_iter().collect()) }
+            Self {
+                scripts: std::sync::Mutex::new(scripts.into_iter().collect()),
+            }
         }
     }
     #[async_trait::async_trait]
@@ -1341,7 +1446,9 @@ mod tests {
         ) -> anyhow::Result<()> {
             let script = self.scripts.lock().unwrap().pop_front().unwrap_or_default();
             for ev in script {
-                if sink.send(ev).await.is_err() { break; }
+                if sink.send(ev).await.is_err() {
+                    break;
+                }
             }
             Ok(())
         }
@@ -1349,137 +1456,349 @@ mod tests {
 
     #[tokio::test]
     async fn context_length_error_is_retried_not_surfaced() {
-        use zoid_provider::ProviderEvent;
-        use zoid_core::event::{Event, EventKind};
         use ulid::Ulid;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::ProviderEvent;
         let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
-        let seed = vec![Event::new(Ulid::from(1u128), None, 1, EventKind::UserMessage { text: "hi".into() })];
-        for e in &seed { session.append(e.clone()).await.unwrap(); }
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage { text: "hi".into() },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
         // First stream errors with a context-length message; the retry completes.
         let provider = std::sync::Arc::new(SequencedProvider::new(vec![
-            vec![ProviderEvent::Error("prompt is too long: exceeds context window".into())],
-            vec![ProviderEvent::TextDelta("recovered".into()), ProviderEvent::Done],
+            vec![ProviderEvent::Error(
+                "prompt is too long: exceeds context window".into(),
+            )],
+            vec![
+                ProviderEvent::TextDelta("recovered".into()),
+                ProviderEvent::Done,
+            ],
         ]));
         let mut cfg = chat_turn_config();
         // enabled so the retry arm is active; band huge so the preflight gate itself evicts nothing
         // — this isolates the capacity-error retry path.
-        cfg.eviction = zoid_core::eviction::EvictionPolicy { enabled: true, capacity: 1_000_000, context_target: 900_000, band_headroom_pct: 20, recent_n: 4, max_output: None };
+        cfg.eviction = zoid_core::eviction::EvictionPolicy {
+            enabled: true,
+            capacity: 1_000_000,
+            context_target: 900_000,
+            band_headroom_pct: 20,
+            recent_n: 4,
+            max_output: None,
+        };
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
-        let out = run_agent_turn(cfg, provider, std::sync::Arc::new(zoid_tools::registry()), std::sync::Arc::new(zoid_tools::AllowAll), session, seed, "m".into(), tx, Ulid::new(), || 0).await.unwrap();
+        let out = run_agent_turn(
+            cfg,
+            provider,
+            std::sync::Arc::new(zoid_tools::registry()),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
         // The context error was retried, not surfaced as a ⚠ message …
         assert!(!out.iter().any(|e| matches!(&e.kind, EventKind::AssistantMessage { text } if text.starts_with(WARN_GLYPH))), "context error must not surface");
         // … and the retry reached the second, successful stream.
-        assert!(out.iter().any(|e| matches!(&e.kind, EventKind::ModelDelta { text } if text == "recovered")), "retry must reach the successful stream");
+        assert!(
+            out.iter()
+                .any(|e| matches!(&e.kind, EventKind::ModelDelta { text } if text == "recovered")),
+            "retry must reach the successful stream"
+        );
     }
 
     #[tokio::test]
     async fn recall_tool_readmits_and_returns_content() {
-        use zoid_provider::{ProviderEvent, ToolCall};
+        use serde_json::json;
+        use ulid::Ulid;
         use zoid_core::event::{Event, EventKind, EvictionMarker};
         use zoid_core::projection::{conversation, ChatMsg};
-        use ulid::Ulid;
-        use serde_json::json;
+        use zoid_provider::{ProviderEvent, ToolCall};
         let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
         // Seed: an evicted user turn (indexed in the store at append) + a recent turn + the marker.
-        let e1 = Event::new(Ulid::from(1u128), None, 1, EventKind::UserMessage { text: "configure the vector backend".into() });
-        let e2 = Event::new(Ulid::from(2u128), None, 2, EventKind::UserMessage { text: "recent question".into() });
-        let evicted = Event::new(Ulid::from(9u128), None, 9, EventKind::TurnsEvicted {
-            ids: vec![Ulid::from(1u128)], reclaimed_tokens: 10, marker: EvictionMarker { spans: vec![] },
-        });
-        for e in [&e1, &e2, &evicted] { session.append(e.clone()).await.unwrap(); }
+        let e1 = Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "configure the vector backend".into(),
+            },
+        );
+        let e2 = Event::new(
+            Ulid::from(2u128),
+            None,
+            2,
+            EventKind::UserMessage {
+                text: "recent question".into(),
+            },
+        );
+        let evicted = Event::new(
+            Ulid::from(9u128),
+            None,
+            9,
+            EventKind::TurnsEvicted {
+                ids: vec![Ulid::from(1u128)],
+                reclaimed_tokens: 10,
+                marker: EvictionMarker { spans: vec![] },
+            },
+        );
+        for e in [&e1, &e2, &evicted] {
+            session.append(e.clone()).await.unwrap();
+        }
         let seed = vec![e1.clone(), e2.clone(), evicted.clone()];
         // Initially the evicted turn is NOT in the projection.
-        assert!(!conversation(&seed).iter().any(|m| matches!(m, ChatMsg::User { text, .. } if text.contains("vector backend"))));
+        assert!(!conversation(&seed)
+            .iter()
+            .any(|m| matches!(m, ChatMsg::User { text, .. } if text.contains("vector backend"))));
 
         let provider = std::sync::Arc::new(SequencedProvider::new(vec![
-            vec![ProviderEvent::ToolCall(ToolCall { id: "r1".into(), name: "recall".into(), args: json!({"query": "vector"}) }), ProviderEvent::Done],
-            vec![ProviderEvent::TextDelta("thanks".into()), ProviderEvent::Done],
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "r1".into(),
+                    name: "recall".into(),
+                    args: json!({"query": "vector"}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![
+                ProviderEvent::TextDelta("thanks".into()),
+                ProviderEvent::Done,
+            ],
         ]));
-        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin())));
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(std::sync::Arc::new(
+            zoid_core::skill::SkillRegistry::builtin(),
+        )));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
-        let out = run_agent_turn(chat_turn_config(), provider, tools, std::sync::Arc::new(zoid_tools::AllowAll), session, seed, "m".into(), tx, Ulid::from(0u128), || 0).await.unwrap();
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            || 0,
+        )
+        .await
+        .unwrap();
 
         // Re-admission event for the evicted id …
         assert!(out.iter().any(|e| matches!(&e.kind, EventKind::TurnsReadmitted { ids } if ids.contains(&Ulid::from(1u128)))));
         // … the recall ToolResult carries the retrieved content …
         assert!(out.iter().any(|e| matches!(&e.kind, EventKind::ToolResult { name, output, .. } if name == "recall" && output.contains("vector backend"))));
         // … and the turn is back in the projection.
-        assert!(conversation(&out).iter().any(|m| matches!(m, ChatMsg::User { text, .. } if text.contains("vector backend"))));
+        assert!(conversation(out.iter())
+            .iter()
+            .any(|m| matches!(m, ChatMsg::User { text, .. } if text.contains("vector backend"))));
     }
 
     #[tokio::test]
     async fn recall_tool_reports_no_matches_and_readmits_nothing() {
-        use zoid_provider::{ProviderEvent, ToolCall};
-        use zoid_core::event::{Event, EventKind};
-        use ulid::Ulid;
         use serde_json::json;
+        use ulid::Ulid;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
         let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
-        let e1 = Event::new(Ulid::from(1u128), None, 1, EventKind::UserMessage { text: "configure the vector backend".into() });
-        let e2 = Event::new(Ulid::from(2u128), None, 2, EventKind::UserMessage { text: "recent question".into() });
-        for e in [&e1, &e2] { session.append(e.clone()).await.unwrap(); }
+        let e1 = Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "configure the vector backend".into(),
+            },
+        );
+        let e2 = Event::new(
+            Ulid::from(2u128),
+            None,
+            2,
+            EventKind::UserMessage {
+                text: "recent question".into(),
+            },
+        );
+        for e in [&e1, &e2] {
+            session.append(e.clone()).await.unwrap();
+        }
         let seed = vec![e1.clone(), e2.clone()];
 
         let provider = std::sync::Arc::new(SequencedProvider::new(vec![
-            vec![ProviderEvent::ToolCall(ToolCall { id: "r1".into(), name: "recall".into(), args: json!({"query": "nonexistent_term_xyz"}) }), ProviderEvent::Done],
-            vec![ProviderEvent::TextDelta("thanks".into()), ProviderEvent::Done],
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "r1".into(),
+                    name: "recall".into(),
+                    args: json!({"query": "nonexistent_term_xyz"}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![
+                ProviderEvent::TextDelta("thanks".into()),
+                ProviderEvent::Done,
+            ],
         ]));
-        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin())));
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(std::sync::Arc::new(
+            zoid_core::skill::SkillRegistry::builtin(),
+        )));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
-        let out = run_agent_turn(chat_turn_config(), provider, tools, std::sync::Arc::new(zoid_tools::AllowAll), session, seed, "m".into(), tx, Ulid::from(0u128), || 0).await.unwrap();
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            || 0,
+        )
+        .await
+        .unwrap();
 
         // No matches → the tool result says so …
         assert!(out.iter().any(|e| matches!(&e.kind, EventKind::ToolResult { name, output, .. } if name == "recall" && output == "[recall: no matches]")));
         // … and nothing is re-admitted.
-        assert!(!out.iter().any(|e| matches!(&e.kind, EventKind::TurnsReadmitted { .. })));
+        assert!(!out
+            .iter()
+            .any(|e| matches!(&e.kind, EventKind::TurnsReadmitted { .. })));
     }
 
     #[tokio::test]
     async fn evict_then_recall_round_trips() {
-        use zoid_provider::{ProviderEvent, ToolCall, FakeProvider};
-        use zoid_core::event::{Event, EventKind};
-        use zoid_core::projection::{conversation, ChatMsg};
-        use zoid_core::eviction::EvictionPolicy;
-        use ulid::Ulid;
         use serde_json::json;
+        use ulid::Ulid;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_core::eviction::EvictionPolicy;
+        use zoid_core::projection::{conversation, ChatMsg};
+        use zoid_provider::{FakeProvider, ProviderEvent, ToolCall};
 
         let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
         let big = "x".repeat(3000); // ~1000 tokens per turn
-        // Oldest turn carries a distinctive searchable token.
+                                    // Oldest turn carries a distinctive searchable token.
         let mut seed = vec![
-            Event::new(Ulid::from(1u128), None, 1, EventKind::UserMessage { text: format!("zephyrbackend {big}") }),
-            Event::new(Ulid::from(2u128), None, 2, EventKind::AssistantMessage { text: "ok".into() }),
+            Event::new(
+                Ulid::from(1u128),
+                None,
+                1,
+                EventKind::UserMessage {
+                    text: format!("zephyrbackend {big}"),
+                },
+            ),
+            Event::new(
+                Ulid::from(2u128),
+                None,
+                2,
+                EventKind::AssistantMessage { text: "ok".into() },
+            ),
         ];
         for i in 1..8u128 {
-            seed.push(Event::new(Ulid::from(i*2+1), None, (i*2+1) as i64, EventKind::UserMessage { text: big.clone() }));
-            seed.push(Event::new(Ulid::from(i*2+2), None, (i*2+2) as i64, EventKind::AssistantMessage { text: "ok".into() }));
+            seed.push(Event::new(
+                Ulid::from(i * 2 + 1),
+                None,
+                (i * 2 + 1) as i64,
+                EventKind::UserMessage { text: big.clone() },
+            ));
+            seed.push(Event::new(
+                Ulid::from(i * 2 + 2),
+                None,
+                (i * 2 + 2) as i64,
+                EventKind::AssistantMessage { text: "ok".into() },
+            ));
         }
-        for e in &seed { session.append(e.clone()).await.unwrap(); }
-        let policy = EvictionPolicy { enabled: true, capacity: 1_000_000, context_target: 3_000, band_headroom_pct: 20, recent_n: 2, max_output: None };
-        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin())));
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+        let policy = EvictionPolicy {
+            enabled: true,
+            capacity: 1_000_000,
+            context_target: 3_000,
+            band_headroom_pct: 20,
+            recent_n: 2,
+            max_output: None,
+        };
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(std::sync::Arc::new(
+            zoid_core::skill::SkillRegistry::builtin(),
+        )));
 
         // TURN 1 — the pre-flight gate evicts the oldest turns.
         let mut cfg1 = chat_turn_config();
         cfg1.eviction = policy;
-        let p1 = std::sync::Arc::new(FakeProvider::new(vec![ProviderEvent::TextDelta("ack".into()), ProviderEvent::Done]));
+        let p1 = std::sync::Arc::new(FakeProvider::new(vec![
+            ProviderEvent::TextDelta("ack".into()),
+            ProviderEvent::Done,
+        ]));
         let (tx1, mut rx1) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx1.recv().await.is_some() {} });
-        let out1 = run_agent_turn(cfg1, p1, tools.clone(), std::sync::Arc::new(zoid_tools::AllowAll), session.clone(), seed, "m".into(), tx1, Ulid::from(0u128), || 0).await.unwrap();
-        assert!(out1.iter().any(|e| matches!(e.kind, EventKind::TurnsEvicted { .. })), "turn 1 must evict");
-        assert!(!conversation(&out1).iter().any(|m| matches!(m, ChatMsg::User { text, .. } if text.contains("zephyrbackend"))), "evicted turn gone from projection");
+        let out1 = run_agent_turn(
+            cfg1,
+            p1,
+            tools.clone(),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session.clone(),
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx1,
+            Ulid::from(0u128),
+            || 0,
+        )
+        .await
+        .unwrap();
+        assert!(
+            out1.iter()
+                .any(|e| matches!(e.kind, EventKind::TurnsEvicted { .. })),
+            "turn 1 must evict"
+        );
+        assert!(
+            !conversation(out1.iter())
+                .iter()
+                .any(|m| matches!(m, ChatMsg::User { text, .. } if text.contains("zephyrbackend"))),
+            "evicted turn gone from projection"
+        );
 
         // TURN 2 — the model recalls the evicted content.
         let mut cfg2 = chat_turn_config();
         cfg2.eviction = policy;
         let p2 = std::sync::Arc::new(SequencedProvider::new(vec![
-            vec![ProviderEvent::ToolCall(ToolCall { id: "r1".into(), name: "recall".into(), args: json!({"query": "zephyrbackend"}) }), ProviderEvent::Done],
-            vec![ProviderEvent::TextDelta("got it".into()), ProviderEvent::Done],
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "r1".into(),
+                    name: "recall".into(),
+                    args: json!({"query": "zephyrbackend"}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![
+                ProviderEvent::TextDelta("got it".into()),
+                ProviderEvent::Done,
+            ],
         ]));
         let (tx2, mut rx2) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx2.recv().await.is_some() {} });
-        let out2 = run_agent_turn(cfg2, p2, tools, std::sync::Arc::new(zoid_tools::AllowAll), session, out1, "m".into(), tx2, Ulid::from(0u128), || 0).await.unwrap();
+        let out2 = run_agent_turn(
+            cfg2,
+            p2,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            out1,
+            "m".into(),
+            tx2,
+            Ulid::from(0u128),
+            || 0,
+        )
+        .await
+        .unwrap();
         assert!(out2.iter().any(|e| matches!(&e.kind, EventKind::TurnsReadmitted { ids } if ids.contains(&Ulid::from(1u128)))), "recall re-admits the evicted turn");
         assert!(out2.iter().any(|e| matches!(&e.kind, EventKind::ToolResult { name, output, .. } if name == "recall" && output.contains("zephyrbackend"))), "recall result carries content");
     }

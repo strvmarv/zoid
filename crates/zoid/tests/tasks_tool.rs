@@ -58,7 +58,7 @@ async fn update_tasks_appends_a_tasks_event_and_acks() {
         tools,
         Arc::new(zoid_tools::AllowAll),
         session.clone(),
-        seed,
+        zoid::eventlog::EventLog::from_vec(seed),
         "fake".into(),
         tx,
         ulid::Ulid::new(),
@@ -71,12 +71,12 @@ async fn update_tasks_appends_a_tasks_event_and_acks() {
     assert!(complete, "loop must emit TurnComplete");
 
     // A Tasks event was appended with the two items, faithfully.
-    let snapshot = zoid_core::tasks::tasks(&events);
+    let snapshot = zoid_core::tasks::tasks(events.iter());
     assert_eq!(snapshot.len(), 2);
     assert_eq!(snapshot[0].status, zoid_core::tasks::TaskStatus::Active);
 
     // And a non-error ack ToolResult was fed back.
-    let acks = zoid_testkit::tool_results(&events);
+    let acks = zoid_testkit::tool_results(events.iter());
     assert!(acks
         .iter()
         .any(|(n, out, err)| n == "update_tasks" && !err && out.contains("task")));

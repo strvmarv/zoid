@@ -46,9 +46,10 @@ pub fn parse_task_items(args: &serde_json::Value) -> Result<Vec<TaskItem>, Strin
 
 /// The latest task snapshot (last-write-wins), or empty if none was published.
 /// Ignores subagent branches, matching the conversation projection.
-pub fn tasks(events: &[Event]) -> Vec<TaskItem> {
+pub fn tasks<'a>(events: impl IntoIterator<Item = &'a Event>) -> Vec<TaskItem> {
+    let events: Vec<&Event> = events.into_iter().collect();
     events
-        .iter()
+        .into_iter()
         .filter(|e| e.branch == crate::event::BranchId::default())
         .rev()
         .find_map(|e| match &e.kind {

@@ -308,7 +308,7 @@ fn build_overview_data(
 ) -> zoid_tui::overview::OverviewData {
     use zoid_tui::overview::OverviewData;
     // Economy split from the same ledger the session drawer/context economy use.
-    let ledger = zoid_core::economy::token_ledger(&app.events);
+    let ledger = zoid_core::economy::token_ledger(app.events.iter());
     // Prompt-cache hit rate = cache-read as a % of input tokens (economy).
     let cache_hit_pct = (ledger.cached * 100)
         .checked_div(ledger.input)
@@ -434,7 +434,7 @@ fn handle_conversation_click(app: &mut App, layout: &zoid_tui::layout::ShellLayo
     }
     let clicked_line = app.shell.conversation_scroll as usize + (row - conv.y) as usize;
     let width = zoid_tui::layout::conv_text_width(conv.width) as usize;
-    let msgs = conversation(&app.events);
+    let msgs = conversation(app.events.iter());
     let hits = zoid_tui::chat::code_hits(&msgs, app.streaming, true, app.tz_offset_secs, width);
     if let Some(h) = hits
         .into_iter()
@@ -750,19 +750,20 @@ struct ProjectionCache {
 impl ProjectionCache {
     /// Refresh all projections iff the event count changed; a cheap no-op
     /// otherwise. Returns `true` when a recompute happened.
-    fn refresh(&mut self, events: &[Event]) -> bool {
+    fn refresh(&mut self, events: &zoid::eventlog::EventLog) -> bool {
         if self.events_len == Some(events.len()) {
             return false;
         }
-        self.msgs = conversation(events);
-        self.window = zoid_core::context::context_window(events);
-        self.churn = zoid_core::economy::churn_timeline(events);
-        self.tasks = zoid_core::tasks::tasks(events);
-        let ledger = zoid_core::economy::token_ledger(events);
+        self.msgs = conversation(events.iter());
+        self.window = zoid_core::context::context_window(events.iter());
+        self.churn = zoid_core::economy::churn_timeline(events.iter());
+        self.tasks = zoid_core::tasks::tasks(events.iter());
+        let ledger = zoid_core::economy::token_ledger(events.iter());
         self.ledger_total = ledger.total;
         self.cached_total = ledger.cached;
         // Find the last Usage event's real input token count — the provider's
         // actual prompt size, far more accurate than the chars/4 estimate.
+        // `EventLog::iter()` is double-ended, so `.rev()` works directly.
         self.last_input_tokens = events
             .iter()
             .rev()
@@ -913,7 +914,7 @@ impl BodyCache {
 struct App {
     session: SessionHandle,
     session_id: Ulid,
-    events: Vec<Event>,
+    events: zoid::eventlog::EventLog,
     provider: Arc<dyn Provider>,
     tools: Arc<Vec<Box<dyn Tool>>>,
     /// Available mode profiles with the active one marked; drives the turn's
@@ -1066,7 +1067,12 @@ async fn main() -> Result<()> {
             .await?;
         (id, name, boot_ts)
     };
-    let events = session.snapshot_session(session_id).await?;
+    let mut events =
+        zoid::eventlog::EventLog::from_vec(session.snapshot_session(session_id).await?);
+    // #6b: free compacted tool-result bodies on the boot auto-resume path too
+    // (mirrors the interactive session-switch clear), so reopening a long
+    // session doesn't re-inflate RAM to the pre-#6b footprint.
+    events.clear_compacted_bodies();
 
     let (config, prov) = load_config();
     let model = if config.model.is_empty() {
@@ -1187,11 +1193,7 @@ async fn main() -> Result<()> {
     // Fetch the active model's capabilities (context window, prompt cache) from
     // the provider's introspection endpoint. The static MODEL_CAPS table is the
     // fallback until this lands (or if the provider doesn't support it).
-    spawn_model_info_fetch(
-        app.provider.clone(),
-        app.model.clone(),
-        app.ui_tx.clone(),
-    );
+    spawn_model_info_fetch(app.provider.clone(), app.model.clone(), app.ui_tx.clone());
 
     let result = run(&mut terminal, &mut app, &mut ui_rx, &obs.state).await;
 
@@ -1525,7 +1527,19 @@ async fn run<B: ratatui::backend::Backend>(
                             app.proj.events_len = None;
                             app.body_cache.key = None;
                         }
+                        // #6b: when a compaction marker arrives, free the raw body
+                        // of the ToolResult it summarizes. Safe: request/render carry
+                        // the summary (projection.rs), file_contents & window are
+                        // redirected (Task 3), eviction weighs the summary (Task 4),
+                        // recall reads SQLite. Capture the id before `*ev` is moved.
+                        let compacted_id = match &ev.kind {
+                            EventKind::ToolResultCompacted { id, .. } => Some(id.clone()),
+                            _ => None,
+                        };
                         app.events.push(*ev);
+                        if let Some(id) = compacted_id {
+                            app.events.clear_tool_output(&id);
+                        }
                     }
                     AgentUpdate::ToolStarted { name } => {
                         app.shell.set_active_tool(name);
@@ -2116,14 +2130,14 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             app.shell.objects = Default::default();
         }
         Action::ObjectMove(d) => {
-            let n = zoid_tui::objects::selectable_objects(&conversation(&app.events)).len();
+            let n = zoid_tui::objects::selectable_objects(&conversation(app.events.iter())).len();
             app.shell.objects.obj_selected =
                 zoid_tui::palette::nav(app.shell.objects.obj_selected, d, n);
         }
         Action::ObjectPick => {
             // Advance to the verb picker — but only if there's an object to act
             // on (otherwise the verb picker would show "(no object)").
-            if !zoid_tui::objects::selectable_objects(&conversation(&app.events)).is_empty() {
+            if !zoid_tui::objects::selectable_objects(&conversation(app.events.iter())).is_empty() {
                 app.shell.overlay = zoid_tui::Overlay::Verbs;
                 app.shell.objects.verb_selected = 0;
             }
@@ -2133,7 +2147,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             app.shell.overlay = zoid_tui::Overlay::Objects;
         }
         Action::VerbMove(d) => {
-            let objs = zoid_tui::objects::selectable_objects(&conversation(&app.events));
+            let objs = zoid_tui::objects::selectable_objects(&conversation(app.events.iter()));
             let sel = zoid_tui::palette::nav(app.shell.objects.obj_selected, 0, objs.len());
             let n = objs
                 .get(sel)
@@ -2143,7 +2157,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 zoid_tui::palette::nav(app.shell.objects.verb_selected, d, n);
         }
         Action::VerbPick => {
-            let objs = zoid_tui::objects::selectable_objects(&conversation(&app.events));
+            let objs = zoid_tui::objects::selectable_objects(&conversation(app.events.iter()));
             let osel = zoid_tui::palette::nav(app.shell.objects.obj_selected, 0, objs.len());
             if let Some(obj) = objs.get(osel) {
                 let verbs = zoid_tui::objects::verbs_for(obj.kind);
@@ -2182,7 +2196,10 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 };
                 app.session.touch_session(sid, now_ms()).await.ok();
                 app.session_id = sid;
-                app.events = loaded;
+                app.events = zoid::eventlog::EventLog::from_vec(loaded);
+                // #6b resume: free any compacted ToolResult bodies immediately
+                // instead of re-inflating RAM to the pre-#6b footprint.
+                app.events.clear_compacted_bodies();
                 // Wholesale event-log replacement: reset the caches so they
                 // can't serve the previous session's data at an equal length.
                 app.proj = ProjectionCache::default();
@@ -2693,7 +2710,7 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             app.session_id = id;
             app.shell.session_name = name;
             app.session_started_ms = ts;
-            app.events.clear();
+            app.events = zoid::eventlog::EventLog::new();
             // New session: reset the caches (clear() may leave the same length).
             app.proj = ProjectionCache::default();
             app.body_cache = BodyCache::default();
@@ -2799,7 +2816,7 @@ fn start_delegation(app: &mut App, task: String) {
     let provider = app.provider.clone();
     let session = app.session.clone();
     let session_id = app.session_id;
-    let seed = app.events.clone(); // context for construction (B3)
+    let seed = app.events.snapshot(); // context for construction (B3)
     let model = app.model.clone();
     let ui = app.ui_tx.clone();
     tokio::spawn(async move {
@@ -2847,7 +2864,7 @@ fn spawn_turn(app: &mut App) {
     let provider = app.provider.clone();
     let tools = app.tools.clone();
     let session = app.session.clone();
-    let seed = app.events.clone();
+    let seed = app.events.snapshot();
     let model = app.model.clone();
     let ui = app.ui_tx.clone();
     let session_id = app.session_id;
@@ -3288,7 +3305,7 @@ mod tests {
         App {
             session,
             session_id,
-            events: Vec::new(),
+            events: zoid::eventlog::EventLog::new(),
             provider: Arc::new(zoid_provider::FakeProvider::new(Vec::new())),
             tools: Arc::new(Vec::new()),
             profiles: zoid_core::agent_profile::AgentProfileRegistry::new(vec![
@@ -3348,7 +3365,7 @@ mod tests {
             )
         };
         let mut cache = ProjectionCache::default();
-        let mut events = vec![mk("hello there friend")];
+        let mut events = zoid::eventlog::EventLog::from_vec(vec![mk("hello there friend")]);
         assert!(cache.refresh(&events), "first refresh always recomputes");
         assert_eq!(cache.events_len, Some(1));
         assert_eq!(cache.msgs.len(), 1);

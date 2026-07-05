@@ -41,9 +41,16 @@ pub fn script(events: Vec<ProviderEvent>) -> Arc<dyn Provider> {
 }
 
 /// Extract `(name, output, is_error)` for every `ToolResult` in the log.
-pub fn tool_results(events: &[Event]) -> Vec<(String, String, bool)> {
+///
+/// Accepts anything iterable as `&Event` — a `&Vec<Event>`/`&[Event]`, or (in
+/// the `zoid` crate, which depends on this testkit for integration tests) an
+/// `EventLog::iter()` — so it works for both a raw `Vec<Event>` log and the
+/// `EventLog`-typed value `run_agent_turn` returns.
+pub fn tool_results<'a>(
+    events: impl IntoIterator<Item = &'a Event>,
+) -> Vec<(String, String, bool)> {
     events
-        .iter()
+        .into_iter()
         .filter_map(|e| match &e.kind {
             EventKind::ToolResult {
                 name,
@@ -57,7 +64,7 @@ pub fn tool_results(events: &[Event]) -> Vec<(String, String, bool)> {
 }
 
 /// Panic if any tool result is an error.
-pub fn assert_no_tool_errors(events: &[Event]) {
+pub fn assert_no_tool_errors<'a>(events: impl IntoIterator<Item = &'a Event>) {
     for (name, output, is_error) in tool_results(events) {
         assert!(!is_error, "tool `{name}` errored: {output}");
     }
