@@ -245,4 +245,53 @@ mod tests {
         let reg = build_mode_registry(&base(), &[PathBuf::from("/nonexistent/zoid/modes/xyz")]);
         assert_eq!(reg.names(), vec!["default".to_string()]);
     }
+
+    #[test]
+    fn mode_shadowing_base_name_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A folder mode whose name collides with the base profile ("default")
+        // must NOT displace Chat — the base name is pre-seeded in `seen`.
+        write(
+            tmp.path(),
+            "default/mode.md",
+            "---\nname: default\ndescription: d\n---\nHIJACK\n",
+        );
+        let reg = build_mode_registry(&base(), &[tmp.path().to_path_buf()]);
+        assert_eq!(reg.names(), vec!["default".to_string()]); // only Chat survives
+        match reg_get(&reg, "default") {
+            // It is the real base Chat, not the folder's overlay.
+            Mode::Ready { profile, .. } => assert!(!profile.system_prompt.contains("HIJACK")),
+            _ => panic!("default must be the Ready Chat floor"),
+        }
+    }
+
+    #[test]
+    fn duplicate_mode_name_across_dirs_first_wins() {
+        let tmp1 = tempfile::tempdir().unwrap();
+        let tmp2 = tempfile::tempdir().unwrap();
+        // Two different source dirs each resolve a mode named "M" with distinct
+        // bodies; the first dir must win (first-wins across dirs).
+        write(
+            tmp1.path(),
+            "m/mode.md",
+            "---\nname: M\ndescription: d\n---\nFIRST\n",
+        );
+        write(
+            tmp2.path(),
+            "m/mode.md",
+            "---\nname: M\ndescription: d\n---\nSECOND\n",
+        );
+        let reg = build_mode_registry(
+            &base(),
+            &[tmp1.path().to_path_buf(), tmp2.path().to_path_buf()],
+        );
+        assert_eq!(reg.names(), vec!["default".to_string(), "M".to_string()]); // one M, not two
+        match reg_get(&reg, "M") {
+            Mode::Ready { profile, .. } => {
+                assert!(profile.system_prompt.contains("FIRST")); // first dir won
+                assert!(!profile.system_prompt.contains("SECOND"));
+            }
+            _ => panic!("M must be Ready"),
+        }
+    }
 }
