@@ -1293,14 +1293,10 @@ async fn main() -> Result<()> {
         companion_hub: zoid_companion::CompanionHub::new(),
     };
 
-    // Mirror the active mode onto the shell so the chip/palette are correct on
-    // boot, then restore the resumed session's persisted active mode (a no-op if
-    // that mode no longer exists ⇒ stays Chat).
-    sync_mode_mirror(&mut app);
-    if let Ok(Some(saved)) = app.session.get_active_mode(app.session_id).await {
-        app.modes.set_active(&saved);
-        sync_mode_mirror(&mut app);
-    }
+    // Restore the resumed session's persisted active mode (a no-op if that mode
+    // no longer exists ⇒ stays Chat) and mirror it onto the shell so the
+    // chip/palette are correct before the event loop begins.
+    restore_mode_for_session(&mut app).await;
 
     if companion_at_boot {
         enable_companion(&mut app);
@@ -2373,6 +2369,9 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 app.body_cache = BodyCache::default();
                 app.shell.conversation_scroll = 0;
                 app.shell.follow_tail = true; // jump to the latest of the loaded session
+                                              // The resumed session runs with ITS OWN mode, never the
+                                              // previous session's overlay prompt + scoped skills.
+                restore_mode_for_session(app).await;
                 if let Some(info) = app
                     .session
                     .list_sessions(Some(repo_root()))
@@ -2942,6 +2941,9 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             app.body_cache = BodyCache::default();
             app.shell.conversation_scroll = 0;
             app.shell.follow_tail = true; // new session starts pinned to the latest
+                                          // A fresh session has no saved mode yet ⇒ this resets to Chat rather
+                                          // than carrying over the previous session's active mode.
+            restore_mode_for_session(app).await;
             Ok(false)
         }
         Command::RenameSession(name) => {
@@ -3102,6 +3104,19 @@ async fn persist_active_mode(app: &App) {
         .session
         .set_active_mode(app.session_id, app.modes.active_name().to_string())
         .await;
+}
+
+/// Reset to the Chat floor, then apply the session's saved mode if it still
+/// exists, and refresh the shell mirror. Called at boot AND on every mid-run
+/// session change so a resumed/new session runs with ITS OWN mode (spec §11),
+/// never the previously-active session's overlay + scoped skills.
+async fn restore_mode_for_session(app: &mut App) {
+    // Reset to Chat (index 0); its name == base_profile.name.
+    app.modes.set_active(app.base_profile.name.as_str());
+    if let Ok(Some(saved)) = app.session.get_active_mode(app.session_id).await {
+        app.modes.set_active(&saved); // no-op if the saved mode vanished ⇒ stays Chat
+    }
+    sync_mode_mirror(app);
 }
 
 fn spawn_turn(app: &mut App) {
@@ -3992,6 +4007,92 @@ mod tests {
             app.shell.status_hint.as_deref(),
             Some("finish the current turn first"),
             "blocked NewSession should surface the busy hint"
+        );
+    }
+
+    /// Regression for the whole-branch review's Important #1: the two mid-run
+    /// session-change sites (`Action::SessionPick`, `Command::NewSession`) must
+    /// call `restore_mode_for_session` so a resumed/new session runs with ITS
+    /// OWN mode, never the previous session's mode carried over in-memory.
+    /// This test exercises the shared helper directly: a session with no saved
+    /// mode degrades to Chat even if `app.modes` is currently parked on a
+    /// non-Chat mode (proving the reset-then-restore order, not just a
+    /// no-op), a session with a saved mode is restored, and a saved mode that
+    /// no longer exists in the registry degrades cleanly to Chat with no panic.
+    #[tokio::test]
+    async fn restore_mode_for_session_applies_saved_and_degrades_to_chat() {
+        let mut app = test_app().await;
+        // The Chat floor's name is whatever the base profile is named (`"default"`
+        // for `zoid::agent::default_profile()`); capture it rather than hardcoding
+        // the literal, since `restore_mode_for_session` resets to
+        // `app.base_profile.name`, not a hardcoded `"Chat"` string.
+        let chat_name = app.base_profile.name.clone();
+        app.modes = zoid_core::mode::ModeRegistry::new(vec![
+            zoid_core::mode::Mode::chat(app.base_profile.clone()),
+            zoid_core::mode::Mode::Ready {
+                profile: zoid_core::agent_profile::AgentProfile {
+                    name: "SP".into(),
+                    description: "d".into(),
+                    system_prompt: "BASE\n\nOVER".into(),
+                    tools: vec![],
+                    model: None,
+                },
+                skills: zoid_core::skill::SkillRegistry::new(vec![]),
+            },
+        ]);
+
+        // Session A: persist "SP" as its active mode.
+        let session_a = app.session_id;
+        app.session
+            .set_active_mode(session_a, "SP".to_string())
+            .await
+            .unwrap();
+
+        // Create session B with no saved mode.
+        let session_b = Ulid::new();
+        app.session
+            .new_session(session_b, "b".into(), "/repo".into(), 0)
+            .await
+            .unwrap();
+        app.session_id = session_b;
+
+        // Simulate the carried-over in-memory state a mid-run swap would leave
+        // behind if the reset were missing: active mode still "SP" from A.
+        app.modes.set_active("SP");
+        restore_mode_for_session(&mut app).await;
+        assert_eq!(
+            app.modes.active_name(),
+            chat_name,
+            "session B has no saved mode, so it must NOT inherit A's carried-over SP"
+        );
+        assert_eq!(
+            app.shell.active_mode, chat_name,
+            "the shell mirror must reflect the degraded-to-Chat state"
+        );
+
+        // Persist "SP" for session B; restoring should now pick it up.
+        app.session
+            .set_active_mode(session_b, "SP".to_string())
+            .await
+            .unwrap();
+        app.modes.set_active(&chat_name);
+        restore_mode_for_session(&mut app).await;
+        assert_eq!(
+            app.modes.active_name(),
+            "SP",
+            "session B's saved mode must be restored"
+        );
+
+        // A saved mode that no longer exists in the registry degrades to Chat.
+        app.session
+            .set_active_mode(session_b, "Ghost".to_string())
+            .await
+            .unwrap();
+        restore_mode_for_session(&mut app).await;
+        assert_eq!(
+            app.modes.active_name(),
+            chat_name,
+            "a vanished saved mode must degrade cleanly to Chat, not panic"
         );
     }
 
