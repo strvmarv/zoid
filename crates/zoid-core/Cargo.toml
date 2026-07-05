@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 serde = { workspace = true }
+serde_ignored = { workspace = true }
 serde_json = { workspace = true }
 ulid = { workspace = true }
 rusqlite = { workspace = true }

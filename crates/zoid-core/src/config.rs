@@ -96,7 +96,7 @@ mod tests {
 
     #[test]
     fn companion_section_parses_and_merges() {
-        let p = parse_toml("[companion]\nport = 9123\nopen = false").unwrap();
+        let (p, _warn) = parse_toml("[companion]\nport = 9123\nopen = false").unwrap();
         assert_eq!(p.companion.port, Some(9123));
         assert_eq!(p.companion.open, Some(false));
         let (cfg, _prov) = merge(&[(Source::UserGlobal, p)]);
@@ -132,7 +132,7 @@ pub struct Provenance {
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct PartialEconomy {
     pub context_target: Option<u64>,
     pub auto_evict_cold: Option<bool>,
@@ -142,20 +142,20 @@ pub struct PartialEconomy {
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct PartialSkills {
     pub source_dirs: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct PartialCompanion {
     pub port: Option<u16>,
     pub open: Option<bool>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct PartialConfig {
     pub provider: Option<String>,
     pub base_url: Option<String>,
@@ -166,9 +166,16 @@ pub struct PartialConfig {
     pub companion: PartialCompanion,
 }
 
-/// Parse one TOML layer. Unknown keys are rejected so typos surface early.
-pub fn parse_toml(s: &str) -> anyhow::Result<PartialConfig> {
-    Ok(toml::from_str(s)?)
+/// Parse one TOML layer. Known keys deserialize normally; unknown keys are NOT
+/// rejected — their dotted paths are collected and returned so callers can warn
+/// (preserving typo-surfacing without discarding the whole layer). A genuine
+/// syntax error, or a wrong-typed *known* key, is still an `Err`.
+pub fn parse_toml(s: &str) -> anyhow::Result<(PartialConfig, Vec<String>)> {
+    let de = toml::Deserializer::new(s);
+    let mut unknown: Vec<String> = Vec::new();
+    let cfg: PartialConfig =
+        serde_ignored::deserialize(de, |path| unknown.push(path.to_string()))?;
+    Ok((cfg, unknown))
 }
 
 /// Merge layers in order; later layers override earlier. Records the winning
@@ -247,10 +254,10 @@ mod merge_tests {
 
     #[test]
     fn later_layers_override_and_record_source() {
-        let user =
+        let (user, _) =
             parse_toml("model = \"a\"\nreduced_motion = true\n[economy]\nauto_evict_cold = false")
                 .unwrap();
-        let proj = parse_toml("model = \"b\"").unwrap();
+        let (proj, _) = parse_toml("model = \"b\"").unwrap();
         let (cfg, prov) = merge(&[(Source::UserGlobal, user), (Source::Project, proj)]);
         assert_eq!(cfg.model, "b");
         assert_eq!(prov.model, Source::Project); // project overrode user
@@ -269,13 +276,50 @@ mod merge_tests {
     }
 
     #[test]
-    fn unknown_key_is_rejected() {
-        assert!(parse_toml("bogus = 1").is_err());
+    fn unknown_key_is_warned_not_rejected() {
+        let (pc, warn) = parse_toml("model = \"a\"\nbogus = 1").unwrap();
+        assert_eq!(pc.model.as_deref(), Some("a")); // valid key still loads
+        assert_eq!(warn, vec!["bogus".to_string()]);
+    }
+
+    #[test]
+    fn unknown_economy_key_loads_siblings_and_warns_dotted() {
+        let (pc, warn) =
+            parse_toml("[economy]\ncompact_threshold_pct = 70\ncontext_ceiling = 512000").unwrap();
+        assert_eq!(pc.economy.compact_threshold_pct, Some(70)); // sibling loads
+        assert_eq!(pc.economy.context_target, None); // renamed key NOT applied
+        assert_eq!(warn, vec!["economy.context_ceiling".to_string()]);
+    }
+
+    #[test]
+    fn regression_stale_ceiling_does_not_drop_model_or_provider() {
+        let toml = "model = \"glm-5.2\"\nprovider = \"ollama-cloud\"\n[economy]\ncontext_ceiling = 512000";
+        let (pc, warn) = parse_toml(toml).unwrap();
+        assert_eq!(pc.model.as_deref(), Some("glm-5.2"));
+        assert_eq!(pc.provider.as_deref(), Some("ollama-cloud"));
+        assert_eq!(warn, vec!["economy.context_ceiling".to_string()]);
+    }
+
+    #[test]
+    fn malformed_toml_is_still_err() {
+        assert!(parse_toml("this is = = not toml").is_err());
+    }
+
+    #[test]
+    fn wrong_typed_known_key_is_still_err() {
+        // recent_n expects an integer; a string is a hard error, not an unknown key.
+        assert!(parse_toml("[economy]\nrecent_n = \"four\"").is_err());
+    }
+
+    #[test]
+    fn no_unknown_keys_yields_empty_warnings() {
+        let (_pc, warn) = parse_toml("model = \"a\"").unwrap();
+        assert!(warn.is_empty());
     }
 
     #[test]
     fn parses_skills_source_dirs() {
-        let p = parse_toml("[skills]\nsource_dirs = [\"a\", \"b\"]").unwrap();
+        let (p, _) = parse_toml("[skills]\nsource_dirs = [\"a\", \"b\"]").unwrap();
         assert_eq!(
             p.skills.source_dirs,
             Some(vec!["a".to_string(), "b".to_string()])
@@ -284,8 +328,8 @@ mod merge_tests {
 
     #[test]
     fn merge_unions_source_dirs_across_layers() {
-        let user = parse_toml("[skills]\nsource_dirs = [\"a\", \"b\"]").unwrap();
-        let proj = parse_toml("[skills]\nsource_dirs = [\"b\", \"c\"]").unwrap();
+        let (user, _) = parse_toml("[skills]\nsource_dirs = [\"a\", \"b\"]").unwrap();
+        let (proj, _) = parse_toml("[skills]\nsource_dirs = [\"b\", \"c\"]").unwrap();
         let (cfg, _) = merge(&[(Source::UserGlobal, user), (Source::Project, proj)]);
         assert_eq!(
             cfg.skills.source_dirs,
@@ -356,7 +400,7 @@ mod write_tests {
         let src = "model = \"old\"\n[economy]\nauto_evict_cold = true\n";
         let out = set_in_toml(src, "model", TomlValue::Str("new".into())).unwrap();
         let out = set_in_toml(&out, "economy.context_target", TomlValue::Int(512000)).unwrap();
-        let p = parse_toml(&out).unwrap();
+        let (p, _) = parse_toml(&out).unwrap();
         assert_eq!(p.model.as_deref(), Some("new"));
         assert_eq!(p.economy.context_target, Some(512000));
         assert_eq!(p.economy.auto_evict_cold, Some(true)); // preserved
@@ -365,12 +409,12 @@ mod write_tests {
     #[test]
     fn unset_removes_key() {
         let out = set_in_toml("model = \"x\"\n", "model", TomlValue::Unset).unwrap();
-        assert!(parse_toml(&out).unwrap().model.is_none());
+        assert!(parse_toml(&out).unwrap().0.model.is_none());
     }
 
     #[test]
     fn writes_into_empty_document() {
         let out = set_in_toml("", "reduced_motion", TomlValue::Bool(true)).unwrap();
-        assert_eq!(parse_toml(&out).unwrap().reduced_motion, Some(true));
+        assert_eq!(parse_toml(&out).unwrap().0.reduced_motion, Some(true));
     }
 }
