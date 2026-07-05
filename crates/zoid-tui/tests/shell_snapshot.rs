@@ -297,6 +297,29 @@ fn active_tool_spinner_frame() {
     insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
 }
 
+/// Mode-chip fidelity (Task 7): the status bar's chip shows the active mode
+/// name, uppercased, when the mode loaded cleanly.
+#[test]
+fn status_chip_shows_active_mode() {
+    let mut s = ShellState::new();
+    s.active_mode = "Superpowers".into();
+    s.mode_names = vec!["Chat".into(), "Superpowers".into()];
+    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+}
+
+/// Broken-mode fidelity (Task 7): when the active mode failed to load, the
+/// chip shows a `⚠` warning glyph + the mode name, and the main surface is
+/// replaced entirely by the mode-error card with the `:mode reload` hint
+/// (spec §9).
+#[test]
+fn broken_mode_shows_warn_chip_and_error_card() {
+    let mut s = ShellState::new();
+    s.active_mode = "Superpowers".into();
+    s.mode_names = vec!["Chat".into(), "Superpowers".into()];
+    s.active_mode_broken = true;
+    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+}
+
 /// Rail drawer headers show title + chevron only — no keybind labels (spec §2.1).
 #[test]
 fn rail_headers_have_no_keybind_labels() {

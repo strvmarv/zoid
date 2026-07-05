@@ -1,0 +1,29 @@
+---
+source: crates/zoid-tui/tests/shell_snapshot.rs
+assertion_line: 320
+expression: "draw(&s, &seeded(), 100, 24)"
+---
+"                                                zoid                                      ^P palette"
+"┌ mode error ─────────────────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
+"│⚠ mode 'Superpowers' failed to load                  │ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
+"│Fix its mode.md, then run  :mode reload              │ ╰─────────────────────────────────────────╯ "
+"│                                                     │                                             "
+"│                                                     │ ╭ ▾ session ──────────────────────────────╮ "
+"│                                                     │ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
+"│                                                     │ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
+"│                                                     │ │⌚ dur 0m   tok/cac 0                    │ " Hidden by multi-width symbols: [(58, " ")]
+"│                                                     │ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
+"│                                                     │ ╰─────────────────────────────────────────╯ "
+"│                                                     │                                             "
+"│                                                     │ ╭ ▾ context · tokens ─────────────────────╮ "
+"│                                                     │ │churn                              cache │ "
+"│                                                     │ ╰─────────────────────────────────────────╯ "
+"│                                                     │                                             "
+"│                                                     │ ╭ ▾ tasks ────────────────────────────────╮ "
+"│                                                     │ │no tasks                                 │ "
+"│                                                     │ ╰─────────────────────────────────────────╯ "
+"└─────────────────────────────────────────────────────┘                                             "
+"┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"
+"│                                                                                                  │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
+" ⚠ Superpowers                                 ● idle                                   zoom normal "

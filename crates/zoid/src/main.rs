@@ -28,7 +28,6 @@ use zoid_core::projection::conversation;
 use zoid_core::session::SessionHandle;
 use zoid_provider::Provider;
 use zoid_provider::{default_model, default_provider};
-use zoid_tools::Tool;
 use zoid_tui::chat::ChatView;
 use zoid_tui::layout::compute;
 use zoid_tui::render_shell;
@@ -1015,12 +1014,6 @@ struct App {
     session_id: Ulid,
     events: zoid::eventlog::EventLog,
     provider: Arc<dyn Provider>,
-    /// No longer read by `spawn_turn` (which now binds a fresh, per-turn
-    /// `invoke_skill` tool to the mode snapshot — see `active_turn`); kept as a
-    /// harmless default so this refactor stays behavior-preserving. Slated for
-    /// removal in Task 7.
-    #[allow(dead_code)]
-    tools: Arc<Vec<Box<dyn Tool>>>,
     /// The active mode + all discovered modes; drives the turn's system prompt,
     /// the effective skill menu, and the mode chip. Index 0 is always Chat.
     modes: zoid_core::mode::ModeRegistry,
@@ -1267,7 +1260,6 @@ async fn main() -> Result<()> {
         session_id,
         events,
         provider,
-        tools: Arc::new(zoid::invoke_skill::chat_tools(skills.clone())),
         modes,
         base_profile,
         mode_dirs,
@@ -3640,7 +3632,6 @@ mod tests {
             session_id,
             events: zoid::eventlog::EventLog::new(),
             provider: Arc::new(zoid_provider::FakeProvider::new(Vec::new())),
-            tools: Arc::new(Vec::new()),
             base_profile: zoid::agent::default_profile(),
             modes: zoid_core::mode::ModeRegistry::new(vec![zoid_core::mode::Mode::chat(
                 zoid::agent::default_profile(),
