@@ -3,24 +3,41 @@
 
 use crate::hub::{CompanionHub, Frame};
 use crate::snapshot::DashboardSnapshot;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
-// Containment for agent-authored card HTML. `connect-src 'self'` permits the
-// dashboard's same-origin SSE (`EventSource`) while blocking script-driven
-// egress (fetch/XHR/WS/`<a ping>`) to any other host. `script-src 'self'` (no
-// 'unsafe-inline') keeps JS to the served `app.js`, so inline event-handler
-// attributes (`onerror`, `onclick`, …) and `javascript:` URIs a card carries
-// stay inert. `img-src`/`style-src` block image/CSS network exfil, and
-// `form-action`/`base-uri` are pinned to 'self' because neither falls back to
-// `default-src` — without them a card `<form action="http://evil">` or `<base>`
-// would exfiltrate on submit. RESIDUAL, accepted for the "raw HTML card by
-// design" feature: top-level navigation (`<meta http-equiv=refresh>`, external
-// `<a href>`) is not fully governable by CSP in shipping browsers.
-pub const CSP: &str = "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; form-action 'self'; base-uri 'self'";
+// CSP for the *shell* document (the dashboard page). This is the token-bearing
+// origin, so it stays locked down: `script-src 'self'` (no 'unsafe-inline')
+// means the only JS that runs in this origin is the served `app.js` — an
+// agent-authored card can never execute script in the page that holds the
+// session token. `connect-src 'self'` permits the dashboard's same-origin SSE
+// (`EventSource`) while blocking script-driven egress (fetch/XHR/WS) to any
+// other host. `form-action`/`base-uri` are pinned to 'self' (neither falls back
+// to `default-src`). `img-src`/`style-src` block image/CSS network exfil.
+//
+// Agent card JS runs, but NOT in this origin: `app.js` renders each card inside
+// an `<iframe sandbox="allow-scripts">` loaded from a `data:` URL. The sandbox
+// (no `allow-same-origin`, no `allow-top-navigation`) gives the frame an opaque
+// origin and walls its script off from the parent — it cannot read `location`
+// (the token), the dashboard DOM, or the SSE stream, and cannot redirect the top
+// page. `frame-src 'self' data:` lets the shell embed that frame.
+//
+// `script-src 'self' 'unsafe-inline'`: a `data:` frame is a *local scheme*, so
+// per CSP inheritance it runs under THIS policy, not one of its own — without
+// 'unsafe-inline' the card's own inline scripts would be blocked and nothing
+// interactive would work. 'unsafe-inline' is safe to grant here because the
+// token-bearing shell page carries no inline script (its only script is the
+// served `app.js`) and NO agent-authored content is ever inserted into the shell
+// DOM — cards live solely inside the sandboxed frame. Isolation is enforced by
+// the sandbox (opaque origin), not by `script-src`; 'unsafe-inline' is inert for
+// the shell and merely lets the walled-off frame execute. RESIDUAL, accepted: a
+// card's sandboxed script can make egress carrying data the *agent itself
+// authored* (never anything read from the parent — the opaque origin guarantees
+// that), the same trust boundary the agent's own tools already sit on.
+pub const CSP: &str = "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-src 'self' data:; form-action 'self'; base-uri 'self'";
 
 const SHELL: &str = include_str!("shell.html");
 const APP_JS: &str = include_str!("app.js");
@@ -130,27 +147,53 @@ fn handle(
             .with_header(header("Content-Security-Policy", CSP));
         let _ = request.respond(resp);
     } else if url == events_path {
-        let reader = SseReader::new(hub, running);
-        let resp = Response::new(
-            StatusCode(200),
-            vec![
-                header("Content-Type", "text/event-stream"),
-                header("Cache-Control", "no-cache"),
-            ],
-            reader,
-            None,
-            None,
-        );
-        let _ = request.respond(resp);
+        stream_events(request, hub, running);
     } else {
         let _ = request.respond(Response::empty(StatusCode(404)));
     }
 }
 
-/// A blocking `Read` that turns hub updates into an SSE byte stream. tiny_http
-/// pulls from it (chunked) for the connection's lifetime; each `read` either
-/// drains the pending buffer, emits changed frames after a version bump, or
-/// emits a heartbeat on idle. Returns `Ok(0)` (EOF) once `running` is false.
+/// Stream the SSE `/events` response by taking over the raw socket. We can't use
+/// tiny_http's `Response` here: it only flushes the writer *after* the whole
+/// body is written (`raw_print` → `flush`), but our SSE body never ends — so
+/// every frame would sit unflushed in the writer and the browser's `EventSource`
+/// would hang forever (dashboard stuck on "waiting for session…"). Instead we
+/// grab the writer with `into_writer`, emit the status line + headers, then pump
+/// `SseReader` frames, flushing after each so they reach the client at once.
+///
+/// The body is delimited by connection close (`Connection: close`, no
+/// Content-Length or chunking) and runs until the client disconnects (a write
+/// error) or the server shuts down (`running` clears, so the reader yields EOF).
+fn stream_events(request: tiny_http::Request, hub: Arc<CompanionHub>, running: Arc<AtomicBool>) {
+    let mut w = request.into_writer();
+    let head = "HTTP/1.1 200 OK\r\n\
+                Content-Type: text/event-stream\r\n\
+                Cache-Control: no-cache\r\n\
+                Connection: close\r\n\
+                \r\n";
+    if w.write_all(head.as_bytes()).is_err() || w.flush().is_err() {
+        return;
+    }
+    // `SseReader` supports partial reads, so a card larger than `buf` simply
+    // streams across several iterations; `read` yields `Ok(0)` only on shutdown.
+    let mut reader = SseReader::new(hub, running);
+    let mut buf = [0u8; 8192];
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                if w.write_all(&buf[..n]).is_err() || w.flush().is_err() {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+}
+
+/// A blocking `Read` that turns hub updates into an SSE byte stream. `read`
+/// either drains the pending buffer, emits changed frames after a version bump,
+/// or emits a heartbeat on idle. Returns `Ok(0)` (EOF) once `running` is false.
 pub(crate) struct SseReader {
     hub: Arc<CompanionHub>,
     running: Arc<AtomicBool>,
@@ -277,6 +320,60 @@ mod tests {
         assert!(resp.starts_with("HTTP/1.1 200"), "got: {resp}");
         assert!(resp.contains("text/javascript"), "wrong content-type: {resp}");
         assert!(resp.contains("EventSource"), "missing script body: {resp}");
+        server.shutdown();
+    }
+
+    #[test]
+    fn events_stream_flushes_first_frame_over_http() {
+        // End-to-end over a real socket (not `SseReader` in isolation): proves the
+        // `/events` body reaches the client without waiting for the endless stream
+        // to finish — the flush bug that pinned the dashboard on "waiting for
+        // session…". A `read` here must return the dashboard frame, not block.
+        let hub = CompanionHub::new();
+        hub.publish_snapshot(DashboardSnapshot {
+            session_name: "e2e".into(),
+            model: "m".into(),
+            provider: "p".into(),
+            cwd: "/".into(),
+            ctx_used: 0,
+            ctx_ceiling: 0,
+            session_tokens: 0,
+            cached_tokens: 0,
+            cache_supported: false,
+            tasks_len: 0,
+            busy: false,
+            tiers: vec![],
+            churn: vec![],
+            updated_ms: 0,
+        });
+        let server = start(hub, 0, "tok123".into()).unwrap();
+
+        let mut s = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        write!(s, "GET /s/tok123/events HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
+
+        // Accumulate a couple of reads; each must return promptly (the timeout is
+        // the failure mode). The status line + dashboard frame arrive right away.
+        let mut acc = String::new();
+        let mut buf = [0u8; 1024];
+        for _ in 0..3 {
+            match s.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => acc.push_str(&String::from_utf8_lossy(&buf[..n])),
+                Err(_) => break,
+            }
+            if acc.contains("event: dashboard") {
+                break;
+            }
+        }
+        assert!(acc.starts_with("HTTP/1.1 200"), "bad status: {acc}");
+        assert!(acc.contains("text/event-stream"), "wrong content-type: {acc}");
+        assert!(acc.contains("event: dashboard"), "no dashboard frame: {acc}");
+        assert!(
+            acc.contains("\"session_name\":\"e2e\""),
+            "frame missing data: {acc}"
+        );
+
         server.shutdown();
     }
 

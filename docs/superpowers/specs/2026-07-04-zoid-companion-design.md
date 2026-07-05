@@ -52,20 +52,32 @@ These bind every implementation task.
 - **Token:** minted with `ulid::Ulid::new()` (128-bit, URL-safe Crockford
   base32). No new `rand`/`getrandom` dependency.
 - **CSP header** on the shell page, verbatim (as shipped):
-  `default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; form-action 'self'; base-uri 'self'`
+  `default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-src 'self' data:; form-action 'self'; base-uri 'self'`
   > **CSP correction (implementation).** This design originally specified
   > `connect-src 'none'` with no `script-src`. That was dead-on-arrival:
   > `connect-src` governs the dashboard's own `EventSource`, so `'none'` blocks
   > the SSE stream entirely, and with no `script-src` the shell's inline
   > `<script>` is also blocked. The shipped policy uses `connect-src 'self'`
   > (permits same-origin SSE, still blocks external egress), moves the shell JS
-  > to a served same-origin `app.js` so `script-src 'self'` needs no
-  > `'unsafe-inline'` (keeping any script in an agent-authored card inert), and
-  > adds `form-action 'self'`/`base-uri 'self'` (neither falls back to
-  > `default-src`) to close form/`<base>` exfil. The per-session token is never
-  > sent to the model and no card JS executes, so the token is structurally
-  > unreachable from a card; top-level navigation (`<meta refresh>`) is an
-  > accepted residual of the raw-HTML-card feature.
+  > to a served same-origin `app.js`, and adds `form-action 'self'`/`base-uri
+  > 'self'` (neither falls back to `default-src`) to close form/`<base>` exfil.
+  > **Interactive-card revision.** Cards were originally injected as `#card`
+  > innerHTML with card JS deliberately inert. To let cards be *interactive*
+  > without granting card JS the token-bearing origin, each card now renders in a
+  > sandboxed `<iframe sandbox="allow-scripts">` from a `data:` URL (`frame-src
+  > 'self' data:` permits it). The sandbox gives the frame an opaque origin (no
+  > `allow-same-origin`, no `allow-top-navigation`), so card JS **runs** but
+  > cannot read the shell URL (the token), the dashboard DOM, or the SSE stream,
+  > and cannot redirect the top page — verified in a real browser. A `data:`
+  > frame is a local scheme and inherits the shell CSP, so `script-src` gains
+  > `'unsafe-inline'` purely to let the *framed* script execute; it is inert for
+  > the shell itself, which has no inline script and into whose DOM no
+  > agent-authored content is ever inserted. Isolation is enforced by the
+  > sandbox, not by `script-src`. The per-session token is never sent to the
+  > model and is structurally unreachable from a card. Residuals, accepted: the
+  > shell's own top-level navigation (`<meta refresh>`), and a card's sandboxed
+  > script making egress that carries only data the agent itself authored (never
+  > anything read from the parent — the opaque origin guarantees that).
 - **Token failure response:** any missing/wrong token or unknown path returns
   `404` with an empty body. Never `401`/`403` (do not confirm existence).
 - **Default off:** the server never starts unless explicitly enabled (palette,
@@ -214,7 +226,8 @@ writes also error once the browser disconnects.
 
 **Static shell** — one `include_str!("shell.html")` string: inline CSS + JS, no
 external assets. Opens `new EventSource("events")`, renders the dashboard from
-`dashboard` frames, and swaps `#card` innerHTML from `card` frames.
+`dashboard` frames, and renders each `card` frame into a sandboxed `<iframe>`
+(one reused frame, `src` swapped per card; see the CSP note above).
 
 ### Routes & wire format
 
@@ -277,7 +290,8 @@ sending only the part(s) that changed.
    (deduped) `hub.publish_snapshot` → SSE workers wake on the version bump →
    each writes a `dashboard` frame.
 3. **Card** → model calls `show(html)` → agent loop intercepts → `publish_card`
-   → SSE `card` frame → shell sets `#card` innerHTML (replacing the previous).
+   → SSE `card` frame → shell loads it into the sandboxed card `<iframe>`
+   (replacing the previous card).
 4. **Disable** → `server.shutdown()` → accept loop + workers exit and join →
    `App.companion = None`. Browser's `EventSource` reconnect attempts fail
    silently. Re-enable mints a fresh token and URL.
