@@ -4,7 +4,6 @@
 //! their argument inline via `ArgKind`. Pure; rendering lives in `render.rs`.
 
 use crate::command::Command;
-use crate::state::Mode;
 
 /// A parameterized palette command's argument-capture flow. The palette enters
 /// an inline "Arg" phase to collect the argument, then builds the final command.
@@ -41,7 +40,7 @@ pub fn arg_kind_for(cmd: &Command) -> Option<ArgKind> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaletteItem {
-    pub label: &'static str,
+    pub label: String,
     pub command: Command,
 }
 
@@ -52,49 +51,56 @@ pub struct PaletteItem {
 ///
 /// `companion_on` is the live companion-server state (source of truth: the bin's
 /// running server); the companion row offers the *opposite* action, mirroring
-/// how the mode row offers the other mode.
-pub fn all_items(mode: Mode, companion_on: bool) -> Vec<PaletteItem> {
-    // The mode row offers the *other* mode.
-    let (mode_label, mode_cmd) = match mode {
-        Mode::Chat => ("Switch to Build", Command::SwitchMode(Mode::Build)),
-        Mode::Build => ("Switch to Chat", Command::SwitchMode(Mode::Chat)),
-    };
+/// how the mode rows offer every mode other than the active one.
+pub fn all_items(active_mode: &str, mode_names: &[String], companion_on: bool) -> Vec<PaletteItem> {
+    // One "Switch to <mode>" row per mode other than the active one, in order,
+    // then a reload row.
+    let mut mode_rows: Vec<PaletteItem> = mode_names
+        .iter()
+        .filter(|n| n.as_str() != active_mode)
+        .map(|n| PaletteItem {
+            label: format!("Switch to {n}"),
+            command: Command::SwitchMode(n.clone()),
+        })
+        .collect();
+    mode_rows.push(PaletteItem {
+        label: "Reload modes".to_string(),
+        command: Command::ReloadModes,
+    });
     // The companion row offers the *opposite* of the current state.
     let (companion_label, companion_cmd) = if companion_on {
         ("Disable companion", Command::CompanionDisable)
     } else {
         ("Enable companion", Command::CompanionEnable)
     };
-    vec![
+    let mut items = vec![
         PaletteItem {
-            label: "New session",
+            label: "New session".to_string(),
             command: Command::NewSession,
         },
         PaletteItem {
-            label: "Resume session…",
+            label: "Resume session…".to_string(),
             command: Command::ResumeSessionPicker,
         },
         PaletteItem {
-            label: "Rename session…",
+            label: "Rename session…".to_string(),
             command: Command::RenameSession(String::new()),
         },
-        PaletteItem {
-            label: mode_label,
-            command: mode_cmd,
-        },
-        PaletteItem {
-            label: "Open settings",
-            command: Command::OpenConfig,
-        },
-        PaletteItem {
-            label: companion_label,
-            command: companion_cmd,
-        },
-        PaletteItem {
-            label: "Quit zoid",
-            command: Command::Quit,
-        },
-    ]
+    ];
+    items.extend(mode_rows);
+    items.push(PaletteItem {
+        label: "Open settings".to_string(),
+        command: Command::OpenConfig,
+    });
+    items.push(PaletteItem {
+        label: companion_label.to_string(),
+        command: companion_cmd,
+    });
+    items.push(PaletteItem {
+        label: "Quit zoid".to_string(),
+        command: Command::Quit,
+    });
+    items
 }
 
 /// Case-insensitive fuzzy score: `Some(higher = better)` if `query` is a
@@ -135,7 +141,7 @@ pub fn selectable_matches(items: &[PaletteItem], query: &str) -> Vec<usize> {
     let mut scored: Vec<(usize, i32)> = items
         .iter()
         .enumerate()
-        .filter_map(|(i, it)| fuzzy_score(it.label, query).map(|s| (i, s)))
+        .filter_map(|(i, it)| fuzzy_score(&it.label, query).map(|s| (i, s)))
         .collect();
     scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     scored.into_iter().map(|(i, _)| i).collect()
@@ -169,13 +175,17 @@ mod tests {
         assert!(fuzzy_score("Quit zoid", "zzz").is_none());
     }
 
+    fn names() -> Vec<String> {
+        vec!["Chat".into(), "Build".into()]
+    }
+
     #[test]
     fn all_items_is_flat_curated() {
         // Runnable-only is now a *type-level* guarantee (the field is `Command`,
         // not `Option<Command>`), so there's nothing to assert at runtime for it.
         // This pins the flat curated set and its at-rest order.
-        let items = all_items(Mode::Chat, false);
-        let labels: Vec<&str> = items.iter().map(|i| i.label).collect();
+        let items = all_items("Chat", &names(), false);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         assert_eq!(
             labels,
             vec![
@@ -183,48 +193,58 @@ mod tests {
                 "Resume session…",
                 "Rename session…",
                 "Switch to Build",
+                "Reload modes",
                 "Open settings",
                 "Enable companion",
                 "Quit zoid",
             ]
         );
         // With the companion running, the row offers the opposite action.
-        let on: Vec<&str> = all_items(Mode::Chat, true)
-            .iter()
-            .map(|i| i.label)
-            .collect();
+        let items_on = all_items("Chat", &names(), true);
+        let on: Vec<&str> = items_on.iter().map(|i| i.label.as_str()).collect();
         assert!(on.contains(&"Disable companion"));
         assert!(!on.contains(&"Enable companion"));
     }
 
     #[test]
-    fn mode_row_offers_the_other_mode() {
+    fn mode_rows_offer_every_other_mode_plus_reload() {
+        let items = all_items("Chat", &names(), false);
+        // A "Switch to <name>" row for every mode other than the active one.
         assert_eq!(
-            all_items(Mode::Chat, false)
+            items
                 .iter()
-                .find(|i| i.command == Command::SwitchMode(Mode::Build))
-                .map(|i| i.label),
+                .find(|i| i.command == Command::SwitchMode("Build".into()))
+                .map(|i| i.label.as_str()),
             Some("Switch to Build")
         );
+        // The active mode does not get a switch row.
+        assert!(items
+            .iter()
+            .all(|i| i.command != Command::SwitchMode("Chat".into())));
+        // …and a reload row is always present.
+        assert!(items.iter().any(|i| i.command == Command::ReloadModes));
+
+        // From Build, Chat gets the switch row instead.
+        let items = all_items("Build", &names(), false);
         assert_eq!(
-            all_items(Mode::Build, false)
+            items
                 .iter()
-                .find(|i| i.command == Command::SwitchMode(Mode::Chat))
-                .map(|i| i.label),
+                .find(|i| i.command == Command::SwitchMode("Chat".into()))
+                .map(|i| i.label.as_str()),
             Some("Switch to Chat")
         );
     }
 
     #[test]
     fn empty_query_returns_all_rows_in_order() {
-        let items = all_items(Mode::Chat, false);
+        let items = all_items("Chat", &names(), false);
         let idxs = selectable_matches(&items, "");
         assert_eq!(idxs, (0..items.len()).collect::<Vec<_>>());
     }
 
     #[test]
     fn typing_reranks_best_match_first() {
-        let items = all_items(Mode::Chat, false);
+        let items = all_items("Chat", &names(), false);
         let idxs = selectable_matches(&items, "comp");
         assert_eq!(items[idxs[0]].label, "Enable companion");
         let idxs = selectable_matches(&items, "build");

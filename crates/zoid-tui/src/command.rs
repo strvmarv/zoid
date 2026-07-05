@@ -1,11 +1,14 @@
 //! The `:`-command and palette-action vocabulary. Both the command line and the
 //! palette resolve to a `Command`; the `zoid` bin executes it (spec §6.5).
 
-use crate::state::{DrawerId, Mode};
+use crate::state::DrawerId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    SwitchMode(Mode),
+    /// Switch to the named mode (`:mode <name>` / palette).
+    SwitchMode(String),
+    /// Re-scan mode folders without a restart (`:mode reload`).
+    ReloadModes,
     Quit,
     OpenDrawer(DrawerId),
     NewSession,
@@ -26,12 +29,12 @@ pub enum Command {
 }
 
 /// Parse a command-line string. Accepts an optional leading `:` and surrounding
-/// whitespace. `:build`/`:chat`, `:q`/`:quit`, `:repo`/`:session`/`:context`.
+/// whitespace. `:mode <name>`/`:mode reload`, `:q`/`:quit`, `:repo`/`:session`/`:context`.
 pub fn parse_command(raw: &str) -> Command {
     let t = raw.trim().trim_start_matches(':').trim();
     match t {
-        "build" => Command::SwitchMode(Mode::Build),
-        "chat" => Command::SwitchMode(Mode::Chat),
+        "mode reload" => Command::ReloadModes,
+        s if s.starts_with("mode ") => Command::SwitchMode(s["mode ".len()..].trim().to_string()),
         "q" | "quit" => Command::Quit,
         "repo" => Command::OpenDrawer(DrawerId::Repo),
         "session" => Command::OpenDrawer(DrawerId::Session),
@@ -57,8 +60,11 @@ mod tests {
 
     #[test]
     fn parses_known_commands_with_or_without_colon() {
-        assert_eq!(parse_command(":build"), Command::SwitchMode(Mode::Build));
-        assert_eq!(parse_command("chat"), Command::SwitchMode(Mode::Chat));
+        assert_eq!(
+            parse_command(":mode Superpowers"),
+            Command::SwitchMode("Superpowers".into())
+        );
+        assert_eq!(parse_command("mode reload"), Command::ReloadModes);
         assert_eq!(parse_command("  :q "), Command::Quit);
     }
 

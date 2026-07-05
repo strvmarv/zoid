@@ -5,7 +5,7 @@ use zoid_core::economy::ChurnTimeline;
 use zoid_core::projection::ChatMsg;
 use zoid_tui::chat::ChatView;
 use zoid_tui::render_shell;
-use zoid_tui::state::{DrawerId, Focus, Mode, Overlay, ShellState, Zoom};
+use zoid_tui::state::{DrawerId, Focus, Overlay, ShellState, Zoom};
 use zoid_tui::EconomyView;
 
 fn normal_view() -> ChatView {
@@ -80,7 +80,17 @@ fn draw_body(
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|f| {
-            render_shell(f, state, &empty_economy(), msgs, body, &[], &input, false, view);
+            render_shell(
+                f,
+                state,
+                &empty_economy(),
+                msgs,
+                body,
+                &[],
+                &input,
+                false,
+                view,
+            );
         })
         .unwrap();
     terminal.backend().to_string()
@@ -369,6 +379,7 @@ fn session_drawer_open_frame() {
 #[test]
 fn palette_overlay_frame() {
     let mut s = ShellState::new();
+    s.mode_names = vec!["Chat".into(), "Build".into()];
     s.overlay = Overlay::Palette;
     s.palette.query = "build".into();
     insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
@@ -391,13 +402,6 @@ fn command_line_frame() {
     s.overlay = Overlay::CommandLine;
     s.cmdline.buffer = "build".into();
     insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
-}
-
-#[test]
-fn build_placeholder_frame() {
-    let mut s = ShellState::new();
-    s.set_mode(Mode::Build);
-    insta::assert_snapshot!(draw(&s, &[], 100, 24));
 }
 
 #[test]

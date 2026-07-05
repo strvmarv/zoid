@@ -1027,6 +1027,9 @@ struct App {
     /// The base coding-agent profile (Chat). Kept so mode reload / broken-mode
     /// fallback can recompose without re-reading a const.
     base_profile: zoid_core::agent_profile::AgentProfile,
+    /// The resolved mode-source directories, computed once at startup. Stashed so
+    /// `:mode reload` can rebuild the registry without recomputing paths.
+    mode_dirs: Vec<PathBuf>,
     /// Skills the `invoke_skill` tool can load; also rendered as the menu the
     /// active mode's system prompt advertises.
     skills: std::sync::Arc<zoid_core::skill::SkillRegistry>,
@@ -1251,15 +1254,13 @@ async fn main() -> Result<()> {
     };
 
     let base_profile = zoid::agent::default_profile();
-    let modes = {
-        let mode_dirs = zoid::mode_import::resolve_mode_dirs(
-            &config.modes.source_dirs,
-            &cfg_dir,
-            std::path::Path::new(&root),
-            home.as_deref(),
-        );
-        zoid::mode_import::build_mode_registry(&base_profile, &mode_dirs)
-    };
+    let mode_dirs = zoid::mode_import::resolve_mode_dirs(
+        &config.modes.source_dirs,
+        &cfg_dir,
+        std::path::Path::new(&root),
+        home.as_deref(),
+    );
+    let modes = zoid::mode_import::build_mode_registry(&base_profile, &mode_dirs);
 
     let mut app = App {
         session,
@@ -1269,6 +1270,7 @@ async fn main() -> Result<()> {
         tools: Arc::new(zoid::invoke_skill::chat_tools(skills.clone())),
         modes,
         base_profile,
+        mode_dirs,
         skills,
         model,
         economy: config.economy,
@@ -1298,6 +1300,15 @@ async fn main() -> Result<()> {
         companion: None,
         companion_hub: zoid_companion::CompanionHub::new(),
     };
+
+    // Mirror the active mode onto the shell so the chip/palette are correct on
+    // boot, then restore the resumed session's persisted active mode (a no-op if
+    // that mode no longer exists ⇒ stays Chat).
+    sync_mode_mirror(&mut app);
+    if let Ok(Some(saved)) = app.session.get_active_mode(app.session_id).await {
+        app.modes.set_active(&saved);
+        sync_mode_mirror(&mut app);
+    }
 
     if companion_at_boot {
         enable_companion(&mut app);
@@ -2110,7 +2121,11 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
     use zoid_tui::Overlay;
     match action {
         Action::Quit => return Ok(true),
-        Action::SwitchMode => app.shell.toggle_mode(),
+        Action::CycleMode => {
+            app.modes.cycle_next();
+            sync_mode_mirror(app);
+            persist_active_mode(app).await;
+        }
         Action::FocusNext => app.shell.focus_next(),
         Action::FocusRegion(f) => app.shell.focus = f,
         Action::OpenPalette => {
@@ -2131,7 +2146,11 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::ToggleDrawer(id) => app.shell.toggle_drawer(id),
         Action::PaletteMove(d) => {
-            let items = zoid_tui::palette::all_items(app.shell.mode, app.shell.companion_on);
+            let items = zoid_tui::palette::all_items(
+                &app.shell.active_mode,
+                &app.shell.mode_names,
+                app.shell.companion_on,
+            );
             let n = zoid_tui::palette::selectable_matches(&items, &app.shell.palette.query).len();
             app.shell.palette.selected = zoid_tui::palette::nav(app.shell.palette.selected, d, n);
         }
@@ -2892,8 +2911,17 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
     use zoid_tui::command::Command;
     match cmd {
         Command::Quit => Ok(true),
-        Command::SwitchMode(m) => {
-            app.shell.set_mode(m);
+        Command::SwitchMode(name) => {
+            app.modes.set_active(&name);
+            sync_mode_mirror(app);
+            persist_active_mode(app).await;
+            Ok(false)
+        }
+        Command::ReloadModes => {
+            let prev = app.modes.active_name().to_string();
+            app.modes = zoid::mode_import::build_mode_registry(&app.base_profile, &app.mode_dirs);
+            app.modes.set_active(&prev); // preserve by name; no-op ⇒ Chat
+            sync_mode_mirror(app);
             Ok(false)
         }
         Command::OpenDrawer(id) => {
@@ -3067,6 +3095,21 @@ fn start_delegation(app: &mut App, task: String) {
         let _ = session.append(ev.clone()).await;
         let _ = ui.send(AgentUpdate::Appended(Box::new(ev))).await;
     });
+}
+
+/// Mirror the active mode + names onto the shell for the pure renderer/palette.
+fn sync_mode_mirror(app: &mut App) {
+    app.shell.active_mode = app.modes.active_name().to_string();
+    app.shell.active_mode_broken = app.modes.active_is_broken();
+    app.shell.mode_names = app.modes.names();
+}
+
+/// Persist the active mode name onto the current session row (best-effort).
+async fn persist_active_mode(app: &App) {
+    let _ = app
+        .session
+        .set_active_mode(app.session_id, app.modes.active_name().to_string())
+        .await;
 }
 
 fn spawn_turn(app: &mut App) {
@@ -3602,6 +3645,7 @@ mod tests {
             modes: zoid_core::mode::ModeRegistry::new(vec![zoid_core::mode::Mode::chat(
                 zoid::agent::default_profile(),
             )]),
+            mode_dirs: Vec::new(),
             skills: std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
             model: "test-model".into(),
             economy: zoid_core::config::EconomyConfig::default(),

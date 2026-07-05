@@ -8,7 +8,7 @@ use crate::command::{parse_command, Command};
 use crate::config_view::FieldKind;
 use crate::layout::{in_rect, ShellLayout};
 use crate::palette::{all_items, nav, selectable_matches};
-use crate::state::{ConfigCol, DrawerId, Focus, Mode, Overlay, ShellState};
+use crate::state::{ConfigCol, DrawerId, Focus, Overlay, ShellState};
 use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -16,7 +16,7 @@ use ratatui::crossterm::event::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     Quit,
-    SwitchMode,
+    CycleMode,
     FocusNext,
     FocusRegion(Focus),
     OpenPalette,
@@ -171,14 +171,9 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
         return Action::OpenProviderSwitch;
     }
     match key.code {
-        KeyCode::BackTab => return Action::SwitchMode,
+        KeyCode::BackTab => return Action::CycleMode,
         KeyCode::Tab => return Action::FocusNext,
         _ => {}
-    }
-
-    // Esc returns to Chat from the Build surface (spec §6.2).
-    if state.mode == Mode::Build && key.code == KeyCode::Esc {
-        return Action::SwitchMode;
     }
 
     // 3. Focus-contextual.
@@ -441,7 +436,7 @@ pub fn route_mouse(state: &ShellState, layout: &ShellLayout, m: MouseEvent) -> A
 /// Resolve the palette's selected row to its command (bin calls after PaletteRun).
 /// `None` means no row matched the current query.
 pub fn palette_selected_command(state: &ShellState) -> Option<Command> {
-    let items = all_items(state.mode, state.companion_on);
+    let items = all_items(&state.active_mode, &state.mode_names, state.companion_on);
     let matches = selectable_matches(&items, &state.palette.query);
     let sel = nav(state.palette.selected, 0, matches.len());
     matches.get(sel).map(|&i| items[i].command.clone())
@@ -594,7 +589,7 @@ mod tests {
         let s = ShellState::new();
         assert_eq!(
             route_key(&s, key(KeyCode::BackTab, KeyModifiers::NONE)),
-            Action::SwitchMode
+            Action::CycleMode
         );
         assert_eq!(
             route_key(&s, key(KeyCode::Tab, KeyModifiers::NONE)),
@@ -758,10 +753,10 @@ mod tests {
     fn cmdline_enter_parses_command() {
         let mut s = ShellState::new();
         s.overlay = Overlay::CommandLine;
-        s.cmdline.buffer = ":build".into();
+        s.cmdline.buffer = ":mode Build".into();
         assert_eq!(
             route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)),
-            Action::RunCommand(Command::SwitchMode(crate::state::Mode::Build))
+            Action::RunCommand(Command::SwitchMode("Build".into()))
         );
     }
 
@@ -997,26 +992,26 @@ mod tests {
         // With overlay up: scroll still drives the conversation (doesn't dismiss).
         let mut s2 = ShellState::new();
         s2.overlay = Overlay::Palette;
-        assert_eq!(route_mouse(&s2, &l, scroll_down), Action::ScrollConversation(1));
+        assert_eq!(
+            route_mouse(&s2, &l, scroll_down),
+            Action::ScrollConversation(1)
+        );
     }
 
     #[test]
     fn palette_selected_command_resolves_highlighted_row() {
-        use crate::state::Mode;
-        let mut s = ShellState::new(); // mode = Chat
+        let mut s = ShellState::new(); // active_mode = Chat
+        s.mode_names = vec!["Chat".into(), "Build".into()];
         s.palette.query = "build".into();
         s.palette.selected = 0;
         assert_eq!(
             palette_selected_command(&s),
-            Some(Command::SwitchMode(Mode::Build)),
+            Some(Command::SwitchMode("Build".into())),
         );
         // The companion row resolves to the state-appropriate command.
         s.palette.query = "companion".into();
         s.companion_on = false;
-        assert_eq!(
-            palette_selected_command(&s),
-            Some(Command::CompanionEnable),
-        );
+        assert_eq!(palette_selected_command(&s), Some(Command::CompanionEnable),);
         s.companion_on = true;
         assert_eq!(
             palette_selected_command(&s),
@@ -1025,20 +1020,8 @@ mod tests {
     }
 
     #[test]
-    fn esc_exits_build_mode() {
-        use crate::state::Mode;
-        let mut s = ShellState::new();
-        s.mode = Mode::Build;
-        // Esc in Build mode → SwitchMode (back to Chat).
-        assert_eq!(
-            route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)),
-            Action::SwitchMode
-        );
-    }
-
-    #[test]
     fn esc_in_chat_conversation_focus_returns_to_input() {
-        let mut s = ShellState::new(); // mode = Chat
+        let mut s = ShellState::new(); // active_mode = Chat
         s.focus = Focus::Conversation;
         // Esc in Chat mode with Conversation focus → FocusRegion(Input) (unchanged).
         assert_eq!(
