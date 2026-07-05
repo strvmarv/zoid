@@ -2097,9 +2097,10 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         },
         Action::PaletteRun => match app.shell.palette.stage.clone() {
             zoid_tui::state::PaletteStage::Pick => {
-                match palette_selected_command(&app.shell) {
+                // No matching palette row → do nothing (overlay stays open).
+                if let Some(cmd) = palette_selected_command(&app.shell) {
                     // Parameterized command → enter inline Arg phase, stay open.
-                    Some(cmd) => match zoid_tui::palette::arg_kind_for(&cmd) {
+                    match zoid_tui::palette::arg_kind_for(&cmd) {
                         Some(kind) => {
                             app.shell.palette.stage = zoid_tui::state::PaletteStage::Arg {
                                 kind,
@@ -2110,9 +2111,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                             app.shell.close_overlay();
                             return exec_command(app, cmd).await;
                         }
-                    },
-                    // No matching row → do nothing (overlay stays open).
-                    None => {}
+                    }
                 }
             }
             zoid_tui::state::PaletteStage::Arg { kind, input } => {

@@ -19,11 +19,7 @@ pub struct ToolStat {
 }
 impl ToolStat {
     pub fn avg_ms(&self) -> u64 {
-        if self.count == 0 {
-            0
-        } else {
-            self.total_ms / self.count
-        }
+        self.total_ms.checked_div(self.count).unwrap_or(0)
     }
 }
 
