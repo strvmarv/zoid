@@ -1,0 +1,10 @@
+[package]
+name = "zoid-companion"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[dependencies]
+tiny_http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

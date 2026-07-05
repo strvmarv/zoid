@@ -63,7 +63,7 @@ pub(crate) fn truncate_start(s: &str, max: usize) -> String {
     let mut out = format!("{}{}", glyph::ELLIPSIS, rest);
     while UnicodeWidthStr::width(out.as_str()) > max {
         // Remove the last char and retry.
-        if let Some(_) = out.pop() {
+        if out.pop().is_some() {
             // popped one char; re-check width
         } else {
             break;

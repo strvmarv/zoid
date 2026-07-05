@@ -216,6 +216,7 @@ pub async fn run_agent_turn(
     model: String,
     ui: mpsc::Sender<AgentUpdate>,
     session_id: Ulid,
+    companion_hub: std::sync::Arc<zoid_companion::CompanionHub>,
     now: fn() -> i64,
 ) -> Result<crate::eventlog::EventLog> {
     // Not externally cancellable: a token that never fires. The TUI uses
@@ -231,6 +232,7 @@ pub async fn run_agent_turn(
         model,
         ui,
         session_id,
+        companion_hub,
         now,
         CancellationToken::new(),
     )
@@ -253,6 +255,7 @@ pub async fn run_agent_turn_cancellable(
     model: String,
     ui: mpsc::Sender<AgentUpdate>,
     session_id: Ulid,
+    companion_hub: std::sync::Arc<zoid_companion::CompanionHub>,
     now: fn() -> i64,
     cancel: CancellationToken,
 ) -> Result<crate::eventlog::EventLog> {
@@ -300,6 +303,7 @@ pub async fn run_agent_turn_cancellable(
         model,
         &ui,
         session_id,
+        companion_hub,
         now,
         &mut calibration_ratio,
         &overhead,
@@ -326,6 +330,7 @@ async fn run_turn_inner(
     model: String,
     ui: &mpsc::Sender<AgentUpdate>,
     session_id: Ulid,
+    companion_hub: std::sync::Arc<zoid_companion::CompanionHub>,
     now: fn() -> i64,
     calibration_ratio: &mut Option<f64>,
     overhead: &zoid_core::context::ContextOverhead,
@@ -767,6 +772,37 @@ async fn run_turn_inner(
                         "tool executed"
                     );
                 }
+                Some(zoid_tools::ToolKind::Emitting) if tc.name == "show" => {
+                    let html = tc
+                        .args
+                        .get("html")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let (output, is_error) = companion_show(&companion_hub, html);
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::ToolResult {
+                            id: tc.id,
+                            name: tc.name,
+                            output,
+                            is_error,
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                    tracing::info!(
+                        kind = "tool",
+                        name = "show",
+                        ms = tool_start.elapsed().as_millis() as u64,
+                        ok = !is_error,
+                        "tool executed"
+                    );
+                }
                 Some(zoid_tools::ToolKind::Interactive) if tc.name == "ask_user" => {
                     let question = tc
                         .args
@@ -968,6 +1004,21 @@ async fn emit(
     emit_with_tokens(session, events, ui, branch, kind, None, session_id, now).await
 }
 
+/// Result of a `show` tool call: publish the card when the companion is enabled,
+/// otherwise return a no-op ack. Never errors (returns `is_error = false`).
+pub(crate) fn companion_show(hub: &zoid_companion::CompanionHub, html: String) -> (String, bool) {
+    if hub.is_enabled() {
+        hub.publish_card(html);
+        ("card shown in companion".to_string(), false)
+    } else {
+        (
+            "Companion is disabled; enable it from the command palette to view cards."
+                .to_string(),
+            false,
+        )
+    }
+}
+
 /// Render recalled events into readable text for the recall tool-result.
 fn render_recalled(events: &[Event]) -> String {
     let mut out = String::new();
@@ -994,6 +1045,10 @@ fn render_recalled(events: &[Event]) -> String {
 /// ratio than the old chars/4, but it's still an estimate; this ratio lets us
 /// fine-tune on cached sub-turns (where the provider reports 0): we scale the
 /// current estimate by the last known ratio.
+// Pre-existing 9-arg signature (predates the companion feature); a refactor is
+// out of scope for companion lifecycle wiring, so the lint is suppressed here
+// rather than reshaping unrelated agent-loop plumbing.
+#[allow(clippy::too_many_arguments)]
 async fn record_compactions(
     session: &SessionHandle,
     events: &mut crate::eventlog::EventLog,
@@ -1230,6 +1285,25 @@ mod tests {
     }
 
     #[test]
+    fn companion_show_publishes_when_enabled_and_acks_when_disabled() {
+        use zoid_companion::CompanionHub;
+        let hub = CompanionHub::new();
+
+        // Disabled: no publish, distinct ack.
+        let (out, err) = super::companion_show(&hub, "<b>x</b>".into());
+        assert!(!err);
+        assert!(out.contains("disabled"), "got: {out}");
+        assert!(hub.current().card.is_none());
+
+        // Enabled: publishes the card.
+        hub.set_enabled(true);
+        let (out, err) = super::companion_show(&hub, "<b>y</b>".into());
+        assert!(!err);
+        assert_eq!(out, "card shown in companion");
+        assert_eq!(hub.current().card.as_deref(), Some("<b>y</b>"));
+    }
+
+    #[test]
     fn build_request_uses_the_given_system_prompt() {
         let req = build_request(
             &crate::eventlog::EventLog::new(),
@@ -1413,6 +1487,7 @@ mod tests {
             "m".into(),
             tx,
             Ulid::new(),
+            zoid_companion::CompanionHub::new(),
             || 0,
         )
         .await
@@ -1502,6 +1577,7 @@ mod tests {
             "m".into(),
             tx,
             Ulid::new(),
+            zoid_companion::CompanionHub::new(),
             || 0,
         )
         .await
@@ -1589,6 +1665,7 @@ mod tests {
             "m".into(),
             tx,
             Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
             || 0,
         )
         .await
@@ -1661,6 +1738,7 @@ mod tests {
             "m".into(),
             tx,
             Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
             || 0,
         )
         .await
@@ -1750,6 +1828,7 @@ mod tests {
             "m".into(),
             tx1,
             Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
             || 0,
         )
         .await
@@ -1795,6 +1874,7 @@ mod tests {
             "m".into(),
             tx2,
             Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
             || 0,
         )
         .await

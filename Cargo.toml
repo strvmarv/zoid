@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/zoid-core", "crates/zoid-model", "crates/zoid-provider", "crates/zoid-tui", "crates/zoid-tools", "crates/zoid-syntax", "crates/zoid", "crates/zoid-testkit"]
+members = ["crates/zoid-core", "crates/zoid-model", "crates/zoid-provider", "crates/zoid-tui", "crates/zoid-tools", "crates/zoid-syntax", "crates/zoid", "crates/zoid-testkit", "crates/zoid-companion"]
 exclude = ["spikes"]
 resolver = "2"
 
@@ -31,6 +31,7 @@ tempfile = "3"
 # the static-musl release target. Dropping them keeps the musl build clean.
 git2 = { version = "0.20", default-features = false }
 toml = "0.8"
+tiny_http = "0.12"
 chacha20poly1305 = "0.10"
 rand = "0.8"
 tracing = "0.1"

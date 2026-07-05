@@ -91,6 +91,9 @@ pub fn chat_tools(skills: Arc<SkillRegistry>) -> Vec<Box<dyn Tool>> {
     // turns worth recalling even when eviction is currently off. It is NOT in the
     // subagent `registry()`, so subagents (which have no session) can't call it.
     tools.push(Box::new(zoid_tools::recall::Recall));
+    // `show` renders an HTML card in the companion browser view. Chat-only (it
+    // needs the companion hub); never in the subagent registry.
+    tools.push(Box::new(zoid_tools::show::Show));
     tools
 }
 
@@ -141,6 +144,9 @@ mod tests {
         // recall is a chat-only tool; it must be registered here (and never in the
         // subagent registry — see chat_tools).
         assert!(names.contains(&"recall"));
+        // show is a chat-only tool; it must be registered here (and never in the
+        // subagent registry — see chat_tools).
+        assert!(names.contains(&"show"));
     }
 
     #[test]

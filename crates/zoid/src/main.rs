@@ -128,6 +128,14 @@ fn load_config() -> (zoid_core::config::Config, zoid_core::config::Provenance) {
     {
         envp.reduced_motion = Some(true);
     }
+    if let Ok(v) = std::env::var("ZOID_COMPANION_PORT") {
+        if let Ok(n) = v.trim().parse::<u16>() {
+            envp.companion.port = Some(n);
+        }
+    }
+    if let Ok(v) = std::env::var("ZOID_COMPANION_OPEN") {
+        envp.companion.open = Some(matches!(v.trim(), "1" | "true" | "yes"));
+    }
     layers.push((Source::Env, envp));
     merge(&layers)
 }
@@ -373,6 +381,66 @@ fn build_overview_data(
                 )
             })
             .collect(),
+    }
+}
+
+/// Rank a `Heat` value for the companion dashboard's `TierRow.heat` field
+/// (2 = hot, 1 = warm, 0 = cold — hotter sorts higher).
+fn heat_rank(h: zoid_core::context::Heat) -> u8 {
+    use zoid_core::context::Heat;
+    match h {
+        Heat::Hot => 2,
+        Heat::Warm => 1,
+        Heat::Cold => 0,
+    }
+}
+
+/// Project the live session state into the companion's `DashboardSnapshot`
+/// (a plain-serde, `zoid-core`-free type the browser dashboard renders).
+#[allow(clippy::too_many_arguments)]
+fn dashboard_snapshot(
+    session_name: &str,
+    model: &str,
+    provider: &str,
+    cwd: &str,
+    ctx_used: u64,
+    ctx_ceiling: u64,
+    session_tokens: u64,
+    cached_tokens: u64,
+    cache_supported: bool,
+    tasks_len: usize,
+    busy: bool,
+    window: &zoid_core::context::ContextWindow,
+    churn: &zoid_core::economy::ChurnTimeline,
+    updated_ms: i64,
+) -> zoid_companion::DashboardSnapshot {
+    use zoid_core::context::Heat;
+    let tiers = window
+        .items
+        .iter()
+        .map(|i| zoid_companion::TierRow {
+            label: i.label.clone(),
+            tokens: i.tokens,
+            heat: heat_rank(i.heat),
+            cold: i.heat == Heat::Cold,
+            pinned: i.pinned,
+        })
+        .collect();
+    zoid_companion::DashboardSnapshot {
+        session_name: session_name.to_string(),
+        model: model.to_string(),
+        provider: provider.to_string(),
+        cwd: cwd.to_string(),
+        ctx_used,
+        ctx_ceiling,
+        session_tokens,
+        cached_tokens,
+        cache_supported,
+        tasks_len,
+        busy,
+        tiers,
+        churn: churn.points.iter().map(|p| p.tokens).collect(),
+        updated_ms,
     }
 }
 
@@ -992,6 +1060,12 @@ struct App {
     /// overriding the static MODEL_CAPS table. `None` until the first fetch
     /// lands (or when the provider doesn't support capability introspection).
     fetched_model_info: Option<zoid_provider::model::ModelInfo>,
+    /// Optional companion HTTP server (None = disabled). Managed via the command
+    /// palette (`companion` / `companion off`) or the `--companion` launch flag.
+    companion: Option<zoid_companion::CompanionServer>,
+    /// The state hub feeding the companion. Always present (cheap); the server is
+    /// the optional part. `is_enabled()` gates snapshot publishing and `show`.
+    companion_hub: std::sync::Arc<zoid_companion::CompanionHub>,
 }
 
 impl App {
@@ -1009,7 +1083,7 @@ impl App {
 async fn main() -> Result<()> {
     let obs = obs::init();
 
-    match zoid::cli::parse_args(std::env::args().skip(1)) {
+    let companion_at_boot = match zoid::cli::parse_args(std::env::args().skip(1)) {
         zoid::cli::Cli::Version => {
             println!("{}", zoid::cli::version_string());
             return Ok(());
@@ -1028,8 +1102,8 @@ async fn main() -> Result<()> {
             );
             std::process::exit(2);
         }
-        zoid::cli::Cli::Run => {}
-    }
+        zoid::cli::Cli::Run { companion } => companion,
+    };
 
     let path = db_path()?;
     let root = repo_root();
@@ -1171,7 +1245,13 @@ async fn main() -> Result<()> {
         pending_answer: None,
         turn_cancel: None,
         fetched_model_info: None,
+        companion: None,
+        companion_hub: zoid_companion::CompanionHub::new(),
     };
+
+    if companion_at_boot {
+        enable_companion(&mut app);
+    }
 
     enable_raw_mode()?;
     let mut out = stdout();
@@ -1386,6 +1466,27 @@ async fn run<B: ratatui::backend::Backend>(
         // (kept out of the pure renderer for snapshot determinism); the motion
         // tick below redraws at MOTION_FPS while busy so it actually animates.
         app.shell.busy = app.streaming || app.delegating;
+        // Feed the companion dashboard when it's enabled. The hub dedupes, so
+        // unchanged frames (e.g. motion ticks) don't wake SSE clients.
+        if app.companion_hub.is_enabled() {
+            let snap = dashboard_snapshot(
+                &app.shell.session_name,
+                &app.shell.model,
+                &app.shell.provider,
+                &app.shell.cwd,
+                app.shell.ctx_used,
+                app.shell.ctx_ceiling,
+                app.shell.session_tokens,
+                app.shell.cached_tokens,
+                app.shell.cache_supported,
+                app.shell.tasks_len as usize,
+                app.shell.busy,
+                &app.proj.window,
+                &app.proj.churn,
+                now_ms(),
+            );
+            app.companion_hub.publish_snapshot(snap);
+        }
         // Only a chat turn carries a cancellation token; delegation has none, so
         // Esc/Ctrl-C routes to CancelTurn only while this is true (and keeps its
         // normal focus behavior during a delegation).
@@ -1996,9 +2097,10 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         },
         Action::PaletteRun => match app.shell.palette.stage.clone() {
             zoid_tui::state::PaletteStage::Pick => {
-                match palette_selected_command(&app.shell) {
+                // No matching palette row → do nothing (overlay stays open).
+                if let Some(cmd) = palette_selected_command(&app.shell) {
                     // Parameterized command → enter inline Arg phase, stay open.
-                    Some(cmd) => match zoid_tui::palette::arg_kind_for(&cmd) {
+                    match zoid_tui::palette::arg_kind_for(&cmd) {
                         Some(kind) => {
                             app.shell.palette.stage = zoid_tui::state::PaletteStage::Arg {
                                 kind,
@@ -2009,9 +2111,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                             app.shell.close_overlay();
                             return exec_command(app, cmd).await;
                         }
-                    },
-                    // No matching row → do nothing (overlay stays open).
-                    None => {}
+                    }
                 }
             }
             zoid_tui::state::PaletteStage::Arg { kind, input } => {
@@ -2682,6 +2782,54 @@ fn answer_question(app: &mut App, ans: zoid::agent::Answer) {
     app.shell.overlay = zoid_tui::state::Overlay::None;
 }
 
+/// Open `url` in the platform's default browser. Best-effort: a missing
+/// launcher or spawn failure is silently ignored — never blocks or panics.
+fn open_url(url: &str) {
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd")
+        .args(["/c", "start", "", url])
+        .spawn();
+}
+
+/// Turn the companion server on. Idempotent — if it's already running this
+/// just re-opens the browser (when configured to). On bind failure the error
+/// is surfaced via the status hint; it never panics.
+fn enable_companion(app: &mut App) {
+    if let Some(server) = &app.companion {
+        if app.config.companion.open {
+            open_url(&server.url);
+        }
+        return;
+    }
+    let token = Ulid::new().to_string();
+    match zoid_companion::start(app.companion_hub.clone(), app.config.companion.port, token) {
+        Ok(server) => {
+            app.companion_hub.set_enabled(true);
+            if app.config.companion.open {
+                open_url(&server.url);
+            } else {
+                app.shell.status_hint = Some(format!("companion: {}", server.url));
+            }
+            app.companion = Some(server);
+        }
+        Err(e) => {
+            app.shell.status_hint = Some(format!("companion: {e}"));
+        }
+    }
+}
+
+/// Turn the companion server off (no-op if it wasn't running).
+fn disable_companion(app: &mut App) {
+    if let Some(server) = app.companion.take() {
+        app.companion_hub.set_enabled(false);
+        server.shutdown();
+    }
+}
+
 async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<bool> {
     use zoid_tui::command::Command;
     match cmd {
@@ -2769,6 +2917,14 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
         Command::ShowOverview => {
             app.shell.zoom = zoid_tui::state::Zoom::Overview;
             app.shell.conversation_scroll = 0;
+            Ok(false)
+        }
+        Command::CompanionEnable => {
+            enable_companion(app);
+            Ok(false)
+        }
+        Command::CompanionDisable => {
+            disable_companion(app);
             Ok(false)
         }
         Command::Unknown(_) => Ok(false),
@@ -2884,6 +3040,7 @@ fn spawn_turn(app: &mut App) {
     // `Action::CancelTurn` (Esc/Ctrl-C) can fire it. Cleared on `TurnComplete`.
     let cancel = tokio_util::sync::CancellationToken::new();
     app.turn_cancel = Some(cancel.clone());
+    let companion_hub = app.companion_hub.clone();
     tokio::spawn(async move {
         let _ = run_agent_turn_cancellable(
             turn_config,
@@ -2895,6 +3052,7 @@ fn spawn_turn(app: &mut App) {
             model,
             ui,
             session_id,
+            companion_hub,
             now_ms,
             cancel,
         )
@@ -2907,6 +3065,58 @@ mod tests {
     use super::*;
     use ratatui::{backend::TestBackend, style::Modifier, Terminal};
     use tui_textarea::TextArea;
+
+    #[test]
+    fn heat_rank_orders_hot_warm_cold() {
+        use zoid_core::context::Heat;
+        assert_eq!(super::heat_rank(Heat::Hot), 2);
+        assert_eq!(super::heat_rank(Heat::Warm), 1);
+        assert_eq!(super::heat_rank(Heat::Cold), 0);
+    }
+
+    #[test]
+    fn dashboard_snapshot_maps_scalars_and_churn() {
+        use zoid_core::context::ContextWindow;
+        use zoid_core::economy::{ChurnPoint, ChurnTimeline};
+        let window = ContextWindow {
+            items: vec![],
+            total_tokens: 0,
+        };
+        let churn = ChurnTimeline {
+            points: vec![
+                ChurnPoint {
+                    turn: 0,
+                    tokens: 10,
+                    cached: 1,
+                    resent_tokens: 0,
+                },
+                ChurnPoint {
+                    turn: 1,
+                    tokens: 20,
+                    cached: 2,
+                    resent_tokens: 0,
+                },
+            ],
+        };
+        let snap = super::dashboard_snapshot(
+            "sess", "glm", "ollama", "/home/x", 300, 384, 90, 20, true, 3, true, &window,
+            &churn, 42,
+        );
+        assert_eq!(snap.session_name, "sess");
+        assert_eq!(snap.model, "glm");
+        assert_eq!(snap.provider, "ollama");
+        assert_eq!(snap.cwd, "/home/x");
+        assert_eq!(snap.ctx_used, 300);
+        assert_eq!(snap.ctx_ceiling, 384);
+        assert_eq!(snap.session_tokens, 90);
+        assert_eq!(snap.cached_tokens, 20);
+        assert!(snap.cache_supported);
+        assert_eq!(snap.tasks_len, 3);
+        assert!(snap.busy);
+        assert_eq!(snap.churn, vec![10, 20]);
+        assert!(snap.tiers.is_empty());
+        assert_eq!(snap.updated_ms, 42);
+    }
 
     #[test]
     fn zoom_anchor_maps_top_message_across_altitudes() {
@@ -3350,6 +3560,8 @@ mod tests {
             pending_answer: None,
             turn_cancel: None,
             fetched_model_info: None,
+            companion: None,
+            companion_hub: zoid_companion::CompanionHub::new(),
         }
     }
 

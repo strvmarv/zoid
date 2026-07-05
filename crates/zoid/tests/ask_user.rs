@@ -70,6 +70,7 @@ async fn ask_user_answer_becomes_the_tool_result() {
         "fake".into(),
         ui_tx,
         ulid::Ulid::new(),
+        zoid_companion::CompanionHub::new(),
         fixed_now,
     )
     .await
@@ -118,6 +119,7 @@ async fn ask_user_dropped_sender_aborts_turn_with_balanced_result() {
         "fake".into(),
         ui_tx,
         ulid::Ulid::new(),
+        zoid_companion::CompanionHub::new(),
         fixed_now,
     )
     .await
@@ -172,6 +174,7 @@ async fn abort_drains_remaining_batched_tool_calls() {
         "fake".into(),
         ui_tx,
         ulid::Ulid::new(),
+        zoid_companion::CompanionHub::new(),
         fixed_now,
     )
     .await

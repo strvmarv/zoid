@@ -150,6 +150,10 @@ pub async fn run_subagent(
         policy: subagent_policy(),
         eviction: zoid_core::eviction::EvictionPolicy::disabled(),
     };
+    // Subagents have no session-scoped companion (the `show` tool is chat-only
+    // and is never in the subagent tool registry), so this hub is never
+    // published to; it only satisfies the turn-loop's signature.
+    let companion_hub = zoid_companion::CompanionHub::new();
     let produced = run_agent_turn(
         config,
         provider,
@@ -160,6 +164,7 @@ pub async fn run_subagent(
         model,
         ui,
         session_id,
+        companion_hub,
         now,
     )
     .await?;

@@ -51,8 +51,21 @@ These bind every implementation task.
   zoid-companion`.
 - **Token:** minted with `ulid::Ulid::new()` (128-bit, URL-safe Crockford
   base32). No new `rand`/`getrandom` dependency.
-- **CSP header** on the shell page, verbatim:
-  `default-src 'self'; connect-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'`
+- **CSP header** on the shell page, verbatim (as shipped):
+  `default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; form-action 'self'; base-uri 'self'`
+  > **CSP correction (implementation).** This design originally specified
+  > `connect-src 'none'` with no `script-src`. That was dead-on-arrival:
+  > `connect-src` governs the dashboard's own `EventSource`, so `'none'` blocks
+  > the SSE stream entirely, and with no `script-src` the shell's inline
+  > `<script>` is also blocked. The shipped policy uses `connect-src 'self'`
+  > (permits same-origin SSE, still blocks external egress), moves the shell JS
+  > to a served same-origin `app.js` so `script-src 'self'` needs no
+  > `'unsafe-inline'` (keeping any script in an agent-authored card inert), and
+  > adds `form-action 'self'`/`base-uri 'self'` (neither falls back to
+  > `default-src`) to close form/`<base>` exfil. The per-session token is never
+  > sent to the model and no card JS executes, so the token is structurally
+  > unreachable from a card; top-level navigation (`<meta refresh>`) is an
+  > accepted residual of the raw-HTML-card feature.
 - **Token failure response:** any missing/wrong token or unknown path returns
   `404` with an empty body. Never `401`/`403` (do not confirm existence).
 - **Default off:** the server never starts unless explicitly enabled (palette,

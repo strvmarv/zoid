@@ -44,6 +44,7 @@ async fn turn_usage_lands_in_ledger() {
         "m".into(),
         tx,
         Ulid::new(),
+        zoid_companion::CompanionHub::new(),
         now,
     )
     .await
@@ -105,6 +106,7 @@ async fn oversized_tool_result_is_compacted_when_over_threshold() {
         "fake".into(),
         tx,
         Ulid::new(),
+        zoid_companion::CompanionHub::new(),
         now,
     )
     .await

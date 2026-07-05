@@ -90,6 +90,7 @@ async fn invoke_skill_body_flows_back_into_the_loop() {
         "fake".into(),
         tx,
         ulid::Ulid::new(),
+        zoid_companion::CompanionHub::new(),
         fixed_now,
     )
     .await
