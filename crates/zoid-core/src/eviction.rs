@@ -124,6 +124,7 @@ pub fn eviction_breadcrumb<'a>(events: impl IntoIterator<Item = &'a Event>) -> O
 #[cfg(test)]
 mod fold_tests {
     use super::*;
+    use crate::event::EvictionMarker;
 
     fn ev(id: u128, kind: EventKind) -> Event {
         Event::new(Ulid::from(id), None, id as i64, kind)
