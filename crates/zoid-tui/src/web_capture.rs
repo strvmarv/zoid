@@ -33,6 +33,12 @@ pub fn buffer_to_html(buf: &Buffer) -> String {
     let area = buf.area;
     let mut out = String::from("<pre class=\"tui\">");
     for y in area.y..area.y + area.height {
+        // Rows are *separated* by `\n`, not terminated: emit the newline before
+        // every row except the first, so `</pre>` follows the last row's content
+        // with no trailing blank line (which `<pre>` would render).
+        if y > area.y {
+            out.push('\n');
+        }
         let mut x = area.x;
         // Open-span state for the current run.
         let mut run = String::new();
@@ -79,7 +85,6 @@ pub fn buffer_to_html(buf: &Buffer) -> String {
             x += w;
         }
         flush(&mut out, &mut run, &mut cur);
-        out.push('\n');
     }
     out.push_str("</pre>");
     out
@@ -118,5 +123,20 @@ mod tests {
         // After REVERSED swap, the glyph paints in the (former) bg color.
         assert!(html.contains("color:#58a6ff"));
         assert!(html.contains("background:#0d1117"));
+    }
+
+    #[test]
+    fn rows_are_separated_not_terminated() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 1, 2));
+        buf.set_string(0, 0, "a", Style::default());
+        buf.set_string(0, 1, "b", Style::default());
+        let html = buffer_to_html(&buf);
+        // Strip the known wrapper and compare the exact body: two rows must be
+        // *joined* by a single `\n` with NO trailing newline before `</pre>`.
+        let body = html
+            .strip_prefix("<pre class=\"tui\">")
+            .and_then(|s| s.strip_suffix("</pre>"))
+            .expect("wrapper present");
+        assert_eq!(body, "a\nb");
     }
 }
