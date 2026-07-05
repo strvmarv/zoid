@@ -2903,6 +2903,10 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
     match cmd {
         Command::Quit => Ok(true),
         Command::SwitchMode(name) => {
+            if name.trim().is_empty() {
+                app.shell.status_hint = Some("usage: :mode <name> · :mode reload".into());
+                return Ok(false);
+            }
             app.modes.set_active(&name);
             sync_mode_mirror(app);
             persist_active_mode(app).await;
@@ -3100,10 +3104,15 @@ fn sync_mode_mirror(app: &mut App) {
 
 /// Persist the active mode name onto the current session row (best-effort).
 async fn persist_active_mode(app: &App) {
-    let _ = app
+    if let Err(e) = app
         .session
         .set_active_mode(app.session_id, app.modes.active_name().to_string())
-        .await;
+        .await
+    {
+        // Best-effort: a failed write just means the chip won't survive a restart.
+        // Surface it at debug so it's diagnosable without spamming normal runs.
+        tracing::debug!(error = %e, "failed to persist active mode");
+    }
 }
 
 /// Reset to the Chat floor, then apply the session's saved mode if it still

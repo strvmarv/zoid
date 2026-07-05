@@ -8,6 +8,11 @@ pub enum Command {
     /// Switch to the named mode (`:mode <name>` / palette).
     SwitchMode(String),
     /// Re-scan mode folders without a restart (`:mode reload`).
+    ///
+    /// Note: `:mode reload` is parsed as this command *before* it is treated as a
+    /// mode name, so a user mode literally named `reload` is unreachable from the
+    /// command line. Reach it via the Shift+Tab cycle or the Ctrl+P palette (both
+    /// build `SwitchMode` directly, bypassing this parser).
     ReloadModes,
     Quit,
     OpenDrawer(DrawerId),
@@ -34,6 +39,9 @@ pub fn parse_command(raw: &str) -> Command {
     let t = raw.trim().trim_start_matches(':').trim();
     match t {
         "mode reload" => Command::ReloadModes,
+        // Bare `:mode` (or `:mode` + only whitespace, already trimmed to "mode"):
+        // an empty target the bin renders as a usage hint rather than a silent no-op.
+        "mode" => Command::SwitchMode(String::new()),
         s if s.starts_with("mode ") => Command::SwitchMode(s["mode ".len()..].trim().to_string()),
         "q" | "quit" => Command::Quit,
         "repo" => Command::OpenDrawer(DrawerId::Repo),
@@ -66,6 +74,17 @@ mod tests {
         );
         assert_eq!(parse_command("mode reload"), Command::ReloadModes);
         assert_eq!(parse_command("  :q "), Command::Quit);
+    }
+
+    #[test]
+    fn bare_mode_is_empty_switch_not_unknown() {
+        // Both degenerate forms trim to "mode" and carry an empty target, which
+        // the bin renders as a usage hint (not a silent Unknown or empty switch).
+        assert_eq!(parse_command(":mode"), Command::SwitchMode(String::new()));
+        assert_eq!(
+            parse_command(":mode   "),
+            Command::SwitchMode(String::new())
+        );
     }
 
     #[test]
