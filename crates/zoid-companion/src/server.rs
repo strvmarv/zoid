@@ -8,10 +8,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
-pub const CSP: &str =
-    "default-src 'self'; connect-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'";
+// `connect-src 'self'` permits the dashboard's same-origin SSE (`EventSource`)
+// while still blocking egress to any other host — the containment goal. Scripts
+// load only from same origin (`script-src 'self'`, no 'unsafe-inline'), so the
+// page keeps its JS in the served `app.js` and any script an agent-authored
+// card carries stays inert. `img-src 'self' data:` blocks image-based exfil.
+pub const CSP: &str = "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'";
 
 const SHELL: &str = include_str!("shell.html");
+const APP_JS: &str = include_str!("app.js");
 
 pub struct CompanionServer {
     server: Arc<Server>,
@@ -99,10 +104,16 @@ fn handle(
     let url = request.url().to_string();
     let shell_path = base.trim_end_matches('/');
     let events_path = format!("{base}events");
+    let app_js_path = format!("{base}app.js");
 
     if url == base || url == shell_path {
         let resp = Response::from_string(SHELL)
             .with_header(header("Content-Type", "text/html; charset=utf-8"))
+            .with_header(header("Content-Security-Policy", CSP));
+        let _ = request.respond(resp);
+    } else if url == app_js_path {
+        let resp = Response::from_string(APP_JS)
+            .with_header(header("Content-Type", "text/javascript; charset=utf-8"))
             .with_header(header("Content-Security-Policy", CSP));
         let _ = request.respond(resp);
     } else if url == events_path {
@@ -173,6 +184,22 @@ mod tests {
             "missing CSP header: {resp}"
         );
         assert!(resp.contains("id=\"dashboard\""), "missing shell body");
+        // CSP must permit the app's own SSE, else the dashboard is dead on
+        // arrival: connect-src is 'self' (not 'none'), and the shell pulls its
+        // JS from a same-origin file so script-src can stay 'self'.
+        assert!(resp.contains("connect-src 'self'"), "SSE-blocking CSP: {resp}");
+        assert!(resp.contains("src=\"app.js\""), "shell not wired to app.js: {resp}");
+        server.shutdown();
+    }
+
+    #[test]
+    fn app_js_route_serves_script() {
+        let hub = CompanionHub::new();
+        let server = start(hub, 0, "tok123".into()).unwrap();
+        let resp = raw_get(server.port, "/s/tok123/app.js");
+        assert!(resp.starts_with("HTTP/1.1 200"), "got: {resp}");
+        assert!(resp.contains("text/javascript"), "wrong content-type: {resp}");
+        assert!(resp.contains("EventSource"), "missing script body: {resp}");
         server.shutdown();
     }
 

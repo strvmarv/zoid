@@ -16,22 +16,4 @@
   <section id="dashboard"><span class="k">waiting for session…</span></section>
   <section id="card"></section>
 </main>
-<script>
-  const dash = document.getElementById("dashboard");
-  const card = document.getElementById("card");
-  const es = new EventSource("events");
-  es.addEventListener("dashboard", (e) => {
-    const d = JSON.parse(e.data);
-    const pct = d.ctx_ceiling ? Math.min(100, Math.round((d.ctx_used / d.ctx_ceiling) * 100)) : 0;
-    const tiers = (d.tiers || []).map(t =>
-      `<div><span class="k">${t.label}</span> <span class="v">${t.tokens}</span>${t.cold ? " · cold" : ""}</div>`
-    ).join("");
-    dash.innerHTML =
-      `<div class="k">${d.provider} · ${d.model} · ${d.session_name}</div>` +
-      `<div class="v">${d.ctx_used} / ${d.ctx_ceiling} (${pct}%)</div>` +
-      `<div class="bar"><i style="width:${pct}%"></i></div>` +
-      `<div class="k">tiers</div>${tiers}` +
-      `<div class="k">tasks: ${d.tasks_len}${d.busy ? " · busy" : ""}</div>`;
-  });
-  es.addEventListener("card", (e) => { card.innerHTML = JSON.parse(e.data); });
-</script>
+<script src="app.js"></script>
