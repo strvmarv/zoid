@@ -1,7 +1,7 @@
 # zoid — Mode Promotion + Quick-Switch (Slice 3) · Design
 
 **Date:** 2026-07-05
-**Status:** Approved design, ready for implementation plan
+**Status:** Approved design, gilfoyle-reviewed (C1/I1–I3/M1–M4 folded in), ready for implementation plan
 **Slice:** 3 of the mode/skill seam — the on-disk **mode runtime** (discovery, scoping, **ambient prompt overlay**, switch, error-safety, persistence, hot-reload). Network-free.
 **Author:** strvmarv (with Claude)
 
@@ -15,7 +15,7 @@
 
 ## 1. Overview
 
-A **mode** is a **named agent that owns a scoped set of skills**. The user switches between modes with **Shift+Tab**; the active mode determines which skills the model can see and pull. `Chat` is the default, non-removable mode — a bare, clean coding agent that owns no skills, so its `invoke_skill` menu stays uncluttered.
+A **mode** is a **named agent that owns a scoped set of skills**. The user switches between modes with **Shift+Tab**; the active mode determines which skills the model can see and pull. `Chat` is the default, non-removable mode — a bare coding agent that owns **no scoped skills**, so switching to a heavy mode like Superpowers never leaks its methodology skills back into Chat. (Chat's menu is still the *global* tier — the built-ins plus any `[skills] source_dirs` imports — so "owns no scoped skills" means uncluttered *by modes*, not necessarily empty.)
 
 This slice replaces the current UI `Mode` enum (`Chat`/`Build`, where `Build` is a vestigial placeholder) with a real, extensible **mode registry** built from on-disk mode folders. Everything the user experiences as a "mode" is, internally, an `AgentProfile` plus a scoped skill set. No autonomous-loop or Build behavior is introduced — a "mode" is a behavior/skill scope, not a workflow engine.
 
@@ -43,7 +43,7 @@ External skill sets are heterogeneous — arbitrary authors, inconsistent shapes
 **Canonical `mode.md`** (new; parsed by the *same* `parse_skill_md` — a `mode.md` is structurally a `SKILL.md` playing a different role):
 - **Required:** frontmatter `name:` — the mode's canonical display name.
 - **Optional:** `description:` — one-line summary shown in the switch UI.
-- **Optional, HONORED (§5, §8):** the **body** → the mode's **ambient system-prompt overlay**. For a `Ready` mode, `AgentProfile.system_prompt = SYSTEM_PROMPT + "\n\n" + body` (empty body ⇒ just `SYSTEM_PROMPT`, i.e. behaves like Chat). This is what makes switching to a mode *do* something — e.g. Superpowers' `mode.md` body carries the `using-superpowers` loader text so the model knows to drive the skill menu.
+- **Optional, HONORED (§5, §8):** the **body** → the mode's **ambient system-prompt overlay**. For a `Ready` mode, `system_prompt = <base profile's prompt> + "\n\n" + body` (empty body ⇒ just the base, i.e. behaves like Chat). The base is the bin's `default_profile()` — the composition happens bin-side because `SYSTEM_PROMPT` is bin-only (§5). This overlay is what makes switching to a mode *do* something — e.g. Superpowers' `mode.md` body carries the `using-superpowers` loader text so the model knows to drive the skill menu.
 - **Optional, SEAMED (§12.1):** `tools:` allow-list and `model:` override. Parsed and stored on the mode's `AgentProfile`; **not applied to the turn in this slice.**
 
 **A mode folder** = a directory containing a `mode.md` plus zero or more `*/SKILL.md` subfolders (its scoped skills). Anything that does not meet this contract is either skipped-with-warning (a bad skill) or loaded as `Broken` (a bad mode, §9) — never trusted, never fatal.
@@ -92,7 +92,7 @@ impl ModeRegistry {
 }
 ```
 
-`ModeRegistry` **subsumes the active-pointer role** that Slice 0 gave `AgentProfileRegistry`. The `AgentProfile` struct is reused verbatim as the identity carried inside `Mode::Ready`; `AgentProfileRegistry` (`agent_profile.rs`) is retired from the app path (kept only if still used by the Chat-delegation subagent, which is out of scope here).
+`ModeRegistry` **subsumes the active-pointer role** that Slice 0 gave `AgentProfileRegistry`. The `AgentProfile` **struct** is reused verbatim as the identity carried inside `Mode::Ready`. `AgentProfileRegistry` itself (`agent_profile.rs`) can be **fully deleted** — verified: the Chat-delegation subagent path constructs `AgentProfile::builtin()` directly (`main.rs:3010`, `subagent.rs:236`) and never touches the registry, and the app path's only use is the active pointer that `ModeRegistry` now owns. Do not preserve it "just in case."
 
 **Menu & invoke_skill scoping.** A pure helper builds the effective view for the active mode:
 
@@ -105,7 +105,11 @@ pub fn effective_skills(global: &SkillRegistry, active: &Mode) -> SkillRegistry;
 
 > **Shadowing detail.** "Mode shadows global" means the *mode's* copy wins. Since `push_unique` is first-wins, the builder seeds the mode's skills **first**, then folds in globals — so a same-named global is rejected and the mode copy stays. `Chat` (owns no skills) ⇒ globals only.
 
-The turn already reads `app.profiles.active()` + `app.skills.menu()` at `main.rs:3055` and builds `chat_turn_config_with(profile, menu)`. This slice changes that call site to read the **active mode**: the turn's `system` = the active mode's `AgentProfile.system_prompt` (which, for a `Ready` mode, is `SYSTEM_PROMPT + mode.md body` — §3) **plus** the effective scoped menu; **`invoke_skill` resolves against the same effective registry.** So one Shift+Tab swaps *both* prompt layers at once — the ambient overlay and the visible/pullable skills — and switching back to `Chat` restores the pure `SYSTEM_PROMPT` with globals only. This reuses Slice 0's `chat_turn_config_with` unchanged; the only new input is "which mode is active." (The tool holds a handle to the app's current effective scope rather than a fixed `Arc<SkillRegistry>` — mechanism deferred to the plan.)
+The turn already reads `app.profiles.active()` + `app.skills.menu()` at `main.rs:3055` and builds `chat_turn_config_with(profile, menu)`. This slice changes that call site to read the **active mode** and build a **per-turn snapshot** of the effective view (details below): the turn's `system` = the active mode's `AgentProfile.system_prompt` **plus** the effective scoped menu; **`invoke_skill` resolves against the same snapshot.** So one Shift+Tab swaps *both* prompt layers at once — the ambient overlay and the visible/pullable skills — and switching back to `Chat` restores the pure `SYSTEM_PROMPT` with globals only. This reuses Slice 0's `chat_turn_config_with` unchanged; the only new input is "which mode is active."
+
+**Where the overlay is composed (crate boundary — decided).** `SYSTEM_PROMPT` is a **bin-only** constant (`agent.rs:27`); `zoid-core` cannot see it. Therefore **the bin composes the overlay**, not core. `zoid-core`'s `Mode`/`ModeRegistry`/`effective_skills` are pure value-holders: `Mode::chat(base: AgentProfile)` and the mode-importer both take a **base `AgentProfile` as a parameter** and store `system_prompt = base.system_prompt + "\n\n" + mode.md body` (empty body ⇒ just the base). The bin seeds the registry from `default_profile()` (`agent.rs:36`) — exactly as it already seeds `AgentProfileRegistry` at `main.rs:1244`. Consequence: the overlay-composition assertion is a **bin test**, not a core test (§13).
+
+**The `invoke_skill` snapshot (decided — resolves risks 1 & 3).** Slice 0 wired `InvokeSkillTool { skills: Arc<SkillRegistry> }` — an immutable snapshot resolved synchronously (`invoke_skill.rs:17`), and the tools vec is built **once** at App construction (`main.rs:1243`) then cloned into each `tokio::spawn`ed turn (`main.rs:3049`). The menu, however, is **already** recomputed per turn (`main.rs:3056`). We make the resolver consistent with the menu **by construction**: `spawn_turn` builds the effective `SkillRegistry` for the active mode **once at turn start** and binds a **fresh `InvokeSkillTool` (Arc of that snapshot)** for that turn. `InvokeSkillTool`'s field stays `Arc<SkillRegistry>` (no interior mutability, no shared-mutable state, no `RwLock`/`ArcSwap`). A mid-turn mode switch or `:mode reload` **cannot** touch an in-flight turn — it takes effect on the **next** turn. (Cosmetic consequence, stated deliberately: the mode chip may lead the resolver by at most one turn if switched mid-stream; acceptable.)
 
 **The Superpowers split (worked example).** `using-superpowers` — the loader skill whose whole job is *"reach for skills"* — is authored as the **`mode.md` body** (ambient, always-on while the mode is active), **not** a menu entry. The other ~13 methodology skills (`brainstorming`, `writing-plans`, `test-driven-development`, …) are the **scoped menu**, pulled transiently via `invoke_skill`. The two prompt layers from Slice 0 map exactly: ambient loader + transient bodies.
 
@@ -115,13 +119,14 @@ The turn already reads `app.profiles.active()` + `app.skills.menu()` at `main.rs
 
 | Unit | File | Responsibility |
 |---|---|---|
-| `Mode`, `ModeRegistry`, `effective_skills` | **new** `crates/zoid-core/src/mode.rs` | Pure domain model + menu scoping. `Chat` constructor (`Mode::chat()` = default `AgentProfile`, empty skills). No FS/network. |
+| `Mode`, `ModeRegistry`, `effective_skills` | **new** `crates/zoid-core/src/mode.rs` | Pure value-holders + menu scoping. `Mode::chat(base: AgentProfile)` **takes the base profile as a param** (core can't see the bin's `SYSTEM_PROMPT`, §5); `effective_skills` builds the scoped view. No FS/network, no `SYSTEM_PROMPT`. |
 | `ModesConfig` / `PartialModes` | `crates/zoid-core/src/config.rs` | `[modes] source_dirs = [...]` mirroring `SkillsConfig` (`config.rs:8`); union-merge across layers (`config.rs:234` pattern). |
-| Mode importer + `reload` | **new** `crates/zoid/src/mode_import.rs` | Effectful: resolve mode dirs (convention + config), scan each subfolder for `mode.md` + sibling `*/SKILL.md`, build `Vec<Mode>` (Chat first), producing `Ready`/`Broken`. `build_mode_registry(dirs) -> ModeRegistry`. Mirrors `skill_import.rs` (`resolve_skill_dirs`/`import_skills`/`build_registry`). |
-| App wiring | `crates/zoid/src/main.rs` (~1014, 1235, 1244, 3055) | `App` gains `modes: ModeRegistry` (replacing the `profiles` field, `main.rs:1014/1244`); global `skills` stays. `spawn_turn` (`main.rs:3055`) builds the effective menu for `modes.active()`. |
-| Switch action | `crates/zoid-tui/src/{state,route,command,palette}.rs` | Delete `enum Mode`/`toggle_mode`; `Action::SwitchMode` → `cycle_next`; `:mode <name>` command; palette "Switch mode ▸" group (replaces "Switch to Build"); `:mode reload`. |
-| Mode chip + broken card | `crates/zoid-tui/src/render.rs` | Status-bar chip shows `modes.active_name()` (⚠ prefix when broken); delete `render_build_placeholder` + the Chat/Build render branches; a `Broken`-mode conversation area renders the crafted error card (§9). |
-| Per-session active mode | `crates/zoid-core/src/{sessions,session}.rs` | `sessions` table gains a nullable `active_mode TEXT`; write on switch, read on resume (§11). |
+| Mode importer + `reload` | **new** `crates/zoid/src/mode_import.rs` | Effectful: resolve mode dirs (convention + config), scan each subfolder for `mode.md` + sibling `*/SKILL.md`, compose each `Ready` mode's `system_prompt` from the passed base profile + `mode.md` body (§5), build `Vec<Mode>` (Chat first) → `build_mode_registry(base, dirs) -> ModeRegistry`. Mirrors `skill_import.rs`. |
+| App wiring + per-turn snapshot | `crates/zoid/src/main.rs` (~1014, 1243, 1244, 3049, 3056) | `App` gains `modes: ModeRegistry` (replacing the `profiles` field); global `skills` stays. `spawn_turn` builds the effective `SkillRegistry` snapshot for `modes.active()` **once at turn start** and binds a fresh `InvokeSkillTool` to it (§5), instead of the once-at-construction tools vec (`main.rs:1243`). |
+| Switch action + payload type | `crates/zoid-tui/src/{state,route,command,palette}.rs` | Delete `enum Mode`/`toggle_mode`. **`Command::SwitchMode(Mode)` → `SwitchMode(String)` + a new `CycleMode`** (`command.rs:8`); `parse_command(":mode <name>")` carries a `String`; `all_items(mode: Mode, …)` (`palette.rs:56`) takes the mirrored active-mode name. `BackTab` → `CycleMode`; `:mode reload`; palette "Switch mode ▸" group (replaces "Switch to Build"). |
+| `ShellState` mode mirror | `crates/zoid-tui/src/state.rs` | The pure renderer can't reach the bin's `ModeRegistry`, so mirror it like `provider`/`model`/`companion_on` (`state.rs:175-196`): add `active_mode: String`, `active_mode_broken: bool`, and `mode_names: Vec<String>` (for the palette group). The bin pushes these on switch/reload. |
+| Mode chip + broken card | `crates/zoid-tui/src/render.rs` | Chip reads the mirrored `active_mode` (⚠ when `active_mode_broken`); delete `render_build_placeholder` + Chat/Build render branches; a `Broken`-mode conversation area renders the crafted error card (§9). |
+| Per-session active mode + **migration** | `crates/zoid-core/src/store.rs` (+ `session.rs` actor, `sessions.rs` projection) | **All SQL lives in `store.rs`.** Add the schema migration (§11), an `active_mode`-aware write, and a `get_active_mode(id)` read. `session.rs` threads a `set_active_mode` message; `sessions.rs` is untouched unless the column joins `SessionRow`. |
 
 ---
 
@@ -164,7 +169,7 @@ source_dirs = ["~/dev/zoid-modes"]
 - **Mode chip — bottom-left status bar.** Shows the active mode's name; a `Broken` mode renders with a `⚠` prefix. (Replaces the `Chat`/`Build` chip branch, `render.rs:277`.)
 - **`:mode <name>`** — direct switch (`set_active`); **`:mode reload`** — hot-reload (§10). Replaces `:chat`/`:build` (`command.rs:33`).
 - **Palette "Switch mode ▸"** group — lists modes (Chat first), each row `name — description` (⚠ for broken); selecting one switches. Replaces the single "Switch to Build" item (`palette.rs:59`).
-- **Retire `enum Mode { Chat, Build }`** (`state.rs:6`): delete the enum, `toggle_mode` (`state.rs:372`), `render_build_placeholder` (`render.rs:173`), the Chat/Build match arms in `render.rs`/`route.rs`/`command.rs`/`palette.rs`, and the `Esc`-from-Build hatch (`route.rs:180` — nothing to escape now). Rendering becomes single-surface; `Chat` is simply mode 0.
+- **Retire `enum Mode { Chat, Build }`** (`state.rs:6`): delete the enum, `toggle_mode` (`state.rs:372`), `render_build_placeholder` (`render.rs:173`), the Chat/Build match arms in `render.rs`/`route.rs`/`command.rs`/`palette.rs`, and the `Esc`-from-Build hatch (`route.rs:180` — nothing to escape now). Rendering becomes single-surface; `Chat` is simply mode 0. **Not purely mechanical:** because modes now have arbitrary on-disk names, the `Command`/`Action` payload changes from the typed `Mode` enum to a `String` (`SwitchMode(String)` + `CycleMode`, §6) — a data-contract change across the pure boundary, so the mirrored `ShellState` fields (§6) and the palette's `all_items` signature move with it.
 
 ---
 
@@ -195,9 +200,11 @@ This is the single seam both on-ramps use: dropping a folder into a convention d
 
 The active mode is **session state**. Sessions are already keyed per-repo (`root_path`) and auto-loaded most-recent-first for the current repo, so storing the active mode on the session yields **per-repo stickiness for free**: resume a repo → land back in the mode you left.
 
-- **Storage:** the `sessions` table (`sessions.rs`) gains a nullable **`active_mode TEXT`** column. Written on every switch; read on resume and passed to `ModeRegistry::set_active` (falling back to `Chat` if the stored mode no longer resolves — e.g. its folder was removed).
+- **Storage:** the `sessions` table gains a nullable **`active_mode TEXT`** column. Written on every switch; read on resume and passed to `ModeRegistry::set_active` (falling back to `Chat` if the stored mode no longer resolves — e.g. its folder was removed).
 - **Default:** a new session starts in `Chat`.
-- **Migration:** additive nullable column; existing rows read as `NULL` ⇒ `Chat`. No destructive migration.
+- **Migration (this is the codebase's FIRST schema migration — name the mechanism).** The schema is created with `CREATE TABLE IF NOT EXISTS sessions (…)` (`store.rs:42`) and there is **no migration framework, no `user_version`, no `ALTER TABLE`** anywhere in `store.rs`. For an existing DB the table already exists, so adding the column to the `CREATE TABLE` body is a **silent no-op** — the column never appears and the first `SELECT/INSERT active_mode` throws at runtime. SQLite has no `ADD COLUMN IF NOT EXISTS`, so on `EventStore::open` we **probe `pragma table_info(sessions)`** (or catch the duplicate-column error) and, if absent, run `ALTER TABLE sessions ADD COLUMN active_mode TEXT`. Idempotent, additive, non-destructive; existing rows read `NULL ⇒ Chat`. This establishes the pattern every future column follows.
+- **Read path:** a dedicated `get_active_mode(session_id) -> Option<String>` query (keeps `SessionRow`/`session_list` untouched — less churn than threading the column through the projection).
+- **Restore onto a `Broken` mode.** `set_active` matches a `Broken` slot (it occupies a named cycle position, §9), so resuming a session whose stored mode is now broken lands directly on that mode's **error card** — intended ("you left it broken; here's why"). Only a *vanished* mode falls back to `Chat`.
 
 ---
 
@@ -220,13 +227,15 @@ Paste a URL (e.g. `github.com/obra/superpowers/tree/main/skills`) → the agent 
 - `effective_skills`: `Chat` ⇒ globals only; `Ready` mode ⇒ globals + mode skills; **mode shadows global** of the same name; `Broken` ⇒ globals only.
 - `ModeRegistry`: `cycle_next` wraps in order with Chat first; `set_active` hit/miss; `active()`/`names()` on a mix of Ready + Broken; empty-discovery ⇒ just `Chat`.
 - `mode.md` parsing via `parse_skill_md`: name→canonical, missing name ⇒ Broken input, description optional.
-- **Ambient overlay composition:** a `Ready` mode with a non-empty `mode.md` body ⇒ `profile.system_prompt == SYSTEM_PROMPT + "\n\n" + body`; an empty body ⇒ `== SYSTEM_PROMPT`; `Chat` ⇒ `== SYSTEM_PROMPT`. Assert the turn `system` under a mode **contains** the overlay and under `Chat` **does not** (the "drops on switch back" invariant).
-- Seamed fields (`tools`, `model`) captured onto the `AgentProfile` but asserted **unused** by the turn config this slice.
+- **Overlay composition on an arbitrary base (pure — no `SYSTEM_PROMPT`):** `Mode::chat(base)` ⇒ `system_prompt == base.system_prompt`; a `Ready` mode with body `b` built on `base` ⇒ `== base.system_prompt + "\n\n" + b`; empty body ⇒ `== base.system_prompt`.
 
 **Effectful (`zoid` bin, temp dirs):**
 - `mode_import`: a folder with `mode.md` + skills ⇒ `Ready` with scoped skills; malformed `mode.md` ⇒ `Broken` named by folder; no `mode.md` ⇒ ignored; a bad `SKILL.md` inside a good mode ⇒ mode `Ready`, warning counted; missing dir ⇒ skipped, never panics.
+- **Overlay + turn wiring (uses real `SYSTEM_PROMPT`/`default_profile()`):** the turn `system` under a mode **contains** the overlay and under `Chat` **does not** (the "drops on switch back" invariant); the `"## Available skills…"` menu header lands **after** the overlay text (guards against a future `chat_turn_config_with` reorder, `agent.rs:64`).
+- **Per-turn snapshot:** a scoped skill resolvable via `invoke_skill` while its mode is active is **unresolvable** after switching away (proves the snapshot is bound per turn, §5).
+- Seamed fields (`tools`, `model`) captured onto the `AgentProfile` but asserted **unused** by the turn config this slice.
 - `reload` preserves active-by-name; falls back to `Chat` when the active mode disappears.
-- Persistence: switch writes `active_mode`; resume restores it; stored-but-vanished mode ⇒ `Chat`.
+- **Migration + persistence:** opening an **old-shape DB** (no `active_mode` column) runs the `ALTER TABLE` and resumes into `Chat` (no throw); switch writes `active_mode`; resume restores it; stored-but-vanished mode ⇒ `Chat`; stored-but-`Broken` mode ⇒ lands on the error card (§11).
 
 **TUI (`TestBackend`/`insta` snapshots):**
 - Shift+Tab cycle order/wrap; mode chip (Ready name; ⚠ broken); the crafted **broken-mode error card**; palette "Switch mode ▸" group. Each snapshot asserts the Chat/Build chrome is gone (single-surface render).
@@ -244,7 +253,8 @@ Paste a URL (e.g. `github.com/obra/superpowers/tree/main/skills`) → the agent 
 
 ## 15. Risks
 
-1. **`invoke_skill` scope handle.** The tool must resolve against the *current* active mode's effective registry, which changes at runtime. If wired as a fixed `Arc<SkillRegistry>` (Slice 0's shape) it would go stale. Mitigate: give the tool a handle to the app's live effective scope (mechanism decided in the plan); a test asserts a scoped skill is unresolvable after switching away from its mode.
-2. **Enum-retirement blast radius.** ~5 `zoid-tui` sites plus tests reference `Mode`/`toggle_mode`. Mitigate: the retirement is mechanical (delete + repoint to `ModeRegistry`); the existing `backtab_switches_mode` / palette tests are rewritten to assert cycle behavior, and snapshots catch chrome regressions.
-3. **Reload races a live turn.** A `reload()` mid-turn could swap the effective scope under an in-flight `invoke_skill`. Mitigate: apply reload at a turn boundary (or snapshot the effective scope at turn start); documented in the plan.
-4. **Per-session column migration.** Adding `active_mode` must not break existing DBs. Mitigate: nullable additive column, `NULL ⇒ Chat`; a test opens an old-shape row and resumes into `Chat`.
+1. **`invoke_skill` scope — DECIDED (not open), see §5.** The resolver must match the active mode's effective skills, which change at runtime. Resolution: **per-turn snapshot** — `spawn_turn` binds a fresh `InvokeSkillTool(Arc<snapshot>)` at turn start, consistent with the already-per-turn menu. `InvokeSkillTool` keeps its immutable `Arc<SkillRegistry>` field; no shared-mutable state, no lock. Test: a scoped skill is unresolvable after switching away.
+2. **Reload/switch vs. a live turn — DISSOLVED by the snapshot (§5).** Because each turn owns its snapshot, a mid-turn `reload()`/switch cannot mutate an in-flight turn; it applies on the next turn. The only residue is cosmetic (the chip may lead the resolver by one turn) and is stated as acceptable. No locking needed.
+3. **Enum-retirement is a data-contract change, not just deletion (§6, §8).** Beyond the ~5 `zoid-tui` sites, the `Command`/`Action` payload moves from the `Mode` enum to `String` (`SwitchMode(String)` + `CycleMode`) and the renderer needs mirrored `ShellState` fields. Mitigate: land the payload/mirror change first, then repoint; rewrite `backtab_switches_mode`/palette tests to assert cycle behavior; snapshots catch chrome regressions.
+4. **First-ever schema migration (§11).** `store.rs` has no migration machinery, and a `CREATE TABLE IF NOT EXISTS` edit is a silent no-op on existing DBs. Mitigate: probe `pragma table_info` then `ALTER TABLE … ADD COLUMN` on `open`; a test opens an old-shape DB and resumes into `Chat` without throwing. This sets the precedent for future columns — get it right once.
+5. **`AgentProfile` reuse creates a subtle coupling.** `Mode::chat(base)` and the importer both depend on the bin passing `default_profile()`; if a future refactor changes `default_profile`'s prompt, every mode's overlay base shifts. Acceptable (it *should* track the base agent), but noted so it's a deliberate dependency, not an accident.
