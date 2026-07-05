@@ -688,7 +688,7 @@ fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
             frame.render_widget(Paragraph::new(vec![hint]), inner);
         }
         PaletteStage::Pick => {
-            let items = all_items(state.mode);
+            let items = all_items(state.mode, state.companion_on);
             let matches = selectable_matches(&items, &state.palette.query);
             let sel = nav(state.palette.selected, 0, matches.len());
 

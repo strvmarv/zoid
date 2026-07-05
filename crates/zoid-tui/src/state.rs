@@ -168,6 +168,11 @@ pub struct ShellState {
     pub reduced_motion: bool,
     /// Conversation altitude (spec ① semantic zoom).
     pub zoom: Zoom,
+    /// Whether the companion server is currently running. Mirrors the bin's
+    /// `App.companion` (the source of truth), synced by enable/disable so the
+    /// pure renderer and palette can offer the opposite action ("Enable" vs
+    /// "Disable companion") without reaching into `App`.
+    pub companion_on: bool,
     /// Transient one-line hint shown in the status bar (e.g. the ④ "queued · P5"
     /// notice). Lives on `ShellState` (not `App`) so the pure renderer can read
     /// it directly. Setting/clearing it on a verb pick is bin wiring (P4d T4).
@@ -302,6 +307,7 @@ impl ShellState {
             changes_files: 0,
             reduced_motion: false,
             zoom: Zoom::Normal,
+            companion_on: false,
             status_hint: None,
             input_rows: 1,
             tasks_len: 0,

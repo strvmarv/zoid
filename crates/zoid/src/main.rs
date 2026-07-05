@@ -2103,7 +2103,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::ToggleDrawer(id) => app.shell.toggle_drawer(id),
         Action::PaletteMove(d) => {
-            let items = zoid_tui::palette::all_items(app.shell.mode);
+            let items = zoid_tui::palette::all_items(app.shell.mode, app.shell.companion_on);
             let n = zoid_tui::palette::selectable_matches(&items, &app.shell.palette.query).len();
             app.shell.palette.selected = zoid_tui::palette::nav(app.shell.palette.selected, d, n);
         }
@@ -2837,6 +2837,7 @@ fn enable_companion(app: &mut App) {
     match zoid_companion::start(app.companion_hub.clone(), app.config.companion.port, token) {
         Ok(server) => {
             app.companion_hub.set_enabled(true);
+            app.shell.companion_on = true;
             if app.config.companion.open {
                 open_url(&server.url);
             } else {
@@ -2854,6 +2855,7 @@ fn enable_companion(app: &mut App) {
 fn disable_companion(app: &mut App) {
     if let Some(server) = app.companion.take() {
         app.companion_hub.set_enabled(false);
+        app.shell.companion_on = false;
         server.shutdown();
     }
 }
@@ -2940,11 +2942,6 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             app.shell.config_field = 0;
             app.shell.config_edit = None;
             refresh_config_sections(app);
-            Ok(false)
-        }
-        Command::ShowOverview => {
-            app.shell.zoom = zoid_tui::state::Zoom::Overview;
-            app.shell.conversation_scroll = 0;
             Ok(false)
         }
         Command::CompanionEnable => {

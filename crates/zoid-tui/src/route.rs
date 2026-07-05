@@ -441,7 +441,7 @@ pub fn route_mouse(state: &ShellState, layout: &ShellLayout, m: MouseEvent) -> A
 /// Resolve the palette's selected row to its command (bin calls after PaletteRun).
 /// `None` means no row matched the current query.
 pub fn palette_selected_command(state: &ShellState) -> Option<Command> {
-    let items = all_items(state.mode);
+    let items = all_items(state.mode, state.companion_on);
     let matches = selectable_matches(&items, &state.palette.query);
     let sel = nav(state.palette.selected, 0, matches.len());
     matches.get(sel).map(|&i| items[i].command.clone())
@@ -1009,6 +1009,18 @@ mod tests {
         assert_eq!(
             palette_selected_command(&s),
             Some(Command::SwitchMode(Mode::Build)),
+        );
+        // The companion row resolves to the state-appropriate command.
+        s.palette.query = "companion".into();
+        s.companion_on = false;
+        assert_eq!(
+            palette_selected_command(&s),
+            Some(Command::CompanionEnable),
+        );
+        s.companion_on = true;
+        assert_eq!(
+            palette_selected_command(&s),
+            Some(Command::CompanionDisable),
         );
     }
 

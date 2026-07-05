@@ -49,11 +49,21 @@ pub struct PaletteItem {
 /// `selectable_matches` re-ranks it by fuzzy score while the user types. Non-
 /// implemented actions (fork/undo/pin/evict/recipe) are intentionally omitted —
 /// re-add them here with their real `Command` when those features ship.
-pub fn all_items(mode: Mode) -> Vec<PaletteItem> {
+///
+/// `companion_on` is the live companion-server state (source of truth: the bin's
+/// running server); the companion row offers the *opposite* action, mirroring
+/// how the mode row offers the other mode.
+pub fn all_items(mode: Mode, companion_on: bool) -> Vec<PaletteItem> {
     // The mode row offers the *other* mode.
     let (mode_label, mode_cmd) = match mode {
         Mode::Chat => ("Switch to Build", Command::SwitchMode(Mode::Build)),
         Mode::Build => ("Switch to Chat", Command::SwitchMode(Mode::Chat)),
+    };
+    // The companion row offers the *opposite* of the current state.
+    let (companion_label, companion_cmd) = if companion_on {
+        ("Disable companion", Command::CompanionDisable)
+    } else {
+        ("Enable companion", Command::CompanionEnable)
     };
     vec![
         PaletteItem {
@@ -73,12 +83,12 @@ pub fn all_items(mode: Mode) -> Vec<PaletteItem> {
             command: mode_cmd,
         },
         PaletteItem {
-            label: "Overview",
-            command: Command::ShowOverview,
-        },
-        PaletteItem {
             label: "Open settings",
             command: Command::OpenConfig,
+        },
+        PaletteItem {
+            label: companion_label,
+            command: companion_cmd,
         },
         PaletteItem {
             label: "Quit zoid",
@@ -164,7 +174,7 @@ mod tests {
         // Runnable-only is now a *type-level* guarantee (the field is `Command`,
         // not `Option<Command>`), so there's nothing to assert at runtime for it.
         // This pins the flat curated set and its at-rest order.
-        let items = all_items(Mode::Chat);
+        let items = all_items(Mode::Chat, false);
         let labels: Vec<&str> = items.iter().map(|i| i.label).collect();
         assert_eq!(
             labels,
@@ -173,24 +183,31 @@ mod tests {
                 "Resume session…",
                 "Rename session…",
                 "Switch to Build",
-                "Overview",
                 "Open settings",
+                "Enable companion",
                 "Quit zoid",
             ]
         );
+        // With the companion running, the row offers the opposite action.
+        let on: Vec<&str> = all_items(Mode::Chat, true)
+            .iter()
+            .map(|i| i.label)
+            .collect();
+        assert!(on.contains(&"Disable companion"));
+        assert!(!on.contains(&"Enable companion"));
     }
 
     #[test]
     fn mode_row_offers_the_other_mode() {
         assert_eq!(
-            all_items(Mode::Chat)
+            all_items(Mode::Chat, false)
                 .iter()
                 .find(|i| i.command == Command::SwitchMode(Mode::Build))
                 .map(|i| i.label),
             Some("Switch to Build")
         );
         assert_eq!(
-            all_items(Mode::Build)
+            all_items(Mode::Build, false)
                 .iter()
                 .find(|i| i.command == Command::SwitchMode(Mode::Chat))
                 .map(|i| i.label),
@@ -200,16 +217,16 @@ mod tests {
 
     #[test]
     fn empty_query_returns_all_rows_in_order() {
-        let items = all_items(Mode::Chat);
+        let items = all_items(Mode::Chat, false);
         let idxs = selectable_matches(&items, "");
         assert_eq!(idxs, (0..items.len()).collect::<Vec<_>>());
     }
 
     #[test]
     fn typing_reranks_best_match_first() {
-        let items = all_items(Mode::Chat);
-        let idxs = selectable_matches(&items, "over");
-        assert_eq!(items[idxs[0]].label, "Overview");
+        let items = all_items(Mode::Chat, false);
+        let idxs = selectable_matches(&items, "comp");
+        assert_eq!(items[idxs[0]].label, "Enable companion");
         let idxs = selectable_matches(&items, "build");
         assert_eq!(items[idxs[0]].label, "Switch to Build");
     }
@@ -234,7 +251,7 @@ mod tests {
             arg_kind_for(&Command::RenameSession(String::new())),
             Some(ArgKind::Rename)
         );
-        assert_eq!(arg_kind_for(&Command::ShowOverview), None);
+        assert_eq!(arg_kind_for(&Command::CompanionEnable), None);
         assert_eq!(arg_kind_for(&Command::Quit), None);
         assert_eq!(arg_kind_for(&Command::NewSession), None);
     }

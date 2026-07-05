@@ -18,8 +18,6 @@ pub enum Command {
     Delegate(String),
     /// Open the full-screen config overlay (provider/model/economy/secrets).
     OpenConfig,
-    /// Jump straight to the `Zoom::Overview` altitude from anywhere.
-    ShowOverview,
     /// Enable the companion server (start it if needed, open the browser).
     CompanionEnable,
     /// Disable (stop) the companion server.
@@ -47,7 +45,6 @@ pub fn parse_command(raw: &str) -> Command {
             Command::Delegate(rest.strip_prefix("delegate").unwrap().trim().to_string())
         }
         "config" => Command::OpenConfig,
-        "overview" => Command::ShowOverview,
         "companion" => Command::CompanionEnable,
         "companion off" => Command::CompanionDisable,
         other => Command::Unknown(other.to_string()),
@@ -95,12 +92,6 @@ mod tests {
     #[test]
     fn parses_config_command() {
         assert_eq!(parse_command(":config"), Command::OpenConfig);
-    }
-
-    #[test]
-    fn parses_overview_command() {
-        assert_eq!(parse_command(":overview"), Command::ShowOverview);
-        assert_eq!(parse_command("overview"), Command::ShowOverview);
     }
 
     #[test]
