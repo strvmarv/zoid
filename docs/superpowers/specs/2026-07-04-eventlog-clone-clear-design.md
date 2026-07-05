@@ -81,13 +81,14 @@ This is the only signature ripple: ~3 core functions plus their unit tests. The 
 
 ### Safety argument (why clearing is sound)
 
-Clearing is scoped to **compacted** bodies only. For a compacted id:
-- `conversation()` always renders the summary — the raw body is never a render source again (`projection.rs:136`).
+Clearing is scoped to **compacted** bodies only. For a compacted id, every surviving reader of the raw body must be redirected to the summary first:
+- `conversation()` always renders the summary — the raw body is never a render source again (`projection.rs:135`, matches by id regardless of item kind, so files are covered).
 - There is **no un-compact / restore path** in the codebase (verified) — a summary is never expanded back to raw in memory.
 - Recall and readmit source the raw body from SQLite, not memory.
-- The two token estimators are redirected (above).
+- **Token estimators (both):** `context_window`'s override (`context.rs:310-317`) and eviction's per-turn accounting must weigh a compacted result by `estimate_tokens(summary)`.
+- **`file_contents` (`context.rs:356`) is also a reader.** Compaction compacts **File** items too (`compaction.rs:151`, emitting `ToolResultCompacted { id: tool_call_id }` for a file read), and `build_subagent_request` (`subagent.rs:54`) inlines file bodies via `file_contents`, which reads raw `ToolResult.output`. So a cleared compacted **file** read would hand a subagent an empty file. `file_contents` must substitute the summary for compacted ids.
 
-Therefore, once the redirects land, the in-memory raw compacted body has **no surviving reader**, and clearing it cannot change rendered output, recall, readmit, or token accounting. Uncompacted evicted bodies are explicitly left intact (readmit renders them raw).
+**Correction (was previously stated as "no surviving reader"):** because compaction covers **File** items — not just non-file tool results — two readers keyed on item *kind* miss compacted files: `file_contents` (returns the raw/cleared body) and `context_window`'s override (only matches `ItemKind::ToolResult`, so a compacted file's window tokens are never redirected to the summary). Both must be extended to handle compacted File items before clearing is sound. Once all the redirects above land, clearing cannot change rendered output, recall, readmit, subagent file context, or token accounting. Uncompacted evicted bodies are explicitly left intact (readmit renders them raw).
 
 ## Data flow (end to end)
 
