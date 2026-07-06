@@ -90,6 +90,40 @@ impl ModeMapping {
     }
 }
 
+use serde::{Deserialize, Serialize};
+
+/// One entry in the per-mode provenance sidecar. Read at update time to
+/// classify each canonical file against a fresh upstream fetch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProvenanceEntry {
+    pub canonical_path: String,
+    pub upstream_path: String,
+    pub upstream_sha: String,
+    pub upstream_ref: String,
+    pub upstream_snapshot: String,
+}
+
+/// The `source` block of the sidecar: where the mode was imported from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProvenanceSource {
+    pub url: String,
+    pub repo: String,
+    /// The `ref` field (a reserved word, so the serde rename).
+    #[serde(rename = "ref")]
+    pub ref_: String,
+    pub subtree_path: String,
+    pub fetched_at: String,
+}
+
+/// The on-disk `.zoid-provenance.json` shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProvenanceFile {
+    pub schema: u32,
+    pub source: ProvenanceSource,
+    pub mode_name: String,
+    pub files: Vec<ProvenanceEntry>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,5 +207,57 @@ mod tests {
         assert_eq!(s.resolved_ref, "abc123");
         assert_eq!(s.subtree_path, "skills");
         assert_eq!(s.files.len(), 2);
+    }
+
+    #[test]
+    fn provenance_file_round_trips() {
+        let pf = ProvenanceFile {
+            schema: 1,
+            source: ProvenanceSource {
+                url: "https://github.com/o/r/tree/main/skills".into(),
+                repo: "o/r".into(),
+                ref_: "abc123".into(),
+                subtree_path: "skills".into(),
+                fetched_at: "2026-07-05T12:00:00Z".into(),
+            },
+            mode_name: "Superpowers".into(),
+            files: vec![ProvenanceEntry {
+                canonical_path: "brainstorming/SKILL.md".into(),
+                upstream_path: "skills/brainstorming/SKILL.md".into(),
+                upstream_sha: "sha-1".into(),
+                upstream_ref: "abc123".into(),
+                upstream_snapshot: "snap".into(),
+            }],
+        };
+        let json = serde_json::to_string_pretty(&pf).unwrap();
+        let back: ProvenanceFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(pf, back);
+    }
+
+    #[test]
+    fn provenance_entry_canonical_path_is_relative() {
+        let pf = ProvenanceFile {
+            schema: 1,
+            source: ProvenanceSource {
+                url: "u".into(),
+                repo: "o/r".into(),
+                ref_: "r".into(),
+                subtree_path: "s".into(),
+                fetched_at: "t".into(),
+            },
+            mode_name: "M".into(),
+            files: vec![ProvenanceEntry {
+                canonical_path: "a/SKILL.md".into(),
+                upstream_path: "s/a/SKILL.md".into(),
+                upstream_sha: "x".into(),
+                upstream_ref: "r".into(),
+                upstream_snapshot: "snap".into(),
+            }],
+        };
+        let json = serde_json::to_string(&pf).unwrap();
+        assert!(!json.contains("/home/"));
+        assert!(!json.contains("C:\\"));
+        let back: ProvenanceFile = serde_json::from_str(&json).unwrap();
+        assert!(back.files[0].canonical_path.starts_with("a/"));
     }
 }
