@@ -338,8 +338,27 @@ fn render_question_card(
     let border = color::BRANCH;
     let content_w = width.saturating_sub(4).max(20);
 
+    // At Normal zoom, elide the bundled-files and skipped sections for
+    // ModeMapping cards — they're shown at Detail zoom (detail_lines). Ask
+    // cards show the full question text at every zoom.
+    let body = match kind {
+        QuestionKind::ModeMapping { .. } => {
+            if let Some(idx) = question.find("\nBundled files") {
+                let mut head = question[..idx].trim_end().to_string();
+                let bundled_count = question[idx..].matches('\n').count().max(1);
+                head.push_str(&format!(
+                    "\n\n({bundled_count} bundled/skipped rows — Detail zoom to review)"
+                ));
+                head
+            } else {
+                question.to_string()
+            }
+        }
+        _ => question.to_string(),
+    };
+
     lines.push(card_border_top(title, content_w + 2, border));
-    for para in question.split('\n') {
+    for para in body.split('\n') {
         if para.is_empty() {
             lines.push(Line::from(Span::styled(
                 "│ ".to_string(),
@@ -813,6 +832,39 @@ fn detail_lines(
                     spans.extend(line.spans);
                     out.push(Line::from(spans));
                 }
+            }
+            ChatMsg::Question {
+                kind,
+                question: qtext,
+                choices,
+                state,
+                ..
+            } => {
+                blank_between_turns(&mut out);
+                let (selected, free_text) = match state {
+                    zoid_core::projection::QuestionCardState::Open {
+                        selected,
+                        free_text,
+                    } => {
+                        if let Some(q) = question {
+                            (q.selected, q.free_text.clone())
+                        } else {
+                            (*selected, free_text.clone())
+                        }
+                    }
+                    zoid_core::projection::QuestionCardState::Answered { .. } => (0, String::new()),
+                };
+                render_question_card(
+                    &mut out,
+                    &mut Vec::new(),
+                    kind,
+                    qtext,
+                    choices,
+                    state,
+                    selected,
+                    &free_text,
+                    width,
+                );
             }
             other => out.extend(conversation_lines(
                 std::slice::from_ref(other),
