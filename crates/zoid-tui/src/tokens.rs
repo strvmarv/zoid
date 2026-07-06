@@ -41,6 +41,10 @@ pub mod glyph {
     pub const CODE_BAR: char = '▏'; // fenced-code container left rule (§3.5)
     pub const COPY: char = '⧉'; // code-block copy affordance (§3.5)
     pub const COMPACT: char = '⊟'; // ⑤ compacted tool-result marker (ACM-1)
+    /// Compaction status spinner — a 6-frame box-shuffle ramp, animated at ~120ms
+    /// (slower than the working spinner, signaling a different kind of work).
+    /// Purple (color::BRANCH). Only shown while automated compaction is running.
+    pub const COMPACT_SPINNER: [char; 6] = ['⊟', '⊞', '⊟', '⊕', '⊞', '⊕'];
 
     // Repo drawer line-prefix emojis (§16) — visual markers for at-a-glance scanning.
     pub const REPO_NAME: char = '📦';
@@ -192,5 +196,13 @@ mod tests {
     #[test]
     fn acm1_compact_token_present() {
         assert_eq!(glyph::COMPACT, '⊟');
+    }
+
+    #[test]
+    fn compaction_spinner_token_present() {
+        assert_eq!(
+            glyph::COMPACT_SPINNER,
+            ['⊟', '⊞', '⊟', '⊕', '⊞', '⊕']
+        );
     }
 }
