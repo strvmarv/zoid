@@ -86,9 +86,8 @@ async fn apply_mode_mapping_raises_approval_and_approve_emits_tool_result() {
     });
 
     let wiz = Arc::new(ModeImportWizard::new_import(scan()));
-    let mut tools = zoid::invoke_skill::chat_tools(Arc::new(
-        zoid_core::skill::SkillRegistry::builtin(),
-    ));
+    let mut tools =
+        zoid::invoke_skill::chat_tools(Arc::new(zoid_core::skill::SkillRegistry::builtin()));
     tools.push(Box::new(ProposeModeMappingTool::new(wiz.clone())));
     tools.push(Box::new(ApplyModeMappingTool::new(wiz.clone())));
     let tools = Arc::new(tools);
@@ -98,7 +97,9 @@ async fn apply_mode_mapping_raises_approval_and_approve_emits_tool_result() {
         ulid::Ulid::from(1u128),
         None,
         0,
-        EventKind::UserMessage { text: "import the mode".into() },
+        EventKind::UserMessage {
+            text: "import the mode".into(),
+        },
     )];
     session.append(seed[0].clone()).await.unwrap();
 

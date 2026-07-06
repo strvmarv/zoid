@@ -9,9 +9,7 @@ use tokio::sync::mpsc;
 
 use async_trait::async_trait;
 use zoid::agent::{run_agent_turn, AgentUpdate};
-use zoid::mode_wizard::{
-    ApplyModeMappingTool, ModeImportWizard, ProposeModeMappingTool,
-};
+use zoid::mode_wizard::{ApplyModeMappingTool, ModeImportWizard, ProposeModeMappingTool};
 use zoid_core::event::{Event, EventKind};
 use zoid_core::session::SessionHandle;
 use zoid_core::wizard::{ScannedFile, UpstreamScan};
@@ -92,9 +90,8 @@ async fn import_wizard_approve_materializes_and_loads() {
     });
 
     let wiz = Arc::new(ModeImportWizard::new_import(scan()));
-    let mut tools = zoid::invoke_skill::chat_tools(Arc::new(
-        zoid_core::skill::SkillRegistry::builtin(),
-    ));
+    let mut tools =
+        zoid::invoke_skill::chat_tools(Arc::new(zoid_core::skill::SkillRegistry::builtin()));
     tools.push(Box::new(ProposeModeMappingTool::new(wiz.clone())));
     tools.push(Box::new(ApplyModeMappingTool::new(wiz.clone())));
     let tools = Arc::new(tools);
@@ -104,7 +101,9 @@ async fn import_wizard_approve_materializes_and_loads() {
         ulid::Ulid::from(1u128),
         None,
         0,
-        EventKind::UserMessage { text: "import".into() },
+        EventKind::UserMessage {
+            text: "import".into(),
+        },
     )];
     session.append(seed[0].clone()).await.unwrap();
 
@@ -122,7 +121,11 @@ async fn import_wizard_approve_materializes_and_loads() {
                     &dest_for_task,
                     "2026-07-05T12:00:00Z",
                 );
-                let _ = reply.send(if res.is_ok() { "Approve".into() } else { "Reject".into() });
+                let _ = reply.send(if res.is_ok() {
+                    "Approve".into()
+                } else {
+                    "Reject".into()
+                });
             }
         }
     });

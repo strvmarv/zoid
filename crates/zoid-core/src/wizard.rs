@@ -246,7 +246,10 @@ mod tests {
                 summary: "a".into(),
             }],
         };
-        assert_eq!(m.materialize_entries(), vec![("a/SKILL.md", "skills/a/SKILL.md")]);
+        assert_eq!(
+            m.materialize_entries(),
+            vec![("a/SKILL.md", "skills/a/SKILL.md")]
+        );
     }
 
     #[test]

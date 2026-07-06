@@ -120,7 +120,8 @@ pub fn materialize(
                     continue;
                 }
                 seen_paths.push(canonical_path.clone());
-                let require_parse = canonical_path.ends_with("SKILL.md") && canonical_path != "mode.md";
+                let require_parse =
+                    canonical_path.ends_with("SKILL.md") && canonical_path != "mode.md";
                 if canonical_path == "mode.md" && mapping.mode_name.is_empty() {
                     problems.push("mode.md entry but mode_name is empty".into());
                 }
@@ -149,7 +150,9 @@ pub fn materialize(
     let mut written: Vec<PathBuf> = Vec::new();
     for entry in &mapping.entries {
         let MappingEntry::Materialize {
-            canonical_path, source, ..
+            canonical_path,
+            source,
+            ..
         } = entry
         else {
             continue;
@@ -377,16 +380,19 @@ pub fn build_reconciliation_brief(
         fresh_scan.files.len()
     );
     for entry in &old_sidecar.files {
-        let local = std::fs::read_to_string(mode_dir.join(&entry.canonical_path))
-            .unwrap_or_default();
+        let local =
+            std::fs::read_to_string(mode_dir.join(&entry.canonical_path)).unwrap_or_default();
         let class = zoid_core::wizard::classify_update(entry, &local, fresh_scan);
         s.push_str(&format!(
             "- {} (upstream {}): {}\n",
             entry.canonical_path, entry.upstream_path, class
         ));
     }
-    let old_paths: std::collections::HashSet<&str> =
-        old_sidecar.files.iter().map(|f| f.upstream_path.as_str()).collect();
+    let old_paths: std::collections::HashSet<&str> = old_sidecar
+        .files
+        .iter()
+        .map(|f| f.upstream_path.as_str())
+        .collect();
     for f in &fresh_scan.files {
         if !old_paths.contains(f.upstream_path.as_str()) {
             s.push_str(&format!(
@@ -424,10 +430,11 @@ impl Tool for ApplyModeMappingTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "apply_mode_mapping".into(),
-            description: "Propose a mode mapping for approval. args: { mode_name, mode_description, \
+            description:
+                "Propose a mode mapping for approval. args: { mode_name, mode_description, \
                 mode_body, entries: [{ Materialize: { canonical_path, source, summary } } | \
                 { Skip: { upstream_path, reason } }] }. The user approves, rejects, or adjusts."
-                .into(),
+                    .into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -638,7 +645,10 @@ mod tests {
             summary: "dup".into(),
         });
         let err = materialize(&m, &scan(), &tmp.path().join("m"), "t").unwrap_err();
-        assert!(err.problems.iter().any(|p| p.contains("duplicate canonical path 'mode.md'")));
+        assert!(err
+            .problems
+            .iter()
+            .any(|p| p.contains("duplicate canonical path 'mode.md'")));
     }
 
     #[test]
@@ -695,7 +705,9 @@ mod tests {
         let tool = ApplyModeMappingTool::new(std::sync::Arc::new(wiz));
         let out = tool.run(&serde_json::json!({}), std::path::Path::new("."));
         assert!(out.is_error);
-        assert!(out.text.contains("apply_mode_mapping must be handled by the agent loop"));
+        assert!(out
+            .text
+            .contains("apply_mode_mapping must be handled by the agent loop"));
     }
 
     #[test]

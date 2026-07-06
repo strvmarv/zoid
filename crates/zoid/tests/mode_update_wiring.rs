@@ -4,10 +4,7 @@
 //! exercises the materializer's file-set reconciliation directly.
 
 use zoid::mode_wizard::{materialize, slugify};
-use zoid_core::wizard::{
-    MappingEntry, ModeMapping, ProvenanceEntry, ProvenanceFile, ProvenanceSource, ScannedFile,
-    UpstreamScan,
-};
+use zoid_core::wizard::{MappingEntry, ModeMapping, ProvenanceFile, ScannedFile, UpstreamScan};
 
 fn file(path: &str, sha: &str, content: &str) -> ScannedFile {
     ScannedFile {
@@ -24,9 +21,21 @@ fn import_scan() -> UpstreamScan {
         resolved_ref: "ref1".into(),
         subtree_path: "skills".into(),
         files: vec![
-            file("skills/a/SKILL.md", "sha-a-v1", "---\nname: a\ndescription: d\n---\nA-v1\n"),
-            file("skills/b/SKILL.md", "sha-b-v1", "---\nname: b\ndescription: d\n---\nB-v1\n"),
-            file("skills/c/SKILL.md", "sha-c-v1", "---\nname: c\ndescription: d\n---\nC-v1\n"),
+            file(
+                "skills/a/SKILL.md",
+                "sha-a-v1",
+                "---\nname: a\ndescription: d\n---\nA-v1\n",
+            ),
+            file(
+                "skills/b/SKILL.md",
+                "sha-b-v1",
+                "---\nname: b\ndescription: d\n---\nB-v1\n",
+            ),
+            file(
+                "skills/c/SKILL.md",
+                "sha-c-v1",
+                "---\nname: c\ndescription: d\n---\nC-v1\n",
+            ),
         ],
     }
 }
@@ -38,9 +47,21 @@ fn fresh_scan() -> UpstreamScan {
         resolved_ref: "ref1".into(),
         subtree_path: "skills".into(),
         files: vec![
-            file("skills/a/SKILL.md", "sha-a-v2", "---\nname: a\ndescription: d\n---\nA-v2\n"),
-            file("skills/b/SKILL.md", "sha-b-v1", "---\nname: b\ndescription: d\n---\nB-v1\n"),
-            file("skills/d/SKILL.md", "sha-d-v1", "---\nname: d\ndescription: d\n---\nD-v1\n"),
+            file(
+                "skills/a/SKILL.md",
+                "sha-a-v2",
+                "---\nname: a\ndescription: d\n---\nA-v2\n",
+            ),
+            file(
+                "skills/b/SKILL.md",
+                "sha-b-v1",
+                "---\nname: b\ndescription: d\n---\nB-v1\n",
+            ),
+            file(
+                "skills/d/SKILL.md",
+                "sha-d-v1",
+                "---\nname: d\ndescription: d\n---\nD-v1\n",
+            ),
         ],
     }
 }
@@ -105,7 +126,10 @@ fn update_file_set_reconciliation() {
         "---\nname: a\ndescription: d\n---\nA-v2\n"
     );
     assert!(dest.join("b/SKILL.md").is_file());
-    assert!(!dest.join("c/SKILL.md").exists(), "dropped file must be deleted");
+    assert!(
+        !dest.join("c/SKILL.md").exists(),
+        "dropped file must be deleted"
+    );
     assert!(dest.join("d/SKILL.md").is_file());
 
     let side = std::fs::read_to_string(dest.join(".zoid-provenance.json")).unwrap();

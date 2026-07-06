@@ -56,8 +56,7 @@ pub fn parse_github_url(url: &str) -> Result<GithubUrl, String> {
 /// returns canned JSON for tests.
 #[async_trait::async_trait]
 pub trait GithubApi: Send + Sync {
-    async fn fetch_tree_json(&self, owner: &str, repo: &str, ref_: &str)
-        -> anyhow::Result<Value>;
+    async fn fetch_tree_json(&self, owner: &str, repo: &str, ref_: &str) -> anyhow::Result<Value>;
 
     async fn fetch_blob_content(&self, download_url: &str) -> anyhow::Result<String>;
 }
@@ -88,15 +87,9 @@ impl HttpGithubApi {
 
 #[async_trait::async_trait]
 impl GithubApi for HttpGithubApi {
-    async fn fetch_tree_json(
-        &self,
-        owner: &str,
-        repo: &str,
-        ref_: &str,
-    ) -> anyhow::Result<Value> {
-        let url = format!(
-            "https://api.github.com/repos/{owner}/{repo}/git/trees/{ref_}?recursive=1"
-        );
+    async fn fetch_tree_json(&self, owner: &str, repo: &str, ref_: &str) -> anyhow::Result<Value> {
+        let url =
+            format!("https://api.github.com/repos/{owner}/{repo}/git/trees/{ref_}?recursive=1");
         let mut req = self.client.get(&url);
         if let Some(t) = &self.token {
             req = req.bearer_auth(t);
@@ -126,11 +119,10 @@ impl GithubApi for HttpGithubApi {
 }
 
 /// Fetch the subtree at `GithubUrl.subtree_path` and assemble an `UpstreamScan`.
-pub async fn fetch_tree(
-    api: &dyn GithubApi,
-    url: &GithubUrl,
-) -> anyhow::Result<UpstreamScan> {
-    let tree_json = api.fetch_tree_json(&url.owner, &url.repo, &url.ref_).await?;
+pub async fn fetch_tree(api: &dyn GithubApi, url: &GithubUrl) -> anyhow::Result<UpstreamScan> {
+    let tree_json = api
+        .fetch_tree_json(&url.owner, &url.repo, &url.ref_)
+        .await?;
     let resolved_ref = tree_json
         .get("sha")
         .and_then(|v| v.as_str())
@@ -151,10 +143,7 @@ pub async fn fetch_tree(
         if etype != "blob" {
             continue;
         }
-        let path = entry
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let path = entry.get("path").and_then(|v| v.as_str()).unwrap_or("");
         if !path.starts_with(&prefix) {
             continue;
         }
@@ -233,8 +222,7 @@ mod tests {
 
     #[test]
     fn parses_nested_subtree_path() {
-        let g =
-            parse_github_url("github.com/o/r/tree/main/skills/brainstorming/scripts").unwrap();
+        let g = parse_github_url("github.com/o/r/tree/main/skills/brainstorming/scripts").unwrap();
         assert_eq!(g.subtree_path, "skills/brainstorming/scripts");
     }
 
@@ -292,7 +280,11 @@ mod tests {
         assert_eq!(scan.resolved_ref, "abc123");
         assert_eq!(scan.subtree_path, "skills");
         assert_eq!(scan.files.len(), 2);
-        let a = scan.files.iter().find(|f| f.upstream_path == "skills/a/SKILL.md").unwrap();
+        let a = scan
+            .files
+            .iter()
+            .find(|f| f.upstream_path == "skills/a/SKILL.md")
+            .unwrap();
         assert_eq!(a.sha, "sha-a");
         assert_eq!(a.content, "A BODY");
     }

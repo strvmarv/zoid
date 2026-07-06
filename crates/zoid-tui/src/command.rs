@@ -169,7 +169,10 @@ mod tests {
 
     #[test]
     fn bare_mode_import_is_empty_arg() {
-        assert_eq!(parse_command(":mode import"), Command::ModeImport(String::new()));
+        assert_eq!(
+            parse_command(":mode import"),
+            Command::ModeImport(String::new())
+        );
     }
 
     #[test]

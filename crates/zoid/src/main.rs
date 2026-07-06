@@ -1046,8 +1046,10 @@ struct App {
     wizard: Option<zoid::mode_wizard::ModeImportWizard>,
     /// The pending mode mapping + reply channel while the approval overlay is
     /// up. `Some` from `ModeMappingApproval` until the user answers.
-    pending_mode_mapping:
-        Option<(zoid_core::wizard::ModeMapping, tokio::sync::oneshot::Sender<String>)>,
+    pending_mode_mapping: Option<(
+        zoid_core::wizard::ModeMapping,
+        tokio::sync::oneshot::Sender<String>,
+    )>,
     /// A deferred "Adjust" reply from the wizard approval overlay —
     /// `answer_question` is sync and can't `.await` `session.append`, so it
     /// stashes the event here for the main loop to flush at the top of `run`.
@@ -3179,8 +3181,7 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
                     return Ok(false);
                 }
             };
-            app.shell.status_hint =
-                Some(format!("fetching upstream at ref {}…", old.source.ref_));
+            app.shell.status_hint = Some(format!("fetching upstream at ref {}…", old.source.ref_));
             let ui_tx = app.ui_tx.clone();
             let mode_dir_clone = mode_dir.clone();
             let old_clone = old.clone();
@@ -3441,7 +3442,9 @@ fn spawn_turn(app: &mut App) {
     let mut tools = zoid::invoke_skill::chat_tools(std::sync::Arc::new(effective));
     if let Some(wiz) = &app.wizard {
         let wiz = std::sync::Arc::new(wiz.clone());
-        tools.push(Box::new(zoid::mode_wizard::ProposeModeMappingTool::new(wiz.clone())));
+        tools.push(Box::new(zoid::mode_wizard::ProposeModeMappingTool::new(
+            wiz.clone(),
+        )));
         tools.push(Box::new(zoid::mode_wizard::ApplyModeMappingTool::new(wiz)));
     }
     let tools = std::sync::Arc::new(tools);
