@@ -409,6 +409,29 @@ fn palette_overlay_frame() {
 }
 
 #[test]
+fn palette_overlay_empty_query_frame() {
+    // Empty query renders the full curated list (14 rows) — the only snapshot
+    // that exercises the full-list render path. `palette_overlay_frame` uses
+    // query="build" which filters to one row, so it can't catch a render-layer
+    // regression in the empty-query path. The 14-row curated order itself is
+    // pinned by `palette::tests::all_items_is_flat_curated`.
+    let mut s = ShellState::new();
+    s.mode_names = vec!["Chat".into(), "Build".into()];
+    s.overlay = Overlay::Palette;
+    s.palette.query = String::new();
+    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+}
+
+#[test]
+fn palette_direct_phase_frame() {
+    let mut s = ShellState::new();
+    s.mode_names = vec!["Chat".into(), "Build".into()];
+    s.overlay = Overlay::Palette;
+    s.palette.query = ":mode Build".into();
+    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+}
+
+#[test]
 fn palette_arg_stage_frame() {
     let mut s = ShellState::new();
     s.overlay = Overlay::Palette;

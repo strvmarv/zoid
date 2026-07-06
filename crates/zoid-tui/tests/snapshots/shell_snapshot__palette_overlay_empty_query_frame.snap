@@ -1,0 +1,28 @@
+---
+source: crates/zoid-tui/tests/shell_snapshot.rs
+expression: "draw(&s, &seeded(), 100, 24)"
+---
+"                                                zoid                                      ^P palette"
+"┌ ›  ─────────────────────────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
+"│ New session                                         │ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
+"│ Resume session…                                     │ ╰─────────────────────────────────────────╯ "
+"│ Rename session…                                     │                                             "
+"│ Delegate task…                                      │ ╭ ▾ session ──────────────────────────────╮ "
+"│ Import mode from URL…                               │ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
+"│ Update mode…                                        │ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
+"│ Switch to Build                                     │ │⌚ dur 0m   tok/cac 0                    │ " Hidden by multi-width symbols: [(58, " ")]
+"│ Reload modes                                        │ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
+"│ Toggle repo drawer                                  │ ╰─────────────────────────────────────────╯ "
+"│ Toggle session drawer                               │                                             "
+"│ Toggle context drawer                               │ ╭ ▾ context · tokens ─────────────────────╮ "
+"│ Open settings                                       │ │churn                              cache │ "
+"│ Enable companion                                    │ ╰─────────────────────────────────────────╯ "
+"│ Quit zoid                                           │                                             "
+"│                                                     │ ╭ ▾ tasks ────────────────────────────────╮ "
+"│                                                     │ │no tasks                                 │ "
+"└─────────────────────────────────────────────────────┘ ╰─────────────────────────────────────────╯ "
+"                                                      █                                             "
+"┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"
+"│                                                                                                  │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
+" CHAT                                          ● idle                                   zoom normal "
