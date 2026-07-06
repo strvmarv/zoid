@@ -179,6 +179,27 @@ fn map_msg(m: ChatMsg) -> Message {
             tool_name: None,
             tool_call_id: None,
         },
+        ChatMsg::Question {
+            id,
+            question,
+            choices,
+            state,
+            ..
+        } => {
+            // The card is a UI/persistence concern — never sent to the model.
+            // The model sees the answer as the ToolResult for the matching id.
+            // Return an inert assistant message so the provider request stays
+            // well-formed (the ToolResult for the same id is what the model
+            // actually reads).
+            let _ = (id, question, choices, state);
+            Message {
+                role: zoid_provider::MsgRole::Assistant,
+                content: String::new(),
+                tool_calls: vec![],
+                tool_name: None,
+                tool_call_id: None,
+            }
+        }
     }
 }
 
@@ -842,6 +863,24 @@ async fn run_turn_inner(
                         }
                     };
                     let summary = crate::mode_wizard::approval_summary(&mapping);
+                    let detail = crate::mode_wizard::detailed_approval_summary(&mapping);
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::QuestionAsked {
+                            id: tc.id.clone(),
+                            kind: zoid_core::event::QuestionKind::ModeMapping {
+                                mapping: Box::new(mapping.clone()),
+                            },
+                            question: detail,
+                            choices: vec!["Approve".into(), "Reject".into(), "Adjust".into()],
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
                     let (rtx, rrx) = oneshot::channel::<String>();
                     let sent = ui
                         .send(AgentUpdate::ModeMappingApproval {
@@ -859,6 +898,19 @@ async fn run_turn_inner(
                         Err(_) => "approval cancelled".to_string(),
                     };
                     let is_error = output == "Reject" || output.starts_with("approval cancelled");
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::QuestionAnswered {
+                            id: tc.id.clone(),
+                            answer: output.clone(),
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
                     emit(
                         &session,
                         &mut events,
@@ -899,6 +951,22 @@ async fn run_turn_inner(
                                 .collect::<Vec<String>>()
                         })
                         .unwrap_or_default();
+                    // Emit QuestionAsked so the card renders inline immediately.
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::QuestionAsked {
+                            id: tc.id.clone(),
+                            kind: zoid_core::event::QuestionKind::Ask,
+                            question: question.clone(),
+                            choices: choices.clone(),
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
                     let (rtx, rrx) = oneshot::channel::<Answer>();
                     tracing::debug!(
                         "ask_user: intercepted, sending AskUser (choices={})",
@@ -914,83 +982,71 @@ async fn run_turn_inner(
                     tracing::debug!("ask_user: send result ok={}, awaiting reply", sent.is_ok());
                     let ans = rrx.await;
                     tracing::debug!("ask_user: reply received ok={}", ans.is_ok());
-                    match ans {
-                        Ok(ans) => {
-                            let output = match ans {
-                                Answer::Choice(s) | Answer::FreeText(s) => s,
-                                Answer::LetYouDecide => "[let you decide]".to_string(),
-                            };
+                    let output = match ans {
+                        Ok(Answer::Choice(s) | Answer::FreeText(s)) => s,
+                        Ok(Answer::LetYouDecide) => "[let you decide]".to_string(),
+                        Err(_) => "[user aborted]".to_string(),
+                    };
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::QuestionAnswered {
+                            id: tc.id.clone(),
+                            answer: output.clone(),
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                    let is_error = output == "[user aborted]";
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::ToolResult {
+                            id: tc.id,
+                            name: tc.name,
+                            output,
+                            is_error,
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                    tracing::info!(
+                        kind = "tool",
+                        name = tool_name.as_str(),
+                        ms = tool_start.elapsed().as_millis() as u64,
+                        ok = !is_error,
+                        "tool executed"
+                    );
+                    if is_error {
+                        // Drain any remaining batched tool calls so none is
+                        // left without a matching ToolResult (the provider's
+                        // tool-call protocol requires every call to be
+                        // answered before the next request).
+                        for rest in pending_iter.by_ref() {
                             emit(
                                 &session,
                                 &mut events,
                                 ui,
                                 &config.branch,
                                 EventKind::ToolResult {
-                                    id: tc.id,
-                                    name: tc.name,
-                                    output,
+                                    id: rest.id,
+                                    name: rest.name,
+                                    output: "[skipped: turn aborted]".to_string(),
                                     is_error: false,
                                 },
                                 session_id,
                                 now,
                             )
                             .await?;
-                            tracing::info!(
-                                kind = "tool",
-                                name = tool_name.as_str(),
-                                ms = tool_start.elapsed().as_millis() as u64,
-                                ok = true,
-                                "tool executed"
-                            );
                         }
-                        Err(_) => {
-                            // Sender dropped == Esc hard-abort: balanced result, end the turn.
-                            emit(
-                                &session,
-                                &mut events,
-                                ui,
-                                &config.branch,
-                                EventKind::ToolResult {
-                                    id: tc.id,
-                                    name: tc.name,
-                                    output: "[user aborted]".to_string(),
-                                    is_error: false,
-                                },
-                                session_id,
-                                now,
-                            )
-                            .await?;
-                            tracing::info!(
-                                kind = "tool",
-                                name = tool_name.as_str(),
-                                ms = tool_start.elapsed().as_millis() as u64,
-                                ok = true,
-                                "tool executed"
-                            );
-                            // Drain any remaining batched tool calls so none is
-                            // left without a matching ToolResult (the provider's
-                            // tool-call protocol requires every call to be
-                            // answered before the next request).
-                            for rest in pending_iter.by_ref() {
-                                emit(
-                                    &session,
-                                    &mut events,
-                                    ui,
-                                    &config.branch,
-                                    EventKind::ToolResult {
-                                        id: rest.id,
-                                        name: rest.name,
-                                        output: "[skipped: turn aborted]".to_string(),
-                                        is_error: false,
-                                    },
-                                    session_id,
-                                    now,
-                                )
-                                .await?;
-                            }
-                            outcome = "aborted";
-                            break 'turn;
-                        }
+                        outcome = "aborted";
+                        break 'turn;
                     }
                 }
                 _ => {

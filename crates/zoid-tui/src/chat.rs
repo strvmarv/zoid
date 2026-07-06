@@ -212,6 +212,26 @@ fn build_conversation(
                     ),
                 ]));
             }
+            ChatMsg::Question {
+                question, state, ..
+            } => {
+                // Minimal bridge render: a single line for the question. Full
+                // interactive card rendering is a later slice; this keeps the
+                // TUI compiling under the new non-exhaustive variant.
+                blank_between_turns(&mut lines);
+                let (mark, mark_color) = match state {
+                    zoid_core::projection::QuestionCardState::Answered { .. } => {
+                        (glyph::PASS, color::OK)
+                    }
+                    zoid_core::projection::QuestionCardState::Open { .. } => {
+                        (glyph::PENDING, color::CHAT_ACCENT)
+                    }
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {mark} "), Style::new().fg(mark_color)),
+                    Span::styled(first_line(question), Style::new().fg(color::TXT)),
+                ]));
+            }
         }
     }
     // Every top-level code block advertises the click-to-copy affordance on its
