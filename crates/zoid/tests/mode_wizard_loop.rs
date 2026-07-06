@@ -1,11 +1,12 @@
-//! Wiring proof: the agent loop intercepts apply_mode_mapping (Approving),
-//! raises ModeMappingApproval, and on "Approve" emits a non-error ToolResult.
+//! Wiring proof: the agent loop intercepts apply_mode_mapping (Interactive,
+//! unified with ask_user), raises AskUser, and on `Answer::Choice("Approve")`
+//! emits a non-error ToolResult.
 
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 use async_trait::async_trait;
-use zoid::agent::{run_agent_turn, AgentUpdate};
+use zoid::agent::{run_agent_turn, AgentUpdate, Answer};
 use zoid::mode_wizard::{ApplyModeMappingTool, ModeImportWizard, ProposeModeMappingTool};
 use zoid_core::event::{Event, EventKind};
 use zoid_core::session::SessionHandle;
@@ -104,13 +105,18 @@ async fn apply_mode_mapping_raises_approval_and_approve_emits_tool_result() {
     session.append(seed[0].clone()).await.unwrap();
 
     let (tx, mut rx) = mpsc::channel(64);
-    let approvals = Arc::new(Mutex::new(Vec::<zoid_core::wizard::ModeMapping>::new()));
-    let approvals_for_task = approvals.clone();
+    let asks = Arc::new(Mutex::new(Vec::<(String, Vec<String>)>::new()));
+    let asks_for_task = asks.clone();
     let handle = tokio::spawn(async move {
         while let Some(upd) = rx.recv().await {
-            if let AgentUpdate::ModeMappingApproval { mapping, reply, .. } = upd {
-                approvals_for_task.lock().unwrap().push(mapping);
-                let _ = reply.send("Approve".to_string());
+            if let AgentUpdate::AskUser {
+                question,
+                choices,
+                reply,
+            } = upd
+            {
+                asks_for_task.lock().unwrap().push((question, choices));
+                let _ = reply.send(Answer::Choice("Approve".into()));
             }
         }
     });
@@ -133,9 +139,10 @@ async fn apply_mode_mapping_raises_approval_and_approve_emits_tool_result() {
     handle.await.unwrap();
 
     let captured_len = {
-        let captured = approvals.lock().unwrap();
+        let captured = asks.lock().unwrap();
         assert_eq!(captured.len(), 1);
-        assert_eq!(captured[0].mode_name, "M");
+        assert!(captured[0].0.contains("Proposed mode: M"));
+        assert_eq!(captured[0].1, vec!["Approve", "Reject", "Adjust"]);
         captured.len()
     };
     let _ = captured_len;

@@ -66,6 +66,11 @@ impl QuestionState {
                 }
             }
             QuestionMode::Pick => {
+                // If the user typed free text while in pick mode, submit that
+                // (Enter = text if present, else highlighted choice).
+                if !self.free_text.is_empty() {
+                    return QuestionOutcome::FreeText(self.free_text.clone());
+                }
                 let rows = self.rows();
                 let idx = self.selected.min(rows.len() - 1);
                 if idx == rows.len() - 1 {
@@ -80,23 +85,18 @@ impl QuestionState {
     }
 }
 
-/// Map a keypress to an `Action` while the question overlay is up.
-pub fn route_question_key(state: &QuestionState, key: KeyEvent) -> Action {
-    match state.mode {
-        QuestionMode::Pick => match key.code {
-            KeyCode::Up => Action::QuestionMove(-1),
-            KeyCode::Down => Action::QuestionMove(1),
-            KeyCode::Enter => Action::QuestionSelect,
-            KeyCode::Esc => Action::QuestionAbort,
-            _ => Action::Noop,
-        },
-        QuestionMode::FreeText => match key.code {
-            KeyCode::Enter => Action::QuestionSelect,
-            KeyCode::Esc => Action::QuestionAbort,
-            KeyCode::Backspace => Action::QuestionBackspace,
-            KeyCode::Char(c) => Action::QuestionChar(c),
-            _ => Action::Noop,
-        },
+/// Map a keypress to an `Action` while a question card is open. Unified across
+/// Pick and FreeText modes: typing always appends to `free_text`, arrows
+/// always move, Enter always submits, Esc always aborts.
+pub fn route_question_key(_state: &QuestionState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Up => Action::QuestionMove(-1),
+        KeyCode::Down => Action::QuestionMove(1),
+        KeyCode::Enter => Action::QuestionSelect,
+        KeyCode::Esc => Action::QuestionAbort,
+        KeyCode::Backspace => Action::QuestionBackspace,
+        KeyCode::Char(c) => Action::QuestionChar(c),
+        _ => Action::Noop,
     }
 }
 
@@ -162,5 +162,21 @@ mod tests {
             route_question_key(&free, k(KeyCode::Esc)),
             Action::QuestionAbort
         );
+    }
+
+    #[test]
+    fn pick_mode_typing_appends_to_free_text() {
+        let q = QuestionState::new("db?", vec!["pg".into(), "sqlite".into()]);
+        assert_eq!(
+            route_question_key(&q, k(KeyCode::Char('x'))),
+            Action::QuestionChar('x')
+        );
+    }
+
+    #[test]
+    fn pick_mode_enter_with_free_text_submits_free_text() {
+        let mut q = QuestionState::new("db?", vec!["pg".into()]);
+        q.free_text = "custom".into();
+        assert_eq!(q.resolved(), QuestionOutcome::FreeText("custom".into()));
     }
 }

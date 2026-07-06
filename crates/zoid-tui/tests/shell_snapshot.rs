@@ -153,7 +153,7 @@ fn cached_body_window_matches_uncached_paragraph() {
 
     for msgs in [&tall, &short] {
         // `full` is what the bin caches: built reveal-None.
-        let full = conversation_view(msgs, &normal_view(), false, conv.width as usize);
+        let full = conversation_view(msgs, &normal_view(), false, conv.width as usize, None);
         let raw_lines = full.len().saturating_sub(1); // reveal-None appends one blank
 
         // reveal == None at several scrolls × spinner off/on, plus a reveal case
@@ -1154,49 +1154,6 @@ fn config_overlay_narrow_degrades_respects_focus() {
         without_focus, 0,
         "overlay picker must not highlight its selected row when focus is elsewhere"
     );
-}
-
-/// The `ask_user` question overlay (Task 11), pick mode: a centered card
-/// listing the model's choices plus the two synthetic "Other…"/"— let you
-/// decide —" rows, the first row (default `selected == 0`) highlighted with
-/// `SEL_BG`. Buffer-Debug captures the highlight style, not just the text.
-fn draw_question(q: zoid_tui::question::QuestionState, w: u16, h: u16) -> String {
-    let mut s = ShellState::new();
-    s.overlay = Overlay::Question;
-    s.question = Some(q);
-    let input = TextArea::default();
-    let backend = TestBackend::new(w, h);
-    let mut terminal = Terminal::new(backend).unwrap();
-    terminal
-        .draw(|f| {
-            render_shell(
-                f,
-                &s,
-                &empty_economy(),
-                &[],
-                None,
-                &[],
-                &input,
-                false,
-                &normal_view(),
-            );
-        })
-        .unwrap();
-    format!("{:#?}", terminal.backend().buffer())
-}
-
-#[test]
-fn question_overlay_pick_frame() {
-    use zoid_tui::question::QuestionState;
-    let q = QuestionState::new("Which DB?", vec!["postgres".into(), "sqlite".into()]);
-    insta::assert_snapshot!(draw_question(q, 100, 24));
-}
-
-#[test]
-fn question_overlay_freetext_frame() {
-    use zoid_tui::question::QuestionState;
-    let q = QuestionState::new("Describe the bug", vec![]);
-    insta::assert_snapshot!(draw_question(q, 100, 24));
 }
 
 /// Quick-switch (`Alt+P`) overlay (Task 11): a two-pane floating card —

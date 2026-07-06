@@ -38,6 +38,19 @@ pub struct EvictionMarker {
     pub spans: Vec<EvictedSpan>,
 }
 
+/// What kind of question an inline card represents. Drives rendering + the
+/// bin's side-effect on answer (materialize for `ModeMapping` + "Approve").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QuestionKind {
+    /// A plain `ask_user` question (free-text or pick-list).
+    Ask,
+    /// The wizard's mode-mapping approval. The `mapping` rides here so the bin
+    /// can materialize on "Approve" without re-parsing it from anywhere.
+    ModeMapping {
+        mapping: Box<crate::wizard::ModeMapping>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
     UserMessage {
@@ -117,6 +130,21 @@ pub enum EventKind {
     /// Undo / recall re-admission: projections stop skipping these ids.
     TurnsReadmitted {
         ids: Vec<Ulid>,
+    },
+    /// A question the model asked the user via `ask_user` (or `apply_mode_mapping`'s
+    /// approval gate). Rendered as an inline card in the conversation. Paired
+    /// with a `QuestionAnswered` carrying the same `id`.
+    QuestionAsked {
+        id: String,
+        kind: QuestionKind,
+        question: String,
+        choices: Vec<String>,
+    },
+    /// The user's answer to a `QuestionAsked`. `id` matches the question. The
+    /// card collapses to a one-line summary after this lands.
+    QuestionAnswered {
+        id: String,
+        answer: String,
     },
 }
 
@@ -337,5 +365,66 @@ mod tests {
         let s = serde_json::to_string(&k).unwrap();
         let back: EventKind = serde_json::from_str(&s).unwrap();
         assert_eq!(k, back);
+    }
+
+    #[test]
+    fn question_ask_round_trips() {
+        let k = EventKind::QuestionAsked {
+            id: "call_1".into(),
+            kind: QuestionKind::Ask,
+            question: "retry or skip?".into(),
+            choices: vec!["Retry".into(), "Skip".into()],
+        };
+        let ev = Event::new(Ulid::new(), None, 0, k.clone());
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.kind, k);
+    }
+
+    #[test]
+    fn question_ask_mode_mapping_round_trips() {
+        use crate::wizard::{MappingEntry, ModeMapping};
+        let mapping = ModeMapping {
+            mode_name: "brainstorm".into(),
+            mode_description: "brainstorming mode".into(),
+            mode_body: "".into(),
+            entries: vec![MappingEntry::Materialize {
+                canonical_path: "skills/brainstorming/SKILL.md".into(),
+                source: "upstream/SKILL.md".into(),
+                summary: "the skill".into(),
+            }],
+        };
+        let k = EventKind::QuestionAsked {
+            id: "call_2".into(),
+            kind: QuestionKind::ModeMapping {
+                mapping: Box::new(mapping.clone()),
+            },
+            question: "review the mapping".into(),
+            choices: vec!["Approve".into(), "Reject".into(), "Adjust".into()],
+        };
+        let ev = Event::new(Ulid::new(), None, 0, k.clone());
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.kind, k);
+        // Confirm the mapping survived the box + serde round-trip.
+        match back.kind {
+            EventKind::QuestionAsked {
+                kind: QuestionKind::ModeMapping { mapping: m },
+                ..
+            } => assert_eq!(*m, mapping),
+            _ => panic!("expected ModeMapping kind"),
+        }
+    }
+
+    #[test]
+    fn question_answered_round_trips() {
+        let k = EventKind::QuestionAnswered {
+            id: "call_1".into(),
+            answer: "Skip".into(),
+        };
+        let ev = Event::new(Ulid::new(), None, 0, k.clone());
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.kind, k);
     }
 }

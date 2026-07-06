@@ -533,7 +533,14 @@ fn handle_conversation_click(app: &mut App, layout: &zoid_tui::layout::ShellLayo
     let clicked_line = app.shell.conversation_scroll as usize + (row - conv.y) as usize;
     let width = zoid_tui::layout::conv_text_width(conv.width) as usize;
     let msgs = conversation(app.events.iter());
-    let hits = zoid_tui::chat::code_hits(&msgs, app.streaming, true, app.tz_offset_secs, width);
+    let hits = zoid_tui::chat::code_hits(
+        &msgs,
+        app.streaming,
+        true,
+        app.tz_offset_secs,
+        width,
+        app.shell.question.as_ref(),
+    );
     if let Some(h) = hits
         .into_iter()
         .find(|h| clicked_line >= h.header_line && clicked_line <= h.end_line)
@@ -973,6 +980,7 @@ impl BodyCache {
         key: BodyKey,
         msgs: &[zoid_core::projection::ChatMsg],
         width: usize,
+        question: Option<&zoid_tui::question::QuestionState>,
     ) -> bool {
         // Full no-op only when not streaming and nothing changed.
         if !key.streaming && self.key.as_ref() == Some(&key) && self.msg_count == msgs.len() {
@@ -1007,6 +1015,7 @@ impl BodyCache {
                 &view,
                 key.streaming,
                 width,
+                question,
             );
             // conversation_view_indexed appends a trailing blank; we want it.
             self.body.extend(new_lines);
@@ -1015,7 +1024,7 @@ impl BodyCache {
         }
         // Full rebuild.
         let (body, starts) =
-            zoid_tui::chat::conversation_view_indexed(msgs, &view, key.streaming, width);
+            zoid_tui::chat::conversation_view_indexed(msgs, &view, key.streaming, width, question);
         self.body = body;
         self.msg_starts = starts;
         self.msg_count = msgs.len();
@@ -1044,12 +1053,6 @@ struct App {
     /// The URL import/update wizard state. `Some` while a wizard is in flight;
     /// `None` otherwise. Gated into the turn's tool set in `spawn_turn`.
     wizard: Option<zoid::mode_wizard::ModeImportWizard>,
-    /// The pending mode mapping + reply channel while the approval overlay is
-    /// up. `Some` from `ModeMappingApproval` until the user answers.
-    pending_mode_mapping: Option<(
-        zoid_core::wizard::ModeMapping,
-        tokio::sync::oneshot::Sender<String>,
-    )>,
     /// A deferred "Adjust" reply from the wizard approval overlay —
     /// `answer_question` is sync and can't `.await` `session.append`, so it
     /// stashes the event here for the main loop to flush at the top of `run`.
@@ -1293,7 +1296,6 @@ async fn main() -> Result<()> {
         mode_dirs,
         skills,
         wizard: None,
-        pending_mode_mapping: None,
         pending_adjust: None,
         model,
         economy: config.economy,
@@ -1509,6 +1511,7 @@ where
                 },
                 &app.proj.msgs,
                 body_w,
+                app.shell.question.as_ref(),
             ))
         };
 
@@ -1751,13 +1754,13 @@ where
                         reply,
                     } => {
                         tracing::debug!(
-                            "main: AskUser received, raising Question overlay (choices={})",
+                            "main: AskUser received, opening inline card (choices={})",
                             choices.len()
                         );
                         app.shell.question =
                             Some(zoid_tui::question::QuestionState::new(question, choices));
-                        app.shell.overlay = zoid_tui::state::Overlay::Question;
                         app.pending_answer = Some(reply);
+                        app.body_cache.key = None;
                     }
                     AgentUpdate::ModelsFetched { provider, models } => {
                         if provider == "__wizard_error__" {
@@ -1852,17 +1855,6 @@ where
                                 .unwrap_or_else(|| app.shell.ctx_ceiling.min(384_000));
                             app.shell.cache_supported = info.prompt_cache;
                         }
-                    }
-                    AgentUpdate::ModeMappingApproval { mapping, summary, reply } => {
-                        let detail = zoid::mode_wizard::detailed_approval_summary(&mapping);
-                        let _ = summary;
-                        app.pending_mode_mapping = Some((mapping, reply));
-                        app.shell.question =
-                            Some(zoid_tui::question::QuestionState::new(
-                                detail,
-                                vec!["Approve".into(), "Reject".into(), "Adjust".into()],
-                            ));
-                        app.shell.overlay = zoid_tui::state::Overlay::Question;
                     }
                 }
             }
@@ -2809,16 +2801,22 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             if let Some(q) = &mut app.shell.question {
                 let len = q.rows().len();
                 q.selected = zoid_tui::palette::nav(q.selected, d, len);
+                // The live highlight is rendered into the cached body, so a
+                // cursor move must invalidate the cache or the old highlight
+                // would persist on screen until something else rebuilt it.
+                app.body_cache.key = None;
             }
         }
         Action::QuestionChar(c) => {
             if let Some(q) = &mut app.shell.question {
                 q.free_text.push(c);
+                app.body_cache.key = None;
             }
         }
         Action::QuestionBackspace => {
             if let Some(q) = &mut app.shell.question {
                 q.free_text.pop();
+                app.body_cache.key = None;
             }
         }
         Action::QuestionSelect => {
@@ -2965,78 +2963,118 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
     Ok(false)
 }
 
+/// Find the latest unanswered `QuestionAsked` in the event log. Returns the
+/// `QuestionKind` (which carries the `ModeMapping` for wizard approvals) or
+/// `None` if no question is open. Used by `answer_question` to decide whether
+/// to run the materializer on "Approve".
+fn latest_open_question(
+    events: &zoid::eventlog::EventLog,
+) -> Option<&zoid_core::event::QuestionKind> {
+    let mut asked: Option<&zoid_core::event::QuestionKind> = None;
+    let mut asked_id: Option<&str> = None;
+    for e in events.iter() {
+        match &e.kind {
+            zoid_core::event::EventKind::QuestionAsked { id, kind, .. } => {
+                asked = Some(kind);
+                asked_id = Some(id.as_str());
+            }
+            zoid_core::event::EventKind::QuestionAnswered { id, .. }
+                if asked_id == Some(id.as_str()) =>
+            {
+                asked = None;
+                asked_id = None;
+            }
+            _ => {}
+        }
+    }
+    asked
+}
+
 /// Send the user's answer down the `ask_user` reply channel and close the
-/// overlay. A no-op if the channel was already consumed/dropped (e.g. a
-/// double-fire race), matching the other overlay-close handlers' style.
+/// question state. For a `ModeMapping` question answered "Approve", run the
+/// materializer + reload + clear the wizard (same logic as the old
+/// `ModeMappingApproval` path, now keyed off the `QuestionKind` from the
+/// latest unanswered `QuestionAsked` in the event log). A no-op if the
+/// channel was already consumed/dropped (e.g. a double-fire race).
 fn answer_question(app: &mut App, ans: zoid::agent::Answer) {
-    if let Some((mapping, tx)) = app.pending_mode_mapping.take() {
-        match &ans {
-            zoid::agent::Answer::Choice(c) if c == "Approve" => {
-                let cfg_dir = resolve_config_dir(|k| std::env::var(k).ok());
-                let dest = cfg_dir
-                    .join("modes")
-                    .join(zoid::mode_wizard::slugify(&mapping.mode_name));
-                let scan = app
-                    .wizard
-                    .as_ref()
-                    .expect("wizard open during approval")
-                    .scan
-                    .clone();
-                let fetched_at = chrono::Utc::now().to_rfc3339();
-                match zoid::mode_wizard::materialize(&mapping, &scan, &dest, &fetched_at) {
-                    Ok(_) => {
-                        let prev = app.modes.active_name().to_string();
-                        app.modes = zoid::mode_import::build_mode_registry(
-                            &app.base_profile,
-                            &app.mode_dirs,
-                        );
-                        app.modes.set_active(&prev);
-                        sync_mode_mirror(app);
-                        app.wizard = None;
-                        app.shell.status_hint = Some(format!(
-                            "imported '{}' — Shift+Tab to it",
-                            mapping.mode_name
-                        ));
-                        let _ = tx.send("Approve".to_string());
-                    }
-                    Err(e) => {
-                        app.shell.status_hint = Some(format!(
-                            "materialize failed: {}. Re-run :mode import to retry.",
-                            e.problems.join("; ")
-                        ));
-                        app.wizard = None;
-                        let _ = tx.send("Reject".to_string());
+    let kind = latest_open_question(&app.events).cloned();
+    let is_wizard = matches!(
+        kind,
+        Some(zoid_core::event::QuestionKind::ModeMapping { .. })
+    );
+
+    if is_wizard {
+        if let Some(zoid_core::event::QuestionKind::ModeMapping { mapping }) = kind {
+            match &ans {
+                zoid::agent::Answer::Choice(c) if c == "Approve" => {
+                    let cfg_dir = resolve_config_dir(|k| std::env::var(k).ok());
+                    let dest = cfg_dir
+                        .join("modes")
+                        .join(zoid::mode_wizard::slugify(&mapping.mode_name));
+                    let scan = app
+                        .wizard
+                        .as_ref()
+                        .expect("wizard open during approval")
+                        .scan
+                        .clone();
+                    let fetched_at = chrono::Utc::now().to_rfc3339();
+                    match zoid::mode_wizard::materialize(&mapping, &scan, &dest, &fetched_at) {
+                        Ok(_) => {
+                            let prev = app.modes.active_name().to_string();
+                            app.modes = zoid::mode_import::build_mode_registry(
+                                &app.base_profile,
+                                &app.mode_dirs,
+                            );
+                            app.modes.set_active(&prev);
+                            sync_mode_mirror(app);
+                            app.wizard = None;
+                            app.shell.status_hint = Some(format!(
+                                "imported '{}' — Shift+Tab to it",
+                                mapping.mode_name
+                            ));
+                        }
+                        Err(e) => {
+                            app.shell.status_hint = Some(format!(
+                                "materialize failed: {}. Re-run :mode import to retry.",
+                                e.problems.join("; ")
+                            ));
+                            app.wizard = None;
+                            if let Some(tx) = app.pending_answer.take() {
+                                let _ = tx.send(zoid::agent::Answer::Choice("Reject".into()));
+                            }
+                            app.shell.question = None;
+                            app.shell.overlay = zoid_tui::state::Overlay::None;
+                            return;
+                        }
                     }
                 }
-            }
-            zoid::agent::Answer::Choice(c) if c == "Reject" => {
-                app.wizard = None;
-                app.shell.status_hint = Some("import cancelled".into());
-                let _ = tx.send("Reject".to_string());
-            }
-            zoid::agent::Answer::Choice(_) | zoid::agent::Answer::FreeText(_) => {
-                let text = match ans {
-                    zoid::agent::Answer::Choice(s) | zoid::agent::Answer::FreeText(s) => s,
-                    zoid::agent::Answer::LetYouDecide => "[let you decide]".into(),
-                };
-                let ts = now_ms();
-                let ev = zoid_core::event::Event::new(
-                    ulid::Ulid::new(),
-                    None,
-                    ts,
-                    zoid_core::event::EventKind::UserMessage { text },
-                );
-                app.pending_adjust = Some(ev);
-                let _ = tx.send("Adjust".to_string());
-            }
-            zoid::agent::Answer::LetYouDecide => {
-                let _ = tx.send("Approve".to_string());
+                zoid::agent::Answer::Choice(c) if c == "Reject" => {
+                    app.wizard = None;
+                    app.shell.status_hint = Some("import cancelled".into());
+                }
+                zoid::agent::Answer::Choice(_) | zoid::agent::Answer::FreeText(_) => {
+                    let text = match &ans {
+                        zoid::agent::Answer::Choice(s) | zoid::agent::Answer::FreeText(s) => {
+                            s.clone()
+                        }
+                        zoid::agent::Answer::LetYouDecide => "[let you decide]".into(),
+                    };
+                    let ts = now_ms();
+                    let ev = zoid_core::event::Event::new(
+                        ulid::Ulid::new(),
+                        None,
+                        ts,
+                        zoid_core::event::EventKind::UserMessage { text },
+                    );
+                    app.pending_adjust = Some(ev);
+                }
+                zoid::agent::Answer::LetYouDecide => {
+                    // Treat as Approve for the wizard (matches the old behavior).
+                }
             }
         }
-        app.shell.question = None;
-        app.shell.overlay = zoid_tui::state::Overlay::None;
-        return;
     }
+
     if let Some(tx) = app.pending_answer.take() {
         let _ = tx.send(ans);
     }
@@ -3982,7 +4020,6 @@ mod tests {
             mode_dirs: Vec::new(),
             skills: std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
             wizard: None,
-            pending_mode_mapping: None,
             pending_adjust: None,
             model: "test-model".into(),
             economy: zoid_core::config::EconomyConfig::default(),

@@ -409,9 +409,10 @@ pub fn build_reconciliation_brief(
     s
 }
 
-/// The `apply_mode_mapping` tool: an `Approving` tool the agent loop intercepts
-/// by name. The loop parses the model's `ModeMapping` from the args, validates
-/// it, and raises `AgentUpdate::ModeMappingApproval`. `run()` is never called.
+/// The `apply_mode_mapping` tool: an `Interactive` tool the agent loop
+/// intercepts by name (alongside `ask_user`). The loop parses the model's
+/// `ModeMapping` from the args, emits a `QuestionAsked` (kind = ModeMapping),
+/// and parks for the user's answer. `run()` is never called.
 pub struct ApplyModeMappingTool {
     _wizard: Arc<ModeImportWizard>,
 }
@@ -449,7 +450,7 @@ impl Tool for ApplyModeMappingTool {
     }
 
     fn kind(&self) -> ToolKind {
-        ToolKind::Approving
+        ToolKind::Interactive
     }
 
     fn run(&self, _args: &Value, _cwd: &Path) -> ToolOutput {
@@ -522,34 +523,10 @@ pub fn parse_mapping_args(args: &Value) -> Result<ModeMapping, String> {
     })
 }
 
-/// A one-line approval summary: mode name, skill count, skipped count.
-pub fn approval_summary(mapping: &ModeMapping) -> String {
-    let skills = mapping
-        .entries
-        .iter()
-        .filter(|e| {
-            matches!(
-                e,
-                MappingEntry::Materialize { canonical_path, .. }
-                if canonical_path.ends_with("SKILL.md") && canonical_path != "mode.md"
-            )
-        })
-        .count();
-    let skipped = mapping
-        .entries
-        .iter()
-        .filter(|e| matches!(e, MappingEntry::Skip { .. }))
-        .count();
-    format!(
-        "Proposed mode '{}': {} skills, {} skipped. Approve?",
-        mapping.mode_name, skills, skipped
-    )
-}
-
 /// A multi-line approval summary listing every skill, the mode body, and every
 /// skipped file with its reason. Rendered in the question overlay above the
 /// Approve/Reject/Adjust choices so the user can review the full mapping before
-/// deciding (the one-line `approval_summary` is for the status hint / logs).
+/// deciding.
 pub fn detailed_approval_summary(mapping: &ModeMapping) -> String {
     let mut s = String::new();
     s.push_str(&format!("Proposed mode: {}\n", mapping.mode_name));
@@ -795,10 +772,10 @@ mod tests {
     }
 
     #[test]
-    fn apply_tool_is_approving_kind() {
+    fn apply_tool_is_interactive_kind() {
         let wiz = ModeImportWizard::new_import(scan());
         let tool = ApplyModeMappingTool::new(std::sync::Arc::new(wiz));
-        assert_eq!(tool.kind(), zoid_tools::ToolKind::Approving);
+        assert_eq!(tool.kind(), zoid_tools::ToolKind::Interactive);
         assert_eq!(tool.name(), "apply_mode_mapping");
     }
 
@@ -835,14 +812,6 @@ mod tests {
     fn parse_mapping_args_rejects_missing_name() {
         let err = parse_mapping_args(&serde_json::json!({ "entries": [] })).unwrap_err();
         assert!(err.contains("mode_name"));
-    }
-
-    #[test]
-    fn approval_summary_counts_skills_and_skips() {
-        let s = approval_summary(&mapping());
-        assert!(s.contains("Superpowers"));
-        assert!(s.contains("1 skills"));
-        assert!(s.contains("1 skipped"));
     }
 
     #[test]

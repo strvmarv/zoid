@@ -42,6 +42,33 @@ pub enum ChatMsg {
         summary: String,
         ok: bool,
     },
+    /// An inline question card (from `EventKind::QuestionAsked` + optional
+    /// matching `QuestionAnswered`). `Open` means no answer yet — the card is
+    /// live and captures input; `build_conversation` fills the cursor from
+    /// `ShellState.question` at render time. `Answered` means the card has
+    /// collapsed to a one-line summary.
+    Question {
+        id: String,
+        kind: crate::event::QuestionKind,
+        question: String,
+        choices: Vec<String>,
+        state: QuestionCardState,
+        ts: i64,
+    },
+}
+
+/// What the card renders as. The projection decides Open vs Answered from the
+/// event log; `build_conversation` overwrites the `Open` cursor with
+/// `ShellState.question`'s live values before rendering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuestionCardState {
+    /// No matching `QuestionAnswered` yet — the card is live (captures input).
+    /// `selected`/`free_text` are placeholder defaults from the projection;
+    /// `build_conversation` overwrites them with `ShellState.question`'s live
+    /// cursor before rendering.
+    Open { selected: usize, free_text: String },
+    /// `QuestionAnswered` has landed — the card is collapsed to a one-line summary.
+    Answered { answer: String },
 }
 
 /// Fold the event log into ordered `ChatMsg` items. A run of `ModelDelta` plus
@@ -65,6 +92,24 @@ pub fn conversation<'a>(events: impl IntoIterator<Item = &'a Event>) -> Vec<Chat
     for e in visible {
         if let EventKind::ToolResultCompacted { id, summary, .. } = &e.kind {
             compacted.insert(id.as_str(), summary.as_str());
+        }
+    }
+
+    // Pair QuestionAsked → QuestionAnswered by id, and record which tool-result
+    // ids belong to a question (so they can be suppressed from the view — the
+    // card is the human-facing record; the ToolResult stays in the log for the
+    // model/projections/compaction but is hidden from the conversation).
+    let mut answered: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    let mut question_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for e in visible {
+        match &e.kind {
+            EventKind::QuestionAsked { id, .. } => {
+                question_ids.insert(id.as_str());
+            }
+            EventKind::QuestionAnswered { id, answer } => {
+                answered.insert(id.as_str(), answer.as_str());
+            }
+            _ => {}
         }
     }
 
@@ -131,7 +176,13 @@ pub fn conversation<'a>(events: impl IntoIterator<Item = &'a Event>) -> Vec<Chat
                 output,
                 is_error,
             } => {
-                // The assistant turn that made the call(s) ends here.
+                // Suppress the tool-result line when a QuestionAsked owns this
+                // id — the card is the human-facing record.
+                if question_ids.contains(id.as_str()) {
+                    // The assistant turn that made the call(s) still ends here.
+                    flush(&mut text, &mut calls, &mut turn_ts, &mut out);
+                    continue;
+                }
                 flush(&mut text, &mut calls, &mut turn_ts, &mut out);
                 let (output, was_compacted) = match compacted.get(id.as_str()) {
                     Some(sum) => ((*sum).to_string(), true),
@@ -145,6 +196,35 @@ pub fn conversation<'a>(events: impl IntoIterator<Item = &'a Event>) -> Vec<Chat
                     compacted: was_compacted,
                     ts: e.ts,
                 });
+            }
+            EventKind::QuestionAsked {
+                id,
+                kind,
+                question,
+                choices,
+            } => {
+                flush(&mut text, &mut calls, &mut turn_ts, &mut out);
+                let state = match answered.get(id.as_str()) {
+                    Some(ans) => QuestionCardState::Answered {
+                        answer: (*ans).to_string(),
+                    },
+                    None => QuestionCardState::Open {
+                        selected: 0,
+                        free_text: String::new(),
+                    },
+                };
+                out.push(ChatMsg::Question {
+                    id: id.clone(),
+                    kind: kind.clone(),
+                    question: question.clone(),
+                    choices: choices.clone(),
+                    state,
+                    ts: e.ts,
+                });
+            }
+            EventKind::QuestionAnswered { .. } => {
+                // Folded into the matching QuestionAsked card above; not a
+                // standalone conversation item.
             }
             EventKind::DelegationResult { summary, ok, .. } => {
                 flush(&mut text, &mut calls, &mut turn_ts, &mut out);
@@ -606,5 +686,152 @@ mod tests {
         let msgs = conversation(&events);
         assert_eq!(msgs.len(), 1); // only the "new" user message survives
         assert!(matches!(&msgs[0], ChatMsg::User { text, .. } if text == "new"));
+    }
+
+    use crate::event::QuestionKind;
+    use crate::wizard::{MappingEntry, ModeMapping};
+
+    fn q_asked(id: u128, qid: &str, question: &str, choices: &[&str]) -> Event {
+        Event::new(
+            Ulid::from(id),
+            None,
+            0,
+            EventKind::QuestionAsked {
+                id: qid.into(),
+                kind: QuestionKind::Ask,
+                question: question.into(),
+                choices: choices.iter().map(|s| s.to_string()).collect(),
+            },
+        )
+    }
+
+    fn q_answered(id: u128, qid: &str, answer: &str) -> Event {
+        Event::new(
+            Ulid::from(id),
+            None,
+            0,
+            EventKind::QuestionAnswered {
+                id: qid.into(),
+                answer: answer.into(),
+            },
+        )
+    }
+
+    #[test]
+    fn question_asked_alone_folds_to_open_card() {
+        let events = vec![
+            user(1, "go"),
+            q_asked(2, "c1", "retry or skip?", &["Retry", "Skip"]),
+        ];
+        let conv = conversation(&events);
+        assert!(matches!(
+            conv.last(),
+            Some(ChatMsg::Question {
+                state: QuestionCardState::Open { .. },
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn question_asked_then_answered_folds_to_answered_card() {
+        let events = vec![
+            user(1, "go"),
+            q_asked(2, "c1", "retry or skip?", &["Retry", "Skip"]),
+            q_answered(3, "c1", "Skip"),
+        ];
+        let conv = conversation(&events);
+        assert!(matches!(
+            conv.last(),
+            Some(ChatMsg::Question { state: QuestionCardState::Answered { answer }, .. }) if answer == "Skip"
+        ));
+    }
+
+    #[test]
+    fn tool_result_matching_question_asked_is_suppressed() {
+        let events = vec![
+            user(1, "go"),
+            q_asked(2, "c1", "retry?", &["Retry", "Skip"]),
+            q_answered(3, "c1", "Skip"),
+            Event::new(
+                Ulid::from(4u128),
+                None,
+                0,
+                EventKind::ToolResult {
+                    id: "c1".into(),
+                    name: "ask_user".into(),
+                    output: "Skip".into(),
+                    is_error: false,
+                },
+            ),
+        ];
+        let conv = conversation(&events);
+        assert!(
+            !conv
+                .iter()
+                .any(|m| matches!(m, ChatMsg::ToolResult { id, .. } if id == "c1")),
+            "ToolResult matching a QuestionAsked must be suppressed"
+        );
+    }
+
+    #[test]
+    fn unrelated_tool_result_still_renders() {
+        let events = vec![
+            user(1, "go"),
+            q_asked(2, "c1", "retry?", &["Retry", "Skip"]),
+            q_answered(3, "c1", "Skip"),
+            Event::new(
+                Ulid::from(4u128),
+                None,
+                0,
+                EventKind::ToolResult {
+                    id: "c2".into(),
+                    name: "read_file".into(),
+                    output: "data".into(),
+                    is_error: false,
+                },
+            ),
+        ];
+        let conv = conversation(&events);
+        assert!(
+            conv.iter()
+                .any(|m| matches!(m, ChatMsg::ToolResult { id, .. } if id == "c2")),
+            "unrelated ToolResult must still render"
+        );
+    }
+
+    #[test]
+    fn mode_mapping_question_folds_to_open_card() {
+        let mapping = ModeMapping {
+            mode_name: "brainstorm".into(),
+            mode_description: "".into(),
+            mode_body: "".into(),
+            entries: vec![MappingEntry::Materialize {
+                canonical_path: "skills/brainstorming/SKILL.md".into(),
+                source: "up/SKILL.md".into(),
+                summary: "skill".into(),
+            }],
+        };
+        let events = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            0,
+            EventKind::QuestionAsked {
+                id: "c1".into(),
+                kind: QuestionKind::ModeMapping {
+                    mapping: Box::new(mapping),
+                },
+                question: "review".into(),
+                choices: vec!["Approve".into(), "Reject".into(), "Adjust".into()],
+            },
+        )];
+        let conv = conversation(&events);
+        assert!(matches!(
+            conv.last(),
+            Some(ChatMsg::Question {
+                state: QuestionCardState::Open { .. },
+                ..
+            })
+        ));
     }
 }

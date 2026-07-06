@@ -1,14 +1,16 @@
 //! Integration: a scripted provider calls propose_mode_mapping then
-//! apply_mode_mapping; the loop raises ModeMappingApproval; the test answers
-//! "Approve"; the materializer writes canonical files to a temp user-global
-//! dir; the mode loads as Ready. No real fetch (scan injected via the wizard
-//! state); no real model (scripted tool calls).
+//! apply_mode_mapping; the loop raises AskUser (Interactive, unified with
+//! ask_user); the test simulates the bin's wizard bridge — runs the
+//! materializer on "Approve", then sends `Answer::Choice` down the reply
+//! channel; the canonical files land in a temp user-global dir; the mode
+//! loads as Ready. No real fetch (scan injected via the wizard state); no
+//! real model (scripted tool calls).
 
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 use async_trait::async_trait;
-use zoid::agent::{run_agent_turn, AgentUpdate};
+use zoid::agent::{run_agent_turn, AgentUpdate, Answer};
 use zoid::mode_wizard::{ApplyModeMappingTool, ModeImportWizard, ProposeModeMappingTool};
 use zoid_core::event::{Event, EventKind};
 use zoid_core::session::SessionHandle;
@@ -112,19 +114,42 @@ async fn import_wizard_approve_materializes_and_loads() {
     let dest = tmp.path().join("testmode");
     let dest_for_task = dest.clone();
     let scan_for_task = wiz.scan.clone();
+    // The scripted tool call proposes this mapping; the bin would read it from
+    // the event log's latest `QuestionAsked` (kind = ModeMapping). Reconstruct
+    // it here from the same args the scripted provider sends.
+    let mapping_args = serde_json::json!({
+        "mode_name": "TestMode",
+        "mode_description": "test",
+        "mode_body": "LOADER",
+        "entries": [
+            { "Materialize": { "canonical_path": "mode.md", "source": "skills/using/SKILL.md", "summary": "loader" } },
+            { "Materialize": { "canonical_path": "brain/SKILL.md", "source": "skills/brain/SKILL.md", "summary": "brain" } }
+        ]
+    });
+    let mapping_for_task = zoid::mode_wizard::parse_mapping_args(&mapping_args).unwrap();
     let handle = tokio::spawn(async move {
         while let Some(upd) = rx.recv().await {
-            if let AgentUpdate::ModeMappingApproval { mapping, reply, .. } = upd {
+            if let AgentUpdate::AskUser {
+                question,
+                choices,
+                reply,
+            } = upd
+            {
+                // Simulate the bin's wizard bridge: a ModeMapping question's
+                // detail names the proposed mode. On "Approve", materialize
+                // then send `Answer::Choice("Approve")`; the choices for the
+                // wizard are ["Approve", "Reject", "Adjust"].
+                let _ = (question, choices);
                 let res = zoid::mode_wizard::materialize(
-                    &mapping,
+                    &mapping_for_task,
                     &scan_for_task,
                     &dest_for_task,
                     "2026-07-05T12:00:00Z",
                 );
                 let _ = reply.send(if res.is_ok() {
-                    "Approve".into()
+                    Answer::Choice("Approve".into())
                 } else {
-                    "Reject".into()
+                    Answer::Choice("Reject".into())
                 });
             }
         }

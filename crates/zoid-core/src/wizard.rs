@@ -29,7 +29,7 @@ pub struct UpstreamScan {
 }
 
 /// The model's proposal for one canonical file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MappingEntry {
     Materialize {
         canonical_path: String,
@@ -56,7 +56,7 @@ impl MappingEntry {
 /// The full proposed mapping. The model emits this as args to
 /// `apply_mode_mapping`; the user approves or adjusts; the bin materializes
 /// the `Materialize` entries.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModeMapping {
     pub mode_name: String,
     pub mode_description: String,
