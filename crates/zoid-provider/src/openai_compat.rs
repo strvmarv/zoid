@@ -106,11 +106,11 @@ impl ToolCallAccumulator {
     /// Each `arguments` JSON string is re-parsed to a `Value::Object` (matching
     /// `coerce_tool_args`'s contract in `ollama.rs`); invalid JSON → `{}`.
     pub fn take(&mut self) -> Vec<ProviderEvent> {
-        self.by_index
-            .values()
+        std::mem::take(&mut self.by_index)
+            .into_values()
             .map(|a| ProviderEvent::ToolCall(ToolCall {
-                id: a.id.clone(),
-                name: a.name.clone(),
+                id: a.id,
+                name: a.name,
                 args: serde_json::from_str(&a.arguments)
                     .ok()
                     .filter(Value::is_object)
@@ -394,5 +394,16 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0], ProviderEvent::ToolCall(ToolCall { id: "call-a".into(), name: "read_file".into(), args: json!({}) }));
         assert_eq!(out[1], ProviderEvent::ToolCall(ToolCall { id: "call-b".into(), name: "list_dir".into(), args: json!({}) }));
+    }
+
+    #[test]
+    fn tool_call_accumulator_take_drains_so_second_take_is_empty() {
+        let mut acc = ToolCallAccumulator::new();
+        let data = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read_file","arguments":"{}"}}]}}]}"#;
+        let _ = parse_chunk(data, &mut acc);
+        let first = acc.take();
+        assert_eq!(first.len(), 1);
+        let second = acc.take();
+        assert!(second.is_empty(), "take() must drain — second call should be empty");
     }
 }
