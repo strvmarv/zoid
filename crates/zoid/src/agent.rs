@@ -157,6 +157,7 @@ fn map_msg(m: ChatMsg) -> Message {
                 })
                 .collect(),
             tool_name: None,
+            tool_call_id: None,
         },
         ChatMsg::ToolResult { name, output, .. } => Message::tool(name, output),
         ChatMsg::Delegated { summary, .. } => Message {
@@ -164,6 +165,7 @@ fn map_msg(m: ChatMsg) -> Message {
             content: format!("[delegated subagent] {summary}"),
             tool_calls: vec![],
             tool_name: None,
+            tool_call_id: None,
         },
     }
 }
