@@ -351,7 +351,7 @@ Add this near the top of `crates/zoid-tui/src/palette.rs`, after the `ArgKind` b
 /// `Arg` is `PaletteStage::Arg`, not a `Phase` variant — it's a real stage
 /// transition.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Phase<'a> {
+pub enum Phase {
     /// Empty or non-`:` query → fuzzy ranked list.
     Pick,
     /// Query starts with `:` → live `parse_command` preview, list hidden.
@@ -360,8 +360,9 @@ pub enum Phase<'a> {
     Arg,
 }
 
-/// Resolve the current phase from the palette state. Pure.
-pub fn resolve_phase(state: &crate::state::PaletteState) -> Phase<'static> {
+/// Resolve the current phase from the palette state. Pure. Owns the parsed
+/// `Command` (cheap: a trim + string compares per frame).
+pub fn resolve_phase(state: &crate::state::PaletteState) -> Phase {
     match state.stage {
         crate::state::PaletteStage::Arg { .. } => Phase::Arg,
         crate::state::PaletteStage::Pick => {
@@ -376,18 +377,6 @@ pub fn resolve_phase(state: &crate::state::PaletteState) -> Phase<'static> {
     }
 }
 ```
-
-Note: `Phase` carries an owned `Command` (lifetime `'static` is fine — `parse_command` returns an owned `Command`). Adjust the enum to own rather than borrow so we don't fight the borrow checker:
-
-```rust
-pub enum Phase {
-    Pick,
-    Direct { cmd: crate::command::Command },
-    Arg,
-}
-```
-
-(Use the non-generic version above; drop the `<'a>` and `'static`.)
 
 - [ ] **Step 2: Write the failing route tests for Direct phase**
 
@@ -440,6 +429,19 @@ And replace the `colon_opens_cmdline_only_when_not_input` test:
 
 And delete the `cmdline_enter_parses_command` test (around line 752) — its assertion is now covered by `palette_direct_phase_routing` + the bin's `PaletteRun` Direct branch (Task 7).
 
+Also delete the `Overlay::CommandLine` block from the `overlay_captures_keys_first` test (route.rs:744-749). After Task 3 Step 5 deletes the `Overlay::CommandLine => return route_cmdline_key(...)` dispatch arm from `route_key`, that overlay no longer captures keys, so the test's `s.overlay = Overlay::CommandLine; assert_eq!(route_key(&s, ...), Action::Noop)` assertion would fail (it would fall through to `ctrl(&key, 'q') → Action::Quit`). Delete these six lines:
+
+```rust
+        // Same guard applies to CommandLine overlay.
+        s.overlay = Overlay::CommandLine;
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('q'), KeyModifiers::CONTROL)),
+            Action::Noop
+        );
+```
+
+The palette-only assertions above them stay.
+
 - [ ] **Step 3: Run the tests to verify they fail**
 
 Run: `cargo test -p zoid-tui --lib route::tests`
@@ -447,7 +449,7 @@ Expected: FAIL — `OpenPaletteDirect` doesn't exist; `route_palette_key` doesn'
 
 - [ ] **Step 4: Delete the four cmdline `Action` variants; add `OpenPaletteDirect`**
 
-In `crates/zoid-tui/src/route.rs`, edit the `Action` enum (lines 22-37). Delete `OpenCommandLine`, `CmdlineChar(char)`, `CmdlineBackspace`, `RunCommand(Command)`. Add `OpenPaletteDirect` next to `OpenPalette`:
+In `crates/zoid-tui/src/route.rs`, edit the `Action` enum (lines 16-100). Delete `OpenCommandLine` (line 23), `CmdlineChar(char)` (line 34), `CmdlineBackspace` (line 35), `RunCommand(Command)` (line 37). Add `OpenPaletteDirect` next to `OpenPalette` (line 22):
 
 ```rust
     OpenPalette,
@@ -526,10 +528,14 @@ git commit -m "feat(tui): Phase enum + Direct-phase routing; delete cmdline Acti
 
 ---
 
-## Task 4: Delete `CmdlineState` and `Overlay::CommandLine` from `state.rs`
+## Task 4: Delete `CmdlineState`, `Overlay::CommandLine`, the cmdline layout rect, and `render_cmdline` together
+
+The state, layout, and render cmdline references are interdependent — deleting the state types breaks render/layout compilation, and deleting render/layout first leaves dead state. So this task removes all the cmdline scaffolding in one atomic commit, then verifies the crate compiles and the surviving tests pass. The Direct-phase *render* (replacing what `render_cmdline` did) is Task 5.
 
 **Files:**
-- Modify: `crates/zoid-tui/src/state.rs:46-57` (`Overlay` enum), `state.rs:102-105` (`CmdlineState`), `state.rs:128-129` (`ShellState.cmdline` field), `state.rs:295` (`ShellState::new`), `state.rs:388-394` (`close_overlay`), `state.rs:578-588` (the `close_overlay_resets_*` tests)
+- Modify: `crates/zoid-tui/src/state.rs:46-57` (`Overlay` enum), `state.rs:102-105` (`CmdlineState`), `state.rs:128-129` (`ShellState.cmdline` field), `state.rs:295-296` (`ShellState::new`), `state.rs:388-394` (`close_overlay`), `state.rs:578-588` (the `close_overlay_resets_*` test)
+- Modify: `crates/zoid-tui/src/layout.rs:163-176` (`ShellLayout`), `layout.rs:266-295` (the `cmdline` computation block + `ShellLayout` initializer)
+- Modify: `crates/zoid-tui/src/render.rs:190-209` (overlay dispatch), `render.rs:726-737` (`render_cmdline` — delete), `render.rs:669-716` (`render_palette` — temporarily replace the removed cmdline path with a Pick-only stub; Task 5 fills Direct)
 - Test: `crates/zoid-tui/src/state.rs` (the `close_overlay_resets_palette_query` test)
 
 - [ ] **Step 1: Update the `close_overlay_resets_palette_query` test first**
@@ -549,14 +555,9 @@ In `crates/zoid-tui/src/state.rs`, the test at line 578 asserts `s.cmdline == Cm
     }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [ ] **Step 2: Delete `Overlay::CommandLine` from `state.rs`**
 
-Run: `cargo test -p zoid-tui --lib state::tests::close_overlay_resets_palette_query`
-Expected: PASS actually (the assertion we removed isn't required yet). Skip the fail step — proceed to delete the field and watch the test still pass.
-
-- [ ] **Step 3: Delete `Overlay::CommandLine`**
-
-In `crates/zoid-tui/src/state.rs`, edit the `Overlay` enum (lines 46-57). Remove the `CommandLine,` line:
+Edit the `Overlay` enum (state.rs:46-57). Remove the `CommandLine,` line:
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -572,11 +573,11 @@ pub enum Overlay {
 }
 ```
 
-- [ ] **Step 4: Delete `CmdlineState` and the `cmdline` field**
+- [ ] **Step 3: Delete `CmdlineState` and the `cmdline` field from `state.rs`**
 
-In `crates/zoid-tui/src/state.rs`, delete the `CmdlineState` struct (lines 102-105). In `ShellState`, delete the `pub cmdline: CmdlineState,` field (line 129). In `ShellState::new` (around line 295), delete the `cmdline: CmdlineState::default(),` initializer line.
+Delete the `CmdlineState` struct (state.rs:102-105). In `ShellState`, delete the `pub cmdline: CmdlineState,` field (state.rs:129). In `ShellState::new` (state.rs:296), delete the `cmdline: CmdlineState::default(),` initializer line.
 
-- [ ] **Step 5: Update `close_overlay`**
+- [ ] **Step 4: Update `close_overlay` in `state.rs`**
 
 In `crates/zoid-tui/src/state.rs` (line 388-394), delete the `self.cmdline = CmdlineState::default();` line:
 
@@ -592,48 +593,13 @@ In `crates/zoid-tui/src/state.rs` (line 388-394), delete the `self.cmdline = Cmd
 
 (Keep whatever else was after `session_selected = 0;` in the original — read the full function first to be sure.)
 
-- [ ] **Step 6: Run the state tests**
+- [ ] **Step 5: Delete the `cmdline` field + computation from `layout.rs`**
 
-Run: `cargo test -p zoid-tui --lib state::tests`
-Expected: PASS.
+In `crates/zoid-tui/src/layout.rs`, edit `ShellLayout` (lines 163-176): remove the `pub cmdline: Option<Rect>,` line. Delete the entire `let cmdline = if state.overlay == Overlay::CommandLine { ... } else { None };` block (lines 274-283). In the `ShellLayout { ... }` initializer (lines 285-295), delete the `cmdline,` line.
 
-- [ ] **Step 7: Run the `zoid-tui` crate tests**
+- [ ] **Step 6: Delete `render_cmdline` and its dispatch arm in `render.rs`**
 
-Run: `cargo test -p zoid-tui --lib`
-Expected: FAIL in `route.rs` if any leftover reference to `OpenCommandLine` survived, or in `render.rs`/`layout.rs` (still reference `Overlay::CommandLine`). Those are Tasks 5 and 6 — **do not fix them here**. Confirm the failures are only in those files.
-
-- [ ] **Step 8: Commit**
-
-```bash
-git add crates/zoid-tui/src/state.rs
-git commit -m "refactor(state): delete CmdlineState + Overlay::CommandLine"
-```
-
----
-
-## Task 5: Delete the cmdline layout rect and `render_cmdline`; render Direct-phase preview
-
-**Files:**
-- Modify: `crates/zoid-tui/src/layout.rs:163-176` (`ShellLayout`), `layout.rs:266-295` (the `cmdline` computation block + `ShellLayout` initializer), `layout.rs:454-475` (the `palette_rect_only_when_overlay_active` test — no change needed, but verify it still passes)
-- Modify: `crates/zoid-tui/src/render.rs:12` (imports — drop `CmdlineState`/`CommandLine` if imported), `render.rs:190-209` (overlay dispatch), `render.rs:669-716` (`render_palette` — add Direct branch), `render.rs:726-737` (`render_cmdline` — delete)
-- Test: `crates/zoid-tui/tests/shell_snapshot.rs` (Task 6 handles the snapshot replacements; here we just make the crate compile)
-
-- [ ] **Step 1: Delete the `cmdline` field from `ShellLayout`**
-
-In `crates/zoid-tui/src/layout.rs`, edit `ShellLayout` (lines 163-176). Remove the `pub cmdline: Option<Rect>,` line.
-
-- [ ] **Step 2: Delete the cmdline computation block and its initializer**
-
-In `crates/zoid-tui/src/layout.rs` (lines 274-283), delete the entire `let cmdline = if state.overlay == Overlay::CommandLine { ... } else { None };` block. In the `ShellLayout { ... }` initializer (lines 285-295), delete the `cmdline,` line.
-
-- [ ] **Step 3: Run the layout tests to verify they pass**
-
-Run: `cargo test -p zoid-tui --lib layout::tests`
-Expected: PASS — `palette_rect_only_when_overlay_active` doesn't reference `cmdline`; `overlay_rect_present_for_object_and_verb_pickers` likewise.
-
-- [ ] **Step 4: Delete `render_cmdline` and its dispatch arm**
-
-In `crates/zoid-tui/src/render.rs`, delete the `render_cmdline` function (lines 726-737). In the overlay dispatch (lines 190-209), delete the `else if state.overlay == Overlay::CommandLine { ... }` branch:
+Delete the `render_cmdline` function (render.rs:726-737). In the overlay dispatch (render.rs:190-209), delete the `else if state.overlay == Overlay::CommandLine { ... }` branch so the dispatch reads:
 
 ```rust
     // Overlays last, over a cleared region.
@@ -646,14 +612,36 @@ In `crates/zoid-tui/src/render.rs`, delete the `render_cmdline` function (lines 
 
 (removing the three `CommandLine` lines between the `Palette` and `Objects` arms).
 
-- [ ] **Step 5: Extend `render_palette` with the Direct-phase preview**
+- [ ] **Step 7: Verify the crate compiles**
 
-In `crates/zoid-tui/src/render.rs`, replace `render_palette` (lines 669-716). The title must reflect three cases: Pick non-`:`, Pick `:`-prefix (Direct), Arg. The body branches the same way. Add imports at the top of the file: `use crate::palette::{resolve_phase, Phase};` and `use crate::command::Command;` (check what's already imported).
+Run: `cargo build -p zoid-tui`
+Expected: PASS — no remaining references to `Overlay::CommandLine`, `CmdlineState`, or `render_cmdline` inside the `zoid-tui` crate. (`render_palette` still renders only Pick/Arg — Direct comes in Task 5. The `palette_direct_phase_frame` snapshot test added in Task 6 will fail until Task 5, but the crate compiles.)
+
+- [ ] **Step 8: Run the `zoid-tui` lib tests**
+
+Run: `cargo test -p zoid-tui --lib`
+Expected: PASS — `state::tests`, `layout::tests`, `palette::tests`, `route::tests` all green. (`shell_snapshot` integration tests may fail on `palette_overlay_frame` from Task 2's row expansion — Task 6 regenerates. Lib tests don't hit snapshots.)
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add crates/zoid-tui/src/state.rs crates/zoid-tui/src/layout.rs crates/zoid-tui/src/render.rs
+git commit -m "refactor(tui): delete CmdlineState + Overlay::CommandLine + cmdline layout/render"
+```
+
+---
+
+## Task 5: Render the Direct-phase preview line in `render_palette`
+
+**Files:**
+- Modify: `crates/zoid-tui/src/render.rs:669-716` (`render_palette` — add Direct branch using `resolve_phase` from Task 3)
+
+- [ ] **Step 1: Add the Direct-phase branch to `render_palette`**
+
+In `crates/zoid-tui/src/render.rs`, replace `render_palette` (lines 669-716). The title must reflect three cases: Pick non-`:`, Pick `:`-prefix (Direct), Arg. The body branches via `resolve_phase` (added in Task 3). Add top-level imports with the other `use crate::palette::...` imports near the top of the file: `use crate::palette::{resolve_phase, Phase};` and `use crate::command::Command;` (if not already imported). Do not put `use` statements inside the function body.
 
 ```rust
 fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
-    use crate::palette::resolve_phase;
-
     frame.render_widget(Clear, area);
 
     let title = match &state.palette.stage {
@@ -679,7 +667,6 @@ fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
             frame.render_widget(Paragraph::new(vec![hint]), inner);
         }
         Phase::Direct { cmd } => {
-            use crate::command::Command;
             let preview: String = match cmd {
                 Command::Unknown(s) if s.is_empty() => {
                     "type :mode, :q, :delegate …".to_string()
@@ -724,16 +711,16 @@ fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
 }
 ```
 
-- [ ] **Step 6: Run the `zoid-tui` lib tests**
+- [ ] **Step 2: Run the `zoid-tui` lib tests**
 
 Run: `cargo test -p zoid-tui --lib`
-Expected: PASS (compilation succeeds; snapshot tests still failing from Task 2 — Task 6 regenerates them).
+Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add crates/zoid-tui/src/layout.rs crates/zoid-tui/src/render.rs
-git commit -m "feat(render): Direct-phase preview line; delete cmdline rect + render"
+git add crates/zoid-tui/src/render.rs
+git commit -m "feat(render): Direct-phase preview line in render_palette"
 ```
 
 ---
@@ -782,7 +769,7 @@ Expected: `shell_snapshot__palette_overlay_frame.snap` regenerated to the new 14
 
 - [ ] **Step 4: Inspect the regenerated snapshots**
 
-Open `crates/zoid-tui/tests/snapshots/shell_snapshot__palette_overlay_frame.snap` and confirm it shows the 14-row flat list (New session / Resume / Rename / Delegate / Import / Update / Switch to Build / Reload modes / Toggle repo drawer / Toggle session drawer / Toggle context drawer / Open settings / Enable companion / Quit zoid).
+Open `crates/zoid-tui/tests/snapshots/shell_snapshot__palette_overlay_frame.snap` and confirm it shows the single ranked match ` Switch to Build` (the test seeds `query = "build"`, and `selectable_matches` filters the 14-row list down to the one row whose label fuzzy-matches "build"). The full 14-row curated set is pinned by the `all_items_is_flat_curated` unit test in Task 2, not by this snapshot.
 
 Open `shell_snapshot__palette_direct_phase_frame.snap` and confirm it shows the title ` :mode Build ` and the body `→ Switch to Build`.
 
@@ -807,17 +794,18 @@ git commit -m "test(snapshots): regenerate palette; add Direct-phase; remove cmd
 - Modify: `crates/zoid/src/main.rs:3263-3276` (the `RenameSession` arm in `exec_command`)
 - Modify: `crates/zoid-tui/examples/scenes/mod.rs:177-183` (the `palette` scene — remove the stale `s.cmdline.buffer = "build"` line)
 
-- [ ] **Step 1: Update the `palette` scene in `crates/zoid-tui/examples/scenes/mod.rs`**
+- [ ] **Step 1: Delete the `cmdline` scene arm in `crates/zoid-tui/examples/scenes/mod.rs`**
 
-In `crates/zoid-tui/examples/scenes/mod.rs` (around line 177-183), the `palette` scene sets `s.overlay = Overlay::Palette` and `s.palette.query = "build".into()`. Check whether it also sets `s.cmdline.buffer = "build"` — if so, delete that line (the `cmdline` field no longer exists). If the scene seeds `s.cmdline`, the example won't compile until it's removed.
+In `crates/zoid-tui/examples/scenes/mod.rs:181-184`, delete the entire `"cmdline" => { ... }` match arm:
 
-Read the scene first to confirm the exact lines:
-
-```bash
-git show main:crates/zoid-tui/examples/scenes/mod.rs | sed -n '175,190p'
+```rust
+        "cmdline" => {
+            s.overlay = Overlay::CommandLine;
+            s.cmdline.buffer = "build".into();
+        }
 ```
 
-Delete any `s.cmdline.buffer = ...` line in the `palette` arm.
+It references the deleted `Overlay::CommandLine` and `s.cmdline` field (Task 4). The `"palette"` arm (lines 177-180) is already correct — leave it. Also update the doc comment in `crates/zoid-tui/examples/preview.rs:7` which lists `cmdline` as a valid scene — drop `cmdline` from the scene list there.
 
 - [ ] **Step 2: Delete the cmdline action arms in `crates/zoid/src/main.rs`**
 
@@ -962,22 +950,23 @@ git commit -m "docs(ux): update palette mockup for the merged adaptive UI"
 
 ---
 
-## Self-Review (run after writing — already done)
+## Self-Review (run after writing — already done, revised after Gilfoyle review)
 
 **1. Spec coverage:**
 - §1 State model (one overlay, one state) → Task 4.
 - §2 Three phases, derived not stored → Task 3 (`resolve_phase`), Task 5 (render branch), Task 7 (bin branch).
 - §3 ArgKind extension + six new rows → Task 1, Task 2.
 - §4 Drawer toggles (zero-arg) → Task 2 (the three `OpenDrawer` rows).
-- §5 Routing → Task 3.
+- §5 Routing → Task 3 (also fixes `overlay_captures_keys_first` test).
 - §6 Render → Task 5.
 - §7 Bin handlers (delete cmdline arms, `OpenPaletteDirect`, `PaletteRun` Direct branch, `RenameSession("")` edit) → Task 7.
-- §8 Deletions → Tasks 4 (state), 5 (render/layout), 7 (bin arms).
+- §8 Deletions → Task 4 (state + layout + render cmdline removal, atomic), Task 7 (bin arms + scenes).
 - §9 Testing strategy → covered across Tasks 1-7.
 - §11 Non-goals → respected (no MRU, no editing chords, no tab completion, no generic picker).
 - UX mockup → Task 8.
+- Supersession pointer on 2026-07-04 spec → already present in the spec file (added during brainstorming); no plan task needed.
 
-**2. Placeholder scan:** No TBD / TODO / "implement later" / "similar to Task N". Every step shows the exact code or command.
+**2. Placeholder scan:** No TBD / TODO / "implement later" / "similar to Task N". Every step shows the exact code or command. (Task 7 Step 1 previously hand-waved the scenes edit — replaced with the exact `cmdline` arm deletion.)
 
 **3. Type consistency:**
 - `Phase` enum (no lifetime, owns `Command`) — consistent across Task 3 (definition) and Task 5 (render match).
@@ -986,4 +975,6 @@ git commit -m "docs(ux): update palette mockup for the merged adaptive UI"
 - `RenameSession("")` seeding — `query = ":rename "` consistent across Task 7 (bin arm) and spec §7.
 - `DrawerId` import in `all_items` — `use crate::state::DrawerId;` inside the function body (Task 2); matches the existing `DrawerId` path in `state.rs`.
 
-No issues found.
+**4. Task ordering / compile-ability:** Tasks 1-3 leave the `zoid` bin non-compiling (cmdline Action arms still present) but `zoid-tui` compiles. Task 4 atomically deletes state + layout + render cmdline scaffolding so the `zoid-tui` crate compiles after Step 7. Task 5 adds Direct render. Task 6 regenerates snapshots. Task 7 wires the bin (last, so `cargo build --workspace` passes). No mid-task compile dead-ends.
+
+No issues remaining after Gilfoyle's blocker/major fixes applied.
