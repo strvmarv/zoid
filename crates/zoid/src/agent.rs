@@ -817,6 +817,71 @@ async fn run_turn_inner(
                         "tool executed"
                     );
                 }
+                Some(zoid_tools::ToolKind::Approving) if tc.name == "apply_mode_mapping" => {
+                    let mapping = match crate::mode_wizard::parse_mapping_args(&tc.args) {
+                        Ok(m) => m,
+                        Err(reason) => {
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::ToolResult {
+                                    id: tc.id.clone(),
+                                    name: tc.name.clone(),
+                                    output: format!(
+                                        "apply_mode_mapping: {reason}. Re-propose with valid args."
+                                    ),
+                                    is_error: true,
+                                },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                            continue;
+                        }
+                    };
+                    let summary = crate::mode_wizard::approval_summary(&mapping);
+                    let (rtx, rrx) = oneshot::channel::<String>();
+                    let sent = ui
+                        .send(AgentUpdate::ModeMappingApproval {
+                            mapping,
+                            summary,
+                            reply: rtx,
+                        })
+                        .await;
+                    if sent.is_err() {
+                        continue;
+                    }
+                    let ans = rrx.await;
+                    let output = match ans {
+                        Ok(decision) => decision,
+                        Err(_) => "approval cancelled".to_string(),
+                    };
+                    let is_error = output == "Reject" || output.starts_with("approval cancelled");
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::ToolResult {
+                            id: tc.id.clone(),
+                            name: tc.name.clone(),
+                            output,
+                            is_error,
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                    tracing::info!(
+                        kind = "tool",
+                        name = tool_name.as_str(),
+                        ms = tool_start.elapsed().as_millis() as u64,
+                        ok = !is_error,
+                        "tool executed"
+                    );
+                }
                 Some(zoid_tools::ToolKind::Interactive) if tc.name == "ask_user" => {
                     let question = tc
                         .args
