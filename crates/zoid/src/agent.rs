@@ -171,23 +171,32 @@ fn map_msg(m: ChatMsg) -> Message {
         },
         ChatMsg::Question {
             id,
-            question,
-            choices,
+            kind,
+            question: _,
+            choices: _,
             state,
-            ..
+            ts: _,
         } => {
-            // The card is a UI/persistence concern — never sent to the model.
-            // The model sees the answer as the ToolResult for the matching id.
-            // Return an inert assistant message so the provider request stays
-            // well-formed (the ToolResult for the same id is what the model
-            // actually reads).
-            let _ = (id, question, choices, state);
-            Message {
-                role: zoid_provider::MsgRole::Assistant,
-                content: String::new(),
-                tool_calls: vec![],
-                tool_name: None,
-                tool_call_id: None,
+            // The card is a UI/persistence concern. The model sees the answer
+            // as a ToolResult for the matching id. When the card is Answered,
+            // emit it as a tool-result message so the provider request carries
+            // the answer. When Open (shouldn't happen in a well-formed request,
+            // but defensive), emit an inert assistant message.
+            let tool_name = match kind {
+                zoid_core::event::QuestionKind::Ask => "ask_user",
+                zoid_core::event::QuestionKind::ModeMapping { .. } => "apply_mode_mapping",
+            };
+            match state {
+                zoid_core::projection::QuestionCardState::Answered { answer } => {
+                    Message::tool_with_call_id(tool_name, id, answer)
+                }
+                zoid_core::projection::QuestionCardState::Open { .. } => Message {
+                    role: zoid_provider::MsgRole::Assistant,
+                    content: String::new(),
+                    tool_calls: vec![],
+                    tool_name: None,
+                    tool_call_id: None,
+                },
             }
         }
     }
