@@ -1,7 +1,9 @@
 # Command Palette Redesign (VSCode-style) — Design Spec
 
+> **Superseded 2026-07-06** by `2026-07-06-command-surfaces-consolidation-design.md`, which merges the `:` command line and the `Ctrl+P` palette into one adaptive overlay. The "keep both" lock in §Decisions.5 below is reversed by that spec. This document remains as history.
+
 **Date:** 2026-07-04
-**Status:** Approved for planning
+**Status:** Approved for planning (superseded)
 **Scope:** Single implementation plan. `zoid-tui`-local logic + a handful of `zoid` bin match arms. No cross-crate refactor.
 
 ## Goal
