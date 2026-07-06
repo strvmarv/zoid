@@ -294,6 +294,7 @@ impl Provider for OpenAICompatProvider {
                 if !ended_early {
                     let _ = sink.send(ProviderEvent::Done).await;
                 }
+                ended_early = true;
                 break;
             }
             for pe in parse_chunk(&item.data, &mut acc) {
@@ -688,6 +689,46 @@ mod tests {
         assert!(
             matches!(got.last(), Some(ProviderEvent::Error(e)) if e.contains("429")),
             "expected an HTTP 429 Error, got {got:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn done_terminator_emits_exactly_one_done() {
+        // Server writes a minimal SSE stream: one content delta, then [DONE].
+        // Regression: the [DONE] branch must not let the trailing-flush block
+        // re-emit Done (a double Done was emitted before the fix set
+        // `ended_early = true` before break). Uses Content-Length (not chunked)
+        // to avoid brittle hand-computed chunk sizes.
+        let body = b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\r\n\r\n\
+                    data: [DONE]\r\n\r\n";
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.write_all(body).await;
+            }
+        });
+        let provider = OpenAICompatProvider::new("k".into())
+            .with_base_url(format!("http://{addr}"))
+            .with_idle_timeout(Duration::from_secs(2));
+        let (tx, mut rx) = mpsc::channel(16);
+        provider.stream(&probe_req(), tx).await.unwrap();
+        let mut got = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            got.push(ev);
+        }
+        let done_count = got.iter().filter(|e| matches!(e, ProviderEvent::Done)).count();
+        assert_eq!(done_count, 1, "expected exactly one Done, got {done_count} in {got:?}");
+        assert!(
+            got.iter().any(|e| matches!(e, ProviderEvent::TextDelta(t) if t == "hi")),
+            "expected the content delta, got {got:?}"
         );
     }
 }
