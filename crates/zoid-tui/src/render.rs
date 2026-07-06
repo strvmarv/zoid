@@ -8,7 +8,10 @@ use crate::chat::{conversation_view, ChatView};
 use crate::command::Command;
 use crate::economy_view::EconomyView;
 use crate::layout::{compute, ShellLayout, CONV_PAD};
-use crate::palette::{all_items, nav, resolve_phase, selectable_matches, PaletteItem, Phase};
+use crate::palette::{
+    all_items, direct_filter, direct_items, nav, resolve_phase, selectable_matches, PaletteItem,
+    Phase,
+};
 use crate::state::{DrawerId, Focus, Overlay, PaletteStage, ShellState};
 use crate::tokens::{color, glyph};
 use ratatui::{
@@ -691,25 +694,66 @@ fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
             frame.render_widget(Paragraph::new(vec![hint]), inner);
         }
         Phase::Direct { cmd } => {
-            let preview: String = match cmd {
-                Command::Unknown(s) if s.is_empty() => "type :mode, :q, :delegate …".to_string(),
-                Command::Unknown(_) => "unknown command".to_string(),
-                Command::SwitchMode(name) => format!("→ Switch to {name}"),
-                Command::ReloadModes => "→ Reload modes".to_string(),
-                Command::ModeImport(url) => format!("→ Import mode: {url}"),
-                Command::ModeUpdate(name) => format!("→ Update mode: {name}"),
-                Command::RenameSession(name) => format!("→ Rename session: {name}"),
-                Command::Delegate(task) => format!("→ Delegate: {task}"),
-                Command::Quit => "→ Quit zoid".to_string(),
-                Command::OpenDrawer(id) => format!("→ Toggle {:?} drawer", id),
-                Command::NewSession => "→ New session".to_string(),
-                Command::ResumeSessionPicker => "→ Resume session…".to_string(),
-                Command::OpenConfig => "→ Open settings".to_string(),
-                Command::CompanionEnable => "→ Enable companion".to_string(),
-                Command::CompanionDisable => "→ Disable companion".to_string(),
-            };
-            let line = Line::styled(preview, Style::new().fg(color::DIM));
-            frame.render_widget(Paragraph::new(vec![line]), inner);
+            let items = direct_items(state);
+            let filter = direct_filter(&state.palette.query);
+            let matches = selectable_matches(&items, filter);
+            let list_nonempty = !matches.is_empty();
+
+            let mut lines: Vec<Line> = Vec::new();
+
+            // Preview line: show when parse_command resolved to a real Command
+            // (not Unknown) OR when the list is empty. Suppress when the list is
+            // visible and the buffer is an incomplete namespace (Unknown).
+            let show_preview = !matches!(cmd, Command::Unknown(_)) || !list_nonempty;
+            if show_preview {
+                let preview: String = match cmd {
+                    Command::Unknown(s) if s.is_empty() => "type a command word".to_string(),
+                    Command::Unknown(_) => "unknown command".to_string(),
+                    Command::SwitchMode(name) => format!("→ Switch to {name}"),
+                    Command::ReloadModes => "→ Reload modes".to_string(),
+                    Command::ModeImport(url) => format!("→ Import mode: {url}"),
+                    Command::ModeUpdate(name) => format!("→ Update mode: {name}"),
+                    Command::RenameSession(name) => format!("→ Rename session: {name}"),
+                    Command::Delegate(task) => format!("→ Delegate: {task}"),
+                    Command::Quit => "→ Quit zoid".to_string(),
+                    Command::OpenDrawer(id) => format!("→ Toggle {:?} drawer", id),
+                    Command::NewSession => "→ New session".to_string(),
+                    Command::ResumeSessionPicker => "→ Resume session…".to_string(),
+                    Command::OpenConfig => "→ Open settings".to_string(),
+                    Command::CompanionEnable => "→ Enable companion".to_string(),
+                    Command::CompanionDisable => "→ Disable companion".to_string(),
+                };
+                lines.push(Line::styled(preview, Style::new().fg(color::DIM)));
+            }
+
+            // Filtered list below the preview line.
+            let mut selected_line: usize = 0;
+            let list_start = lines.len();
+            let sel = nav(state.palette.selected, 0, matches.len());
+            for (rank, &i) in matches.iter().enumerate() {
+                if rank == sel {
+                    selected_line = list_start + rank;
+                }
+                lines.push(palette_row_line(&items[i], rank == sel));
+            }
+
+            // Footer hint.
+            if list_nonempty {
+                lines.push(Line::styled(
+                    "↑↓ move · ⏎ select · esc close · type to filter",
+                    Style::new().fg(color::DIM),
+                ));
+            } else {
+                lines.push(Line::styled(
+                    "⏎ run · esc close",
+                    Style::new().fg(color::DIM),
+                ));
+            }
+
+            // Scroll-follow on the selected row.
+            let vh = inner.height as usize;
+            let off = selected_line.saturating_sub(vh.saturating_sub(1));
+            frame.render_widget(Paragraph::new(lines).scroll((off as u16, 0)), inner);
         }
         Phase::Pick => {
             let items = all_items(&state.active_mode, &state.mode_names, state.companion_on);
