@@ -87,7 +87,7 @@ pub fn chat_turn_config() -> TurnConfig {
 }
 
 /// Max tool rounds per user message before the loop force-ends (safety leash).
-pub const MAX_TOOL_ITERATIONS: u32 = 50;
+pub const MAX_TOOL_ITERATIONS: u32 = 1000;
 /// Bound on the capacity-error retry (Task 1.7): the hard-bound backstop when
 /// the pre-flight estimate under-reads reality and the provider still rejects
 /// the request as too large. Each retry forces an eviction wave before
