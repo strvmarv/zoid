@@ -1212,6 +1212,7 @@ async fn main() -> Result<()> {
         .list_sessions(Some(root.clone()))
         .await
         .unwrap_or_default();
+    let first_time_user = sessions.is_empty();
     let (session_id, session_name, session_started_ms) = if let Some(s) = sessions.first() {
         session.touch_session(s.id, boot_ts).await.ok();
         (s.id, s.name.clone(), s.created_ts)
@@ -1278,6 +1279,7 @@ async fn main() -> Result<()> {
     shell.provider = provider_label(provider_name, has_key);
     shell.cache_supported = zoid_provider::has_prompt_cache(&model);
     shell.cwd = root.clone();
+    shell.first_time_user = first_time_user;
 
     let (ui_tx, mut ui_rx) = mpsc::channel::<AgentUpdate>(256);
 
@@ -1515,6 +1517,18 @@ where
         let cache_hit = if is_overview {
             let data = build_overview_data(app, obs_state);
             app.overview_body = zoid_tui::overview::overview_lines(&data, body_w);
+            None
+        } else if app.proj.msgs.is_empty() {
+            // Empty-state intercept: bypass BodyCache, build onboarding/welcome
+            // lines directly. When the first message arrives, proj.msgs becomes
+            // non-empty and the else branch takes over (key is None → full
+            // rebuild). Excluded from the body-render cache-hit ratio (None).
+            app.body_cache.body = zoid_tui::onboarding::empty_state_lines(
+                app.shell.first_time_user,
+                body_w,
+            );
+            app.body_cache.key = None;
+            app.body_cache.msg_count = 0;
             None
         } else {
             Some(app.body_cache.refresh(
