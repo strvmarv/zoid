@@ -838,138 +838,93 @@ async fn run_turn_inner(
                         "tool executed"
                     );
                 }
-                Some(zoid_tools::ToolKind::Approving) if tc.name == "apply_mode_mapping" => {
-                    let mapping = match crate::mode_wizard::parse_mapping_args(&tc.args) {
-                        Ok(m) => m,
-                        Err(reason) => {
-                            emit(
-                                &session,
-                                &mut events,
-                                ui,
-                                &config.branch,
-                                EventKind::ToolResult {
-                                    id: tc.id.clone(),
-                                    name: tc.name.clone(),
-                                    output: format!(
-                                        "apply_mode_mapping: {reason}. Re-propose with valid args."
-                                    ),
-                                    is_error: true,
-                                },
-                                session_id,
-                                now,
-                            )
-                            .await?;
-                            continue;
-                        }
-                    };
-                    let summary = crate::mode_wizard::approval_summary(&mapping);
-                    let detail = crate::mode_wizard::detailed_approval_summary(&mapping);
-                    emit(
-                        &session,
-                        &mut events,
-                        ui,
-                        &config.branch,
-                        EventKind::QuestionAsked {
-                            id: tc.id.clone(),
-                            kind: zoid_core::event::QuestionKind::ModeMapping {
-                                mapping: Box::new(mapping.clone()),
+                Some(zoid_tools::ToolKind::Interactive)
+                    if tc.name == "ask_user" || tc.name == "apply_mode_mapping" =>
+                {
+                    let (question, choices) = if tc.name == "ask_user" {
+                        let question = tc
+                            .args
+                            .get("question")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let choices = tc
+                            .args
+                            .get("choices")
+                            .and_then(|v| v.as_array())
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|c| c.as_str().map(String::from))
+                                    .collect::<Vec<String>>()
+                            })
+                            .unwrap_or_default();
+                        // Emit QuestionAsked so the card renders inline immediately.
+                        emit(
+                            &session,
+                            &mut events,
+                            ui,
+                            &config.branch,
+                            EventKind::QuestionAsked {
+                                id: tc.id.clone(),
+                                kind: zoid_core::event::QuestionKind::Ask,
+                                question: question.clone(),
+                                choices: choices.clone(),
                             },
-                            question: detail,
-                            choices: vec!["Approve".into(), "Reject".into(), "Adjust".into()],
-                        },
-                        session_id,
-                        now,
-                    )
-                    .await?;
-                    let (rtx, rrx) = oneshot::channel::<String>();
-                    let sent = ui
-                        .send(AgentUpdate::ModeMappingApproval {
-                            mapping,
-                            summary,
-                            reply: rtx,
-                        })
-                        .await;
-                    if sent.is_err() {
-                        continue;
-                    }
-                    let ans = rrx.await;
-                    let output = match ans {
-                        Ok(decision) => decision,
-                        Err(_) => "approval cancelled".to_string(),
+                            session_id,
+                            now,
+                        )
+                        .await?;
+                        (question, choices)
+                    } else {
+                        // apply_mode_mapping
+                        let mapping = match crate::mode_wizard::parse_mapping_args(&tc.args) {
+                            Ok(m) => m,
+                            Err(reason) => {
+                                emit(
+                                    &session,
+                                    &mut events,
+                                    ui,
+                                    &config.branch,
+                                    EventKind::ToolResult {
+                                        id: tc.id.clone(),
+                                        name: tc.name.clone(),
+                                        output: format!(
+                                            "apply_mode_mapping: {reason}. Re-propose with valid args."
+                                        ),
+                                        is_error: true,
+                                    },
+                                    session_id,
+                                    now,
+                                )
+                                .await?;
+                                continue;
+                            }
+                        };
+                        let detail = crate::mode_wizard::detailed_approval_summary(&mapping);
+                        let choices = vec!["Approve".into(), "Reject".into(), "Adjust".into()];
+                        emit(
+                            &session,
+                            &mut events,
+                            ui,
+                            &config.branch,
+                            EventKind::QuestionAsked {
+                                id: tc.id.clone(),
+                                kind: zoid_core::event::QuestionKind::ModeMapping {
+                                    mapping: Box::new(mapping),
+                                },
+                                question: detail.clone(),
+                                choices: choices.clone(),
+                            },
+                            session_id,
+                            now,
+                        )
+                        .await?;
+                        (detail, choices)
                     };
-                    let is_error = output == "Reject" || output.starts_with("approval cancelled");
-                    emit(
-                        &session,
-                        &mut events,
-                        ui,
-                        &config.branch,
-                        EventKind::QuestionAnswered {
-                            id: tc.id.clone(),
-                            answer: output.clone(),
-                        },
-                        session_id,
-                        now,
-                    )
-                    .await?;
-                    emit(
-                        &session,
-                        &mut events,
-                        ui,
-                        &config.branch,
-                        EventKind::ToolResult {
-                            id: tc.id.clone(),
-                            name: tc.name.clone(),
-                            output,
-                            is_error,
-                        },
-                        session_id,
-                        now,
-                    )
-                    .await?;
-                    tracing::info!(
-                        kind = "tool",
-                        name = tool_name.as_str(),
-                        ms = tool_start.elapsed().as_millis() as u64,
-                        ok = !is_error,
-                        "tool executed"
-                    );
-                }
-                Some(zoid_tools::ToolKind::Interactive) if tc.name == "ask_user" => {
-                    let question = tc
-                        .args
-                        .get("question")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let choices = tc
-                        .args
-                        .get("choices")
-                        .and_then(|v| v.as_array())
-                        .map(|a| {
-                            a.iter()
-                                .filter_map(|c| c.as_str().map(String::from))
-                                .collect::<Vec<String>>()
-                        })
-                        .unwrap_or_default();
-                    // Emit QuestionAsked so the card renders inline immediately.
-                    emit(
-                        &session,
-                        &mut events,
-                        ui,
-                        &config.branch,
-                        EventKind::QuestionAsked {
-                            id: tc.id.clone(),
-                            kind: zoid_core::event::QuestionKind::Ask,
-                            question: question.clone(),
-                            choices: choices.clone(),
-                        },
-                        session_id,
-                        now,
-                    )
-                    .await?;
                     let (rtx, rrx) = oneshot::channel::<Answer>();
                     tracing::debug!(
-                        "ask_user: intercepted, sending AskUser (choices={})",
+                        "{}: intercepted, sending AskUser (choices={})",
+                        tc.name,
                         choices.len()
                     );
                     let sent = ui
@@ -979,9 +934,13 @@ async fn run_turn_inner(
                             reply: rtx,
                         })
                         .await;
-                    tracing::debug!("ask_user: send result ok={}, awaiting reply", sent.is_ok());
+                    tracing::debug!(
+                        "{}: send result ok={}, awaiting reply",
+                        tc.name,
+                        sent.is_ok()
+                    );
                     let ans = rrx.await;
-                    tracing::debug!("ask_user: reply received ok={}", ans.is_ok());
+                    tracing::debug!("{}: reply received ok={}", tc.name, ans.is_ok());
                     let output = match ans {
                         Ok(Answer::Choice(s) | Answer::FreeText(s)) => s,
                         Ok(Answer::LetYouDecide) => "[let you decide]".to_string(),
@@ -1000,7 +959,11 @@ async fn run_turn_inner(
                         now,
                     )
                     .await?;
-                    let is_error = output == "[user aborted]";
+                    let is_error = if tc.name == "apply_mode_mapping" {
+                        output == "[user aborted]" || output == "Reject"
+                    } else {
+                        output == "[user aborted]"
+                    };
                     emit(
                         &session,
                         &mut events,

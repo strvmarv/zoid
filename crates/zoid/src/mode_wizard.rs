@@ -409,9 +409,10 @@ pub fn build_reconciliation_brief(
     s
 }
 
-/// The `apply_mode_mapping` tool: an `Approving` tool the agent loop intercepts
-/// by name. The loop parses the model's `ModeMapping` from the args, validates
-/// it, and raises `AgentUpdate::ModeMappingApproval`. `run()` is never called.
+/// The `apply_mode_mapping` tool: an `Interactive` tool the agent loop
+/// intercepts by name (alongside `ask_user`). The loop parses the model's
+/// `ModeMapping` from the args, emits a `QuestionAsked` (kind = ModeMapping),
+/// and parks for the user's answer. `run()` is never called.
 pub struct ApplyModeMappingTool {
     _wizard: Arc<ModeImportWizard>,
 }
@@ -449,7 +450,7 @@ impl Tool for ApplyModeMappingTool {
     }
 
     fn kind(&self) -> ToolKind {
-        ToolKind::Approving
+        ToolKind::Interactive
     }
 
     fn run(&self, _args: &Value, _cwd: &Path) -> ToolOutput {
@@ -795,10 +796,10 @@ mod tests {
     }
 
     #[test]
-    fn apply_tool_is_approving_kind() {
+    fn apply_tool_is_interactive_kind() {
         let wiz = ModeImportWizard::new_import(scan());
         let tool = ApplyModeMappingTool::new(std::sync::Arc::new(wiz));
-        assert_eq!(tool.kind(), zoid_tools::ToolKind::Approving);
+        assert_eq!(tool.kind(), zoid_tools::ToolKind::Interactive);
         assert_eq!(tool.name(), "apply_mode_mapping");
     }
 

@@ -3007,8 +3007,8 @@ fn answer_question(app: &mut App, ans: zoid::agent::Answer) {
 
     if is_wizard {
         if let Some(zoid_core::event::QuestionKind::ModeMapping { mapping }) = kind {
-            match ans {
-                zoid::agent::Answer::Choice(ref c) if c == "Approve" => {
+            match &ans {
+                zoid::agent::Answer::Choice(c) if c == "Approve" => {
                     let cfg_dir = resolve_config_dir(|k| std::env::var(k).ok());
                     let dest = cfg_dir
                         .join("modes")
@@ -3041,9 +3041,8 @@ fn answer_question(app: &mut App, ans: zoid::agent::Answer) {
                                 e.problems.join("; ")
                             ));
                             app.wizard = None;
-                            // Send "Reject" so the agent loop records an error result.
-                            if let Some((_, tx)) = app.pending_mode_mapping.take() {
-                                let _ = tx.send("Reject".to_string());
+                            if let Some(tx) = app.pending_answer.take() {
+                                let _ = tx.send(zoid::agent::Answer::Choice("Reject".into()));
                             }
                             app.shell.question = None;
                             app.shell.overlay = zoid_tui::state::Overlay::None;
@@ -3051,12 +3050,11 @@ fn answer_question(app: &mut App, ans: zoid::agent::Answer) {
                         }
                     }
                 }
-                zoid::agent::Answer::Choice(ref c) if c == "Reject" => {
+                zoid::agent::Answer::Choice(c) if c == "Reject" => {
                     app.wizard = None;
                     app.shell.status_hint = Some("import cancelled".into());
                 }
                 zoid::agent::Answer::Choice(_) | zoid::agent::Answer::FreeText(_) => {
-                    // "Adjust" or free-text: the model gets the text and re-proposes.
                     let text = match &ans {
                         zoid::agent::Answer::Choice(s) | zoid::agent::Answer::FreeText(s) => {
                             s.clone()
@@ -3077,27 +3075,10 @@ fn answer_question(app: &mut App, ans: zoid::agent::Answer) {
                 }
             }
         }
+    }
 
-        // Bridge: the wizard's reply channel is `pending_mode_mapping` (a
-        // `Sender<String>`), not `pending_answer` (a `Sender<Answer>`). Send the
-        // decision sentinel down the wizard channel so the agent loop's
-        // `ModeMappingApproval` arm unblocks. Task 7 deletes this path when the
-        // arms unify under `Interactive`.
-        if let Some((_, tx)) = app.pending_mode_mapping.take() {
-            let decision = match &ans {
-                zoid::agent::Answer::Choice(ref c) if c == "Approve" => "Approve".to_string(),
-                zoid::agent::Answer::Choice(ref c) if c == "Reject" => "Reject".to_string(),
-                zoid::agent::Answer::Choice(_) | zoid::agent::Answer::FreeText(_) => {
-                    "Adjust".to_string()
-                }
-                zoid::agent::Answer::LetYouDecide => "Approve".to_string(),
-            };
-            let _ = tx.send(decision);
-        }
-    } else {
-        if let Some(tx) = app.pending_answer.take() {
-            let _ = tx.send(ans);
-        }
+    if let Some(tx) = app.pending_answer.take() {
+        let _ = tx.send(ans);
     }
     app.shell.question = None;
     app.shell.overlay = zoid_tui::state::Overlay::None;
