@@ -72,6 +72,17 @@ pub fn resolve_phase(state: &crate::state::PaletteState) -> Phase {
     }
 }
 
+/// The filter text for the current Direct stage: everything after the last
+/// space in the buffer (minus the `:` prefix). Empty after a trailing space
+/// (shows all rows for the next stage). Pure.
+pub fn direct_filter(query: &str) -> &str {
+    let t = query.strip_prefix(':').unwrap_or(query);
+    match t.rsplit_once(' ') {
+        Some((_, last)) => last,
+        None => t,
+    }
+}
+
 /// Which inline-argument flow (if any) a command needs when chosen from the
 /// palette. Pure — the bin uses this to decide the Pick→Arg transition.
 pub fn arg_kind_for(cmd: &Command) -> Option<ArgKind> {
@@ -373,6 +384,36 @@ mod tests {
             None
         );
         assert_eq!(arg_kind_for(&Command::SwitchMode("Build".into())), None);
+    }
+
+    #[test]
+    fn direct_filter_partial_command_word() {
+        assert_eq!(direct_filter(":mo"), "mo");
+        assert_eq!(direct_filter(":q"), "q");
+    }
+
+    #[test]
+    fn direct_filter_after_namespace_space_is_empty() {
+        assert_eq!(direct_filter(":session "), "");
+        assert_eq!(direct_filter(":drawer "), "");
+    }
+
+    #[test]
+    fn direct_filter_partial_subcommand() {
+        assert_eq!(direct_filter(":session re"), "re");
+        assert_eq!(direct_filter(":drawer r"), "r");
+    }
+
+    #[test]
+    fn direct_filter_after_subcommand_space_is_empty() {
+        assert_eq!(direct_filter(":session rename "), "");
+        assert_eq!(direct_filter(":mode import "), "");
+    }
+
+    #[test]
+    fn direct_filter_typing_arg() {
+        assert_eq!(direct_filter(":session rename fix"), "fix");
+        assert_eq!(direct_filter(":session rename fix login"), "login");
     }
 
     #[test]
