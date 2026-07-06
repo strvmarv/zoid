@@ -4,11 +4,15 @@
 //! `.zoid-provenance.json` sidecar to the user-global modes dir.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use serde_json::Value;
 use zoid_core::skill::parse_skill_md;
 use zoid_core::wizard::{
     MappingEntry, ModeMapping, ProvenanceEntry, ProvenanceFile, ProvenanceSource, UpstreamScan,
 };
+use zoid_provider::ToolSpec;
+use zoid_tools::{Tool, ToolOutput};
 
 /// The wizard state held in `App.wizard` while an import or update is in
 /// flight. `scan` is cached so the chat-iterate loop never re-fetches.
@@ -271,6 +275,59 @@ fn build_sidecar(mapping: &ModeMapping, scan: &UpstreamScan, fetched_at: &str) -
     }
 }
 
+/// The `propose_mode_mapping` tool: returns the cached upstream scan (or the
+/// reconciliation brief on update — a later task wires that path) as a tool
+/// result. The model reads it, then calls `apply_mode_mapping` with its
+/// proposal.
+pub struct ProposeModeMappingTool {
+    wizard: Arc<ModeImportWizard>,
+}
+
+impl ProposeModeMappingTool {
+    pub fn new(wizard: Arc<ModeImportWizard>) -> Self {
+        Self { wizard }
+    }
+}
+
+impl Tool for ProposeModeMappingTool {
+    fn name(&self) -> &str {
+        "propose_mode_mapping"
+    }
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "propose_mode_mapping".into(),
+            description: "Read the upstream scan for the active import/update wizard, then call \
+                apply_mode_mapping with your proposed mapping onto the canonical contract. \
+                Available skills are listed in the scan; a mode.md body is the overlay text."
+                .into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        }
+    }
+
+    fn run(&self, _args: &Value, _cwd: &Path) -> ToolOutput {
+        ToolOutput::ok(render_scan(&self.wizard.scan))
+    }
+}
+
+/// Render the scan as a text block the model can read.
+fn render_scan(scan: &UpstreamScan) -> String {
+    let mut s = format!(
+        "Upstream scan of {} (repo {}, ref {}, subtree {}):\n\n",
+        scan.url, scan.repo, scan.resolved_ref, scan.subtree_path
+    );
+    for f in &scan.files {
+        s.push_str(&format!(
+            "---\npath: {}\nsha: {}\ncontent:\n{}\n\n",
+            f.upstream_path, f.sha, f.content
+        ));
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,5 +450,23 @@ mod tests {
         s.files[1].content = "no frontmatter here\n".into();
         let err = materialize(&mapping(), &s, &tmp.path().join("m"), "t").unwrap_err();
         assert!(err.problems.iter().any(|p| p.contains("fails parse")));
+    }
+
+    #[test]
+    fn propose_tool_returns_scan_as_text() {
+        let wiz = ModeImportWizard::new_import(scan());
+        let tool = ProposeModeMappingTool::new(std::sync::Arc::new(wiz));
+        let out = tool.run(&serde_json::json!({}), std::path::Path::new("."));
+        assert!(!out.is_error);
+        assert!(out.text.contains("skills/brainstorming/SKILL.md"));
+        assert!(out.text.contains("BODY"));
+    }
+
+    #[test]
+    fn propose_tool_name_and_spec_agree() {
+        let wiz = ModeImportWizard::new_import(scan());
+        let tool = ProposeModeMappingTool::new(std::sync::Arc::new(wiz));
+        assert_eq!(tool.name(), "propose_mode_mapping");
+        assert_eq!(tool.spec().name, "propose_mode_mapping");
     }
 }
