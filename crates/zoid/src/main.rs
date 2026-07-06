@@ -1044,12 +1044,6 @@ struct App {
     /// The URL import/update wizard state. `Some` while a wizard is in flight;
     /// `None` otherwise. Gated into the turn's tool set in `spawn_turn`.
     wizard: Option<zoid::mode_wizard::ModeImportWizard>,
-    /// The pending mode mapping + reply channel while the approval overlay is
-    /// up. `Some` from `ModeMappingApproval` until the user answers.
-    pending_mode_mapping: Option<(
-        zoid_core::wizard::ModeMapping,
-        tokio::sync::oneshot::Sender<String>,
-    )>,
     /// A deferred "Adjust" reply from the wizard approval overlay —
     /// `answer_question` is sync and can't `.await` `session.append`, so it
     /// stashes the event here for the main loop to flush at the top of `run`.
@@ -1293,7 +1287,6 @@ async fn main() -> Result<()> {
         mode_dirs,
         skills,
         wizard: None,
-        pending_mode_mapping: None,
         pending_adjust: None,
         model,
         economy: config.economy,
@@ -1751,13 +1744,13 @@ where
                         reply,
                     } => {
                         tracing::debug!(
-                            "main: AskUser received, raising Question overlay (choices={})",
+                            "main: AskUser received, opening inline card (choices={})",
                             choices.len()
                         );
                         app.shell.question =
                             Some(zoid_tui::question::QuestionState::new(question, choices));
-                        app.shell.overlay = zoid_tui::state::Overlay::Question;
                         app.pending_answer = Some(reply);
+                        app.body_cache.key = None;
                     }
                     AgentUpdate::ModelsFetched { provider, models } => {
                         if provider == "__wizard_error__" {
@@ -1852,17 +1845,6 @@ where
                                 .unwrap_or_else(|| app.shell.ctx_ceiling.min(384_000));
                             app.shell.cache_supported = info.prompt_cache;
                         }
-                    }
-                    AgentUpdate::ModeMappingApproval { mapping, summary, reply } => {
-                        let detail = zoid::mode_wizard::detailed_approval_summary(&mapping);
-                        let _ = summary;
-                        app.pending_mode_mapping = Some((mapping, reply));
-                        app.shell.question =
-                            Some(zoid_tui::question::QuestionState::new(
-                                detail,
-                                vec!["Approve".into(), "Reject".into(), "Adjust".into()],
-                            ));
-                        app.shell.overlay = zoid_tui::state::Overlay::Question;
                     }
                 }
             }
@@ -4022,7 +4004,6 @@ mod tests {
             mode_dirs: Vec::new(),
             skills: std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
             wizard: None,
-            pending_mode_mapping: None,
             pending_adjust: None,
             model: "test-model".into(),
             economy: zoid_core::config::EconomyConfig::default(),

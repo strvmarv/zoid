@@ -116,16 +116,6 @@ pub enum AgentUpdate {
         choices: Vec<String>,
         reply: oneshot::Sender<Answer>,
     },
-    /// The model proposed a mode mapping via `apply_mode_mapping`; the loop
-    /// validated it and is parking for user approval. `reply` receives the
-    /// user's decision: "Approve" (materialize), "Reject" (cancel), or
-    /// free-text (adjust — re-propose). The bin, not the loop, runs the
-    /// materializer on "Approve".
-    ModeMappingApproval {
-        mapping: zoid_core::wizard::ModeMapping,
-        summary: String,
-        reply: oneshot::Sender<String>,
-    },
     /// The turn is finished (model produced no further tool calls / cap / error).
     TurnComplete,
     /// Live model list fetched for the config model picker, tagged with the

@@ -52,7 +52,6 @@ pub enum Overlay {
     Verbs,
     Sessions,
     Config,
-    Question,
     ProviderSwitch,
 }
 
