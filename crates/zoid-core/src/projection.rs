@@ -168,6 +168,9 @@ pub fn conversation<'a>(events: impl IntoIterator<Item = &'a Event>) -> Vec<Chat
                 // Metadata marker; not a conversation item. (Out of scope: rendering
                 // the in-context breadcrumb / recall filtering is a later slice.)
             }
+            EventKind::QuestionAsked { .. } | EventKind::QuestionAnswered { .. } => {
+                // T2 renders these as an inline card; no-op placeholder for now.
+            }
         }
     }
     flush(&mut text, &mut calls, &mut turn_ts, &mut out);
