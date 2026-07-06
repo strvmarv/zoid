@@ -241,6 +241,15 @@ pub struct ShellState {
     /// "welcome back" hint. Defaults `false` so tests and examples that don't
     /// set it get the returning-user state (no onboarding copy in snapshots).
     pub first_time_user: bool,
+    /// Whether automated compaction is currently running. Set by the bin from
+    /// `AgentUpdate::CompactionStarted`; cleared by the per-frame debounce check
+    /// after `CompactionComplete` + the 3s minimum display duration. Pure
+    /// renderer reads this to show/hide the compaction indicator.
+    pub compacting: bool,
+    /// Current compaction-spinner frame glyph, refreshed by the bin each frame
+    /// from wall-clock elapsed at ~120ms. Defaults to the first frame so
+    /// snapshot tests are deterministic unless they opt into `compacting`.
+    pub compact_spinner: char,
     /// Highlighted row in the quick-switch overlay's provider list (Task 11
     /// renders it; Task 10 only plumbs the state through).
     pub switch_provider_sel: usize,
@@ -333,6 +342,8 @@ impl ShellState {
             active_tool: None,
             question: None,
             first_time_user: false,
+            compacting: false,
+            compact_spinner: crate::tokens::glyph::COMPACT_SPINNER[0],
             switch_provider_sel: 0,
             switch_model_sel: 0,
             switch_pane: SwitchPane::Provider,
@@ -618,6 +629,17 @@ mod tests {
         assert!(
             !ShellState::new().first_time_user,
             "first_time_user must default to false so tests/examples don't show onboarding"
+        );
+    }
+
+    #[test]
+    fn compacting_defaults_false() {
+        let s = ShellState::new();
+        assert!(!s.compacting, "compacting must default to false");
+        assert_eq!(
+            s.compact_spinner,
+            crate::tokens::glyph::COMPACT_SPINNER[0],
+            "compact_spinner must default to the first frame"
         );
     }
 
