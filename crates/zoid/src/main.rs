@@ -533,6 +533,22 @@ fn handle_conversation_click(app: &mut App, layout: &zoid_tui::layout::ShellLayo
     let clicked_line = app.shell.conversation_scroll as usize + (row - conv.y) as usize;
     let width = zoid_tui::layout::conv_text_width(conv.width) as usize;
     let msgs = conversation(app.events.iter());
+    // Check question choice hits first — a click on a choice row selects +
+    // submits it (so the user can click instead of arrow+Enter).
+    if app.shell.question.is_some() {
+        let choices = zoid_tui::chat::question_choice_hits(
+            &msgs,
+            app.streaming,
+            true,
+            app.tz_offset_secs,
+            width,
+            app.shell.question.as_ref(),
+        );
+        if let Some(hit) = choices.into_iter().find(|h| h.line == clicked_line) {
+            answer_question(app, zoid::agent::Answer::Choice(hit.choice));
+            return;
+        }
+    }
     let hits = zoid_tui::chat::code_hits(
         &msgs,
         app.streaming,

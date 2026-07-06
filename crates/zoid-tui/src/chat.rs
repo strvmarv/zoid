@@ -26,6 +26,14 @@ pub struct CodeHit {
     pub source: String,
 }
 
+/// A clickable choice row in an open question card: the transcript line index
+/// and the choice text, so a click can select+submit it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuestionChoiceHit {
+    pub line: usize,
+    pub choice: String,
+}
+
 /// Build the conversation lines (user/assistant turns + inline tool cards).
 /// Shared by `render_chat` and the modal `render_shell`. `width` is the text
 /// column width used to word-wrap prose with a hanging indent (spec §3.5); pass
@@ -46,6 +54,7 @@ pub fn conversation_lines(
         tz_offset_secs,
         width,
         &mut hits,
+        &mut Vec::new(),
         &mut Vec::new(),
         question,
     )
@@ -71,9 +80,36 @@ pub fn code_hits(
         width,
         &mut hits,
         &mut Vec::new(),
+        &mut Vec::new(),
         question,
     );
     hits
+}
+
+/// The clickable choice-row map for an open question card, like `code_hits`.
+/// Returns one entry per rendered choice line in the open card, so a click can
+/// select+submit it. Empty if no question is open or the card is answered.
+pub fn question_choice_hits(
+    msgs: &[ChatMsg],
+    streaming: bool,
+    caret_on: bool,
+    tz_offset_secs: i32,
+    width: usize,
+    question: Option<&crate::question::QuestionState>,
+) -> Vec<QuestionChoiceHit> {
+    let mut choices = Vec::new();
+    build_conversation(
+        msgs,
+        streaming,
+        caret_on,
+        tz_offset_secs,
+        width,
+        &mut Vec::new(),
+        &mut Vec::new(),
+        &mut choices,
+        question,
+    );
+    choices
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -85,6 +121,7 @@ fn build_conversation(
     width: usize,
     hits: &mut Vec<CodeHit>,
     msg_starts: &mut Vec<usize>,
+    question_choices: &mut Vec<QuestionChoiceHit>,
     question: Option<&crate::question::QuestionState>,
 ) -> Vec<Line<'static>> {
     let last = msgs.len().saturating_sub(1);
@@ -242,9 +279,17 @@ fn build_conversation(
                     }
                     zoid_core::projection::QuestionCardState::Answered { .. } => (0, String::new()),
                 };
-                let card =
-                    render_question_card(kind, qtext, choices, state, selected, &free_text, width);
-                lines.extend(card);
+                render_question_card(
+                    &mut lines,
+                    question_choices,
+                    kind,
+                    qtext,
+                    choices,
+                    state,
+                    selected,
+                    &free_text,
+                    width,
+                );
             }
         }
     }
@@ -266,11 +311,15 @@ fn build_conversation(
     lines
 }
 
-/// Render an inline question card as a block of lines. Open state shows the
-/// question + choices (with the live highlight) + a hint line; Answered state
-/// collapses to the question title + the answer on the last line. `width` is
-/// the conversation column width; the card wraps to fit.
+/// Render an inline question card into `lines`. Open state shows the question,
+/// choices with the live highlight, and a hint line. Answered state collapses
+/// to the question title and the answer on the last line. The card uses a
+/// purple border (the BRANCH color) so it stands out from the transcript.
+/// Choice line indices are recorded into `question_choices` for click hit-testing.
+#[allow(clippy::too_many_arguments)]
 fn render_question_card(
+    lines: &mut Vec<Line<'static>>,
+    question_choices: &mut Vec<QuestionChoiceHit>,
     kind: &zoid_core::event::QuestionKind,
     question: &str,
     choices: &[String],
@@ -278,7 +327,7 @@ fn render_question_card(
     selected: usize,
     free_text: &str,
     width: usize,
-) -> Vec<Line<'static>> {
+) {
     use zoid_core::event::QuestionKind;
     use zoid_core::projection::QuestionCardState;
 
@@ -286,17 +335,15 @@ fn render_question_card(
         QuestionKind::Ask => " Question ",
         QuestionKind::ModeMapping { .. } => " Mode mapping — review ",
     };
+    let border = color::BRANCH;
     let content_w = width.saturating_sub(4).max(20);
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    // Top border with title.
-    lines.push(card_border_top(title, content_w + 2));
-    // Question body (split on newlines, prefix each line with "│ ").
+    lines.push(card_border_top(title, content_w + 2, border));
     for para in question.split('\n') {
         if para.is_empty() {
             lines.push(Line::from(Span::styled(
                 "│ ".to_string(),
-                Style::new().fg(color::DIM),
+                Style::new().fg(border),
             )));
         } else {
             for l in crate::render::wrap_plain(para, content_w) {
@@ -309,12 +356,11 @@ fn render_question_card(
     }
     lines.push(Line::from(Span::styled(
         "│ ".to_string(),
-        Style::new().fg(color::DIM),
+        Style::new().fg(border),
     )));
 
     match state {
         QuestionCardState::Open { .. } => {
-            // Choices with highlight.
             for (i, c) in choices.iter().enumerate() {
                 let marker = if i == selected { "●" } else { "○" };
                 let style = if i == selected {
@@ -322,12 +368,16 @@ fn render_question_card(
                 } else {
                     Style::new().fg(color::TXT)
                 };
+                let line_idx = lines.len();
+                question_choices.push(QuestionChoiceHit {
+                    line: line_idx,
+                    choice: c.clone(),
+                });
                 lines.push(Line::from(Span::styled(
                     format!("│   {marker} {}", c),
                     style,
                 )));
             }
-            // Free-text echo (if the user typed anything).
             if !free_text.is_empty() {
                 lines.push(Line::from(Span::styled(
                     format!("│   {}{}", free_text, glyph::CARET),
@@ -338,31 +388,28 @@ fn render_question_card(
                 "│ Type your answer, or pick above. Enter to submit · Esc to cancel.".to_string(),
                 Style::new().fg(color::DIM),
             )));
-            // Bottom border.
-            lines.push(card_border_bottom(content_w + 2));
+            lines.push(card_border_bottom(content_w + 2, border));
         }
         QuestionCardState::Answered { answer } => {
-            // Collapsed: just the answer on the last line.
             lines.push(Line::from(Span::styled(
                 format!("└ ► {}", answer),
                 Style::new().fg(color::TXT),
             )));
         }
     }
-    lines
 }
 
-fn card_border_top(title: &str, width: usize) -> Line<'static> {
+fn card_border_top(title: &str, width: usize, color: ratatui::style::Color) -> Line<'static> {
     let inner = width.saturating_sub(title.chars().count() + 2);
     let right = "─".repeat(inner);
     Line::from(vec![
-        Span::styled(format!("┌─{title}"), Style::new().fg(color::DIM)),
-        Span::styled(right, Style::new().fg(color::DIM)),
+        Span::styled(format!("┌─{title}"), Style::new().fg(color)),
+        Span::styled(right, Style::new().fg(color)),
     ])
 }
 
-fn card_border_bottom(width: usize) -> Line<'static> {
-    Line::from(Span::styled("─".repeat(width), Style::new().fg(color::DIM)))
+fn card_border_bottom(width: usize, color: ratatui::style::Color) -> Line<'static> {
+    Line::from(Span::styled("─".repeat(width), Style::new().fg(color)))
 }
 
 /// Attach the `⧉ copy` affordance to the code-block header at `idx`, stealing
@@ -628,6 +675,7 @@ pub fn conversation_view_indexed(
                 width,
                 &mut hits,
                 &mut starts,
+                &mut Vec::new(),
                 question,
             )
         }
