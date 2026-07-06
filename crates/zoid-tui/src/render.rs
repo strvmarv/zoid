@@ -1,7 +1,7 @@
 //! `render_shell` — the shell frame: the active-mode title + status chip, the
 //! main surface (the conversation, or a mode-error card when the active mode
-//! failed to load), the rail of drawers, the input box, and palette /
-//! command-line overlays. Every glyph/color comes from `tokens` (spec §16).
+//! failed to load), the rail of drawers, the input box, and the palette
+//! overlay. Every glyph/color comes from `tokens` (spec §16).
 //! Geometry comes from `layout::compute` — the same rects mouse hit-testing uses.
 
 use crate::chat::{conversation_view, ChatView};
