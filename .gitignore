@@ -1,6 +1,7 @@
 # Local agent-tooling scratch (not part of the project source)
 .superpowers/
 .claude/
+.worktrees/
 
 # Rust build output
 /target
