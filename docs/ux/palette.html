@@ -29,10 +29,10 @@
   .cap{color:var(--mut);font-size:13px;margin:8px 14px 22px;}.cap b{color:#c9d1d9;}
 </style></head>
 <body>
-  <div class="head"><h1>zoid — command palette (^P) &amp; command line (:)</h1><p>Fuzzy, mode-aware action launcher that shows each keybind (teaches its own shortcuts). : for direct commands.</p></div>
+  <div class="head"><h1>zoid — command palette (^P)</h1><p>Fuzzy, mode-aware action launcher. Type <b>:</b> inside it for direct commands (:mode, :q, :delegate …).</p></div>
 
   <div class="winL">
-    <div class="tb"><span class="name">zoid</span><span class="dim">session:</span><span>fix 500 on GET /users</span><span class="sp"></span><span class="dim">^P palette · : command</span></div>
+    <div class="tb"><span class="name">zoid</span><span class="dim">session:</span><span>fix 500 on GET /users</span><span class="sp"></span><span class="dim">^P palette · type : for direct</span></div>
     <!-- dimmed content behind -->
     <div class="behind"><div class="row">› what's causing the 500 on /users/:id …
 zoid  ● edited users.rs +3 -1 · ✓ cargo check
@@ -77,8 +77,6 @@ zoid  ● edited users.rs +3 -1 · ✓ cargo check
 
       <div class="pf"><span>↑↓ move</span><span>⏎ run</span><span>esc close</span><span>type to filter</span><span class="dim">results rank by recency + match</span></div>
     </div>
-
-    <div class="cmdline">: new<span class="dim">         ← vim-style direct command (:new :rename :chat :model … :pin :q) for power users</span></div>
   </div>
-  <p class="cap"><b>Two entry points:</b> <b>^P</b> opens the fuzzy, mode-aware palette — grouped (session · mode/app · navigate · context ⑤ · settings), each row showing its <em>keybind</em> so you learn shortcuts by using it; results rank by recency + match. <b>:</b> is the direct command line for power users. The palette surfaces <em>global</em> verbs (new/resume session, quit, settings) plus current-mode actions — and since rail drawers carry no keybinds for now, it's how you toggle them. <span class="dim">(Switch to Build is deferred until the autonomous loop is built.)</span></p>
+  <p class="cap"><b>One adaptive palette (^P).</b> Empty query: fuzzy, mode-aware list — grouped (session · mode/app · navigate · context ⑤ · settings), each row showing its <em>keybind</em> so you learn shortcuts by using it; results rank by recency + match. <b>Type <code>:</code> as the first character</b> to switch the same prompt to direct-command mode: live-preview the parsed command, <b>⏎</b> runs it. The palette surfaces <em>global</em> verbs (new/resume session, quit, settings, delegate, import mode, drawer toggles) plus current-mode actions — and since rail drawers carry no keybinds for now, it's how you toggle them. <span class="dim">(Switch to Build is deferred until the autonomous loop is built.)</span></p>
 </body></html>
