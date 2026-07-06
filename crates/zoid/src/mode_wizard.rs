@@ -196,6 +196,33 @@ pub fn materialize(
         written.push(dest);
     }
 
+    // File-set reconciliation: delete canonical paths from the old sidecar
+    // that are not in the new mapping. (Update flow; import flow has no old
+    // sidecar so this is a no-op.)
+    let old_sidecar = dest_dir.join(".zoid-provenance.json");
+    if old_sidecar.is_file() {
+        if let Ok(old_text) = std::fs::read_to_string(&old_sidecar) {
+            if let Ok(old_pf) = serde_json::from_str::<ProvenanceFile>(&old_text) {
+                let new_paths: std::collections::HashSet<&str> = mapping
+                    .entries
+                    .iter()
+                    .filter_map(|e| match e {
+                        MappingEntry::Materialize { canonical_path, .. } => {
+                            Some(canonical_path.as_str())
+                        }
+                        MappingEntry::Skip { .. } => None,
+                    })
+                    .collect();
+                for old_entry in &old_pf.files {
+                    if !new_paths.contains(old_entry.canonical_path.as_str()) {
+                        let p = dest_dir.join(&old_entry.canonical_path);
+                        let _ = std::fs::remove_file(&p);
+                    }
+                }
+            }
+        }
+    }
+
     // Write the sidecar.
     let sidecar = build_sidecar(mapping, scan, fetched_at);
     let sidecar_path = dest_dir.join(".zoid-provenance.json");
