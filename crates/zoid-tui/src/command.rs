@@ -1,5 +1,6 @@
-//! The `:`-command and palette-action vocabulary. Both the command line and the
-//! palette resolve to a `Command`; the `zoid` bin executes it (spec §6.5).
+//! The `:`-command and palette-action vocabulary. Both the palette's Direct
+//! phase (typing `:` inside `Ctrl+P`) and the palette's Pick rows resolve to a
+//! `Command`; the `zoid` bin executes it (spec §6.5).
 
 use crate::state::DrawerId;
 
@@ -21,8 +22,8 @@ pub enum Command {
     Quit,
     OpenDrawer(DrawerId),
     NewSession,
-    /// Rename the active session. Empty string = "prompt me" (the bin opens the
-    /// command line seeded with `rename `); non-empty = apply directly.
+    /// Rename the active session. Empty string = "prompt me" (the bin seeds the
+    /// palette in Direct phase with `:rename `); non-empty = apply directly.
     RenameSession(String),
     /// Open the resume-session picker overlay (palette-only; no `:` form).
     ResumeSessionPicker,
