@@ -35,7 +35,7 @@ pub const SYSTEM_PROMPT: &str =
 /// registry; reproduces pre-mode behavior exactly.
 pub fn default_profile() -> AgentProfile {
     AgentProfile {
-        name: "default".into(),
+        name: "Chat".into(),
         description: "General terminal coding assistant.".into(),
         system_prompt: SYSTEM_PROMPT.to_string(),
         tools: vec![], // empty = every tool permitted
@@ -1436,7 +1436,7 @@ mod tests {
     #[test]
     fn default_profile_carries_system_prompt_and_allows_all_tools() {
         let p = default_profile();
-        assert_eq!(p.name, "default");
+        assert_eq!(p.name, "Chat");
         assert_eq!(p.system_prompt, SYSTEM_PROMPT);
         assert!(p.tools.is_empty(), "empty allow-list = all tools permitted");
         assert!(p.allows("invoke_skill"));

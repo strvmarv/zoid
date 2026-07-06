@@ -1809,6 +1809,7 @@ where
                                     );
                                     app.session.append(seed_event.clone()).await.ok();
                                     app.events.push(seed_event);
+                                    app.streaming = true;
                                     spawn_turn(app);
                                 }
                             }
