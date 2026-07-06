@@ -65,6 +65,8 @@ pub struct PaletteItem {
 /// running server); the companion row offers the *opposite* action, mirroring
 /// how the mode rows offer every mode other than the active one.
 pub fn all_items(active_mode: &str, mode_names: &[String], companion_on: bool) -> Vec<PaletteItem> {
+    use crate::state::DrawerId;
+
     // One "Switch to <mode>" row per mode other than the active one, in order,
     // then a reload row.
     let mut mode_rows: Vec<PaletteItem> = mode_names
@@ -98,8 +100,32 @@ pub fn all_items(active_mode: &str, mode_names: &[String], companion_on: bool) -
             label: "Rename session…".to_string(),
             command: Command::RenameSession(String::new()),
         },
+        PaletteItem {
+            label: "Delegate task…".to_string(),
+            command: Command::Delegate(String::new()),
+        },
+        PaletteItem {
+            label: "Import mode from URL…".to_string(),
+            command: Command::ModeImport(String::new()),
+        },
+        PaletteItem {
+            label: "Update mode…".to_string(),
+            command: Command::ModeUpdate(String::new()),
+        },
     ];
     items.extend(mode_rows);
+    items.push(PaletteItem {
+        label: "Toggle repo drawer".to_string(),
+        command: Command::OpenDrawer(DrawerId::Repo),
+    });
+    items.push(PaletteItem {
+        label: "Toggle session drawer".to_string(),
+        command: Command::OpenDrawer(DrawerId::Session),
+    });
+    items.push(PaletteItem {
+        label: "Toggle context drawer".to_string(),
+        command: Command::OpenDrawer(DrawerId::Context),
+    });
     items.push(PaletteItem {
         label: "Open settings".to_string(),
         command: Command::OpenConfig,
@@ -193,9 +219,6 @@ mod tests {
 
     #[test]
     fn all_items_is_flat_curated() {
-        // Runnable-only is now a *type-level* guarantee (the field is `Command`,
-        // not `Option<Command>`), so there's nothing to assert at runtime for it.
-        // This pins the flat curated set and its at-rest order.
         let items = all_items("Chat", &names(), false);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         assert_eq!(
@@ -204,8 +227,14 @@ mod tests {
                 "New session",
                 "Resume session…",
                 "Rename session…",
+                "Delegate task…",
+                "Import mode from URL…",
+                "Update mode…",
                 "Switch to Build",
                 "Reload modes",
+                "Toggle repo drawer",
+                "Toggle session drawer",
+                "Toggle context drawer",
                 "Open settings",
                 "Enable companion",
                 "Quit zoid",
