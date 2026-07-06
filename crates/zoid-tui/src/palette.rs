@@ -11,6 +11,9 @@ use crate::command::Command;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArgKind {
     Rename,
+    Delegate,
+    ModeImport,
+    ModeUpdate,
 }
 
 impl ArgKind {
@@ -18,6 +21,9 @@ impl ArgKind {
     pub fn prompt(&self) -> &'static str {
         match self {
             ArgKind::Rename => "Rename to",
+            ArgKind::Delegate => "Delegate task",
+            ArgKind::ModeImport => "Import mode from URL",
+            ArgKind::ModeUpdate => "Update mode",
         }
     }
 
@@ -25,6 +31,9 @@ impl ArgKind {
     pub fn build(&self, input: String) -> Command {
         match self {
             ArgKind::Rename => Command::RenameSession(input),
+            ArgKind::Delegate => Command::Delegate(input),
+            ArgKind::ModeImport => Command::ModeImport(input),
+            ArgKind::ModeUpdate => Command::ModeUpdate(input),
         }
     }
 }
@@ -34,6 +43,9 @@ impl ArgKind {
 pub fn arg_kind_for(cmd: &Command) -> Option<ArgKind> {
     match cmd {
         Command::RenameSession(_) => Some(ArgKind::Rename),
+        Command::Delegate(_) => Some(ArgKind::Delegate),
+        Command::ModeImport(_) => Some(ArgKind::ModeImport),
+        Command::ModeUpdate(_) => Some(ArgKind::ModeUpdate),
         _ => None,
     }
 }
@@ -266,22 +278,61 @@ mod tests {
     }
 
     #[test]
-    fn arg_kind_for_flags_only_parameterized_commands() {
+    fn arg_kind_for_flags_all_parameterized_commands() {
         assert_eq!(
             arg_kind_for(&Command::RenameSession(String::new())),
             Some(ArgKind::Rename)
         );
-        assert_eq!(arg_kind_for(&Command::CompanionEnable), None);
-        assert_eq!(arg_kind_for(&Command::Quit), None);
-        assert_eq!(arg_kind_for(&Command::NewSession), None);
+        assert_eq!(
+            arg_kind_for(&Command::Delegate(String::new())),
+            Some(ArgKind::Delegate)
+        );
+        assert_eq!(
+            arg_kind_for(&Command::ModeImport(String::new())),
+            Some(ArgKind::ModeImport)
+        );
+        assert_eq!(
+            arg_kind_for(&Command::ModeUpdate(String::new())),
+            Some(ArgKind::ModeUpdate)
+        );
     }
 
     #[test]
-    fn arg_kind_builds_command_and_prompt() {
+    fn arg_kind_for_returns_none_for_zero_arg_commands() {
+        assert_eq!(arg_kind_for(&Command::CompanionEnable), None);
+        assert_eq!(arg_kind_for(&Command::Quit), None);
+        assert_eq!(arg_kind_for(&Command::NewSession), None);
+        assert_eq!(arg_kind_for(&Command::ResumeSessionPicker), None);
+        assert_eq!(arg_kind_for(&Command::OpenConfig), None);
+        assert_eq!(arg_kind_for(&Command::ReloadModes), None);
+        assert_eq!(
+            arg_kind_for(&Command::OpenDrawer(crate::state::DrawerId::Repo)),
+            None
+        );
+        assert_eq!(arg_kind_for(&Command::SwitchMode("Build".into())), None);
+    }
+
+    #[test]
+    fn arg_kind_prompts_and_builds_for_all_variants() {
         assert_eq!(ArgKind::Rename.prompt(), "Rename to");
         assert_eq!(
             ArgKind::Rename.build("my-feature".to_string()),
             Command::RenameSession("my-feature".to_string())
+        );
+        assert_eq!(ArgKind::Delegate.prompt(), "Delegate task");
+        assert_eq!(
+            ArgKind::Delegate.build("add a test for parse()".to_string()),
+            Command::Delegate("add a test for parse()".to_string())
+        );
+        assert_eq!(ArgKind::ModeImport.prompt(), "Import mode from URL");
+        assert_eq!(
+            ArgKind::ModeImport.build("github.com/o/r/tree/main/skills".to_string()),
+            Command::ModeImport("github.com/o/r/tree/main/skills".to_string())
+        );
+        assert_eq!(ArgKind::ModeUpdate.prompt(), "Update mode");
+        assert_eq!(
+            ArgKind::ModeUpdate.build("Superpowers".to_string()),
+            Command::ModeUpdate("Superpowers".to_string())
         );
     }
 }
