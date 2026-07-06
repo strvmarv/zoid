@@ -546,6 +546,109 @@ pub fn approval_summary(mapping: &ModeMapping) -> String {
     )
 }
 
+/// A multi-line approval summary listing every skill, the mode body, and every
+/// skipped file with its reason. Rendered in the question overlay above the
+/// Approve/Reject/Adjust choices so the user can review the full mapping before
+/// deciding (the one-line `approval_summary` is for the status hint / logs).
+pub fn detailed_approval_summary(mapping: &ModeMapping) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("Proposed mode: {}\n", mapping.mode_name));
+    if !mapping.mode_description.is_empty() {
+        s.push_str(&format!("Description: {}\n", mapping.mode_description));
+    }
+    if !mapping.mode_body.is_empty() {
+        let body_preview: String = mapping.mode_body.chars().take(120).collect();
+        let ellipsis = if mapping.mode_body.chars().count() > 120 {
+            "…"
+        } else {
+            ""
+        };
+        s.push_str(&format!(
+            "Mode body (overlay): {}{}\n",
+            body_preview.trim(),
+            ellipsis
+        ));
+    }
+    s.push('\n');
+    let mode_md = mapping.entries.iter().find(|e| {
+        matches!(e, MappingEntry::Materialize { canonical_path, .. } if canonical_path == "mode.md")
+    });
+    if let Some(MappingEntry::Materialize {
+        source, summary, ..
+    }) = mode_md
+    {
+        s.push_str("Mode manifest:\n");
+        s.push_str(&format!("  mode.md — {}\n", summary));
+        s.push_str(&format!("    from: {}\n", source));
+    }
+    let skills: Vec<&MappingEntry> = mapping
+        .entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                MappingEntry::Materialize { canonical_path, .. }
+                if canonical_path.ends_with("SKILL.md") && canonical_path != "mode.md"
+            )
+        })
+        .collect();
+    s.push_str(&format!("Skills ({}):\n", skills.len()));
+    for e in &skills {
+        if let MappingEntry::Materialize {
+            canonical_path,
+            source,
+            summary,
+        } = e
+        {
+            s.push_str(&format!("  {} — {}\n", canonical_path, summary));
+            s.push_str(&format!("    from: {}\n", source));
+        }
+    }
+    let siblings: Vec<&MappingEntry> = mapping
+        .entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                MappingEntry::Materialize { canonical_path, .. }
+                if !canonical_path.ends_with("SKILL.md") && canonical_path != "mode.md"
+            )
+        })
+        .collect();
+    if !siblings.is_empty() {
+        s.push_str(&format!("\nBundled files ({}):\n", siblings.len()));
+        for e in &siblings {
+            if let MappingEntry::Materialize {
+                canonical_path,
+                source,
+                ..
+            } = e
+            {
+                s.push_str(&format!("  {} — from {}\n", canonical_path, source));
+            }
+        }
+    }
+    let skipped: Vec<&MappingEntry> = mapping
+        .entries
+        .iter()
+        .filter(|e| matches!(e, MappingEntry::Skip { .. }))
+        .collect();
+    if !skipped.is_empty() {
+        s.push_str(&format!("\nSkipped ({}):\n", skipped.len()));
+        for e in &skipped {
+            if let MappingEntry::Skip {
+                upstream_path,
+                reason,
+            } = e
+            {
+                s.push_str(&format!("  {} — {}\n", upstream_path, reason));
+            }
+        }
+    }
+    s.push_str("\nApprove this mapping?");
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -740,5 +843,17 @@ mod tests {
         assert!(s.contains("Superpowers"));
         assert!(s.contains("1 skills"));
         assert!(s.contains("1 skipped"));
+    }
+
+    #[test]
+    fn detailed_summary_lists_skills_and_skips() {
+        let s = detailed_approval_summary(&mapping());
+        assert!(s.contains("Proposed mode: Superpowers"));
+        assert!(s.contains("brainstorming/SKILL.md"));
+        assert!(s.contains("loader as mode body"));
+        assert!(s.contains("skills/README.md"));
+        assert!(s.contains("repo readme"));
+        assert!(s.contains("Approve this mapping?"));
+        assert!(s.contains('\n'));
     }
 }

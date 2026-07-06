@@ -1097,18 +1097,25 @@ pub fn render_question(frame: &mut Frame, area: Rect, q: &crate::question::Quest
         QuestionMode::FreeText => (q.free_text.width() + 1) // + caret column
             .max(QUESTION_HINT.width() + 2), // + glyph::RETURN + separating space
     };
+    let question_w = q.question.split('\n').map(|l| l.width()).max().unwrap_or(0);
     let content_w = widest_row
-        .max(q.question.width())
+        .max(question_w)
         .max(40)
         .min(area.width.saturating_sub(4) as usize);
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(""));
-    for l in wrap_plain(&q.question, content_w) {
-        lines.push(Line::from(Span::styled(
-            format!(" {l}"),
-            Style::new().fg(color::TXT),
-        )));
+    for para in q.question.split('\n') {
+        if para.is_empty() {
+            lines.push(Line::from(""));
+        } else {
+            for l in wrap_plain(para, content_w) {
+                lines.push(Line::from(Span::styled(
+                    format!(" {l}"),
+                    Style::new().fg(color::TXT),
+                )));
+            }
+        }
     }
     lines.push(Line::from(""));
 

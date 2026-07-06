@@ -1854,10 +1854,12 @@ where
                         }
                     }
                     AgentUpdate::ModeMappingApproval { mapping, summary, reply } => {
+                        let detail = zoid::mode_wizard::detailed_approval_summary(&mapping);
+                        let _ = summary;
                         app.pending_mode_mapping = Some((mapping, reply));
                         app.shell.question =
                             Some(zoid_tui::question::QuestionState::new(
-                                summary,
+                                detail,
                                 vec!["Approve".into(), "Reject".into(), "Adjust".into()],
                             ));
                         app.shell.overlay = zoid_tui::state::Overlay::Question;
