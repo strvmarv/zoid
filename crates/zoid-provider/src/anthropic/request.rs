@@ -296,4 +296,42 @@ mod tests {
         // last message gets a cache breakpoint block array
         assert!(msgs[2]["content"].is_array());
     }
+
+    #[test]
+    fn assistant_with_text_and_tool_calls_emits_both_blocks() {
+        // Assistant turn with BOTH narrative text AND a tool call →
+        // Blocks([Text{...}, ToolUse{...}]) in that order. Anthropic's API
+        // requires the text block before the tool_use block in a tool-call turn.
+        let r = req(
+            vec![
+                Message::user("read foo"),
+                Message {
+                    role: MsgRole::Assistant,
+                    content: "Let me check.".into(),
+                    tool_calls: vec![ToolCall {
+                        id: "toolu_1".into(),
+                        name: "read_file".into(),
+                        args: json!({"path": "foo"}),
+                    }],
+                    tool_name: None,
+                    tool_call_id: None,
+                },
+            ],
+            vec![],
+            None,
+        );
+        let body = serde_json::to_value(build(&r)).unwrap();
+        let asst = &body["messages"][1];
+        assert_eq!(asst["role"], "assistant");
+        let blocks = asst["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        // Text block first, with the narrative
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[0]["text"], "Let me check.");
+        // ToolUse block second
+        assert_eq!(blocks[1]["type"], "tool_use");
+        assert_eq!(blocks[1]["id"], "toolu_1");
+        assert_eq!(blocks[1]["name"], "read_file");
+        assert_eq!(blocks[1]["input"], json!({"path": "foo"}));
+    }
 }
