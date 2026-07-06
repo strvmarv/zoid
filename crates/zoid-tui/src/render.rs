@@ -329,6 +329,18 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
         spans.push(Span::styled(" ".repeat(pad1), Style::new()));
     }
     spans.push(Span::styled(center, Style::new().fg(fg)));
+
+    // Compaction indicator — only while compaction is running. Appended right
+    // after the center segment, no re-centering (the pad2 calculation below
+    // shrinks to accommodate this extra width, and the zoom hint stays pinned
+    // to the right edge).
+    if state.compacting {
+        spans.push(Span::styled(
+            format!("  {} compacting", state.compact_spinner),
+            Style::new().fg(color::BRANCH),
+        ));
+    }
+
     let pad2 = right_start.saturating_sub(left_w + pad1 + center_w);
     if pad2 > 0 {
         spans.push(Span::styled(" ".repeat(pad2), Style::new()));
@@ -1284,4 +1296,87 @@ pub(crate) fn wrap_plain(s: &str, width: usize) -> Vec<String> {
         lines.push(cur);
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::Zoom;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    /// Render a status bar with `compacting: true` and verify the compaction
+    /// segment appears in `color::BRANCH` (purple). The compaction spinner
+    /// glyph and "compacting" label must both be present.
+    #[test]
+    fn compaction_segment_visible_when_compacting() {
+        let mut state = ShellState::new();
+        state.compacting = true;
+        state.compact_spinner = glyph::COMPACT_SPINNER[0];
+        let view = ChatView {
+            zoom: Zoom::Normal,
+            caret_on: false,
+            reveal: None,
+            tz_offset_secs: 0,
+        };
+        let backend = TestBackend::new(100, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| render_status(f, &state, &view, f.area()))
+            .unwrap();
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
+        assert!(
+            content.contains("compacting"),
+            "status bar must contain 'compacting' when state.compacting is true: got {content:?}"
+        );
+        assert!(
+            content.contains(glyph::COMPACT_SPINNER[0].to_string().as_str()),
+            "status bar must contain the compaction spinner glyph: got {content:?}"
+        );
+        let has_branch = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .any(|c| c.style().fg == Some(color::BRANCH));
+        assert!(
+            has_branch,
+            "at least one cell must use color::BRANCH (purple) for the compaction indicator"
+        );
+    }
+
+    /// When `compacting: false`, the compaction segment must NOT appear —
+    /// the status bar is byte-identical to the pre-feature layout.
+    #[test]
+    fn compaction_segment_absent_when_not_compacting() {
+        let state = ShellState::new();
+        assert!(!state.compacting, "compacting must default to false");
+        let view = ChatView {
+            zoom: Zoom::Normal,
+            caret_on: false,
+            reveal: None,
+            tz_offset_secs: 0,
+        };
+        let backend = TestBackend::new(100, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| render_status(f, &state, &view, f.area()))
+            .unwrap();
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
+        assert!(
+            !content.contains("compacting"),
+            "status bar must NOT contain 'compacting' when not compacting: got {content:?}"
+        );
+    }
 }
