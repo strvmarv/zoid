@@ -126,7 +126,7 @@ This spec also corrects a pre-existing bug: `MODEL_CAPS` lists `deepseek-v4-pro`
 The agent loop currently builds `Message::tool(name, content)` for tool results, with `tool_name` set and `tool_calls[].id` carried only on the assistant message. For OpenAI-compat, the tool result must reference the originating `tool_call_id`.
 
 - Extend `Message` with `tool_call_id: Option<String>`. Default `None` on all existing constructors (`Message::user`, `::assistant`, `::tool`); no behavior change for existing providers (Ollama's writer ignores it and emits `tool_name`; Anthropic ignores it).
-- Add `Message::tool_with_call_id(name, call_id, content)` — used by the agent loop when dispatching a tool result for OpenAI-compat providers. The agent loop's tool-result construction site (`crates/zoid/src/agent.rs` or equivalent) is updated to populate `tool_call_id` from the originating `ToolCall.id`.
+- Add `Message::tool_with_call_id(name, call_id, content)` — the agent loop's tool-result construction site (`crates/zoid/src/agent.rs`, `map_msg`/`build_request` around lines 143-189) populates `tool_call_id` from the originating `ChatMsg::ToolResult.id` **unconditionally** — the request-body writers are provider-agnostic and can't tell whether the active provider is OpenAI-compat, so populating it always is the simplest correct implementation. The existing `ollama.rs`/`anthropic.rs` request-body writers ignore the field (Ollama emits `tool_name`; Anthropic is text-only), so there's no behavior change for existing providers.
 - Pure test asserts the field threads through; existing tool-dispatch tests cover it transitively.
 
 ### 4.3 `OpenCodeGoProvider` delegation & wire-shape map
@@ -262,7 +262,11 @@ First model (`glm-5.2`) is the default. No `canonical_id` alias (no legacy id to
 
 Unconfirmed entries carry `// unconfirmed — approx from public claims; override via ZOID_CONTEXT_CEILING` comments in the source. The corrected `deepseek-v4-pro` entry carries `// corrected via api-docs.deepseek.com (was 128_000/0/false)`.
 
-**Existing test update:** the existing test at `zoid-model/src/lib.rs:224-225` asserts the current wrong values (`context_window == 128_000`, `!prompt_cache`). That test is updated in this slice to assert the corrected values (`1_000_000`, `384_000`, `prompt_cache == true`), so `cargo test --workspace` stays green. The §6 regression test is the same assertion, kept explicit in the test module.
+**Existing test update:** two existing tests assert the current wrong `deepseek-v4-pro` values and must be updated in this slice so `cargo test --workspace` stays green:
+- `zoid-model/src/lib.rs:224-225` (`model_info_exact_lookup`): `context_window == 128_000`, `!prompt_cache` → update to `1_000_000` / `prompt_cache == true` (and assert `max_output == 384_000`).
+- `zoid-model/src/lib.rs:240` (`model_info_case_insensitive`): `model_info("DEEPSEEK-V4-PRO").context_window == 128_000` → update to `1_000_000`.
+
+The §6 regression test is the same assertion, kept explicit in the test module.
 
 **Bin (`main.rs`) changes — three functions:**
 
@@ -291,7 +295,7 @@ Unconfirmed entries carry `// unconfirmed — approx from public claims; overrid
 
 3. **`provider_for_id`** — same arm for quick-switch live fetch.
 
-**Settings UI** — the existing status-row and secret-field lists in `main.rs` (around lines 2014-2015 and 3394) gain `OPENCODE_GO_API_KEY` entries. The settings-redesign spec's "selecting a key-requiring provider prompts for the API key" flow works unchanged for `opencode-go`.
+**Settings UI** — the `key_status` array at `main.rs:2013-2016` (iterared generically by `zoid_tui::config_view::build_sections`) gains `OPENCODE_GO_API_KEY` alongside `OLLAMA_API_KEY` / `ANTHROPIC_API_KEY`. The settings-redesign spec's "selecting a key-requiring provider prompts for the API key" flow works unchanged for `opencode-go`.
 
 **`default_provider()` and `default_model()` in `zoid-provider/src/lib.rs`** — **unchanged.** The env-var precedence (`OLLAMA_API_KEY` → ollama, `ANTHROPIC_API_KEY` → anthropic, else `FakeProvider`) stays as-is; `OPENCODE_GO_API_KEY` is not added to that chain. opencode-go is reachable only via explicit config (`provider = "opencode-go"`) or the picker — not a default-provider candidate. This matches how `anthropic-api` already works.
 
