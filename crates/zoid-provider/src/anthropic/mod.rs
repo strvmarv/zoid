@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use std::time::Duration;
 
 pub mod cache;
+pub mod parse;
 pub mod request;
 pub mod types;
 
