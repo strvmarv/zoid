@@ -85,7 +85,9 @@ struct ToolCallAccum {
 }
 
 impl ToolCallAccumulator {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Feed one chunk's `delta.tool_calls[]` entry.
     fn feed(&mut self, call: &Value) {
@@ -114,14 +116,16 @@ impl ToolCallAccumulator {
     pub fn take(&mut self) -> Vec<ProviderEvent> {
         std::mem::take(&mut self.by_index)
             .into_values()
-            .map(|a| ProviderEvent::ToolCall(ToolCall {
-                id: a.id,
-                name: a.name,
-                args: serde_json::from_str(&a.arguments)
-                    .ok()
-                    .filter(Value::is_object)
-                    .unwrap_or_else(|| json!({})),
-            }))
+            .map(|a| {
+                ProviderEvent::ToolCall(ToolCall {
+                    id: a.id,
+                    name: a.name,
+                    args: serde_json::from_str(&a.arguments)
+                        .ok()
+                        .filter(Value::is_object)
+                        .unwrap_or_else(|| json!({})),
+                })
+            })
             .collect()
     }
 }
@@ -139,34 +143,65 @@ pub fn parse_chunk(data: &str, acc: &mut ToolCallAccumulator) -> Vec<ProviderEve
         Ok(v) => v,
         Err(_) => return Vec::new(),
     };
-    if let Some(err) = v.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+    if let Some(err) = v
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+    {
         return vec![ProviderEvent::Error(err.to_string())];
     }
     let mut out = Vec::new();
-    if let Some(content) = v.get("choices").and_then(|c| c.get(0)).and_then(|c| c.get("delta")).and_then(|d| d.get("content")).and_then(|c| c.as_str()) {
+    if let Some(content) = v
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("delta"))
+        .and_then(|d| d.get("content"))
+        .and_then(|c| c.as_str())
+    {
         if !content.is_empty() {
             out.push(ProviderEvent::TextDelta(content.to_string()));
         }
     }
-    if let Some(calls) = v.get("choices").and_then(|c| c.get(0)).and_then(|c| c.get("delta")).and_then(|d| d.get("tool_calls")).and_then(|t| t.as_array()) {
+    if let Some(calls) = v
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("delta"))
+        .and_then(|d| d.get("tool_calls"))
+        .and_then(|t| t.as_array())
+    {
         for call in calls {
             acc.feed(call);
         }
     }
-    if let Some(reason) = v.get("choices").and_then(|c| c.get(0)).and_then(|c| c.get("finish_reason")).and_then(|f| f.as_str()) {
+    if let Some(reason) = v
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("finish_reason"))
+        .and_then(|f| f.as_str())
+    {
         if reason == "length" {
             out.push(ProviderEvent::Truncated);
         }
     }
     if let Some(usage) = v.get("usage") {
-        let input = usage.get("prompt_tokens").and_then(|n| n.as_u64()).unwrap_or(0);
-        let output = usage.get("completion_tokens").and_then(|n| n.as_u64()).unwrap_or(0);
+        let input = usage
+            .get("prompt_tokens")
+            .and_then(|n| n.as_u64())
+            .unwrap_or(0);
+        let output = usage
+            .get("completion_tokens")
+            .and_then(|n| n.as_u64())
+            .unwrap_or(0);
         let cached = usage
             .get("prompt_tokens_details")
             .and_then(|d| d.get("cached_tokens"))
             .and_then(|n| n.as_u64())
             .unwrap_or(0);
-        out.push(ProviderEvent::Usage(Usage { input_tokens: input, output_tokens: output, cached }));
+        out.push(ProviderEvent::Usage(Usage {
+            input_tokens: input,
+            output_tokens: output,
+            cached,
+        }));
     }
     out
 }
@@ -210,7 +245,11 @@ impl OpenAICompatProvider {
 
 #[async_trait]
 impl Provider for OpenAICompatProvider {
-    async fn stream(&self, req: &CompletionRequest, sink: mpsc::Sender<ProviderEvent>) -> Result<()> {
+    async fn stream(
+        &self,
+        req: &CompletionRequest,
+        sink: mpsc::Sender<ProviderEvent>,
+    ) -> Result<()> {
         let start = std::time::Instant::now();
         let mut ttft: Option<u64> = None;
         let mut acc = ToolCallAccumulator::new();
@@ -418,7 +457,10 @@ mod tests {
         assert_eq!(tc["type"], "function");
         assert_eq!(tc["function"]["name"], "read_file");
         assert_eq!(tc["function"]["arguments"], json!(r#"{"path":"a.txt"}"#));
-        assert!(tc["function"]["arguments"].is_string(), "arguments must be a string");
+        assert!(
+            tc["function"]["arguments"].is_string(),
+            "arguments must be a string"
+        );
     }
 
     #[test]
@@ -507,7 +549,11 @@ mod tests {
         let data = r#"{"usage":{"prompt_tokens":120,"completion_tokens":40,"prompt_tokens_details":{"cached_tokens":30}}}"#;
         assert_eq!(
             parse_chunk(data, &mut ToolCallAccumulator::new()),
-            vec![ProviderEvent::Usage(Usage { input_tokens: 120, output_tokens: 40, cached: 30 })]
+            vec![ProviderEvent::Usage(Usage {
+                input_tokens: 120,
+                output_tokens: 40,
+                cached: 30
+            })]
         );
     }
 
@@ -516,7 +562,11 @@ mod tests {
         let data = r#"{"usage":{"prompt_tokens":120,"completion_tokens":40}}"#;
         assert_eq!(
             parse_chunk(data, &mut ToolCallAccumulator::new()),
-            vec![ProviderEvent::Usage(Usage { input_tokens: 120, output_tokens: 40, cached: 0 })]
+            vec![ProviderEvent::Usage(Usage {
+                input_tokens: 120,
+                output_tokens: 40,
+                cached: 0
+            })]
         );
     }
 
@@ -576,8 +626,22 @@ mod tests {
         let _ = parse_chunk(c2, &mut acc);
         let out = acc.take();
         assert_eq!(out.len(), 2);
-        assert_eq!(out[0], ProviderEvent::ToolCall(ToolCall { id: "call-a".into(), name: "read_file".into(), args: json!({}) }));
-        assert_eq!(out[1], ProviderEvent::ToolCall(ToolCall { id: "call-b".into(), name: "list_dir".into(), args: json!({}) }));
+        assert_eq!(
+            out[0],
+            ProviderEvent::ToolCall(ToolCall {
+                id: "call-a".into(),
+                name: "read_file".into(),
+                args: json!({})
+            })
+        );
+        assert_eq!(
+            out[1],
+            ProviderEvent::ToolCall(ToolCall {
+                id: "call-b".into(),
+                name: "list_dir".into(),
+                args: json!({})
+            })
+        );
     }
 
     #[test]
@@ -588,7 +652,10 @@ mod tests {
         let first = acc.take();
         assert_eq!(first.len(), 1);
         let second = acc.take();
-        assert!(second.is_empty(), "take() must drain — second call should be empty");
+        assert!(
+            second.is_empty(),
+            "take() must drain — second call should be empty"
+        );
     }
 
     use std::time::Duration;
@@ -724,10 +791,17 @@ mod tests {
         while let Some(ev) = rx.recv().await {
             got.push(ev);
         }
-        let done_count = got.iter().filter(|e| matches!(e, ProviderEvent::Done)).count();
-        assert_eq!(done_count, 1, "expected exactly one Done, got {done_count} in {got:?}");
+        let done_count = got
+            .iter()
+            .filter(|e| matches!(e, ProviderEvent::Done))
+            .count();
+        assert_eq!(
+            done_count, 1,
+            "expected exactly one Done, got {done_count} in {got:?}"
+        );
         assert!(
-            got.iter().any(|e| matches!(e, ProviderEvent::TextDelta(t) if t == "hi")),
+            got.iter()
+                .any(|e| matches!(e, ProviderEvent::TextDelta(t) if t == "hi")),
             "expected the content delta, got {got:?}"
         );
     }

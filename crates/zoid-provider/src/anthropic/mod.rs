@@ -217,7 +217,7 @@ impl AnthropicProvider {
             return Ok(());
         }
 
-        self.stream_sse(resp, sink).await
+        self.stream_sse(resp, sink, &req.model).await
     }
 
     /// Drive the SSE stream after a successful 200 response. Owns the
@@ -226,6 +226,7 @@ impl AnthropicProvider {
         &self,
         resp: reqwest::Response,
         sink: &mpsc::Sender<ProviderEvent>,
+        model: &str,
     ) -> Result<()> {
         let start = std::time::Instant::now();
         let mut ttft: Option<u64> = None;
@@ -280,6 +281,7 @@ impl AnthropicProvider {
         tracing::info!(
             kind = "provider",
             provider = "anthropic",
+            model = model,
             ttft_ms = ttft.unwrap_or(0),
             total_ms = start.elapsed().as_millis() as u64,
             "provider stream complete"
