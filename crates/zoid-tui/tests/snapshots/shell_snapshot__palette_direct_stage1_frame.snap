@@ -3,16 +3,16 @@ source: crates/zoid-tui/tests/shell_snapshot.rs
 expression: "draw(&s, &seeded(), 100, 24)"
 ---
 "                                                zoid                                      ^P palette"
-"┌ :mode Build ────────────────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
-"│→ Switch to Build                                    │ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
-"│⏎ run · esc close                                    │ ╰─────────────────────────────────────────╯ "
-"│                                                     │                                             "
-"│                                                     │ ╭ ▾ session ──────────────────────────────╮ "
-"│                                                     │ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
-"│                                                     │ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
-"│                                                     │ │⌚ dur 0m   tok/cac 0                    │ " Hidden by multi-width symbols: [(58, " ")]
-"│                                                     │ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
-"│                                                     │ ╰─────────────────────────────────────────╯ "
+"┌ : ──────────────────────────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
+"│ session                                             │ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
+"│ drawer                                              │ ╰─────────────────────────────────────────╯ "
+"│ mode                                                │                                             "
+"│ companion                                           │ ╭ ▾ session ──────────────────────────────╮ "
+"│ delegate                                            │ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
+"│ config                                              │ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
+"│ q                                                   │ │⌚ dur 0m   tok/cac 0                    │ " Hidden by multi-width symbols: [(58, " ")]
+"│ quit                                                │ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
+"│↑↓ move · ⏎ select · esc close · type to filter      │ ╰─────────────────────────────────────────╯ "
 "│                                                     │                                             "
 "│                                                     │ ╭ ▾ context · tokens ─────────────────────╮ "
 "│                                                     │ │churn                              cache │ "

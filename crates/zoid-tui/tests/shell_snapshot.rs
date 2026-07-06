@@ -432,6 +432,35 @@ fn palette_direct_phase_frame() {
 }
 
 #[test]
+fn palette_direct_stage1_frame() {
+    let mut s = ShellState::new();
+    s.mode_names = vec!["Chat".into(), "Build".into()];
+    s.sessions = vec!["fix 500".into(), "add auth".into()];
+    s.overlay = Overlay::Palette;
+    s.palette.query = ":".into();
+    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+}
+
+#[test]
+fn palette_direct_stage2_frame() {
+    let mut s = ShellState::new();
+    s.mode_names = vec!["Chat".into(), "Build".into()];
+    s.overlay = Overlay::Palette;
+    s.palette.query = ":session ".into();
+    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+}
+
+#[test]
+fn palette_direct_stage3_frame() {
+    let mut s = ShellState::new();
+    s.mode_names = vec!["Chat".into(), "Build".into()];
+    s.sessions = vec!["fix 500".into(), "add auth".into()];
+    s.overlay = Overlay::Palette;
+    s.palette.query = ":session rename ".into();
+    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+}
+
+#[test]
 fn palette_arg_stage_frame() {
     let mut s = ShellState::new();
     s.overlay = Overlay::Palette;

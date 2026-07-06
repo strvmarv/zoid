@@ -3,11 +3,11 @@ source: crates/zoid-tui/tests/shell_snapshot.rs
 expression: "draw(&s, &seeded(), 100, 24)"
 ---
 "                                                zoid                                      ^P palette"
-"┌ :mode Build ────────────────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
-"│→ Switch to Build                                    │ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
-"│⏎ run · esc close                                    │ ╰─────────────────────────────────────────╯ "
-"│                                                     │                                             "
-"│                                                     │ ╭ ▾ session ──────────────────────────────╮ "
+"┌ :session rename  ───────────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
+"│→ Rename session:                                    │ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
+"│ fix 500                                             │ ╰─────────────────────────────────────────╯ "
+"│ add auth                                            │                                             "
+"│↑↓ move · ⏎ select · esc close · type to filter      │ ╭ ▾ session ──────────────────────────────╮ "
 "│                                                     │ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
 "│                                                     │ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
 "│                                                     │ │⌚ dur 0m   tok/cac 0                    │ " Hidden by multi-width symbols: [(58, " ")]
