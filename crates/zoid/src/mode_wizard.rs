@@ -12,7 +12,7 @@ use zoid_core::wizard::{
     MappingEntry, ModeMapping, ProvenanceEntry, ProvenanceFile, ProvenanceSource, UpstreamScan,
 };
 use zoid_provider::ToolSpec;
-use zoid_tools::{Tool, ToolOutput};
+use zoid_tools::{Tool, ToolKind, ToolOutput};
 
 /// The wizard state held in `App.wizard` while an import or update is in
 /// flight. `scan` is cached so the chat-iterate loop never re-fetches.
@@ -48,7 +48,6 @@ pub fn slugify(name: &str) -> String {
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { '-' })
         .collect();
-    // Collapse runs of '-' into one, then trim leading/trailing '-'.
     let mut out = String::with_capacity(raw.len());
     let mut prev_dash = false;
     for c in raw.chars() {
@@ -328,6 +327,142 @@ fn render_scan(scan: &UpstreamScan) -> String {
     s
 }
 
+/// The `apply_mode_mapping` tool: an `Approving` tool the agent loop intercepts
+/// by name. The loop parses the model's `ModeMapping` from the args, validates
+/// it, and raises `AgentUpdate::ModeMappingApproval`. `run()` is never called.
+pub struct ApplyModeMappingTool {
+    _wizard: Arc<ModeImportWizard>,
+}
+
+impl ApplyModeMappingTool {
+    pub fn new(wizard: Arc<ModeImportWizard>) -> Self {
+        Self { _wizard: wizard }
+    }
+}
+
+impl Tool for ApplyModeMappingTool {
+    fn name(&self) -> &str {
+        "apply_mode_mapping"
+    }
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "apply_mode_mapping".into(),
+            description: "Propose a mode mapping for approval. args: { mode_name, mode_description, \
+                mode_body, entries: [{ Materialize: { canonical_path, source, summary } } | \
+                { Skip: { upstream_path, reason } }] }. The user approves, rejects, or adjusts."
+                .into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "mode_name": { "type": "string" },
+                    "mode_description": { "type": "string" },
+                    "mode_body": { "type": "string" },
+                    "entries": { "type": "array" }
+                },
+                "required": ["mode_name", "entries"]
+            }),
+        }
+    }
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Approving
+    }
+
+    fn run(&self, _args: &Value, _cwd: &Path) -> ToolOutput {
+        ToolOutput::err("apply_mode_mapping must be handled by the agent loop")
+    }
+}
+
+/// Parse a `ModeMapping` from the tool-call args. Returns `Err` with a
+/// human-readable reason if the args are malformed.
+pub fn parse_mapping_args(args: &Value) -> Result<ModeMapping, String> {
+    let mode_name = args
+        .get("mode_name")
+        .and_then(|v| v.as_str())
+        .ok_or("missing 'mode_name'")?
+        .to_string();
+    if mode_name.is_empty() {
+        return Err("mode_name is empty".into());
+    }
+    let mode_description = args
+        .get("mode_description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let mode_body = args
+        .get("mode_body")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let entries_arr = args
+        .get("entries")
+        .and_then(|v| v.as_array())
+        .ok_or("missing 'entries' array")?;
+    let mut entries = Vec::new();
+    for (i, e) in entries_arr.iter().enumerate() {
+        let mat = e.get("Materialize").unwrap_or(e);
+        if let (Some(cp), Some(src)) = (
+            mat.get("canonical_path").and_then(|v| v.as_str()),
+            mat.get("source").and_then(|v| v.as_str()),
+        ) {
+            entries.push(MappingEntry::Materialize {
+                canonical_path: cp.to_string(),
+                source: src.to_string(),
+                summary: mat
+                    .get("summary")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            });
+            continue;
+        }
+        let skip = e.get("Skip").unwrap_or(e);
+        if let Some(up) = skip.get("upstream_path").and_then(|v| v.as_str()) {
+            entries.push(MappingEntry::Skip {
+                upstream_path: up.to_string(),
+                reason: skip
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            });
+            continue;
+        }
+        return Err(format!("entries[{i}] is neither Materialize nor Skip"));
+    }
+    Ok(ModeMapping {
+        mode_name,
+        mode_description,
+        mode_body,
+        entries,
+    })
+}
+
+/// A one-line approval summary: mode name, skill count, skipped count.
+pub fn approval_summary(mapping: &ModeMapping) -> String {
+    let skills = mapping
+        .entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                MappingEntry::Materialize { canonical_path, .. }
+                if canonical_path.ends_with("SKILL.md") && canonical_path != "mode.md"
+            )
+        })
+        .count();
+    let skipped = mapping
+        .entries
+        .iter()
+        .filter(|e| matches!(e, MappingEntry::Skip { .. }))
+        .count();
+    format!(
+        "Proposed mode '{}': {} skills, {} skipped. Approve?",
+        mapping.mode_name, skills, skipped
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,5 +603,54 @@ mod tests {
         let tool = ProposeModeMappingTool::new(std::sync::Arc::new(wiz));
         assert_eq!(tool.name(), "propose_mode_mapping");
         assert_eq!(tool.spec().name, "propose_mode_mapping");
+    }
+
+    #[test]
+    fn apply_tool_is_approving_kind() {
+        let wiz = ModeImportWizard::new_import(scan());
+        let tool = ApplyModeMappingTool::new(std::sync::Arc::new(wiz));
+        assert_eq!(tool.kind(), zoid_tools::ToolKind::Approving);
+        assert_eq!(tool.name(), "apply_mode_mapping");
+    }
+
+    #[test]
+    fn apply_tool_run_is_never_called() {
+        let wiz = ModeImportWizard::new_import(scan());
+        let tool = ApplyModeMappingTool::new(std::sync::Arc::new(wiz));
+        let out = tool.run(&serde_json::json!({}), std::path::Path::new("."));
+        assert!(out.is_error);
+        assert!(out.text.contains("apply_mode_mapping must be handled by the agent loop"));
+    }
+
+    #[test]
+    fn parse_mapping_args_round_trip() {
+        let args = serde_json::json!({
+            "mode_name": "Superpowers",
+            "mode_description": "sp",
+            "mode_body": "LOADER",
+            "entries": [
+                { "Materialize": { "canonical_path": "mode.md", "source": "skills/u/SKILL.md", "summary": "loader" } },
+                { "Skip": { "upstream_path": "skills/README.md", "reason": "readme" } }
+            ]
+        });
+        let m = parse_mapping_args(&args).unwrap();
+        assert_eq!(m.mode_name, "Superpowers");
+        assert_eq!(m.entries.len(), 2);
+        assert!(matches!(m.entries[0], MappingEntry::Materialize { .. }));
+        assert!(matches!(m.entries[1], MappingEntry::Skip { .. }));
+    }
+
+    #[test]
+    fn parse_mapping_args_rejects_missing_name() {
+        let err = parse_mapping_args(&serde_json::json!({ "entries": [] })).unwrap_err();
+        assert!(err.contains("mode_name"));
+    }
+
+    #[test]
+    fn approval_summary_counts_skills_and_skips() {
+        let s = approval_summary(&mapping());
+        assert!(s.contains("Superpowers"));
+        assert!(s.contains("1 skills"));
+        assert!(s.contains("1 skipped"));
     }
 }

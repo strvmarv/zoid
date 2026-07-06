@@ -1762,6 +1762,20 @@ where
                             app.shell.cache_supported = info.prompt_cache;
                         }
                     }
+                    // The model proposed a mode mapping via `apply_mode_mapping`.
+                    // The wizard UI (a later task) raises an approval overlay and
+                    // routes the user's decision back through `reply`. Until that
+                    // UI lands, log + drop `reply`, which the loop interprets as an
+                    // abort (turn ends with a cancel).
+                    AgentUpdate::ModeMappingApproval { mapping, summary, reply } => {
+                        tracing::warn!(
+                            "ModeMappingApproval received but no wizard UI wired yet \
+                            (mode='{}', summary='{}'); dropping reply (turn aborts)",
+                            mapping.mode_name,
+                            summary
+                        );
+                        let _ = reply;
+                    }
                 }
             }
             _ = motion_tick.tick(), if app.streaming || app.delegating || app.zoom_changed_at.is_some() => {
