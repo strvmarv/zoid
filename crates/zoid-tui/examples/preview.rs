@@ -4,7 +4,7 @@
 //!
 //!   cargo run -p zoid-tui --example preview -- [scene] [width] [height]
 //!
-//! scene ∈ { chat, files, palette, cmdline, build, economy, syntax, summary, detail, objects, verbs }  (default: chat)
+//! scene ∈ { chat, files, palette, build, economy, syntax, summary, detail, objects, verbs }  (default: chat)
 //! width/height default to 140×24 (wide enough to expose gutter bugs).
 
 use ratatui::{backend::TestBackend, Terminal};
