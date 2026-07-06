@@ -38,10 +38,11 @@ impl ArgKind {
     }
 }
 
-/// What a given `PaletteState` means at this instant. Pure — used by routing
-/// and rendering to branch on the `:` prefix without storing a phase.
-/// `Arg` is `PaletteStage::Arg`, not a `Phase` variant — it's a real stage
-/// transition.
+/// What a given `PaletteState` means at this instant. Pure — used by rendering
+/// to branch on the `:` prefix without storing a phase. Routing derives the
+/// same classification inline (`in_direct: query.starts_with(':')`, a boolean)
+/// to avoid the per-keystroke `parse_command` cost. `Arg` is `PaletteStage::Arg`,
+/// not a `Phase` variant — it's a real stage transition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Phase {
     /// Empty or non-`:` query → fuzzy ranked list.
@@ -52,8 +53,10 @@ pub enum Phase {
     Arg,
 }
 
-/// Resolve the current phase from the palette state. Pure. Owns the parsed
-/// `Command` (cheap: a trim + string compares per frame).
+/// Resolve the current phase from the palette state. Pure. Calls
+/// `parse_command`, which returns an owned `Command` — one `String` heap
+/// allocation per frame for `:`-prefix queries (e.g. `:mode Build`). The render
+/// path needs the `Command` regardless.
 pub fn resolve_phase(state: &crate::state::PaletteState) -> Phase {
     match state.stage {
         crate::state::PaletteStage::Arg { .. } => Phase::Arg,
