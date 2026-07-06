@@ -69,7 +69,9 @@ jobs:
           repository: strvmarv/zoid-releases
           token: ${{ secrets.RELEASES_REPO_TOKEN }}
           path: releases-repo
-          persist-credentials: false
+          # persist-credentials: true (default) writes the token into the
+          # local git config so the subsequent `git push` can authenticate.
+          # Setting false here breaks the push step.
 
       - name: Sync site into releases-repo/docs
         # Mirror /public → /docs, replacing any prior site entirely. We wipe
@@ -85,7 +87,10 @@ jobs:
           # Copy the site payload, excluding the dev-only build scripts and
           # the README that documents the private-repo build pipeline.
           cp -r ../public/. docs/
-          rm -f docs/build.sh docs/capture.sh docs/README.md
+          # Dev-only files: build pipeline + the inlining source template.
+          # index.html is already the inlined artifact, so template.html
+          # is not needed at serve time.
+          rm -f docs/build.sh docs/capture.sh docs/README.md docs/template.html
           echo "synced site into docs/"
           ls -la docs/ docs/frames/
 
