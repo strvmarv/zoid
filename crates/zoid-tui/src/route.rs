@@ -215,16 +215,21 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
 }
 
 fn route_palette_key(state: &ShellState, key: KeyEvent) -> Action {
+    use crate::palette::{direct_filter, direct_items, selectable_matches};
     let in_arg = matches!(state.palette.stage, crate::state::PaletteStage::Arg { .. });
     let in_direct = !in_arg && state.palette.query.starts_with(':');
+    let direct_list_nonempty = in_direct && {
+        let items = direct_items(state);
+        !selectable_matches(&items, direct_filter(&state.palette.query)).is_empty()
+    };
     match key.code {
         // Esc: in Arg phase return to the Pick list; otherwise close.
         KeyCode::Esc if in_arg => Action::PaletteArgCancel,
         KeyCode::Esc => Action::CloseOverlay,
         KeyCode::Enter => Action::PaletteRun,
-        // Selection nav only applies to the Pick list (not Direct, not Arg).
-        KeyCode::Up if !in_arg && !in_direct => Action::PaletteMove(-1),
-        KeyCode::Down if !in_arg && !in_direct => Action::PaletteMove(1),
+        // Selection nav applies to Pick, and to Direct when its filtered list is non-empty.
+        KeyCode::Up if !in_arg && (!in_direct || direct_list_nonempty) => Action::PaletteMove(-1),
+        KeyCode::Down if !in_arg && (!in_direct || direct_list_nonempty) => Action::PaletteMove(1),
         KeyCode::Backspace => Action::PaletteBackspace,
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             Action::PaletteChar(c)
@@ -676,15 +681,17 @@ mod tests {
     #[test]
     fn palette_direct_phase_routing() {
         let mut s = ShellState::new();
+        s.mode_names = vec!["Chat".into(), "Build".into()];
         s.overlay = Overlay::Palette;
-        s.palette.query = ":mode Build".into(); // Direct — derived from ':' prefix
+
+        // Direct with a non-empty list (`:mode ` → Stage 2 subcommands + mode
+        // names) → arrows navigate.
+        s.palette.query = ":mode ".into();
         let k = |c: KeyCode| KeyEvent::new(c, KeyModifiers::NONE);
-        // Esc closes (same as Pick); arrows are inert (no list to navigate).
         assert_eq!(route_key(&s, k(KeyCode::Esc)), Action::CloseOverlay);
         assert_eq!(route_key(&s, k(KeyCode::Enter)), Action::PaletteRun);
-        assert_eq!(route_key(&s, k(KeyCode::Up)), Action::Noop);
-        assert_eq!(route_key(&s, k(KeyCode::Down)), Action::Noop);
-        // Char/Backspace still edit the buffer.
+        assert_eq!(route_key(&s, k(KeyCode::Up)), Action::PaletteMove(-1));
+        assert_eq!(route_key(&s, k(KeyCode::Down)), Action::PaletteMove(1));
         assert_eq!(
             route_key(&s, k(KeyCode::Char('x'))),
             Action::PaletteChar('x')
@@ -693,6 +700,11 @@ mod tests {
             route_key(&s, k(KeyCode::Backspace)),
             Action::PaletteBackspace
         );
+
+        // Direct with an empty list (`:wat` → no fuzzy match) → arrows inert.
+        s.palette.query = ":wat".into();
+        assert_eq!(route_key(&s, k(KeyCode::Up)), Action::Noop);
+        assert_eq!(route_key(&s, k(KeyCode::Down)), Action::Noop);
     }
 
     #[test]

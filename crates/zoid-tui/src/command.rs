@@ -24,7 +24,7 @@ pub enum Command {
     OpenDrawer(DrawerId),
     NewSession,
     /// Rename the active session. Empty string = "prompt me" (the bin seeds the
-    /// palette in Direct phase with `:rename `); non-empty = apply directly.
+    /// palette in Direct phase with `:session rename `); non-empty = apply directly.
     RenameSession(String),
     /// Open the resume-session picker overlay (palette-only; no `:` form).
     ResumeSessionPicker,
@@ -40,10 +40,23 @@ pub enum Command {
 }
 
 /// Parse a command-line string. Accepts an optional leading `:` and surrounding
-/// whitespace. `:mode <name>`/`:mode reload`, `:q`/`:quit`, `:repo`/`:session`/`:context`.
+/// whitespace. Grouped namespaces: `:session`, `:drawer`, `:mode`, `:companion`.
+/// Flat commands: `:q`/`:quit`, `:delegate`, `:config`.
 pub fn parse_command(raw: &str) -> Command {
     let t = raw.trim().trim_start_matches(':').trim();
     match t {
+        // --- :session namespace ---
+        "session new" => Command::NewSession,
+        "session resume" => Command::ResumeSessionPicker,
+        "session rename" => Command::RenameSession(String::new()),
+        s if s.starts_with("session rename ") => {
+            Command::RenameSession(s["session rename ".len()..].trim().to_string())
+        }
+        // --- :drawer namespace ---
+        "drawer repo" => Command::OpenDrawer(DrawerId::Repo),
+        "drawer session" => Command::OpenDrawer(DrawerId::Session),
+        "drawer context" => Command::OpenDrawer(DrawerId::Context),
+        // --- :mode namespace (existing grouped grammar) ---
         "mode reload" => Command::ReloadModes,
         s if s.starts_with("mode import ") => {
             Command::ModeImport(s["mode import ".len()..].trim().to_string())
@@ -53,25 +66,18 @@ pub fn parse_command(raw: &str) -> Command {
             Command::ModeUpdate(s["mode update ".len()..].trim().to_string())
         }
         "mode update" => Command::ModeUpdate(String::new()),
-        // Bare `:mode` (or `:mode` + only whitespace, already trimmed to "mode"):
-        // an empty target the bin renders as a usage hint rather than a silent no-op.
         "mode" => Command::SwitchMode(String::new()),
         s if s.starts_with("mode ") => Command::SwitchMode(s["mode ".len()..].trim().to_string()),
+        // --- :companion namespace ---
+        "companion on" => Command::CompanionEnable,
+        "companion off" => Command::CompanionDisable,
+        // --- flat commands ---
         "q" | "quit" => Command::Quit,
-        "repo" => Command::OpenDrawer(DrawerId::Repo),
-        "session" => Command::OpenDrawer(DrawerId::Session),
-        "context" => Command::OpenDrawer(DrawerId::Context),
-        "new" => Command::NewSession,
-        "rename" => Command::RenameSession(String::new()),
-        s if s.starts_with("rename ") => {
-            Command::RenameSession(s["rename ".len()..].trim().to_string())
-        }
+        "config" => Command::OpenConfig,
         rest if rest == "delegate" || rest.starts_with("delegate ") => {
             Command::Delegate(rest.strip_prefix("delegate").unwrap().trim().to_string())
         }
-        "config" => Command::OpenConfig,
-        "companion" => Command::CompanionEnable,
-        "companion off" => Command::CompanionDisable,
+        // --- bare namespaces (session, drawer, companion) fall through to Unknown.
         other => Command::Unknown(other.to_string()),
     }
 }
@@ -102,16 +108,74 @@ mod tests {
     }
 
     #[test]
-    fn parses_drawer_toggle_commands() {
-        assert_eq!(parse_command(":repo"), Command::OpenDrawer(DrawerId::Repo));
+    fn parses_session_subcommands() {
+        assert_eq!(parse_command(":session new"), Command::NewSession);
         assert_eq!(
-            parse_command(":session"),
+            parse_command(":session rename"),
+            Command::RenameSession(String::new())
+        );
+        assert_eq!(
+            parse_command(":session rename fix login"),
+            Command::RenameSession("fix login".into())
+        );
+        assert_eq!(
+            parse_command(":session resume"),
+            Command::ResumeSessionPicker
+        );
+    }
+
+    #[test]
+    fn parses_drawer_subcommands() {
+        assert_eq!(
+            parse_command(":drawer repo"),
+            Command::OpenDrawer(DrawerId::Repo)
+        );
+        assert_eq!(
+            parse_command(":drawer session"),
             Command::OpenDrawer(DrawerId::Session)
         );
         assert_eq!(
-            parse_command(":context"),
+            parse_command(":drawer context"),
             Command::OpenDrawer(DrawerId::Context)
         );
+    }
+
+    #[test]
+    fn parses_companion_subcommands() {
+        assert_eq!(parse_command(":companion on"), Command::CompanionEnable);
+        assert_eq!(parse_command(":companion off"), Command::CompanionDisable);
+    }
+
+    #[test]
+    fn bare_namespace_is_unknown() {
+        assert_eq!(
+            parse_command(":session"),
+            Command::Unknown("session".into())
+        );
+        assert_eq!(parse_command(":drawer"), Command::Unknown("drawer".into()));
+        assert_eq!(
+            parse_command(":companion"),
+            Command::Unknown("companion".into())
+        );
+    }
+
+    #[test]
+    fn drawer_requires_subcommand() {
+        assert_eq!(parse_command(":drawer"), Command::Unknown("drawer".into()));
+        assert_eq!(
+            parse_command(":drawer repo"),
+            Command::OpenDrawer(DrawerId::Repo)
+        );
+    }
+
+    #[test]
+    fn companion_requires_on_or_off() {
+        assert_eq!(
+            parse_command(":companion"),
+            Command::Unknown("companion".into())
+        );
+        assert_eq!(parse_command(":companion on"), Command::CompanionEnable);
+        assert_eq!(parse_command(":companion off"), Command::CompanionDisable);
     }
 
     #[test]
@@ -131,26 +195,6 @@ mod tests {
     #[test]
     fn parses_config_command() {
         assert_eq!(parse_command(":config"), Command::OpenConfig);
-    }
-
-    #[test]
-    fn parses_companion_commands() {
-        assert_eq!(parse_command("companion"), Command::CompanionEnable);
-        assert_eq!(parse_command(":companion off"), Command::CompanionDisable);
-    }
-
-    #[test]
-    fn parses_session_commands() {
-        assert_eq!(parse_command(":new"), Command::NewSession);
-        assert_eq!(parse_command("new"), Command::NewSession);
-        assert_eq!(
-            parse_command(":rename"),
-            Command::RenameSession(String::new())
-        );
-        assert_eq!(
-            parse_command(":rename fix login"),
-            Command::RenameSession("fix login".into())
-        );
     }
 
     #[test]

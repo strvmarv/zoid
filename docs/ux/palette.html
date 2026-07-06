@@ -38,44 +38,34 @@ zoid  ● edited users.rs +3 -1 · ✓ cargo check
 ›</div></div>
     <div class="scrim"></div>
 
-    <!-- palette overlay -->
+    <!-- palette overlay — Pick phase (empty query, fuzzy list) -->
     <div class="palette">
       <div class="pq"><span class="car">⌘</span><span class="q">compact</span><span class="cur">▌</span><span style="margin-left:auto;color:var(--dim);font-size:12px;">fuzzy · all actions</span></div>
 
       <div class="grp">session</div>
-      <div class="it"><span class="ic">＋</span> New session <span class="dim">— fresh thread + clean context budget</span><span class="k">:new</span></div>
-      <div class="it"><span class="ic">↺</span> Resume session… <span class="dim">— this repo, most-recent first</span><span class="k">⏎</span></div>
-      <div class="it"><span class="ic">✎</span> Rename session…<span class="k">:rename</span></div>
+      <div class="it"><span class="ic">＋</span> New session <span class="dim">— fresh thread + clean context budget</span><span class="k">:session new</span></div>
+      <div class="it"><span class="ic">↺</span> Resume session… <span class="dim">— this repo, most-recent first</span><span class="k">:session resume</span></div>
+      <div class="it"><span class="ic">✎</span> Rename session…<span class="k">:session rename</span></div>
 
-      <div class="grp">mode / app</div>
-      <div class="it" style="opacity:.5;"><span class="ic">⇢</span> Switch to Build <span class="dim">— deferred (autonomous loop not yet built)</span><span class="k">:build</span></div>
+      <div class="grp">mode</div>
+      <div class="it"><span class="ic">⇢</span> Switch to Build <span class="dim">— :mode Build</span><span class="k">:mode</span></div>
+      <div class="it"><span class="ic">↻</span> Reload modes <span class="dim">— re-scan mode folders</span><span class="k">:mode reload</span></div>
+      <div class="it"><span class="ic">⬇</span> Import mode from URL… <span class="k">:mode import</span></div>
+      <div class="it"><span class="ic">⟳</span> Update mode… <span class="k">:mode update</span></div>
+
+      <div class="grp">drawers</div>
+      <div class="it"><span class="ic">▸</span> Toggle repo drawer<span class="k">:drawer repo</span></div>
+      <div class="it"><span class="ic">▸</span> Toggle session drawer<span class="k">:drawer session</span></div>
+      <div class="it"><span class="ic">▸</span> Toggle context drawer<span class="k">:drawer context</span></div>
+
+      <div class="grp">app</div>
+      <div class="it"><span class="ic">▷</span> Delegate task to subagent… <span class="k">:delegate</span></div>
+      <div class="it"><span class="ic">◑</span> Open settings<span class="k">:config</span></div>
+      <div class="it"><span class="ic">◉</span> Enable companion<span class="k">:companion on</span></div>
       <div class="it"><span class="ic">⏻</span> Quit zoid<span class="k">:q</span></div>
-
-      <div class="grp" style="opacity:.5;">branch ⎇ <span style="text-transform:none;">· post-v1</span></div>
-      <div class="it" style="opacity:.5;"><span class="ic">⎇</span> Fork from here <span class="dim">— new branch at this turn</span><span class="k">:fork</span></div>
-      <div class="it" style="opacity:.5;"><span class="ic">⤺</span> Undo last turn <span class="dim">— move head back</span><span class="k">u</span></div>
-      <div class="it" style="opacity:.5;"><span class="ic">◷</span> Go to turn / time-travel… <span class="dim">— jump head</span><span class="k">gt</span></div>
-
-      <div class="grp">navigate</div>
-      <div class="it"><span class="ic">ƒ</span> Go to symbol… <span class="dim">(tree-sitter)</span><span class="k">gs</span></div>
-      <div class="it"><span class="ic">▤</span> Open file…<span class="k"></span></div>
-      <div class="it"><span class="ic">▸</span> Toggle drawer… <span class="dim">— repo · session · context ⑤</span><span class="k"></span></div>
-
-      <div class="grp">context ⑤</div>
-      <div class="it"><span class="ic">●</span> Pin file to context<span class="k"></span></div>
-      <div class="it"><span class="ic">✕</span> Evict cold items <span class="dim">— free tokens</span><span class="k"></span></div>
-      <div class="it sel"><span class="ic">⊟</span> <span class="acc">Compact context now</span><span class="k"></span></div>
-
-      <div class="grp">settings</div>
-      <div class="it"><span class="ic">◑</span> Toggle reduced motion<span class="k"></span></div>
-      <div class="it"><span class="ic">◆</span> Set model…<span class="k"></span></div>
-      <div class="it"><span class="ic">🔔</span> Set notify-cmd…<span class="k"></span></div>
-
-      <div class="grp" style="opacity:.5;">recipes <span style="text-transform:none;">· post-v1</span></div>
-      <div class="it" style="opacity:.5;"><span class="ic">▷</span> Run recipe…<span class="k"></span></div>
 
       <div class="pf"><span>↑↓ move</span><span>⏎ run</span><span>esc close</span><span>type to filter</span><span class="dim">results rank by recency + match</span></div>
     </div>
   </div>
-  <p class="cap"><b>One adaptive palette (^P).</b> Empty query: fuzzy, mode-aware list — grouped (session · mode/app · navigate · context ⑤ · settings), each row showing its <em>keybind</em> so you learn shortcuts by using it; results rank by recency + match. <b>Type <code>:</code> as the first character</b> to switch the same prompt to direct-command mode: live-preview the parsed command, <b>⏎</b> runs it. The palette surfaces <em>global</em> verbs (new/resume session, quit, settings, delegate, import mode, drawer toggles) plus current-mode actions — and since rail drawers carry no keybinds for now, it's how you toggle them. <span class="dim">(Switch to Build is deferred until the autonomous loop is built.)</span></p>
+  <p class="cap"><b>One adaptive palette (^P).</b> Empty query: fuzzy, mode-aware list of curated actions — each row showing its <code>:</code>-command equivalent so you learn the grammar by using it. <b>Type <code>:</code> as the first character</b> to switch to direct-command mode with a three-stage autocomplete: namespace → subcommand → arg. Selecting a row fills the buffer and advances; zero-arg leaves run immediately. The preview line shows what <code>parse_command</code> resolves to (suppressed when the list is visible and the buffer is an incomplete namespace). <span class="dim">Grouped vocabulary: :session new/rename/resume · :drawer repo/session/context · :mode/reload/import/update · :companion on/off · :delegate · :config · :q. No aliases for the old flat shortcuts.</span></p>
 </body></html>

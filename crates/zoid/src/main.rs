@@ -2310,23 +2310,36 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::PaletteRun => match app.shell.palette.stage.clone() {
             zoid_tui::state::PaletteStage::Pick => {
                 if app.shell.palette.query.starts_with(':') {
-                    // Direct phase — parse the whole buffer and run it.
-                    let cmd = zoid_tui::command::parse_command(&app.shell.palette.query);
-                    app.shell.close_overlay();
-                    return exec_command(app, cmd).await;
-                }
-                // Pick phase — fuzzy list resolution.
-                if let Some(cmd) = palette_selected_command(&app.shell) {
-                    match zoid_tui::palette::arg_kind_for(&cmd) {
-                        Some(kind) => {
-                            app.shell.palette.stage = zoid_tui::state::PaletteStage::Arg {
-                                kind,
-                                input: String::new(),
-                            };
+                    // Direct phase — resolve the highlighted row.
+                    match zoid_tui::palette::direct_selected_action(&app.shell) {
+                        zoid_tui::palette::DirectAction::Fill(text) => {
+                            app.shell.palette.query = text;
+                            app.shell.palette.selected = 0;
                         }
-                        None => {
+                        zoid_tui::palette::DirectAction::Run(cmd) => {
                             app.shell.close_overlay();
                             return exec_command(app, cmd).await;
+                        }
+                        zoid_tui::palette::DirectAction::Nothing => {
+                            let cmd = zoid_tui::command::parse_command(&app.shell.palette.query);
+                            app.shell.close_overlay();
+                            return exec_command(app, cmd).await;
+                        }
+                    }
+                } else {
+                    // Pick phase — fuzzy list resolution.
+                    if let Some(cmd) = palette_selected_command(&app.shell) {
+                        match zoid_tui::palette::arg_kind_for(&cmd) {
+                            Some(kind) => {
+                                app.shell.palette.stage = zoid_tui::state::PaletteStage::Arg {
+                                    kind,
+                                    input: String::new(),
+                                };
+                            }
+                            None => {
+                                app.shell.close_overlay();
+                                return exec_command(app, cmd).await;
+                            }
                         }
                     }
                 }
@@ -3336,7 +3349,7 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
                 // Seed the palette in Direct phase so the user types the name.
                 app.shell.overlay = zoid_tui::Overlay::Palette;
                 app.shell.palette = Default::default();
-                app.shell.palette.query = ":rename ".into();
+                app.shell.palette.query = ":session rename ".into();
             } else {
                 app.session
                     .rename_session(app.session_id, name.clone())
