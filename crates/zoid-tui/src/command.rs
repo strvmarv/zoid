@@ -11,9 +11,10 @@ pub enum Command {
     /// Re-scan mode folders without a restart (`:mode reload`).
     ///
     /// Note: `:mode reload` is parsed as this command *before* it is treated as a
-    /// mode name, so a user mode literally named `reload` is unreachable from the
-    /// command line. Reach it via the Shift+Tab cycle or the Ctrl+P palette (both
-    /// build `SwitchMode` directly, bypassing this parser).
+    /// mode name, so a user mode literally named `reload` is unreachable via `:mode
+    /// reload` (Direct phase). Reach it via the Shift+Tab cycle or the Ctrl+P
+    /// palette's "Switch to reload" row (both build `SwitchMode` directly,
+    /// bypassing this parser).
     ReloadModes,
     /// Start the URL import wizard (`:mode import <url>`). Empty = usage hint.
     ModeImport(String),

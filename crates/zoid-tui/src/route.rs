@@ -2,7 +2,7 @@
 //! `Action` vocabulary. Pure — synthetic events in, `Action` out (spec §13/§14.1).
 //! Precedence: an active overlay captures keys first; then global combos
 //! (`^Q`/`^P`/`⇧Tab`); then focus-contextual keys (Input edits; Conversation/Rail
-//! navigate). `:` opens the command line only when focus ≠ Input.
+//! navigate). `:` opens the palette in Direct phase only when focus ≠ Input.
 
 use crate::command::Command;
 use crate::config_view::FieldKind;
@@ -273,7 +273,7 @@ fn route_provider_switch_key(_state: &ShellState, key: KeyEvent) -> Action {
 ///    ↑/↓/Enter/←/Esc for movement/select/back while it's open.
 /// 2. An in-flight inline text edit buffer (Text/Uint/Secret fields) captures
 ///    Enter/Esc/Backspace/Char — the same buffer/commit/cancel shape as the
-///    palette/cmdline overlays, scoped to a single field.
+///    palette overlay (Pick/Arg phases), scoped to a single field.
 /// 3. Otherwise, field-list navigation: Up/Down move fields, Tab/Shift+Tab
 ///    switch sections, and Right/Enter act on the focused field (drill into a
 ///    `Pick` field's picker, toggle a `Bool`, or begin editing Text/Uint).
