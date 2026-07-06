@@ -124,6 +124,70 @@ pub struct ProvenanceFile {
     pub files: Vec<ProvenanceEntry>,
 }
 
+/// Classification of one canonical file for update, computed by the pure
+/// `classify_update` helper. The bin builds a human-readable reconciliation
+/// brief from a vector of these.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateClass {
+    Unchanged,
+    UpstreamMoved { new_content: String },
+    LocalOnlyChanged,
+    BothChanged { new_upstream: String },
+    NewUpstream { new_content: String },
+    UpstreamDeleted,
+}
+
+impl std::fmt::Display for UpdateClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UpdateClass::Unchanged => write!(f, "unchanged"),
+            UpdateClass::UpstreamMoved { .. } => write!(f, "upstream changed"),
+            UpdateClass::LocalOnlyChanged => write!(f, "local-only changed"),
+            UpdateClass::BothChanged { .. } => write!(f, "both changed (conflict)"),
+            UpdateClass::NewUpstream { .. } => write!(f, "upstream added"),
+            UpdateClass::UpstreamDeleted => write!(f, "upstream deleted"),
+        }
+    }
+}
+
+/// Three-way classify one canonical file for update:
+/// - `provenance` is the sidecar entry from last import (the base).
+/// - `local_canonical` is the current on-disk canonical content.
+/// - `fresh_scan` is the just-fetched upstream tree (at the same ref).
+///
+/// If the file's `upstream_path` is not in the fresh scan ⇒ `UpstreamDeleted`
+/// (whether the scan is empty or not — a rename/move upstream is "deleted"
+/// from this entry's perspective; new-upstream detection is the caller's job,
+/// iterating fresh-scan files not in the sidecar). If the path is present,
+/// compare SHAs: same SHA + local==snapshot ⇒ `Unchanged`; same SHA +
+/// local!=snapshot ⇒ `LocalOnlyChanged`; different SHA + local==snapshot ⇒
+/// `UpstreamMoved`; different SHA + local!=snapshot ⇒ `BothChanged`.
+pub fn classify_update(
+    provenance: &ProvenanceEntry,
+    local_canonical: &str,
+    fresh_scan: &UpstreamScan,
+) -> UpdateClass {
+    let fresh = fresh_scan
+        .files
+        .iter()
+        .find(|f| f.upstream_path == provenance.upstream_path);
+    let Some(fresh) = fresh else {
+        return UpdateClass::UpstreamDeleted;
+    };
+    let upstream_same = fresh.sha == provenance.upstream_sha;
+    let local_same = local_canonical == provenance.upstream_snapshot;
+    match (upstream_same, local_same) {
+        (true, true) => UpdateClass::Unchanged,
+        (false, true) => UpdateClass::UpstreamMoved {
+            new_content: fresh.content.clone(),
+        },
+        (true, false) => UpdateClass::LocalOnlyChanged,
+        (false, false) => UpdateClass::BothChanged {
+            new_upstream: fresh.content.clone(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,5 +323,99 @@ mod tests {
         assert!(!json.contains("C:\\"));
         let back: ProvenanceFile = serde_json::from_str(&json).unwrap();
         assert!(back.files[0].canonical_path.starts_with("a/"));
+    }
+
+    fn prov(path: &str, sha: &str, snap: &str) -> ProvenanceEntry {
+        ProvenanceEntry {
+            canonical_path: path.into(),
+            upstream_path: format!("skills/{path}"),
+            upstream_sha: sha.into(),
+            upstream_ref: "abc123".into(),
+            upstream_snapshot: snap.into(),
+        }
+    }
+
+    fn scan_with(file_path: &str, sha: &str, content: &str) -> UpstreamScan {
+        UpstreamScan {
+            url: "u".into(),
+            repo: "o/r".into(),
+            resolved_ref: "abc123".into(),
+            subtree_path: "skills".into(),
+            files: vec![ScannedFile {
+                upstream_path: file_path.into(),
+                sha: sha.into(),
+                content: content.into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn classify_unchanged() {
+        let p = prov("a/SKILL.md", "sha-1", "snap");
+        let scan = scan_with("skills/a/SKILL.md", "sha-1", "snap");
+        assert!(matches!(
+            classify_update(&p, "snap", &scan),
+            UpdateClass::Unchanged
+        ));
+    }
+
+    #[test]
+    fn classify_upstream_moved() {
+        let p = prov("a/SKILL.md", "sha-1", "snap");
+        let scan = scan_with("skills/a/SKILL.md", "sha-2", "new");
+        match classify_update(&p, "snap", &scan) {
+            UpdateClass::UpstreamMoved { new_content } => assert_eq!(new_content, "new"),
+            other => panic!("expected UpstreamMoved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_local_only_changed() {
+        let p = prov("a/SKILL.md", "sha-1", "snap");
+        let scan = scan_with("skills/a/SKILL.md", "sha-1", "snap");
+        assert!(matches!(
+            classify_update(&p, "local-edit", &scan),
+            UpdateClass::LocalOnlyChanged
+        ));
+    }
+
+    #[test]
+    fn classify_both_changed() {
+        let p = prov("a/SKILL.md", "sha-1", "snap");
+        let scan = scan_with("skills/a/SKILL.md", "sha-2", "new");
+        match classify_update(&p, "local-edit", &scan) {
+            UpdateClass::BothChanged { new_upstream } => assert_eq!(new_upstream, "new"),
+            other => panic!("expected BothChanged, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_upstream_deleted() {
+        let p = prov("a/SKILL.md", "sha-1", "snap");
+        let scan = UpstreamScan {
+            url: "u".into(),
+            repo: "o/r".into(),
+            resolved_ref: "abc123".into(),
+            subtree_path: "skills".into(),
+            files: vec![],
+        };
+        assert!(matches!(
+            classify_update(&p, "snap", &scan),
+            UpdateClass::UpstreamDeleted
+        ));
+    }
+
+    #[test]
+    fn classify_upstream_renamed_is_deleted() {
+        // A non-empty scan whose path doesn't match the provenance entry's
+        // upstream_path is a rename/move upstream — from the provenance entry's
+        // perspective, its file is deleted. (New-upstream detection is the
+        // caller's job, iterating fresh-scan files not in the sidecar.)
+        let p = prov("old/SKILL.md", "sha-old", "snap");
+        let scan = scan_with("skills/new/SKILL.md", "sha-new", "new-content");
+        assert!(matches!(
+            classify_update(&p, "snap", &scan),
+            UpdateClass::UpstreamDeleted
+        ));
     }
 }
