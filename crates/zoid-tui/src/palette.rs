@@ -247,6 +247,59 @@ fn stage3_items(ns: &str, sub: &str, state: &ShellState) -> Vec<PaletteItem> {
     }
 }
 
+/// What Enter should do in Direct phase with the highlighted row. Pure —
+/// the bin calls this on `PaletteRun` when the buffer starts with `:`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DirectAction {
+    /// Set `query` to this text and stay open (advance to the next stage).
+    Fill(String),
+    /// Close the overlay and run this command immediately.
+    Run(Command),
+    /// No row selected / empty list — fall through to `parse_command(query)`.
+    Nothing,
+}
+
+/// Resolve the highlighted Direct row to a fill-or-run action. Pure.
+pub fn direct_selected_action(state: &ShellState) -> DirectAction {
+    let items = direct_items(state);
+    let filter = direct_filter(&state.palette.query);
+    let matches = selectable_matches(&items, filter);
+    if matches.is_empty() {
+        return DirectAction::Nothing;
+    }
+    let sel = nav(state.palette.selected, 0, matches.len());
+    let item = &items[matches[sel]];
+
+    // Decide Fill vs Run based on the row's command:
+    // - `Unknown` (namespace) or a bare parameterized sentinel
+    //   (`RenameSession("")`, `ModeImport("")`, `ModeUpdate("")`, `Delegate("")`)
+    //   → Fill to the next stage.
+    // - Anything else → Run.
+    let is_fill = match &item.command {
+        Command::Unknown(_) => true,
+        Command::RenameSession(s) if s.is_empty() => true,
+        Command::ModeImport(s) if s.is_empty() => true,
+        Command::ModeUpdate(s) if s.is_empty() => true,
+        Command::Delegate(s) if s.is_empty() => true,
+        _ => false,
+    };
+
+    if is_fill {
+        // Construct the next-stage buffer: `:` + the accepted prefix + label + " ".
+        // The accepted prefix is everything in the query up to and including the
+        // last space (or just `:` if we're at Stage 1 with no space yet).
+        let q = &state.palette.query;
+        let prefix = q.strip_prefix(':').unwrap_or(q);
+        let accepted = match prefix.rsplit_once(' ') {
+            Some((before, _)) => format!(":{} {}", before.trim_end(), item.label),
+            None => format!(":{}", item.label),
+        };
+        DirectAction::Fill(format!("{} ", accepted))
+    } else {
+        DirectAction::Run(item.command.clone())
+    }
+}
+
 /// Which inline-argument flow (if any) a command needs when chosen from the
 /// palette. Pure — the bin uses this to decide the Pick→Arg transition.
 pub fn arg_kind_for(cmd: &Command) -> Option<ArgKind> {
@@ -703,5 +756,61 @@ mod tests {
             ArgKind::ModeUpdate.build("Superpowers".to_string()),
             Command::ModeUpdate("Superpowers".to_string())
         );
+    }
+
+    #[test]
+    fn direct_selected_action_select_namespace_fills() {
+        let s = shell_for_direct(":");
+        // Top row is "session" (a namespace) → Fill.
+        assert_eq!(
+            direct_selected_action(&s),
+            DirectAction::Fill(":session ".into())
+        );
+    }
+
+    #[test]
+    fn direct_selected_action_select_zero_arg_runs() {
+        let s = shell_for_direct(":session ");
+        // Top row is "new" (zero-arg) → Run.
+        assert_eq!(
+            direct_selected_action(&s),
+            DirectAction::Run(Command::NewSession)
+        );
+    }
+
+    #[test]
+    fn direct_selected_action_select_parameterized_fills() {
+        let s = shell_for_direct(":session ");
+        // Move selection to "rename" (index 1).
+        let mut s = s;
+        s.palette.selected = 1;
+        assert_eq!(
+            direct_selected_action(&s),
+            DirectAction::Fill(":session rename ".into())
+        );
+    }
+
+    #[test]
+    fn direct_selected_action_select_arg_runs() {
+        let s = shell_for_direct(":session rename ");
+        // Top row is "fix 500" (a session name) → Run.
+        assert_eq!(
+            direct_selected_action(&s),
+            DirectAction::Run(Command::RenameSession("fix 500".into()))
+        );
+    }
+
+    #[test]
+    fn direct_selected_action_no_match_is_nothing() {
+        let s = shell_for_direct(":wat");
+        // No fuzzy match in Stage 1 → Nothing.
+        assert_eq!(direct_selected_action(&s), DirectAction::Nothing);
+    }
+
+    #[test]
+    fn direct_selected_action_empty_list_is_nothing() {
+        let s = shell_for_direct(":delegate ");
+        // Free-text Stage 3 → empty list → Nothing.
+        assert_eq!(direct_selected_action(&s), DirectAction::Nothing);
     }
 }
