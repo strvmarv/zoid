@@ -4,6 +4,7 @@
 //! their argument inline via `ArgKind`. Pure; rendering lives in `render.rs`.
 
 use crate::command::Command;
+use crate::state::ShellState;
 
 /// A parameterized palette command's argument-capture flow. The palette enters
 /// an inline "Arg" phase to collect the argument, then builds the final command.
@@ -80,6 +81,169 @@ pub fn direct_filter(query: &str) -> &str {
     match t.rsplit_once(' ') {
         Some((_, last)) => last,
         None => t,
+    }
+}
+
+/// The three-stage Direct-phase list, derived from the buffer. Pure.
+///
+/// - Stage 1 (no complete namespace): top-level namespaces + flat commands.
+/// - Stage 2 (`:ns `): subcommands for the namespace.
+/// - Stage 3 (`:ns sub `): arg completions for a parameterized subcommand.
+///
+/// Stages are derived from `query` — no stored stage. Empty lists (free-text
+/// args like `:delegate `, `:mode import `) mean the user types freely.
+pub fn direct_items(state: &ShellState) -> Vec<PaletteItem> {
+    let t = state
+        .palette
+        .query
+        .strip_prefix(':')
+        .unwrap_or(&state.palette.query);
+    let has_trailing_space = t.ends_with(' ');
+    let trimmed = t.trim_end();
+    let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+
+    match (tokens.as_slice(), has_trailing_space) {
+        // Stage 1: bare colon or partial command word (no complete namespace).
+        ([], _) | ([_], false) => stage1_items(),
+        // Stage 2: `:ns ` (one recognized namespace + trailing space).
+        ([ns], true) => stage2_items(ns, state),
+        // Stage 3: `:ns sub ` (parameterized subcommand + trailing space).
+        ([ns, sub], true) => stage3_items(ns, sub, state),
+        // Stage 3 with a partial arg typed (`:session rename fi`) — still Stage 3;
+        // return the arg list and let `selectable_matches` filter by `direct_filter`.
+        ([ns, sub, ..], _) => stage3_items(ns, sub, state),
+    }
+}
+
+fn stage1_items() -> Vec<PaletteItem> {
+    vec![
+        PaletteItem {
+            label: "session".into(),
+            command: Command::Unknown("session".into()),
+        },
+        PaletteItem {
+            label: "drawer".into(),
+            command: Command::Unknown("drawer".into()),
+        },
+        PaletteItem {
+            label: "mode".into(),
+            command: Command::SwitchMode(String::new()),
+        },
+        PaletteItem {
+            label: "companion".into(),
+            command: Command::Unknown("companion".into()),
+        },
+        PaletteItem {
+            label: "delegate".into(),
+            command: Command::Delegate(String::new()),
+        },
+        PaletteItem {
+            label: "config".into(),
+            command: Command::OpenConfig,
+        },
+        PaletteItem {
+            label: "q".into(),
+            command: Command::Quit,
+        },
+        PaletteItem {
+            label: "quit".into(),
+            command: Command::Quit,
+        },
+    ]
+}
+
+fn stage2_items(ns: &str, state: &ShellState) -> Vec<PaletteItem> {
+    use crate::state::DrawerId;
+    match ns {
+        "session" => vec![
+            PaletteItem {
+                label: "new".into(),
+                command: Command::NewSession,
+            },
+            PaletteItem {
+                label: "rename".into(),
+                command: Command::RenameSession(String::new()),
+            },
+            PaletteItem {
+                label: "resume".into(),
+                command: Command::ResumeSessionPicker,
+            },
+        ],
+        "drawer" => vec![
+            PaletteItem {
+                label: "repo".into(),
+                command: Command::OpenDrawer(DrawerId::Repo),
+            },
+            PaletteItem {
+                label: "session".into(),
+                command: Command::OpenDrawer(DrawerId::Session),
+            },
+            PaletteItem {
+                label: "context".into(),
+                command: Command::OpenDrawer(DrawerId::Context),
+            },
+        ],
+        "mode" => {
+            let mut rows = vec![
+                PaletteItem {
+                    label: "reload".into(),
+                    command: Command::ReloadModes,
+                },
+                PaletteItem {
+                    label: "import".into(),
+                    command: Command::ModeImport(String::new()),
+                },
+                PaletteItem {
+                    label: "update".into(),
+                    command: Command::ModeUpdate(String::new()),
+                },
+            ];
+            rows.extend(
+                state
+                    .mode_names
+                    .iter()
+                    .filter(|n| n.as_str() != state.active_mode)
+                    .map(|n| PaletteItem {
+                        label: n.clone(),
+                        command: Command::SwitchMode(n.clone()),
+                    }),
+            );
+            rows
+        }
+        "companion" => vec![
+            PaletteItem {
+                label: "on".into(),
+                command: Command::CompanionEnable,
+            },
+            PaletteItem {
+                label: "off".into(),
+                command: Command::CompanionDisable,
+            },
+        ],
+        _ => vec![],
+    }
+}
+
+fn stage3_items(ns: &str, sub: &str, state: &ShellState) -> Vec<PaletteItem> {
+    match (ns, sub) {
+        ("session", "rename") => state
+            .sessions
+            .iter()
+            .map(|s| PaletteItem {
+                label: s.clone(),
+                command: Command::RenameSession(s.clone()),
+            })
+            .collect(),
+        ("mode", "update") => state
+            .mode_names
+            .iter()
+            .map(|n| PaletteItem {
+                label: n.clone(),
+                command: Command::ModeUpdate(n.clone()),
+            })
+            .collect(),
+        // Free-text args (delegate, mode import) — no completion list.
+        _ => vec![],
     }
 }
 
@@ -414,6 +578,107 @@ mod tests {
     fn direct_filter_typing_arg() {
         assert_eq!(direct_filter(":session rename fix"), "fix");
         assert_eq!(direct_filter(":session rename fix login"), "login");
+    }
+
+    fn shell_for_direct(query: &str) -> ShellState {
+        let mut s = ShellState::new();
+        s.overlay = crate::state::Overlay::Palette;
+        s.mode_names = vec!["Chat".into(), "Build".into()];
+        s.active_mode = "Chat".into();
+        s.sessions = vec!["fix 500".into(), "add auth".into()];
+        s.palette.query = query.into();
+        s
+    }
+
+    #[test]
+    fn direct_items_stage1_bare_colon() {
+        let s = shell_for_direct(":");
+        let items = direct_items(&s);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "session",
+                "drawer",
+                "mode",
+                "companion",
+                "delegate",
+                "config",
+                "q",
+                "quit",
+            ]
+        );
+    }
+
+    #[test]
+    fn direct_items_stage2_session() {
+        let s = shell_for_direct(":session ");
+        let items = direct_items(&s);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, vec!["new", "rename", "resume"]);
+    }
+
+    #[test]
+    fn direct_items_stage2_drawer() {
+        let s = shell_for_direct(":drawer ");
+        let items = direct_items(&s);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, vec!["repo", "session", "context"]);
+    }
+
+    #[test]
+    fn direct_items_stage2_mode_includes_subcommands_and_mode_names() {
+        let s = shell_for_direct(":mode ");
+        let items = direct_items(&s);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        // Subcommands first, then mode-name rows (excluding the active mode Chat).
+        assert_eq!(labels, vec!["reload", "import", "update", "Build"]);
+    }
+
+    #[test]
+    fn direct_items_stage2_companion() {
+        let s = shell_for_direct(":companion ");
+        let items = direct_items(&s);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, vec!["on", "off"]);
+    }
+
+    #[test]
+    fn direct_items_stage3_rename_shows_sessions() {
+        let s = shell_for_direct(":session rename ");
+        let items = direct_items(&s);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, vec!["fix 500", "add auth"]);
+    }
+
+    #[test]
+    fn direct_items_stage3_import_is_empty_free_text() {
+        let s = shell_for_direct(":mode import ");
+        assert!(direct_items(&s).is_empty());
+    }
+
+    #[test]
+    fn direct_items_stage3_delegate_is_empty_free_text() {
+        let s = shell_for_direct(":delegate ");
+        assert!(direct_items(&s).is_empty());
+    }
+
+    #[test]
+    fn direct_items_stage3_update_shows_mode_names() {
+        let s = shell_for_direct(":mode update ");
+        let items = direct_items(&s);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        // All mode_names shown (the pure layer doesn't filter by provenance).
+        assert_eq!(labels, vec!["Chat", "Build"]);
+    }
+
+    #[test]
+    fn direct_items_partial_command_word_still_stage1() {
+        let s = shell_for_direct(":se");
+        let items = direct_items(&s);
+        // Stage 1 — no trailing space yet, so we're still picking a namespace.
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"session"));
     }
 
     #[test]
