@@ -3652,6 +3652,7 @@ dependencies = [
  "eventsource-stream",
  "futures-util",
  "reqwest",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",

@@ -5,6 +5,8 @@ use crate::{CompletionRequest, MsgRole, ProviderEvent, Usage};
 use serde_json::{json, Value};
 use std::time::Duration;
 
+pub mod types;
+
 /// Default model when `$ZOID_MODEL` is unset (latest Claude Sonnet).
 pub const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
 
