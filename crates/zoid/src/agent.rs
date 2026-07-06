@@ -159,7 +159,9 @@ fn map_msg(m: ChatMsg) -> Message {
             tool_name: None,
             tool_call_id: None,
         },
-        ChatMsg::ToolResult { name, output, .. } => Message::tool(name, output),
+        ChatMsg::ToolResult { id, name, output, .. } => {
+            Message::tool_with_call_id(name, id, output)
+        }
         ChatMsg::Delegated { summary, .. } => Message {
             role: zoid_provider::MsgRole::Assistant,
             content: format!("[delegated subagent] {summary}"),
@@ -1882,5 +1884,56 @@ mod tests {
         .unwrap();
         assert!(out2.iter().any(|e| matches!(&e.kind, EventKind::TurnsReadmitted { ids } if ids.contains(&Ulid::from(1u128)))), "recall re-admits the evicted turn");
         assert!(out2.iter().any(|e| matches!(&e.kind, EventKind::ToolResult { name, output, .. } if name == "recall" && output.contains("zephyrbackend"))), "recall result carries content");
+    }
+}
+
+#[cfg(test)]
+mod tool_call_id_threading_tests {
+    use super::*;
+    use zoid_core::event::{Event, EventKind};
+    use zoid_provider::MsgRole;
+
+    #[test]
+    fn build_request_threads_tool_result_id_into_tool_call_id() {
+        let ts = 1700000000i64;
+        let events = crate::eventlog::EventLog::from_vec(vec![
+            Event::new(
+                Ulid::new(),
+                None,
+                ts,
+                EventKind::UserMessage { text: "hi".into() },
+            ),
+            Event::new(
+                Ulid::new(),
+                None,
+                ts,
+                EventKind::ToolCall {
+                    id: "call-7".into(),
+                    name: "read_file".into(),
+                    args: "{}".into(),
+                },
+            ),
+            Event::new(
+                Ulid::new(),
+                None,
+                ts,
+                EventKind::ToolResult {
+                    id: "call-7".into(),
+                    name: "read_file".into(),
+                    output: "ok".into(),
+                    is_error: false,
+                },
+            ),
+        ]);
+
+        let req = build_request(&events, "m", &[], "sys");
+
+        let tool_msg = req
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == MsgRole::Tool)
+            .expect("tool message should be present");
+        assert_eq!(tool_msg.tool_call_id.as_deref(), Some("call-7"));
     }
 }
