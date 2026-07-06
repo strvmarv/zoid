@@ -5,6 +5,7 @@
 
 pub mod anthropic;
 pub mod ollama;
+pub mod openai_compat;
 
 /// The shared model/provider catalog lives in the dependency-free `zoid-model`
 /// crate; re-exported here so `zoid_provider::model::…` keeps resolving for the
