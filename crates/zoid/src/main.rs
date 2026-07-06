@@ -1041,6 +1041,17 @@ struct App {
     /// Skills the `invoke_skill` tool can load; also rendered as the menu the
     /// active mode's system prompt advertises.
     skills: std::sync::Arc<zoid_core::skill::SkillRegistry>,
+    /// The URL import/update wizard state. `Some` while a wizard is in flight;
+    /// `None` otherwise. Gated into the turn's tool set in `spawn_turn`.
+    wizard: Option<zoid::mode_wizard::ModeImportWizard>,
+    /// The pending mode mapping + reply channel while the approval overlay is
+    /// up. `Some` from `ModeMappingApproval` until the user answers.
+    pending_mode_mapping:
+        Option<(zoid_core::wizard::ModeMapping, tokio::sync::oneshot::Sender<String>)>,
+    /// A deferred "Adjust" reply from the wizard approval overlay —
+    /// `answer_question` is sync and can't `.await` `session.append`, so it
+    /// stashes the event here for the main loop to flush at the top of `run`.
+    pending_adjust: Option<zoid_core::event::Event>,
     model: String,
     /// Economy config (spec §7.2), carried from `load_config()` so `run`'s
     /// per-frame `ContextPolicy` build (via `policy_from_config`) doesn't need
@@ -1279,6 +1290,9 @@ async fn main() -> Result<()> {
         base_profile,
         mode_dirs,
         skills,
+        wizard: None,
+        pending_mode_mapping: None,
+        pending_adjust: None,
         model,
         economy: config.economy,
         context_target,
@@ -1409,6 +1423,11 @@ where
     }
 
     loop {
+        if let Some(ev) = app.pending_adjust.take() {
+            app.session.append(ev.clone()).await.ok();
+            app.events.push(ev);
+            spawn_turn(app);
+        }
         // Latest git status from the background watcher (non-blocking read).
         {
             let (a, r, f) = *git_rx.borrow_and_update();
@@ -1739,6 +1758,76 @@ where
                         app.pending_answer = Some(reply);
                     }
                     AgentUpdate::ModelsFetched { provider, models } => {
+                        if provider == "__wizard_error__" {
+                            if let Some(msg) = models.first() {
+                                app.shell.status_hint = Some(msg.clone());
+                            }
+                            continue;
+                        }
+                        if provider == "__wizard_scan__" {
+                            if let Some(json) = models.first() {
+                                if let Ok(scan) =
+                                    serde_json::from_str::<zoid_core::wizard::UpstreamScan>(json)
+                                {
+                                    app.wizard =
+                                        Some(zoid::mode_wizard::ModeImportWizard::new_import(scan));
+                                    app.shell.status_hint = Some(
+                                        "Import wizard started. Ask the model to propose a mapping.".into(),
+                                    );
+                                    let ts = now_ms();
+                                    let seed_event = zoid_core::event::Event::new(
+                                        ulid::Ulid::new(),
+                                        None,
+                                        ts,
+                                        zoid_core::event::EventKind::UserMessage {
+                                            text: "Import wizard started. Call propose_mode_mapping \
+                                                to see the upstream scan, then call apply_mode_mapping \
+                                                with your proposed mapping onto the canonical contract."
+                                                .into(),
+                                        },
+                                    );
+                                    app.session.append(seed_event.clone()).await.ok();
+                                    app.events.push(seed_event);
+                                    spawn_turn(app);
+                                }
+                            }
+                            continue;
+                        }
+                        if provider == "__wizard_update__" {
+                            let mut iter = models.into_iter();
+                            let scan_json = iter.next().unwrap_or_default();
+                            let brief = iter.next().unwrap_or_default();
+                            let target = iter.next().unwrap_or_default();
+                            if let Ok(scan) =
+                                serde_json::from_str::<zoid_core::wizard::UpstreamScan>(&scan_json)
+                            {
+                                app.wizard =
+                                    Some(zoid::mode_wizard::ModeImportWizard::new_update(
+                                        scan,
+                                        target,
+                                        brief,
+                                    ));
+                                app.shell.status_hint = Some(
+                                    "Update wizard started. Ask the model to propose a merged mapping.".into(),
+                                );
+                                let ts = now_ms();
+                                let seed_event = zoid_core::event::Event::new(
+                                    ulid::Ulid::new(),
+                                    None,
+                                    ts,
+                                    zoid_core::event::EventKind::UserMessage {
+                                        text: "Update wizard started. Call propose_mode_mapping \
+                                            to see the reconciliation brief, then call \
+                                            apply_mode_mapping with your merged mapping."
+                                            .into(),
+                                    },
+                                );
+                                app.session.append(seed_event.clone()).await.ok();
+                                app.events.push(seed_event);
+                                spawn_turn(app);
+                            }
+                            continue;
+                        }
                         // At most one surface acts: the config picker guards on
                         // the active provider, the quick-switch on its highlight.
                         apply_switch_models_fetched(app, provider.clone(), models.clone());
@@ -1762,19 +1851,14 @@ where
                             app.shell.cache_supported = info.prompt_cache;
                         }
                     }
-                    // The model proposed a mode mapping via `apply_mode_mapping`.
-                    // The wizard UI (a later task) raises an approval overlay and
-                    // routes the user's decision back through `reply`. Until that
-                    // UI lands, log + drop `reply`, which the loop interprets as an
-                    // abort (turn ends with a cancel).
                     AgentUpdate::ModeMappingApproval { mapping, summary, reply } => {
-                        tracing::warn!(
-                            "ModeMappingApproval received but no wizard UI wired yet \
-                            (mode='{}', summary='{}'); dropping reply (turn aborts)",
-                            mapping.mode_name,
-                            summary
-                        );
-                        let _ = reply;
+                        app.pending_mode_mapping = Some((mapping, reply));
+                        app.shell.question =
+                            Some(zoid_tui::question::QuestionState::new(
+                                summary,
+                                vec!["Approve".into(), "Reject".into(), "Adjust".into()],
+                            ));
+                        app.shell.overlay = zoid_tui::state::Overlay::Question;
                     }
                 }
             }
@@ -2871,6 +2955,74 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
 /// overlay. A no-op if the channel was already consumed/dropped (e.g. a
 /// double-fire race), matching the other overlay-close handlers' style.
 fn answer_question(app: &mut App, ans: zoid::agent::Answer) {
+    if let Some((mapping, tx)) = app.pending_mode_mapping.take() {
+        match &ans {
+            zoid::agent::Answer::Choice(c) if c == "Approve" => {
+                let cfg_dir = resolve_config_dir(|k| std::env::var(k).ok());
+                let dest = cfg_dir
+                    .join("modes")
+                    .join(zoid::mode_wizard::slugify(&mapping.mode_name));
+                let scan = app
+                    .wizard
+                    .as_ref()
+                    .expect("wizard open during approval")
+                    .scan
+                    .clone();
+                let fetched_at = chrono::Utc::now().to_rfc3339();
+                match zoid::mode_wizard::materialize(&mapping, &scan, &dest, &fetched_at) {
+                    Ok(_) => {
+                        let prev = app.modes.active_name().to_string();
+                        app.modes = zoid::mode_import::build_mode_registry(
+                            &app.base_profile,
+                            &app.mode_dirs,
+                        );
+                        app.modes.set_active(&prev);
+                        sync_mode_mirror(app);
+                        app.wizard = None;
+                        app.shell.status_hint = Some(format!(
+                            "imported '{}' — Shift+Tab to it",
+                            mapping.mode_name
+                        ));
+                        let _ = tx.send("Approve".to_string());
+                    }
+                    Err(e) => {
+                        app.shell.status_hint = Some(format!(
+                            "materialize failed: {}. Re-run :mode import to retry.",
+                            e.problems.join("; ")
+                        ));
+                        app.wizard = None;
+                        let _ = tx.send("Reject".to_string());
+                    }
+                }
+            }
+            zoid::agent::Answer::Choice(c) if c == "Reject" => {
+                app.wizard = None;
+                app.shell.status_hint = Some("import cancelled".into());
+                let _ = tx.send("Reject".to_string());
+            }
+            zoid::agent::Answer::Choice(_) | zoid::agent::Answer::FreeText(_) => {
+                let text = match ans {
+                    zoid::agent::Answer::Choice(s) | zoid::agent::Answer::FreeText(s) => s,
+                    zoid::agent::Answer::LetYouDecide => "[let you decide]".into(),
+                };
+                let ts = now_ms();
+                let ev = zoid_core::event::Event::new(
+                    ulid::Ulid::new(),
+                    None,
+                    ts,
+                    zoid_core::event::EventKind::UserMessage { text },
+                );
+                app.pending_adjust = Some(ev);
+                let _ = tx.send("Adjust".to_string());
+            }
+            zoid::agent::Answer::LetYouDecide => {
+                let _ = tx.send("Approve".to_string());
+            }
+        }
+        app.shell.question = None;
+        app.shell.overlay = zoid_tui::state::Overlay::None;
+        return;
+    }
     if let Some(tx) = app.pending_answer.take() {
         let _ = tx.send(ans);
     }
@@ -2947,6 +3099,121 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             app.modes = zoid::mode_import::build_mode_registry(&app.base_profile, &app.mode_dirs);
             app.modes.set_active(&prev); // preserve by name; no-op ⇒ Chat
             sync_mode_mirror(app);
+            Ok(false)
+        }
+        Command::ModeImport(url) => {
+            if url.trim().is_empty() {
+                app.shell.status_hint = Some("usage: :mode import <github-url>".into());
+                return Ok(false);
+            }
+            app.wizard = None;
+            app.shell.status_hint = Some(format!("fetching {url}…"));
+            let parsed = match zoid::github_fetch::parse_github_url(&url) {
+                Ok(p) => p,
+                Err(e) => {
+                    app.shell.status_hint = Some(e);
+                    return Ok(false);
+                }
+            };
+            let ui_tx = app.ui_tx.clone();
+            tokio::spawn(async move {
+                let api = zoid::github_fetch::HttpGithubApi::new();
+                let scan = match zoid::github_fetch::fetch_tree(&api, &parsed).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let _ = ui_tx
+                            .send(zoid::agent::AgentUpdate::ModelsFetched {
+                                provider: "__wizard_error__".into(),
+                                models: vec![format!("fetch failed: {e}")],
+                            })
+                            .await;
+                        return;
+                    }
+                };
+                let _ = ui_tx
+                    .send(zoid::agent::AgentUpdate::ModelsFetched {
+                        provider: "__wizard_scan__".into(),
+                        models: vec![serde_json::to_string(&scan).unwrap_or_default()],
+                    })
+                    .await;
+            });
+            Ok(false)
+        }
+        Command::ModeUpdate(name) => {
+            if name.trim().is_empty() {
+                app.shell.status_hint = Some("usage: :mode update <name>".into());
+                return Ok(false);
+            }
+            let cfg_dir = resolve_config_dir(|k| std::env::var(k).ok());
+            let slug = zoid::mode_wizard::slugify(&name);
+            let mode_dir = cfg_dir.join("modes").join(&slug);
+            let sidecar_path = mode_dir.join(".zoid-provenance.json");
+            if !sidecar_path.is_file() {
+                app.shell.status_hint = Some(format!(
+                    "mode '{name}' has no import provenance; it was not imported from a URL. Use :mode import <url> instead."
+                ));
+                return Ok(false);
+            }
+            let sidecar_text = match std::fs::read_to_string(&sidecar_path) {
+                Ok(t) => t,
+                Err(e) => {
+                    app.shell.status_hint = Some(format!("read sidecar: {e}"));
+                    return Ok(false);
+                }
+            };
+            let old: zoid_core::wizard::ProvenanceFile = match serde_json::from_str(&sidecar_text) {
+                Ok(p) => p,
+                Err(e) => {
+                    app.shell.status_hint = Some(format!("parse sidecar: {e}"));
+                    return Ok(false);
+                }
+            };
+            let url = format!(
+                "https://github.com/{}/tree/{}/{}",
+                old.source.repo, old.source.ref_, old.source.subtree_path
+            );
+            let parsed = match zoid::github_fetch::parse_github_url(&url) {
+                Ok(p) => p,
+                Err(e) => {
+                    app.shell.status_hint = Some(e);
+                    return Ok(false);
+                }
+            };
+            app.shell.status_hint =
+                Some(format!("fetching upstream at ref {}…", old.source.ref_));
+            let ui_tx = app.ui_tx.clone();
+            let mode_dir_clone = mode_dir.clone();
+            let old_clone = old.clone();
+            tokio::spawn(async move {
+                let api = zoid::github_fetch::HttpGithubApi::new();
+                let scan = match zoid::github_fetch::fetch_tree(&api, &parsed).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let _ = ui_tx
+                            .send(zoid::agent::AgentUpdate::ModelsFetched {
+                                provider: "__wizard_error__".into(),
+                                models: vec![format!("fetch failed: {e}")],
+                            })
+                            .await;
+                        return;
+                    }
+                };
+                let brief = zoid::mode_wizard::build_reconciliation_brief(
+                    &mode_dir_clone,
+                    &old_clone,
+                    &scan,
+                );
+                let _ = ui_tx
+                    .send(zoid::agent::AgentUpdate::ModelsFetched {
+                        provider: "__wizard_update__".into(),
+                        models: vec![
+                            serde_json::to_string(&scan).unwrap_or_default(),
+                            brief,
+                            old_clone.mode_name.clone(),
+                        ],
+                    })
+                    .await;
+            });
             Ok(false)
         }
         Command::OpenDrawer(id) => {
@@ -3171,9 +3438,13 @@ fn spawn_turn(app: &mut App) {
     let (profile, effective) =
         zoid_core::mode::active_turn(&app.modes, &app.skills, &app.base_profile);
     let menu = effective.menu();
-    let tools = std::sync::Arc::new(zoid::invoke_skill::chat_tools(std::sync::Arc::new(
-        effective,
-    )));
+    let mut tools = zoid::invoke_skill::chat_tools(std::sync::Arc::new(effective));
+    if let Some(wiz) = &app.wizard {
+        let wiz = std::sync::Arc::new(wiz.clone());
+        tools.push(Box::new(zoid::mode_wizard::ProposeModeMappingTool::new(wiz.clone())));
+        tools.push(Box::new(zoid::mode_wizard::ApplyModeMappingTool::new(wiz)));
+    }
+    let tools = std::sync::Arc::new(tools);
     let mut turn_config = zoid::agent::chat_turn_config_with(&profile, &menu);
     turn_config.policy = policy_from_config(&app.economy, app.context_target);
     turn_config.eviction = zoid_core::eviction::EvictionPolicy {
@@ -3695,6 +3966,9 @@ mod tests {
             )]),
             mode_dirs: Vec::new(),
             skills: std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            wizard: None,
+            pending_mode_mapping: None,
+            pending_adjust: None,
             model: "test-model".into(),
             economy: zoid_core::config::EconomyConfig::default(),
             context_target: 384_000,

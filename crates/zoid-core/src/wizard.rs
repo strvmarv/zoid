@@ -4,10 +4,12 @@
 //! pure — no FS/network deps. Provenance serde + `classify_update` live here
 //! too (Tasks 2-3).
 
+use serde::{Deserialize, Serialize};
+
 /// One file fetched from upstream at scan time. `content` is the raw bytes
 /// decoded as UTF-8 (lossy); `sha` is the GitHub blob SHA (stable identity
 /// across ref moves).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScannedFile {
     pub upstream_path: String,
     pub sha: String,
@@ -17,7 +19,7 @@ pub struct ScannedFile {
 /// The scanned tree the wizard holds in `App` state. `resolved_ref` is the
 /// commit SHA at scan time, so an update can re-fetch at the same ref and
 /// compare SHAs apples-to-apples.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpstreamScan {
     pub url: String,
     pub repo: String,
@@ -89,8 +91,6 @@ impl ModeMapping {
             .collect()
     }
 }
-
-use serde::{Deserialize, Serialize};
 
 /// One entry in the per-mode provenance sidecar. Read at update time to
 /// classify each canonical file against a fresh upstream fetch.

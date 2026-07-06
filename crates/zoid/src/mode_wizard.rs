@@ -22,6 +22,7 @@ use zoid_tools::{Tool, ToolKind, ToolOutput};
 pub struct ModeImportWizard {
     pub scan: UpstreamScan,
     pub mode_name_target: Option<String>,
+    pub reconciliation_brief: Option<String>,
 }
 
 impl ModeImportWizard {
@@ -29,13 +30,15 @@ impl ModeImportWizard {
         Self {
             scan,
             mode_name_target: None,
+            reconciliation_brief: None,
         }
     }
 
-    pub fn new_update(scan: UpstreamScan, target: String) -> Self {
+    pub fn new_update(scan: UpstreamScan, target: String, brief: String) -> Self {
         Self {
             scan,
             mode_name_target: Some(target),
+            reconciliation_brief: Some(brief),
         }
     }
 }
@@ -308,7 +311,11 @@ impl Tool for ProposeModeMappingTool {
     }
 
     fn run(&self, _args: &Value, _cwd: &Path) -> ToolOutput {
-        ToolOutput::ok(render_scan(&self.wizard.scan))
+        if let Some(brief) = &self.wizard.reconciliation_brief {
+            ToolOutput::ok(brief.clone())
+        } else {
+            ToolOutput::ok(render_scan(&self.wizard.scan))
+        }
     }
 }
 
@@ -324,6 +331,48 @@ fn render_scan(scan: &UpstreamScan) -> String {
             f.upstream_path, f.sha, f.content
         ));
     }
+    s
+}
+
+/// Build the human-readable reconciliation brief for the update flow. Reads
+/// the old sidecar + the on-disk canonical files, classifies each against the
+/// fresh scan, and returns a text block the model reads via
+/// `propose_mode_mapping`. Effectful (FS reads) — called by the bin at
+/// wizard-open time.
+pub fn build_reconciliation_brief(
+    mode_dir: &Path,
+    old_sidecar: &zoid_core::wizard::ProvenanceFile,
+    fresh_scan: &UpstreamScan,
+) -> String {
+    let mut s = format!(
+        "Update reconciliation for mode '{}' (fresh scan: {} files):\n\n",
+        old_sidecar.mode_name,
+        fresh_scan.files.len()
+    );
+    for entry in &old_sidecar.files {
+        let local = std::fs::read_to_string(mode_dir.join(&entry.canonical_path))
+            .unwrap_or_default();
+        let class = zoid_core::wizard::classify_update(entry, &local, fresh_scan);
+        s.push_str(&format!(
+            "- {} (upstream {}): {}\n",
+            entry.canonical_path, entry.upstream_path, class
+        ));
+    }
+    let old_paths: std::collections::HashSet<&str> =
+        old_sidecar.files.iter().map(|f| f.upstream_path.as_str()).collect();
+    for f in &fresh_scan.files {
+        if !old_paths.contains(f.upstream_path.as_str()) {
+            s.push_str(&format!(
+                "- (new upstream) {}: upstream added\n",
+                f.upstream_path
+            ));
+        }
+    }
+    s.push_str(
+        "\nPropose a merged mapping: carry unchanged, re-materialize \
+         upstream-moved (if local untouched), keep local-only-changed, decide \
+         for both-changed, add new-upstream, drop or keep upstream-deleted.",
+    );
     s
 }
 
