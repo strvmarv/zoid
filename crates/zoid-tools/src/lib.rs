@@ -49,6 +49,11 @@ pub enum ToolKind {
     Local,
     Emitting,
     Interactive,
+    /// A tool that requires user approval before its effect lands (e.g.
+    /// `apply_mode_mapping`). The agent loop intercepts it by name, raises a
+    /// UI approval prompt, and parks until the user answers. `run()` is never
+    /// called; the loop emits the tool result from the approval outcome.
+    Approving,
 }
 
 /// A callable tool. `spec()` is sent to the provider; `run()` executes it.
@@ -206,5 +211,12 @@ mod tests {
                 t.name()
             );
         }
+    }
+
+    #[test]
+    fn approving_variant_exists_and_is_distinct() {
+        assert_ne!(ToolKind::Approving, ToolKind::Local);
+        assert_ne!(ToolKind::Approving, ToolKind::Emitting);
+        assert_ne!(ToolKind::Approving, ToolKind::Interactive);
     }
 }
