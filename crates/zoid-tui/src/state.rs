@@ -235,6 +235,12 @@ pub struct ShellState {
     /// question is pending (Task 11 renders it; Task 9 populates it via
     /// `AgentUpdate::AskUser`).
     pub question: Option<crate::question::QuestionState>,
+    /// Whether this is a first-time user (no prior session history for this repo
+    /// at boot). Set once at boot from `sessions.is_empty()`, never changes
+    /// during a session. Drives the empty-state onboarding copy vs. the
+    /// "welcome back" hint. Defaults `false` so tests and examples that don't
+    /// set it get the returning-user state (no onboarding copy in snapshots).
+    pub first_time_user: bool,
     /// Highlighted row in the quick-switch overlay's provider list (Task 11
     /// renders it; Task 10 only plumbs the state through).
     pub switch_provider_sel: usize,
@@ -326,6 +332,7 @@ impl ShellState {
             config_picker_sel: 0,
             active_tool: None,
             question: None,
+            first_time_user: false,
             switch_provider_sel: 0,
             switch_model_sel: 0,
             switch_pane: SwitchPane::Provider,
@@ -604,6 +611,14 @@ mod tests {
     #[test]
     fn new_has_no_status_hint() {
         assert!(ShellState::new().status_hint.is_none());
+    }
+
+    #[test]
+    fn first_time_user_defaults_false() {
+        assert!(
+            !ShellState::new().first_time_user,
+            "first_time_user must default to false so tests/examples don't show onboarding"
+        );
     }
 
     #[test]
