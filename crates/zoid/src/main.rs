@@ -1148,6 +1148,14 @@ struct App {
     /// The state hub feeding the companion. Always present (cheap); the server is
     /// the optional part. `is_enabled()` gates snapshot publishing and `show`.
     companion_hub: std::sync::Arc<zoid_companion::CompanionHub>,
+    /// When the current compaction phase started (for the 3s minimum-display
+    /// debounce). `None` when no compaction is in flight or the debounce has
+    /// cleared. Set by `AgentUpdate::CompactionStarted`; cleared by the
+    /// per-frame debounce check after `CompactionComplete` + 3s elapsed.
+    compaction_started_at: Option<std::time::Instant>,
+    /// `CompactionComplete` arrived; the indicator stays visible until the 3s
+    /// minimum display duration elapses (checked per-frame in `run()`).
+    compaction_complete: bool,
 }
 
 impl App {
@@ -1342,6 +1350,8 @@ async fn main() -> Result<()> {
         fetched_model_info: None,
         companion: None,
         companion_hub: zoid_companion::CompanionHub::new(),
+        compaction_started_at: None,
+        compaction_complete: false,
     };
 
     // Restore the resumed session's persisted active mode (a no-op if that mode
@@ -1618,6 +1628,21 @@ where
             zoid_tui::tokens::glyph::SPINNER.len(),
             app.shell.reduced_motion,
         )];
+        app.shell.compact_spinner = zoid_tui::tokens::glyph::COMPACT_SPINNER
+            [zoid_tui::motion::spinner_frame(elapsed, 120, 6, app.shell.reduced_motion)];
+        // Debounce: if CompactionComplete arrived, keep the indicator visible
+        // until 3s have elapsed since CompactionStarted. The motion tick guard
+        // wakes while `compacting` is true, so this timer drains without an
+        // extra wake source.
+        if app.compaction_complete {
+            if let Some(start) = app.compaction_started_at {
+                if start.elapsed() >= std::time::Duration::from_secs(3) {
+                    app.shell.compacting = false;
+                    app.compaction_complete = false;
+                    app.compaction_started_at = None;
+                }
+            }
+        }
 
         let frame_start = std::time::Instant::now();
         terminal.draw(|f| {
@@ -1894,9 +1919,20 @@ where
                             app.shell.cache_supported = info.prompt_cache;
                         }
                     }
+                    AgentUpdate::CompactionStarted => {
+                        app.shell.compacting = true;
+                        app.compaction_started_at = Some(std::time::Instant::now());
+                        app.compaction_complete = false;
+                    }
+                    AgentUpdate::CompactionComplete => {
+                        app.compaction_complete = true;
+                        // Don't clear app.shell.compacting here — the per-frame
+                        // debounce check clears it once the 3s minimum has
+                        // elapsed.
+                    }
                 }
             }
-            _ = motion_tick.tick(), if app.streaming || app.delegating || app.zoom_changed_at.is_some() => {
+            _ = motion_tick.tick(), if app.streaming || app.delegating || app.shell.compacting || app.zoom_changed_at.is_some() => {
                 // Wake to redraw the blinking caret or the activity spinner (which
                 // animates while streaming OR delegating). Zoom is instant now (the
                 // reveal animation was retired for cross-zoom anchoring), so
@@ -4108,6 +4144,8 @@ mod tests {
             fetched_model_info: None,
             companion: None,
             companion_hub: zoid_companion::CompanionHub::new(),
+            compaction_started_at: None,
+            compaction_complete: false,
         }
     }
 
