@@ -77,6 +77,11 @@ pub fn plan_compactions<'a>(
         .iter()
         .filter_map(|e| match &e.kind {
             EventKind::ToolResultCompacted { id, .. } => Some(id.as_str()),
+            EventKind::QuestionAsked { .. } | EventKind::QuestionAnswered { .. } => {
+                // The card is a paired record; preserve both halves so the
+                // conversation view still renders the Q&A inline after compaction.
+                None
+            }
             _ => None,
         })
         .collect();
