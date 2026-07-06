@@ -837,8 +837,8 @@ pub async fn fetch_tree(
         // Fetch raw content via the raw.githubusercontent.com URL derived from
         // owner/repo/ref/path (avoids a second API call per blob).
         let raw_url = format!(
-            "https://raw.githubusercontent.com/{}/{}/{ref_}/{path}",
-            url.owner, url.repo
+            "https://raw.githubusercontent.com/{}/{}/{}/{path}",
+            url.owner, url.repo, url.ref_
         );
         let content = api.fetch_blob_content(&raw_url).await?;
         files.push(ScannedFile {
@@ -1098,10 +1098,12 @@ pub fn materialize(
         problems.push("mode name 'default' collides with the Chat floor".into());
     }
 
-    // Validate entries: parse every proposed SKILL.md/mode.md, dedupe paths,
-    // check sources exist.
+    // Validate entries: parse every proposed SKILL.md (sibling files are
+    // verbatim payload), dedupe paths, check sources exist. NOTE: `mode.md` is
+    // SYNTHESIZED from the mapping's mode fields (Task 6 write step), so we
+    // don't parse-check its source — we parse-check the synthesized content
+    // after building it would be redundant since we control the frontmatter.
     let mut seen_paths: Vec<String> = Vec::new();
-    let mut has_mode_md = false;
     for entry in &mapping.entries {
         match entry {
             MappingEntry::Materialize {
@@ -1114,8 +1116,12 @@ pub fn materialize(
                     continue;
                 }
                 seen_paths.push(canonical_path.clone());
-                if canonical_path == "mode.md" {
-                    has_mode_md = true;
+                // mode.md is synthesized from mapping fields; its source still
+                // must exist in the scan (the body may be derived from it), but
+                // we don't parse-check the source content.
+                let require_parse = canonical_path.ends_with("SKILL.md") && canonical_path != "mode.md";
+                if canonical_path == "mode.md" && mapping.mode_name.is_empty() {
+                    problems.push("mode.md entry but mode_name is empty".into());
                 }
                 let Some(file) = scan.files.iter().find(|f| f.upstream_path == *source) else {
                     problems.push(format!(
@@ -1123,9 +1129,7 @@ pub fn materialize(
                     ));
                     continue;
                 };
-                // Validate parse only for SKILL.md / mode.md (sibling files
-                // are verbatim payload).
-                if canonical_path.ends_with("SKILL.md") || canonical_path == "mode.md" {
+                if require_parse {
                     if let Err(reason) = parse_skill_md(&file.content) {
                         problems.push(format!(
                             "proposed '{canonical_path}' (from {source}) fails parse: {reason}"
@@ -1150,11 +1154,6 @@ pub fn materialize(
         else {
             continue;
         };
-        let file = scan
-            .files
-            .iter()
-            .find(|f| f.upstream_path == *source)
-            .expect("validated above");
         let dest = dest_dir.join(canonical_path);
         if let Some(parent) = dest.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
@@ -1165,7 +1164,29 @@ pub fn materialize(
                 )));
             }
         }
-        if let Err(e) = std::fs::write(&dest, &file.content) {
+        // The content to write: for `mode.md`, SYNTHESIZE from the mapping's
+        // mode fields (spec §6 — the mode manifest is composed from
+        // mode_name/mode_description/mode_body, not copied from the source).
+        // For all other paths, copy the source file's content verbatim.
+        let content: String = if canonical_path == "mode.md" {
+            let mut s = String::new();
+            s.push_str("---\n");
+            s.push_str(&format!("name: {}\n", mapping.mode_name));
+            if !mapping.mode_description.is_empty() {
+                s.push_str(&format!("description: {}\n", mapping.mode_description));
+            }
+            s.push_str("---\n");
+            s.push_str(&mapping.mode_body);
+            s
+        } else {
+            let file = scan
+                .files
+                .iter()
+                .find(|f| f.upstream_path == *source)
+                .expect("validated above");
+            file.content.clone()
+        };
+        if let Err(e) = std::fs::write(&dest, &content) {
             rollback(&written);
             return Err(MaterializeError::one(format!(
                 "write {}: {e}",
@@ -1215,12 +1236,29 @@ fn build_sidecar(mapping: &ModeMapping, scan: &UpstreamScan, fetched_at: &str) -
                 ..
             } => {
                 let f = scan.files.iter().find(|f| f.upstream_path == *source)?;
+                // For mode.md, the snapshot is the SYNTHESIZED content (what
+                // we wrote), not the source's raw content — so a later
+                // `classify_update` sees `local == snapshot` when the user
+                // hasn't edited. For other paths, it's the verbatim source.
+                let snapshot: String = if canonical_path == "mode.md" {
+                    let mut s = String::new();
+                    s.push_str("---\n");
+                    s.push_str(&format!("name: {}\n", mapping.mode_name));
+                    if !mapping.mode_description.is_empty() {
+                        s.push_str(&format!("description: {}\n", mapping.mode_description));
+                    }
+                    s.push_str("---\n");
+                    s.push_str(&mapping.mode_body);
+                    s
+                } else {
+                    f.content.clone()
+                };
                 Some(ProvenanceEntry {
                     canonical_path: canonical_path.clone(),
                     upstream_path: source.clone(),
                     upstream_sha: f.sha.clone(),
                     upstream_ref: scan.resolved_ref.clone(),
-                    upstream_snapshot: f.content.clone(),
+                    upstream_snapshot: snapshot,
                 })
             }
             MappingEntry::Skip { .. } => None,
@@ -1820,7 +1858,7 @@ fn scan() -> UpstreamScan {
 
 #[tokio::test]
 async fn apply_mode_mapping_raises_approval_and_approve_emits_tool_result() {
-    let provider = Arc::new(ScriptedProvider {
+    let provider: Arc<dyn Provider> = Arc::new(ScriptedProvider {
         turns: Mutex::new(std::collections::VecDeque::from(vec![
             vec![
                 zoid_testkit::tool_call(
@@ -2114,7 +2152,7 @@ In the test `App` construction (~line 3679, near `mode_dirs: Vec::new(),`), add:
 
 - [ ] **Step 4: Add the `ModeImport` handler**
 
-In `crates/zoid/src/main.rs`, in the `apply_command` function (after the `Command::ReloadModes` arm, ~line 2937), add:
+In `crates/zoid/src/main.rs`, in the `exec_command` function (after the `Command::ReloadModes` arm, ~line 2937), add:
 
 ```rust
         Command::ModeImport(url) => {
@@ -2133,31 +2171,29 @@ In `crates/zoid/src/main.rs`, in the `apply_command` function (after the `Comman
                     return Ok(false);
                 }
             };
-            let provider = app.provider.clone();
             let ui_tx = app.ui_tx.clone();
-            let url_for_err = url.clone();
             tokio::spawn(async move {
                 let api = zoid::github_fetch::HttpGithubApi::new();
                 let scan = match zoid::github_fetch::fetch_tree(&api, &parsed).await {
                     Ok(s) => s,
                     Err(e) => {
+                        // Signal the failure via the sentinel so the main loop
+                        // surfaces it as a status hint (not a silent drop).
                         let _ = ui_tx.send(zoid::agent::AgentUpdate::ModelsFetched {
-                            provider: String::new(),
+                            provider: format!("__wizard_error__"),
                             models: vec![format!("fetch failed: {e}")],
                         }).await;
                         return;
                     }
                 };
                 // Stash the scan and spawn a turn. We can't move `app` into
-                // the task, so we send a dedicated UI message the main loop
-                // recognizes. For simplicity in v1, we re-use the status hint
-                // channel: the main loop polls `wizard` state on the next
-                // frame. See Step 5 for the receive path.
+                // the task, so we signal via the sentinel; the main loop
+                // recognizes it, deserializes the scan, sets `app.wizard`,
+                // pushes the seed user message, and calls `spawn_turn`.
                 let _ = ui_tx.send(zoid::agent::AgentUpdate::ModelsFetched {
                     provider: format!("__wizard_scan__"),
                     models: vec![serde_json::to_string(&scan).unwrap_or_default()],
                 }).await;
-                let _ = url_for_err;
             });
             Ok(false)
         }
@@ -2166,7 +2202,9 @@ In `crates/zoid/src/main.rs`, in the `apply_command` function (after the `Comman
                 app.shell.status_hint = Some("usage: :mode update <name>".into());
                 return Ok(false);
             }
-            app.shell.status_hint = Some(format!("update wizard for '{name}' not yet fully wired (provenance read + re-fetch pending)"));
+            // Full update wiring (read sidecar, re-fetch, classify, build
+            // brief, open wizard) is in Task 15. This stub is replaced there.
+            app.shell.status_hint = Some(format!("update wizard for '{name}' — see Task 15"));
             Ok(false)
         }
 ```
@@ -2179,6 +2217,14 @@ In `crates/zoid/src/main.rs`, in the UI update handler (the `AgentUpdate::Models
 
 ```rust
                     AgentUpdate::ModelsFetched { provider, models } => {
+                        if provider == "__wizard_error__" {
+                            // The import fetch failed; surface the error as a
+                            // status hint and clear the "fetching…" hint.
+                            if let Some(msg) = models.first() {
+                                app.shell.status_hint = Some(msg.clone());
+                            }
+                            continue;
+                        }
                         if provider == "__wizard_scan__" {
                             // The import fetch completed; deserialize the scan
                             // and open the wizard.
@@ -2221,7 +2267,7 @@ In `crates/zoid/src/main.rs`, in the UI update handler (the `AgentUpdate::Models
                         // ... existing ModelsFetched handling continues here ...
 ```
 
-> **Implementer note:** the `return Ok(false)` inside the sentinel branch short-circuits the rest of the `ModelsFetched` arm. If your tree's arm shape differs (e.g. it's not in `apply_command` but in the UI loop), adapt the early-return to match — the integration test in Task 13 will catch a miss.
+> **Implementer note:** the `continue` inside the sentinel branch short-circuits the rest of the `ModelsFetched` arm in the UI loop (the `while let Some(upd) = ui_rx.recv().await` loop in `run()`, not `exec_command`). If your tree's arm shape differs, adapt the early-return to match — the integration test in Task 13 will catch a miss.
 
 - [ ] **Step 6: Build to verify it compiles**
 
@@ -2395,14 +2441,16 @@ fn answer_question(app: &mut App, ans: zoid::agent::Answer) {
 }
 ```
 
-Add the `pending_adjust: Option<Event>` field to `App` (init `None`), and in the main loop's frame setup (before `spawn_turn` calls), add:
+Add the `pending_adjust: Option<Event>` field to `App` (init `None`), and in the main loop's `run()` — at the top of the `loop {}`, before the `tokio::select!` (`main.rs:1643`), add:
 
 ```rust
-    if let Some(ev) = app.pending_adjust.take() {
-        app.session.append(ev.clone()).await.ok();
-        app.events.push(ev);
-        spawn_turn(app);
-    }
+        // Flush a deferred adjust reply from the wizard approval overlay
+        // (answer_question is sync and can't `.await` session.append).
+        if let Some(ev) = app.pending_adjust.take() {
+            app.session.append(ev.clone()).await.ok();
+            app.events.push(ev);
+            spawn_turn(app);
+        }
 ```
 
 > **Implementer note:** `answer_question` is sync but `session.append` is async. The `pending_adjust` flag + main-loop flush is the v1 bridge (mirrors how other sync handlers defer async work). If your tree has an async answer path, inline the `.await` there instead.
@@ -2503,7 +2551,7 @@ fn scan() -> UpstreamScan {
 
 #[tokio::test]
 async fn import_wizard_approve_materializes_and_loads() {
-    let provider = Arc::new(ScriptedProvider {
+    let provider: Arc<dyn Provider> = Arc::new(ScriptedProvider {
         turns: Mutex::new(std::collections::VecDeque::from(vec![
             vec![
                 zoid_testkit::tool_call(
@@ -2808,7 +2856,325 @@ git commit -m "feat(zoid): materialize file-set reconciliation (delete dropped) 
 
 ---
 
-## Task 15: Real-model go/no-go smoke runbook (`docs/superpowers/runbooks/2026-07-05-url-import-wizard-smoke.md`)
+## Task 15: Update wiring — `ModeUpdate` handler + reconciliation brief (`zoid/src/main.rs` + `mode_wizard.rs`)
+
+**Files:**
+- Modify: `crates/zoid/src/mode_wizard.rs` — `ModeImportWizard.reconciliation_brief: Option<String>` + `ProposeModeMappingTool` returns it when present.
+- Modify: `crates/zoid/src/main.rs` — replace the `ModeUpdate` stub (Task 11) with the full handler: read sidecar, re-fetch at original ref, classify, build brief, open wizard.
+
+**Interfaces:**
+- Consumes: `ProvenanceFile`, `classify_update`, `fetch_tree`, `parse_github_url`.
+- Produces: a working `:mode update <name>` that opens the wizard with a reconciliation brief.
+
+- [ ] **Step 1: Add `reconciliation_brief` to `ModeImportWizard`**
+
+In `crates/zoid/src/mode_wizard.rs`, add a field to `ModeImportWizard`:
+
+```rust
+#[derive(Debug, Clone)]
+pub struct ModeImportWizard {
+    pub scan: UpstreamScan,
+    pub mode_name_target: Option<String>,
+    /// Pre-computed reconciliation brief for the update flow. `None` for
+    /// import. When `Some`, `ProposeModeMappingTool` returns this instead of
+    /// the raw scan.
+    pub reconciliation_brief: Option<String>,
+}
+```
+
+Update `new_import` to set `reconciliation_brief: None`. Add `new_update`:
+
+```rust
+impl ModeImportWizard {
+    pub fn new_import(scan: UpstreamScan) -> Self {
+        Self {
+            scan,
+            mode_name_target: None,
+            reconciliation_brief: None,
+        }
+    }
+
+    pub fn new_update(scan: UpstreamScan, target: String, brief: String) -> Self {
+        Self {
+            scan,
+            mode_name_target: Some(target),
+            reconciliation_brief: Some(brief),
+        }
+    }
+}
+```
+
+- [ ] **Step 2: Make `ProposeModeMappingTool` return the brief when present**
+
+In `ProposeModeMappingTool::run`, replace the body:
+
+```rust
+    fn run(&self, _args: &Value, _cwd: &Path) -> ToolOutput {
+        if let Some(brief) = &self.wizard.reconciliation_brief {
+            ToolOutput::ok(brief.clone())
+        } else {
+            ToolOutput::ok(render_scan(&self.wizard.scan))
+        }
+    }
+```
+
+- [ ] **Step 3: Add `build_reconciliation_brief` helper**
+
+In `crates/zoid/src/mode_wizard.rs`, add:
+
+```rust
+/// Build the human-readable reconciliation brief for the update flow. Reads
+/// the old sidecar + the on-disk canonical files, classifies each against the
+/// fresh scan, and returns a text block the model reads via
+/// `propose_mode_mapping`. Effectful (FS reads) — called by the bin at
+/// wizard-open time, not by the tool.
+pub fn build_reconciliation_brief(
+    mode_dir: &Path,
+    old_sidecar: &zoid_core::wizard::ProvenanceFile,
+    fresh_scan: &UpstreamScan,
+) -> String {
+    let mut s = format!(
+        "Update reconciliation for mode '{}' (fresh scan: {} files):\n\n",
+        old_sidecar.mode_name,
+        fresh_scan.files.len()
+    );
+    for entry in &old_sidecar.files {
+        let local = std::fs::read_to_string(mode_dir.join(&entry.canonical_path))
+            .unwrap_or_default();
+        let class = zoid_core::wizard::classify_update(entry, &local, fresh_scan);
+        s.push_str(&format!(
+            "- {} (upstream {}): {}\n",
+            entry.canonical_path, entry.upstream_path, class
+        ));
+    }
+    // Also list fresh-scan files not in the old sidecar (new upstream).
+    let old_paths: std::collections::HashSet<&str> =
+        old_sidecar.files.iter().map(|f| f.upstream_path.as_str()).collect();
+    for f in &fresh_scan.files {
+        if !old_paths.contains(f.upstream_path.as_str()) {
+            s.push_str(&format!(
+                "- (new upstream) {}: upstream added\n",
+                f.upstream_path
+            ));
+        }
+    }
+    s.push_str(
+        "\nPropose a merged mapping: carry unchanged, re-materialize \
+         upstream-moved (if local untouched), keep local-only-changed, decide \
+         for both-changed, add new-upstream, drop or keep upstream-deleted.",
+    );
+    s
+}
+```
+
+- [ ] **Step 4: Write the failing test for the brief**
+
+Append to `crates/zoid/src/mode_wizard.rs` tests:
+
+```rust
+    #[test]
+    fn reconciliation_brief_lists_classifications() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mode_dir = tmp.path().join("m");
+        std::fs::create_dir_all(&mode_dir).unwrap();
+        // Write a local canonical file (unchanged case).
+        std::fs::write(
+            mode_dir.join("a/SKILL.md"),
+            "---\nname: a\ndescription: d\n---\nA-v1\n",
+        )
+        .unwrap();
+        let old = ProvenanceFile {
+            schema: 1,
+            source: ProvenanceSource {
+                url: "u".into(),
+                repo: "o/r".into(),
+                ref_: "ref1".into(),
+                subtree_path: "skills".into(),
+                fetched_at: "t".into(),
+            },
+            mode_name: "M".into(),
+            files: vec![ProvenanceEntry {
+                canonical_path: "a/SKILL.md".into(),
+                upstream_path: "skills/a/SKILL.md".into(),
+                upstream_sha: "sha-a-v1".into(),
+                upstream_ref: "ref1".into(),
+                upstream_snapshot: "---\nname: a\ndescription: d\n---\nA-v1\n".into(),
+            }],
+        };
+        let fresh = UpstreamScan {
+            url: "u".into(),
+            repo: "o/r".into(),
+            resolved_ref: "ref1".into(),
+            subtree_path: "skills".into(),
+            files: vec![
+                ScannedFile {
+                    upstream_path: "skills/a/SKILL.md".into(),
+                    sha: "sha-a-v1".into(),
+                    content: "---\nname: a\ndescription: d\n---\nA-v1\n".into(),
+                },
+                ScannedFile {
+                    upstream_path: "skills/new/SKILL.md".into(),
+                    sha: "sha-new".into(),
+                    content: "NEW".into(),
+                },
+            ],
+        };
+        let brief = build_reconciliation_brief(&mode_dir, &old, &fresh);
+        assert!(brief.contains("unchanged"));
+        assert!(brief.contains("new upstream"));
+        assert!(brief.contains("skills/new/SKILL.md"));
+    }
+```
+
+- [ ] **Step 5: Run the test to verify it passes**
+
+Run: `cargo test -p zoid --lib reconciliation_brief`
+Expected: PASS.
+
+- [ ] **Step 6: Replace the `ModeUpdate` stub with the full handler**
+
+In `crates/zoid/src/main.rs` `exec_command`, replace the `Command::ModeUpdate(name)` arm (the Task 11 stub) with:
+
+```rust
+        Command::ModeUpdate(name) => {
+            if name.trim().is_empty() {
+                app.shell.status_hint = Some("usage: :mode update <name>".into());
+                return Ok(false);
+            }
+            // Find the mode's folder under the user-global modes dir.
+            let cfg_dir = resolve_config_dir(|k| std::env::var(k).ok());
+            let slug = zoid::mode_wizard::slugify(&name);
+            let mode_dir = cfg_dir.join("modes").join(&slug);
+            let sidecar_path = mode_dir.join(".zoid-provenance.json");
+            if !sidecar_path.is_file() {
+                app.shell.status_hint = Some(format!(
+                    "mode '{name}' has no import provenance; it was not imported from a URL. Use :mode import <url> instead."
+                ));
+                return Ok(false);
+            }
+            let sidecar_text = match std::fs::read_to_string(&sidecar_path) {
+                Ok(t) => t,
+                Err(e) => {
+                    app.shell.status_hint = Some(format!("read sidecar: {e}"));
+                    return Ok(false);
+                }
+            };
+            let old: zoid_core::wizard::ProvenanceFile = match serde_json::from_str(&sidecar_text) {
+                Ok(p) => p,
+                Err(e) => {
+                    app.shell.status_hint = Some(format!("parse sidecar: {e}"));
+                    return Ok(false);
+                }
+            };
+            // Re-fetch at the ORIGINAL ref (stable, not latest).
+            let url = format!(
+                "https://github.com/{}/tree/{}/{}",
+                old.source.repo, old.source.ref_, old.source.subtree_path
+            );
+            let parsed = match zoid::github_fetch::parse_github_url(&url) {
+                Ok(p) => p,
+                Err(e) => {
+                    app.shell.status_hint = Some(e);
+                    return Ok(false);
+                }
+            };
+            app.shell.status_hint = Some(format!("fetching upstream at ref {}…", old.source.ref_));
+            let ui_tx = app.ui_tx.clone();
+            let mode_dir_clone = mode_dir.clone();
+            let old_clone = old.clone();
+            tokio::spawn(async move {
+                let api = zoid::github_fetch::HttpGithubApi::new();
+                let scan = match zoid::github_fetch::fetch_tree(&api, &parsed).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let _ = ui_tx.send(zoid::agent::AgentUpdate::ModelsFetched {
+                            provider: format!("__wizard_error__"),
+                            models: vec![format!("fetch failed: {e}")],
+                        }).await;
+                        return;
+                    }
+                };
+                let brief = zoid::mode_wizard::build_reconciliation_brief(
+                    &mode_dir_clone,
+                    &old_clone,
+                    &scan,
+                );
+                // Stash scan + brief via a second sentinel shape: we re-use
+                // __wizard_scan__ but pack the scan JSON + brief together
+                // (brief in models[1], target name in models[2]).
+                let _ = ui_tx.send(zoid::agent::AgentUpdate::ModelsFetched {
+                    provider: format!("__wizard_update__"),
+                    models: vec![
+                        serde_json::to_string(&scan).unwrap_or_default(),
+                        brief,
+                        old_clone.mode_name.clone(),
+                    ],
+                }).await;
+            });
+            Ok(false)
+        }
+```
+
+- [ ] **Step 7: Handle the `__wizard_update__` sentinel in the UI loop**
+
+In the `AgentUpdate::ModelsFetched` arm (after the `__wizard_error__` and `__wizard_scan__` branches from Task 11), add:
+
+```rust
+                        if provider == "__wizard_update__" {
+                            // The update fetch + brief build completed.
+                            let mut iter = models.into_iter();
+                            let scan_json = iter.next().unwrap_or_default();
+                            let brief = iter.next().unwrap_or_default();
+                            let target = iter.next().unwrap_or_default();
+                            if let Ok(scan) =
+                                serde_json::from_str::<zoid_core::wizard::UpstreamScan>(&scan_json)
+                            {
+                                app.wizard = Some(zoid::mode_wizard::ModeImportWizard::new_update(
+                                    scan,
+                                    target,
+                                    brief,
+                                ));
+                                app.shell.status_hint = Some(
+                                    "Update wizard started. Ask the model to propose a merged mapping.".into(),
+                                );
+                                let ts = now_ms();
+                                let seed_event = zoid_core::event::Event::new(
+                                    ulid::Ulid::new(),
+                                    None,
+                                    ts,
+                                    zoid_core::event::EventKind::UserMessage {
+                                        text: "Update wizard started. Call propose_mode_mapping \
+                                            to see the reconciliation brief, then call \
+                                            apply_mode_mapping with your merged mapping."
+                                            .into(),
+                                    },
+                                );
+                                app.session.append(seed_event.clone()).await.ok();
+                                app.events.push(seed_event);
+                                spawn_turn(app);
+                            }
+                            continue;
+                        }
+```
+
+- [ ] **Step 8: Build and run the mode_wizard tests**
+
+Run: `cargo test -p zoid --lib mode_wizard`
+Expected: PASS.
+
+Run: `cargo build -p zoid`
+Expected: compiles clean.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add crates/zoid/src/mode_wizard.rs crates/zoid/src/main.rs
+git commit -m "feat(zoid): :mode update — read sidecar, re-fetch, build reconciliation brief, open wizard"
+```
+
+---
+
+## Task 16: Real-model go/no-go smoke runbook (`docs/superpowers/runbooks/2026-07-05-url-import-wizard-smoke.md`)
 
 **Files:**
 - Create: `docs/superpowers/runbooks/2026-07-05-url-import-wizard-smoke.md`
