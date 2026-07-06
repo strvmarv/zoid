@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use std::time::Duration;
 
 pub mod cache;
+pub mod request;
 pub mod types;
 
 /// Default model when `$ZOID_MODEL` is unset (latest Claude Sonnet).

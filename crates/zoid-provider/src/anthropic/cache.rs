@@ -71,6 +71,7 @@ mod tests {
             stream: true,
             messages: vec![user_text("x")],
             system: Some(vec![SystemBlock {
+                kind: crate::anthropic::types::SystemBlockKind::Text,
                 text: "be terse".into(),
                 cache_control: None,
             }]),

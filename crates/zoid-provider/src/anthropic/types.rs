@@ -80,9 +80,17 @@ pub struct ToolDef {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct SystemBlock {
+    #[serde(rename = "type")]
+    pub kind: SystemBlockKind,
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_control: Option<CacheControl>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum SystemBlockKind {
+    #[serde(rename = "text")]
+    Text,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
