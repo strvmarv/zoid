@@ -5,6 +5,8 @@
 
 pub mod anthropic;
 pub mod ollama;
+pub mod openai_compat;
+pub mod opencode_go;
 
 /// The shared model/provider catalog lives in the dependency-free `zoid-model`
 /// crate; re-exported here so `zoid_provider::model::…` keeps resolving for the
@@ -68,6 +70,11 @@ pub struct Message {
     pub tool_calls: Vec<ToolCall>,
     /// Populated only on `MsgRole::Tool` messages: the tool whose result this is.
     pub tool_name: Option<String>,
+    /// Populated only on `MsgRole::Tool` messages: the originating tool-call id.
+    /// OpenAI Chat Completions identifies tool results by `tool_call_id`;
+    /// Ollama's native API uses `tool_name` instead (its request-body writer
+    /// ignores this field). Anthropic (text-only P1b) also ignores it.
+    pub tool_call_id: Option<String>,
 }
 
 impl Message {
@@ -77,6 +84,7 @@ impl Message {
             content: content.into(),
             tool_calls: Vec::new(),
             tool_name: None,
+            tool_call_id: None,
         }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
@@ -85,6 +93,7 @@ impl Message {
             content: content.into(),
             tool_calls: Vec::new(),
             tool_name: None,
+            tool_call_id: None,
         }
     }
     pub fn tool(name: impl Into<String>, content: impl Into<String>) -> Self {
@@ -93,6 +102,23 @@ impl Message {
             content: content.into(),
             tool_calls: Vec::new(),
             tool_name: Some(name.into()),
+            tool_call_id: None,
+        }
+    }
+    /// Like `Message::tool` but with the originating tool-call id. The agent
+    /// loop uses this when dispatching a tool result so the OpenAI-compat
+    /// request body can emit `tool_call_id`. Existing providers ignore the id.
+    pub fn tool_with_call_id(
+        name: impl Into<String>,
+        call_id: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            role: MsgRole::Tool,
+            content: content.into(),
+            tool_calls: Vec::new(),
+            tool_name: Some(name.into()),
+            tool_call_id: Some(call_id.into()),
         }
     }
 }
@@ -280,6 +306,21 @@ pub fn is_context_length_error(msg: &str) -> bool {
         || (m.contains("context") && m.contains("exceed"))
 }
 
+/// Parse a `{"data":[{"id":...}]}` model-list response body (the shape used by
+/// both the Anthropic `/v1/models` and OpenAI-compat `/v1/models` endpoints).
+/// Lenient: unknown/!json → empty.
+pub fn parse_data_id_models(body: &str) -> Vec<String> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("data").and_then(|d| d.as_array()).cloned())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod selection_tests {
     use super::*;
@@ -395,5 +436,44 @@ mod tool_types_tests {
                 args: json!({"path": "a.txt"})
             })
         );
+    }
+}
+
+#[cfg(test)]
+mod tool_call_id_tests {
+    use super::*;
+
+    #[test]
+    fn existing_constructors_default_tool_call_id_to_none() {
+        assert_eq!(Message::user("hi").tool_call_id, None);
+        assert_eq!(Message::assistant("hi").tool_call_id, None);
+        assert_eq!(Message::tool("read_file", "body").tool_call_id, None);
+    }
+
+    #[test]
+    fn tool_with_call_id_sets_the_field() {
+        let m = Message::tool_with_call_id("read_file", "call-42", "body");
+        assert_eq!(m.role, MsgRole::Tool);
+        assert_eq!(m.content, "body");
+        assert_eq!(m.tool_name.as_deref(), Some("read_file"));
+        assert_eq!(m.tool_call_id.as_deref(), Some("call-42"));
+    }
+}
+
+#[cfg(test)]
+mod parse_data_id_models_tests {
+    use super::parse_data_id_models;
+
+    #[test]
+    fn parses_data_id_array() {
+        let body = r#"{"data":[{"id":"glm-5.2"},{"id":"kimi-k2.6"}]}"#;
+        assert_eq!(parse_data_id_models(body), vec!["glm-5.2", "kimi-k2.6"]);
+    }
+
+    #[test]
+    fn empty_or_bad_body_is_empty() {
+        assert!(parse_data_id_models("{}").is_empty());
+        assert!(parse_data_id_models("not json").is_empty());
+        assert!(parse_data_id_models(r#"{"data":[]}"#).is_empty());
     }
 }

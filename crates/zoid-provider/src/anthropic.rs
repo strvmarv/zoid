@@ -135,15 +135,7 @@ fn parse_one(event_type: &str, data: &str) -> Option<ProviderEvent> {
 
 /// Extract model ids from an Anthropic `/v1/models` response body. Lenient.
 pub fn parse_anthropic_models(body: &str) -> Vec<String> {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v.get("data").and_then(|d| d.as_array()).cloned())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default()
+    crate::parse_data_id_models(body)
 }
 
 use crate::Provider;

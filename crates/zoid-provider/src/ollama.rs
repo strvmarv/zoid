@@ -515,6 +515,7 @@ mod tests {
                         args: json!({"path": "foo"}),
                     }],
                     tool_name: None,
+                    tool_call_id: None,
                 },
                 Message::tool("read_file", "bar"),
             ],
