@@ -137,7 +137,13 @@ pub fn render_shell(
                 // Uncached fallback (tests / examples): render `conversation_view`
                 // (the expensive wrap + highlight pass) and let Paragraph scroll.
                 None => {
-                    let mut body = conversation_view(msgs, view, streaming, text.width as usize);
+                    let mut body = conversation_view(
+                        msgs,
+                        view,
+                        streaming,
+                        text.width as usize,
+                        state.question.as_ref(),
+                    );
                     if has_tool {
                         body.push(tool_spinner_line(
                             state.active_tool.as_deref().unwrap_or(""),
@@ -1207,7 +1213,6 @@ fn object_row(o: &crate::objects::Obj) -> String {
 }
 
 /// Word-wrap a plain string to `width` columns, breaking on whitespace.
-#[allow(dead_code)]
 pub(crate) fn wrap_plain(s: &str, width: usize) -> Vec<String> {
     if s.is_empty() {
         return vec![String::new()];

@@ -533,7 +533,14 @@ fn handle_conversation_click(app: &mut App, layout: &zoid_tui::layout::ShellLayo
     let clicked_line = app.shell.conversation_scroll as usize + (row - conv.y) as usize;
     let width = zoid_tui::layout::conv_text_width(conv.width) as usize;
     let msgs = conversation(app.events.iter());
-    let hits = zoid_tui::chat::code_hits(&msgs, app.streaming, true, app.tz_offset_secs, width);
+    let hits = zoid_tui::chat::code_hits(
+        &msgs,
+        app.streaming,
+        true,
+        app.tz_offset_secs,
+        width,
+        app.shell.question.as_ref(),
+    );
     if let Some(h) = hits
         .into_iter()
         .find(|h| clicked_line >= h.header_line && clicked_line <= h.end_line)
@@ -973,6 +980,7 @@ impl BodyCache {
         key: BodyKey,
         msgs: &[zoid_core::projection::ChatMsg],
         width: usize,
+        question: Option<&zoid_tui::question::QuestionState>,
     ) -> bool {
         // Full no-op only when not streaming and nothing changed.
         if !key.streaming && self.key.as_ref() == Some(&key) && self.msg_count == msgs.len() {
@@ -1007,6 +1015,7 @@ impl BodyCache {
                 &view,
                 key.streaming,
                 width,
+                question,
             );
             // conversation_view_indexed appends a trailing blank; we want it.
             self.body.extend(new_lines);
@@ -1015,7 +1024,7 @@ impl BodyCache {
         }
         // Full rebuild.
         let (body, starts) =
-            zoid_tui::chat::conversation_view_indexed(msgs, &view, key.streaming, width);
+            zoid_tui::chat::conversation_view_indexed(msgs, &view, key.streaming, width, question);
         self.body = body;
         self.msg_starts = starts;
         self.msg_count = msgs.len();
@@ -1502,6 +1511,7 @@ where
                 },
                 &app.proj.msgs,
                 body_w,
+                app.shell.question.as_ref(),
             ))
         };
 
@@ -2791,16 +2801,22 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             if let Some(q) = &mut app.shell.question {
                 let len = q.rows().len();
                 q.selected = zoid_tui::palette::nav(q.selected, d, len);
+                // The live highlight is rendered into the cached body, so a
+                // cursor move must invalidate the cache or the old highlight
+                // would persist on screen until something else rebuilt it.
+                app.body_cache.key = None;
             }
         }
         Action::QuestionChar(c) => {
             if let Some(q) = &mut app.shell.question {
                 q.free_text.push(c);
+                app.body_cache.key = None;
             }
         }
         Action::QuestionBackspace => {
             if let Some(q) = &mut app.shell.question {
                 q.free_text.pop();
+                app.body_cache.key = None;
             }
         }
         Action::QuestionSelect => {

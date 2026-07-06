@@ -36,6 +36,7 @@ pub fn conversation_lines(
     caret_on: bool,
     tz_offset_secs: i32,
     width: usize,
+    question: Option<&crate::question::QuestionState>,
 ) -> Vec<Line<'static>> {
     let mut hits = Vec::new();
     build_conversation(
@@ -46,6 +47,7 @@ pub fn conversation_lines(
         width,
         &mut hits,
         &mut Vec::new(),
+        question,
     )
 }
 
@@ -58,6 +60,7 @@ pub fn code_hits(
     caret_on: bool,
     tz_offset_secs: i32,
     width: usize,
+    question: Option<&crate::question::QuestionState>,
 ) -> Vec<CodeHit> {
     let mut hits = Vec::new();
     build_conversation(
@@ -68,10 +71,12 @@ pub fn code_hits(
         width,
         &mut hits,
         &mut Vec::new(),
+        question,
     );
     hits
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_conversation(
     msgs: &[ChatMsg],
     streaming: bool,
@@ -80,6 +85,7 @@ fn build_conversation(
     width: usize,
     hits: &mut Vec<CodeHit>,
     msg_starts: &mut Vec<usize>,
+    question: Option<&crate::question::QuestionState>,
 ) -> Vec<Line<'static>> {
     let last = msgs.len().saturating_sub(1);
     if msgs.is_empty() {
@@ -213,24 +219,32 @@ fn build_conversation(
                 ]));
             }
             ChatMsg::Question {
-                question, state, ..
+                id: _,
+                kind,
+                question: qtext,
+                choices,
+                state,
+                ts: _,
             } => {
-                // Minimal bridge render: a single line for the question. Full
-                // interactive card rendering is a later slice; this keeps the
-                // TUI compiling under the new non-exhaustive variant.
                 blank_between_turns(&mut lines);
-                let (mark, mark_color) = match state {
-                    zoid_core::projection::QuestionCardState::Answered { .. } => {
-                        (glyph::PASS, color::OK)
+                let (selected, free_text) = match state {
+                    zoid_core::projection::QuestionCardState::Open {
+                        selected,
+                        free_text,
+                    } => {
+                        // Overwrite the projection's placeholder cursor with the
+                        // live cursor from ShellState.question (if present).
+                        if let Some(q) = question {
+                            (q.selected, q.free_text.clone())
+                        } else {
+                            (*selected, free_text.clone())
+                        }
                     }
-                    zoid_core::projection::QuestionCardState::Open { .. } => {
-                        (glyph::PENDING, color::CHAT_ACCENT)
-                    }
+                    zoid_core::projection::QuestionCardState::Answered { .. } => (0, String::new()),
                 };
-                lines.push(Line::from(vec![
-                    Span::styled(format!("  {mark} "), Style::new().fg(mark_color)),
-                    Span::styled(first_line(question), Style::new().fg(color::TXT)),
-                ]));
+                let card =
+                    render_question_card(kind, qtext, choices, state, selected, &free_text, width);
+                lines.extend(card);
             }
         }
     }
@@ -250,6 +264,105 @@ fn build_conversation(
         });
     }
     lines
+}
+
+/// Render an inline question card as a block of lines. Open state shows the
+/// question + choices (with the live highlight) + a hint line; Answered state
+/// collapses to the question title + the answer on the last line. `width` is
+/// the conversation column width; the card wraps to fit.
+fn render_question_card(
+    kind: &zoid_core::event::QuestionKind,
+    question: &str,
+    choices: &[String],
+    state: &zoid_core::projection::QuestionCardState,
+    selected: usize,
+    free_text: &str,
+    width: usize,
+) -> Vec<Line<'static>> {
+    use zoid_core::event::QuestionKind;
+    use zoid_core::projection::QuestionCardState;
+
+    let title = match kind {
+        QuestionKind::Ask => " Question ",
+        QuestionKind::ModeMapping { .. } => " Mode mapping — review ",
+    };
+    let content_w = width.saturating_sub(4).max(20);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    // Top border with title.
+    lines.push(card_border_top(title, content_w + 2));
+    // Question body (split on newlines, prefix each line with "│ ").
+    for para in question.split('\n') {
+        if para.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "│ ".to_string(),
+                Style::new().fg(color::DIM),
+            )));
+        } else {
+            for l in crate::render::wrap_plain(para, content_w) {
+                lines.push(Line::from(Span::styled(
+                    format!("│ {l}"),
+                    Style::new().fg(color::TXT),
+                )));
+            }
+        }
+    }
+    lines.push(Line::from(Span::styled(
+        "│ ".to_string(),
+        Style::new().fg(color::DIM),
+    )));
+
+    match state {
+        QuestionCardState::Open { .. } => {
+            // Choices with highlight.
+            for (i, c) in choices.iter().enumerate() {
+                let marker = if i == selected { "●" } else { "○" };
+                let style = if i == selected {
+                    Style::new().fg(color::TXT).bg(color::SEL_BG)
+                } else {
+                    Style::new().fg(color::TXT)
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("│   {marker} {}", c),
+                    style,
+                )));
+            }
+            // Free-text echo (if the user typed anything).
+            if !free_text.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    format!("│   {}{}", free_text, glyph::CARET),
+                    Style::new().fg(color::TXT),
+                )));
+            }
+            lines.push(Line::from(Span::styled(
+                "│ Type your answer, or pick above. Enter to submit · Esc to cancel.".to_string(),
+                Style::new().fg(color::DIM),
+            )));
+            // Bottom border.
+            lines.push(card_border_bottom(content_w + 2));
+        }
+        QuestionCardState::Answered { answer } => {
+            // Collapsed: just the answer on the last line.
+            lines.push(Line::from(Span::styled(
+                format!("└ ► {}", answer),
+                Style::new().fg(color::TXT),
+            )));
+        }
+    }
+    lines
+}
+
+fn card_border_top(title: &str, width: usize) -> Line<'static> {
+    let inner = width.saturating_sub(title.chars().count() + 2);
+    let right = "─".repeat(inner);
+    Line::from(vec![
+        Span::styled(format!("┌─{title}"), Style::new().fg(color::DIM)),
+        Span::styled(right, Style::new().fg(color::DIM)),
+    ])
+}
+
+fn card_border_bottom(width: usize) -> Line<'static> {
+    Line::from(Span::styled("─".repeat(width), Style::new().fg(color::DIM)))
 }
 
 /// Attach the `⧉ copy` affordance to the code-block header at `idx`, stealing
@@ -478,8 +591,9 @@ pub fn conversation_view(
     view: &ChatView,
     streaming: bool,
     width: usize,
+    question: Option<&crate::question::QuestionState>,
 ) -> Vec<Line<'static>> {
-    conversation_view_indexed(msgs, view, streaming, width).0
+    conversation_view_indexed(msgs, view, streaming, width, question).0
 }
 
 /// Like `conversation_view`, but also returns `msg_starts` (length msgs.len()):
@@ -490,6 +604,7 @@ pub fn conversation_view_indexed(
     view: &ChatView,
     streaming: bool,
     width: usize,
+    question: Option<&crate::question::QuestionState>,
 ) -> (Vec<Line<'static>>, Vec<usize>) {
     let mut starts: Vec<usize> = Vec::new();
     let mut lines: Vec<Line<'static>> = match view.zoom {
@@ -513,9 +628,10 @@ pub fn conversation_view_indexed(
                 width,
                 &mut hits,
                 &mut starts,
+                question,
             )
         }
-        Zoom::Detail => detail_lines(msgs, view.tz_offset_secs, width, &mut starts),
+        Zoom::Detail => detail_lines(msgs, view.tz_offset_secs, width, &mut starts, question),
     };
     if let Some(n) = view.reveal {
         lines.truncate(n);
@@ -588,6 +704,7 @@ fn detail_lines(
     tz_offset_secs: i32,
     width: usize,
     msg_starts: &mut Vec<usize>,
+    question: Option<&crate::question::QuestionState>,
 ) -> Vec<Line<'static>> {
     use std::collections::HashMap;
     // id → file path, from assistant tool calls.
@@ -655,6 +772,7 @@ fn detail_lines(
                 true,
                 tz_offset_secs,
                 width,
+                question,
             )),
         }
     }
@@ -740,7 +858,7 @@ pub fn render_chat(frame: &mut Frame, msgs: &[ChatMsg], input: &TextArea<'_>, st
 
     // Conversation: user/assistant text turns + inline tool cards. This legacy
     // standalone renderer (tests only) has no view-model, so stamps in UTC.
-    let body = conversation_lines(msgs, streaming, true, 0, chunks[1].width as usize);
+    let body = conversation_lines(msgs, streaming, true, 0, chunks[1].width as usize, None);
     frame.render_widget(Paragraph::new(body), chunks[1]);
 
     // Input box (bordered text area).
@@ -807,7 +925,7 @@ mod tests {
             ts: 0,
         }];
         let has_caret = |streaming, caret| {
-            conversation_lines(&msgs, streaming, caret, 0, 80)
+            conversation_lines(&msgs, streaming, caret, 0, 80, None)
                 .iter()
                 .any(|l| l.spans.iter().any(|s| s.content.contains(glyph::CARET)))
         };
@@ -890,7 +1008,7 @@ mod tests {
         ];
         for zoom in [Zoom::Summary, Zoom::Normal, Zoom::Detail] {
             let v = view(zoom);
-            let (lines, starts) = conversation_view_indexed(&msgs, &v, false, 80);
+            let (lines, starts) = conversation_view_indexed(&msgs, &v, false, 80, None);
             assert_eq!(
                 starts.len(),
                 msgs.len(),
@@ -914,7 +1032,7 @@ mod tests {
 
     #[test]
     fn summary_collapses_to_one_line_per_turn() {
-        let lines = conversation_view(&seeded(), &view(Zoom::Summary), false, 80);
+        let lines = conversation_view(&seeded(), &view(Zoom::Summary), false, 80, None);
         // two turns → two digest lines, plus one trailing breathing-room blank
         assert_eq!(lines.len(), 3);
     }
@@ -922,7 +1040,7 @@ mod tests {
     #[test]
     fn detail_highlights_file_tool_results() {
         use crate::tokens::color;
-        let lines = conversation_view(&seeded(), &view(Zoom::Detail), false, 80);
+        let lines = conversation_view(&seeded(), &view(Zoom::Detail), false, 80, None);
         // A keyword (`fn`/`let`) must carry the syntax keyword color — proves the
         // id→path→Rust resolution fired and highlighting actually ran, rather than
         // silently falling back to PlainText (which colors everything TXT).
@@ -940,7 +1058,7 @@ mod tests {
     #[test]
     fn detail_collapses_function_bodies_to_signatures() {
         use crate::tokens::glyph;
-        let lines = conversation_view(&seeded(), &view(Zoom::Detail), false, 80);
+        let lines = conversation_view(&seeded(), &view(Zoom::Detail), false, 80, None);
         let text: Vec<String> = lines
             .iter()
             .map(|l| {
@@ -967,8 +1085,8 @@ mod tests {
     #[test]
     fn normal_matches_conversation_lines() {
         let msgs = seeded();
-        let normal = conversation_view(&msgs, &view(Zoom::Normal), false, 80);
-        let baseline = conversation_lines(&msgs, false, true, 0, 80);
+        let normal = conversation_view(&msgs, &view(Zoom::Normal), false, 80, None);
+        let baseline = conversation_lines(&msgs, false, true, 0, 80, None);
         // conversation_view appends one trailing breathing-room blank line.
         assert_eq!(normal.len(), baseline.len() + 1);
     }
@@ -977,7 +1095,7 @@ mod tests {
     fn reveal_caps_line_count() {
         let mut v = view(Zoom::Normal);
         v.reveal = Some(1);
-        let lines = conversation_view(&seeded(), &v, false, 80);
+        let lines = conversation_view(&seeded(), &v, false, 80, None);
         assert_eq!(lines.len(), 1);
     }
 
@@ -989,7 +1107,7 @@ mod tests {
             tool_calls: vec![],
             ts: 0,
         }];
-        let lines = conversation_lines(&msgs, false, true, 0, 80);
+        let lines = conversation_lines(&msgs, false, true, 0, 80, None);
         let spans: Vec<(String, Style)> = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| (s.content.to_string(), s.style)))
@@ -1022,7 +1140,7 @@ mod tests {
                 ts: 0,
             },
         ];
-        let hits = code_hits(&msgs, false, true, 0, 80);
+        let hits = code_hits(&msgs, false, true, 0, 80, None);
         assert_eq!(hits.len(), 2, "one hit per top-level block");
         assert!(hits[0].source.contains("let a = 1;"));
         assert!(hits[1].source.contains("let b = 2;"));
@@ -1057,7 +1175,7 @@ mod tests {
                 ts: 0,
             },
         ];
-        let hits = code_hits(&msgs, false, true, 0, 80);
+        let hits = code_hits(&msgs, false, true, 0, 80, None);
         // Only the second (non-bailed) block is clickable…
         assert_eq!(hits.len(), 1, "bailed message emits no clickable block");
         // …and it copies its OWN source, never the phantom from the bailed fence.
@@ -1078,7 +1196,7 @@ mod tests {
             summary: "Added shared NotFound helper.".into(),
             ok: true,
         }];
-        let lines = conversation_lines(&msgs, false, true, 0, 80);
+        let lines = conversation_lines(&msgs, false, true, 0, 80, None);
         let joined: String = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
@@ -1094,5 +1212,62 @@ mod tests {
             .spans
             .iter()
             .any(|s| s.style.bg == Some(color::DELEGATE_BG))));
+    }
+
+    #[test]
+    fn open_question_card_renders_choices_and_highlight() {
+        use zoid_core::event::QuestionKind;
+        use zoid_core::projection::QuestionCardState;
+        let msgs = vec![ChatMsg::Question {
+            id: "c1".into(),
+            kind: QuestionKind::Ask,
+            question: "retry or skip?".into(),
+            choices: vec!["Retry".into(), "Skip".into()],
+            state: QuestionCardState::Open {
+                selected: 1,
+                free_text: String::new(),
+            },
+            ts: 0,
+        }];
+        let lines = conversation_lines(&msgs, false, true, 0, 80, None);
+        let joined: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(joined.contains("retry or skip?"), "question text rendered");
+        assert!(
+            joined.contains("○ Retry"),
+            "first choice rendered unselected"
+        );
+        assert!(joined.contains("● Skip"), "second choice rendered selected");
+    }
+
+    #[test]
+    fn answered_question_card_collapses_to_answer_line() {
+        use zoid_core::event::QuestionKind;
+        use zoid_core::projection::QuestionCardState;
+        let msgs = vec![ChatMsg::Question {
+            id: "c1".into(),
+            kind: QuestionKind::Ask,
+            question: "retry or skip?".into(),
+            choices: vec!["Retry".into(), "Skip".into()],
+            state: QuestionCardState::Answered {
+                answer: "Skip".into(),
+            },
+            ts: 0,
+        }];
+        let lines = conversation_lines(&msgs, false, true, 0, 80, None);
+        let joined: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(
+            joined.contains("└ ► Skip"),
+            "answered card shows the answer"
+        );
+        assert!(
+            !joined.contains("○ Retry"),
+            "answered card does not re-render choices"
+        );
     }
 }

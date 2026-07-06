@@ -153,7 +153,7 @@ fn cached_body_window_matches_uncached_paragraph() {
 
     for msgs in [&tall, &short] {
         // `full` is what the bin caches: built reveal-None.
-        let full = conversation_view(msgs, &normal_view(), false, conv.width as usize);
+        let full = conversation_view(msgs, &normal_view(), false, conv.width as usize, None);
         let raw_lines = full.len().saturating_sub(1); // reveal-None appends one blank
 
         // reveal == None at several scrolls × spinner off/on, plus a reveal case
