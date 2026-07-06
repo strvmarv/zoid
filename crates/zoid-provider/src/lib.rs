@@ -304,6 +304,21 @@ pub fn is_context_length_error(msg: &str) -> bool {
         || (m.contains("context") && m.contains("exceed"))
 }
 
+/// Parse a `{"data":[{"id":...}]}` model-list response body (the shape used by
+/// both the Anthropic `/v1/models` and OpenAI-compat `/v1/models` endpoints).
+/// Lenient: unknown/!json → empty.
+pub fn parse_data_id_models(body: &str) -> Vec<String> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("data").and_then(|d| d.as_array()).cloned())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod selection_tests {
     use super::*;
@@ -440,5 +455,23 @@ mod tool_call_id_tests {
         assert_eq!(m.content, "body");
         assert_eq!(m.tool_name.as_deref(), Some("read_file"));
         assert_eq!(m.tool_call_id.as_deref(), Some("call-42"));
+    }
+}
+
+#[cfg(test)]
+mod parse_data_id_models_tests {
+    use super::parse_data_id_models;
+
+    #[test]
+    fn parses_data_id_array() {
+        let body = r#"{"data":[{"id":"glm-5.2"},{"id":"kimi-k2.6"}]}"#;
+        assert_eq!(parse_data_id_models(body), vec!["glm-5.2", "kimi-k2.6"]);
+    }
+
+    #[test]
+    fn empty_or_bad_body_is_empty() {
+        assert!(parse_data_id_models("{}").is_empty());
+        assert!(parse_data_id_models("not json").is_empty());
+        assert!(parse_data_id_models(r#"{"data":[]}"#).is_empty());
     }
 }
