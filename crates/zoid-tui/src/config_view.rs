@@ -271,10 +271,15 @@ mod tests {
         assert!(cloud.selectable);
         assert!(cloud.detail.contains("https://ollama.com"));
 
-        let cli = opts.iter().find(|o| o.id == "anthropic-cli").unwrap();
-        assert!(!cli.selectable); // planned
-        assert!(cli.detail.contains("claude")); // command shown as its endpoint
-        assert!(cli.label.contains("planned") || cli.detail.contains("planned"));
+        // The falsified anthropic-cli/anthropic-sdk rows were removed
+        // (spikes/cc-infer/RESULTS.md); all 3 surviving providers are
+        // selectable (no [planned] rows remain), so this test no longer
+        // exercises the planned-row marking path. Verify the 3-entry shape
+        // and that anthropic-api is present + selectable.
+        assert_eq!(opts.len(), 3);
+        let api = opts.iter().find(|o| o.id == "anthropic-api").unwrap();
+        assert!(api.selectable);
+        assert!(api.detail.contains("https://api.anthropic.com"));
     }
 
     #[test]

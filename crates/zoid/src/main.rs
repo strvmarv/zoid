@@ -562,7 +562,7 @@ fn effective_base_url(config: &zoid_core::config::Config) -> String {
 /// Whether a provider id needs an API key to be usable. Local Ollama (localhost)
 /// does not; all remote HTTP flavors do. Hardcoded shortcut: `ollama-local` is
 /// the only keyless `Available` provider today. Revisit against the registry if
-/// `anthropic-cli`/`anthropic-sdk` (ambient auth, no API key) become selectable.
+/// an ambient-auth provider (no API key) ever becomes selectable.
 fn entry_requires_key(id: &str) -> bool {
     id != "ollama-local"
 }
@@ -3489,7 +3489,10 @@ mod tests {
             base_url_write_for("anthropic-api"),
             TomlValue::Str("https://api.anthropic.com".into())
         );
-        assert_eq!(base_url_write_for("anthropic-cli"), TomlValue::Unset); // Cli → clear base_url
+        // A non-existent provider id resolves to no default base_url → Unset
+        // (the falsified anthropic-cli/anthropic-sdk rows were removed; see
+        // spikes/cc-infer/RESULTS.md).
+        assert_eq!(base_url_write_for("anthropic-cli"), TomlValue::Unset);
     }
 
     #[test]
