@@ -17,7 +17,7 @@ Collapse zoid's two command surfaces — the `Ctrl+P` command palette and the `:
   - `:`-only: `:delegate`, `:mode import`, `:mode update`, drawer toggles (`:repo`/`:session`/`:context`).
   - Palette-only: `ResumeSessionPicker`.
   - Both: New/Rename/SwitchMode/ReloadModes/OpenConfig/Companion/Quit.
-- **Prior lock (`2026-07-04-command-palette-redesign-design.md` §Decisions.5):** "keep both, `exec_command` not modified." This spec reverses that lock: the two surfaces merge into one, `exec_command` still not modified.
+- **Prior lock (`2026-07-04-command-palette-redesign-design.md` §Decisions.5):** "keep both, `exec_command` not modified." This spec reverses the "keep both" half; `exec_command` is essentially untouched (one tiny edit — see §Decisions.7).
 
 ## Decisions (locked)
 
@@ -30,7 +30,7 @@ Collapse zoid's two command surfaces — the `Ctrl+P` command palette and the `:
 4. **Fold `:`-only parameterized commands into the palette:** `ArgKind` grows from `Rename` to four variants. `Delegate`, `ModeImport`, `ModeUpdate` become palette rows with inline Arg capture, multi-word free-text. `parse_command` stays the Direct-mode parser for the same commands.
 5. **Fold `:`-only zero-arg commands into the palette:** `:repo`/`:session`/`:context` become three plain `OpenDrawer(DrawerId)` palette rows. No `ArgKind`.
 6. **`:`-from-conversation trigger preserved:** typing `:` in Conversation/Rail focus opens the palette with the buffer pre-seeded to `":"` (new `Action::OpenPaletteDirect`). `Ctrl+P` opens it empty (`Action::OpenPalette`, unchanged).
-7. **`exec_command` not modified.** It already handles `Unknown(String)`, `Delegate("")`, `ModeImport("")`, `ModeUpdate("")` as usage hints. The palette's Arg phase always hands it a non-empty arg (existing Rename contract).
+7. **`exec_command` essentially untouched** — one tiny edit: the `RenameSession("")` arm seeds the palette in Direct phase (`query = ":rename "`) instead of the deleted cmdline. It already handles `Unknown(String)`, `Delegate("")`, `ModeImport("")`, `ModeUpdate("")` as silent no-ops / status hints. The palette's Arg phase always hands it a non-empty arg (existing Rename contract).
 8. **`Command` enum and `parse_command` untouched.** They remain the shared vocabulary.
 
 ## Architecture
@@ -192,7 +192,23 @@ match stage:
         close_overlay(); exec_command(app, kind.build(input.trim())).await
 ```
 
-`exec_command` is **not modified**. The palette's Arg phase always hands it a non-empty arg, matching the existing Rename contract.
+`exec_command` is **almost not modified**: one tiny edit. The `Command::RenameSession("")` arm currently seeds the deleted cmdline (`overlay = CommandLine`, `cmdline.buffer = "rename "`). With the cmdline gone, it instead seeds the **palette in Direct phase**:
+
+```rust
+Command::RenameSession(name) => {
+    if name.is_empty() {
+        app.shell.overlay = zoid_tui::Overlay::Palette;
+        app.shell.palette = Default::default();
+        app.shell.palette.query = ":rename ".into();   // Direct phase, pre-seeded
+    } else {
+        app.session.rename_session(app.session_id, name.clone()).await.ok();
+        app.shell.session_name = name;
+    }
+    Ok(false)
+}
+```
+
+This preserves the no-arg `:rename` power-user path: `:rename` (from cmdline or `:rename ` typed in Direct) → `parse_command` → `RenameSession("")` → re-opens the palette pre-seeded with `:rename ` so the user types the name and Enter applies it via `parse_command` again. The palette's own Rename row goes through Arg phase (different path, same `exec_command` non-empty arm). No other `exec_command` arm changes.
 
 ## Data flow
 
@@ -223,8 +239,8 @@ Ctrl+P ──▶ OpenPalette ──▶ overlay=Palette, stage=Pick, query=""
 ## Error / edge handling
 
 - **No matches** (Pick, non-`:`): `palette_selected_command` returns `None`; `Enter` is a no-op; overlay stays open. Body shows empty list.
-- **Unknown `:` command** (Direct): `parse_command` returns `Unknown(String)`; `exec_command` renders its existing hint. No special handling.
-- **Empty Direct buffer** (`query == ":"`): `parse_command(":")` returns `Unknown("")` (after trim). Preview shows the `type :mode, :q, :delegate …` hint; `Enter` runs `exec_command(Unknown(""))` — harmless no-op or hint, matching today's `:` line behavior on bare `:`.
+- **Unknown `:` command** (Direct): `parse_command` returns `Unknown(String)`; `exec_command`'s `Unknown(_)` arm is a silent `Ok(false)` today. The Direct preview line in `render_palette` shows `unknown command` *before* Enter is pressed (so the user sees it live); after Enter, the overlay closes and `exec_command` no-ops. No change to `exec_command`.
+- **Empty Direct buffer** (`query == ":"`): `parse_command(":")` returns `Unknown("")` (after trim). Preview shows the `type :mode, :q, :delegate …` hint; `Enter` runs `exec_command(Unknown(""))` — silent no-op, matching today's `:` line behavior on bare `:`.
 - **Empty argument** on `Enter` in Arg: no-op, stays in Arg (prevents rename/delegate/import/update to empty). Existing rule, extended to all four `ArgKind`s.
 - **Esc semantics:** Arg→Pick (not close) so a mis-selected parameterized command doesn't dump the user out; a second `Esc` (now in Pick) closes. Direct `Esc` closes (same as Pick).
 - **Ctrl-modified / unknown keys:** `Noop`; overlay capture prevents leakage to global handlers while `overlay == Palette`.
