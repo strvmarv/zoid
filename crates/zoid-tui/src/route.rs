@@ -373,15 +373,10 @@ pub fn hit_test(layout: &ShellLayout, col: u16, row: u16) -> Target {
 }
 
 pub fn route_mouse(state: &ShellState, layout: &ShellLayout, m: MouseEvent) -> Action {
-    // An open inline question card captures scroll (navigate choices); other
-    // mouse input is ignored while a question is pending.
-    if state.question.is_some() {
-        return match m.kind {
-            MouseEventKind::ScrollDown => Action::QuestionMove(1),
-            MouseEventKind::ScrollUp => Action::QuestionMove(-1),
-            _ => Action::Noop,
-        };
-    }
+    // An open inline question card does NOT capture mouse input: scroll still
+    // navigates the conversation, scrollbar drag still works, so the user can
+    // review the context above the card while answering. Choice navigation is
+    // keyboard-only (↑↓), not mouse-scroll.
     // Overlays are keyboard-driven. A stray mouse click or scroll outside the
     // overlay must NOT silently dismiss it — accidental clicks are common, and
     // losing an in-progress edit buffer, query, or selection position is
