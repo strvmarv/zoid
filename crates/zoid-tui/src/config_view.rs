@@ -272,11 +272,12 @@ mod tests {
         assert!(cloud.detail.contains("https://ollama.com"));
 
         // The falsified anthropic-cli/anthropic-sdk rows were removed
-        // (spikes/cc-infer/RESULTS.md); all 3 surviving providers are
+        // (spikes/cc-infer/RESULTS.md); all surviving providers are
         // selectable (no [planned] rows remain), so this test no longer
-        // exercises the planned-row marking path. Verify the 3-entry shape
-        // and that anthropic-api is present + selectable.
-        assert_eq!(opts.len(), 3);
+        // exercises the planned-row marking path. Verify the 4-entry shape
+        // (ollama-local, ollama-cloud, opencode-go, anthropic-api) and that
+        // anthropic-api is present + selectable.
+        assert_eq!(opts.len(), 4);
         let api = opts.iter().find(|o| o.id == "anthropic-api").unwrap();
         assert!(api.selectable);
         assert!(api.detail.contains("https://api.anthropic.com"));

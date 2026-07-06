@@ -406,11 +406,12 @@ mod tests {
     }
 
     #[test]
-    fn selectable_has_three_providers() {
+    fn selectable_has_four_providers() {
         let ids: Vec<&str> = selectable().map(|e| e.id).collect();
-        assert_eq!(ids.len(), 3);
+        assert_eq!(ids.len(), 4);
         assert!(ids.contains(&"ollama-local"));
         assert!(ids.contains(&"ollama-cloud"));
+        assert!(ids.contains(&"opencode-go"));
         assert!(ids.contains(&"anthropic-api"));
     }
 
