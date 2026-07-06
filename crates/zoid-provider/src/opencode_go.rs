@@ -3,9 +3,9 @@
 //! (POST {base}/v1/chat/completions, 8 models) or `AnthropicProvider`
 //! (POST {base}/v1/messages, 5 models) based on the active model id.
 
-use crate::{CompletionRequest, Provider, ProviderEvent};
 use crate::anthropic::AnthropicProvider;
 use crate::openai_compat::OpenAICompatProvider;
+use crate::{CompletionRequest, Provider, ProviderEvent};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::time::Duration;
@@ -18,19 +18,19 @@ enum WireShape {
 }
 
 const GO_MODELS: &[(&str, WireShape)] = &[
-    ("glm-5.2",           WireShape::OpenAICompat),
-    ("glm-5.1",           WireShape::OpenAICompat),
-    ("kimi-k2.7-code",    WireShape::OpenAICompat),
-    ("kimi-k2.6",         WireShape::OpenAICompat),
-    ("deepseek-v4-pro",   WireShape::OpenAICompat),
+    ("glm-5.2", WireShape::OpenAICompat),
+    ("glm-5.1", WireShape::OpenAICompat),
+    ("kimi-k2.7-code", WireShape::OpenAICompat),
+    ("kimi-k2.6", WireShape::OpenAICompat),
+    ("deepseek-v4-pro", WireShape::OpenAICompat),
     ("deepseek-v4-flash", WireShape::OpenAICompat),
-    ("mimo-v2.5",         WireShape::OpenAICompat),
-    ("mimo-v2.5-pro",     WireShape::OpenAICompat),
-    ("minimax-m3",        WireShape::Anthropic),
-    ("minimax-m2.7",      WireShape::Anthropic),
-    ("minimax-m2.5",      WireShape::Anthropic),
-    ("qwen3.7-max",       WireShape::Anthropic),
-    ("qwen3.7-plus",      WireShape::Anthropic),
+    ("mimo-v2.5", WireShape::OpenAICompat),
+    ("mimo-v2.5-pro", WireShape::OpenAICompat),
+    ("minimax-m3", WireShape::Anthropic),
+    ("minimax-m2.7", WireShape::Anthropic),
+    ("minimax-m2.5", WireShape::Anthropic),
+    ("qwen3.7-max", WireShape::Anthropic),
+    ("qwen3.7-plus", WireShape::Anthropic),
 ];
 
 pub struct OpenCodeGoProvider {
@@ -149,8 +149,10 @@ mod tests {
 
     /// Server that records the request line of the first request, then writes
     /// a minimal SSE `data: [DONE]` so the stream terminates cleanly.
-    async fn spawn_recording_server(
-    ) -> (std::net::SocketAddr, std::sync::Arc<tokio::sync::Mutex<Option<String>>>) {
+    async fn spawn_recording_server() -> (
+        std::net::SocketAddr,
+        std::sync::Arc<tokio::sync::Mutex<Option<String>>>,
+    ) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let recorded = std::sync::Arc::new(tokio::sync::Mutex::new(None));

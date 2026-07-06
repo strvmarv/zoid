@@ -80,12 +80,19 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             default_base_url: "https://opencode.ai/zen/go",
         },
         models: &[
-            "glm-5.2", "glm-5.1",
-            "kimi-k2.7-code", "kimi-k2.6",
-            "deepseek-v4-pro", "deepseek-v4-flash",
-            "mimo-v2.5", "mimo-v2.5-pro",
-            "minimax-m3", "minimax-m2.7", "minimax-m2.5",
-            "qwen3.7-max", "qwen3.7-plus",
+            "glm-5.2",
+            "glm-5.1",
+            "kimi-k2.7-code",
+            "kimi-k2.6",
+            "deepseek-v4-pro",
+            "deepseek-v4-flash",
+            "mimo-v2.5",
+            "mimo-v2.5-pro",
+            "minimax-m3",
+            "minimax-m2.7",
+            "minimax-m2.5",
+            "qwen3.7-max",
+            "qwen3.7-plus",
         ],
         status: Status::Available,
     },
@@ -173,27 +180,123 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
     ),
     // --- OpenCode Go models (12 new entries; deepseek-v4-pro corrected above) ---
     // glm-5.2: reconciled with existing glm-5.2:cloud (same model, 1M window).
-    ("glm-5.2", ModelInfo { context_window: 1_000_000, max_output: 0, tools: true, prompt_cache: true }),
+    (
+        "glm-5.2",
+        ModelInfo {
+            context_window: 1_000_000,
+            max_output: 0,
+            tools: true,
+            prompt_cache: true,
+        },
+    ),
     // glm-5.1: inferred from glm-5.2:cloud sibling (same GLM-5.x family, 1M window).
-    ("glm-5.1", ModelInfo { context_window: 1_000_000, max_output: 0, tools: true, prompt_cache: true }),
+    (
+        "glm-5.1",
+        ModelInfo {
+            context_window: 1_000_000,
+            max_output: 0,
+            tools: true,
+            prompt_cache: true,
+        },
+    ),
     // Kimi: confirmed via platform.kimi.ai (262,144-token window).
-    ("kimi-k2.7-code", ModelInfo { context_window: 262_144, max_output: 0, tools: true, prompt_cache: true }),
-    ("kimi-k2.6", ModelInfo { context_window: 262_144, max_output: 0, tools: true, prompt_cache: true }),
+    (
+        "kimi-k2.7-code",
+        ModelInfo {
+            context_window: 262_144,
+            max_output: 0,
+            tools: true,
+            prompt_cache: true,
+        },
+    ),
+    (
+        "kimi-k2.6",
+        ModelInfo {
+            context_window: 262_144,
+            max_output: 0,
+            tools: true,
+            prompt_cache: true,
+        },
+    ),
     // deepseek-v4-flash: confirmed via api-docs.deepseek.com (1M window, 384K max output).
-    ("deepseek-v4-flash", ModelInfo { context_window: 1_000_000, max_output: 384_000, tools: true, prompt_cache: true }),
+    (
+        "deepseek-v4-flash",
+        ModelInfo {
+            context_window: 1_000_000,
+            max_output: 384_000,
+            tools: true,
+            prompt_cache: true,
+        },
+    ),
     // MiMo: unconfirmed — approx from public claims; override via ZOID_CONTEXT_CEILING.
-    ("mimo-v2.5", ModelInfo { context_window: 128_000, max_output: 0, tools: true, prompt_cache: true }),
-    ("mimo-v2.5-pro", ModelInfo { context_window: 128_000, max_output: 0, tools: true, prompt_cache: true }),
+    (
+        "mimo-v2.5",
+        ModelInfo {
+            context_window: 128_000,
+            max_output: 0,
+            tools: true,
+            prompt_cache: true,
+        },
+    ),
+    (
+        "mimo-v2.5-pro",
+        ModelInfo {
+            context_window: 128_000,
+            max_output: 0,
+            tools: true,
+            prompt_cache: true,
+        },
+    ),
     // Anthropic-shape Go models: tools=false on day one (existing AnthropicProvider
     // is text-only P1b; a zoid-implementation limitation, not a model limitation —
     // flips to true when P1b.1 Anthropic tool_use/tool_result mapping lands).
     // prompt_cache=true per Go's advertised cached-read pricing for all 13 models.
     // Windows unconfirmed — approx from public claims; override via ZOID_CONTEXT_CEILING.
-    ("minimax-m3", ModelInfo { context_window: 200_000, max_output: 0, tools: false, prompt_cache: true }),
-    ("minimax-m2.7", ModelInfo { context_window: 200_000, max_output: 0, tools: false, prompt_cache: true }),
-    ("minimax-m2.5", ModelInfo { context_window: 200_000, max_output: 0, tools: false, prompt_cache: true }),
-    ("qwen3.7-max", ModelInfo { context_window: 256_000, max_output: 0, tools: false, prompt_cache: true }),
-    ("qwen3.7-plus", ModelInfo { context_window: 256_000, max_output: 0, tools: false, prompt_cache: true }),
+    (
+        "minimax-m3",
+        ModelInfo {
+            context_window: 200_000,
+            max_output: 0,
+            tools: false,
+            prompt_cache: true,
+        },
+    ),
+    (
+        "minimax-m2.7",
+        ModelInfo {
+            context_window: 200_000,
+            max_output: 0,
+            tools: false,
+            prompt_cache: true,
+        },
+    ),
+    (
+        "minimax-m2.5",
+        ModelInfo {
+            context_window: 200_000,
+            max_output: 0,
+            tools: false,
+            prompt_cache: true,
+        },
+    ),
+    (
+        "qwen3.7-max",
+        ModelInfo {
+            context_window: 256_000,
+            max_output: 0,
+            tools: false,
+            prompt_cache: true,
+        },
+    ),
+    (
+        "qwen3.7-plus",
+        ModelInfo {
+            context_window: 256_000,
+            max_output: 0,
+            tools: false,
+            prompt_cache: true,
+        },
+    ),
 ];
 
 /// Conservative fallback for models not in the registry. Under-estimating the
@@ -373,7 +476,9 @@ mod opencode_go_tests {
         assert_eq!(e.status, Status::Available);
         assert_eq!(
             e.transport,
-            Transport::Http { default_base_url: "https://opencode.ai/zen/go" }
+            Transport::Http {
+                default_base_url: "https://opencode.ai/zen/go"
+            }
         );
         assert_eq!(e.models.len(), 13);
         assert_eq!(e.models[0], "glm-5.2"); // default model
@@ -391,19 +496,19 @@ mod opencode_go_tests {
     fn opencode_go_model_caps_match_reconciled_table() {
         let cases: &[(&str, u64, u64, bool, bool)] = &[
             // (id, context_window, max_output, tools, prompt_cache)
-            ("glm-5.2",           1_000_000, 0,       true,  true),
-            ("glm-5.1",           1_000_000, 0,       true,  true),
-            ("kimi-k2.7-code",    262_144,   0,       true,  true),
-            ("kimi-k2.6",         262_144,   0,       true,  true),
-            ("deepseek-v4-pro",   1_000_000, 384_000, true,  true),
-            ("deepseek-v4-flash", 1_000_000, 384_000, true,  true),
-            ("mimo-v2.5",         128_000,   0,       true,  true),
-            ("mimo-v2.5-pro",     128_000,   0,       true,  true),
-            ("minimax-m3",        200_000,   0,       false, true),
-            ("minimax-m2.7",      200_000,   0,       false, true),
-            ("minimax-m2.5",      200_000,   0,       false, true),
-            ("qwen3.7-max",       256_000,   0,       false, true),
-            ("qwen3.7-plus",      256_000,   0,       false, true),
+            ("glm-5.2", 1_000_000, 0, true, true),
+            ("glm-5.1", 1_000_000, 0, true, true),
+            ("kimi-k2.7-code", 262_144, 0, true, true),
+            ("kimi-k2.6", 262_144, 0, true, true),
+            ("deepseek-v4-pro", 1_000_000, 384_000, true, true),
+            ("deepseek-v4-flash", 1_000_000, 384_000, true, true),
+            ("mimo-v2.5", 128_000, 0, true, true),
+            ("mimo-v2.5-pro", 128_000, 0, true, true),
+            ("minimax-m3", 200_000, 0, false, true),
+            ("minimax-m2.7", 200_000, 0, false, true),
+            ("minimax-m2.5", 200_000, 0, false, true),
+            ("qwen3.7-max", 256_000, 0, false, true),
+            ("qwen3.7-plus", 256_000, 0, false, true),
         ];
         for (id, ctx, max_out, tools, pc) in cases {
             let info = model_info(id);
