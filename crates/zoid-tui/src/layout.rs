@@ -171,7 +171,6 @@ pub struct ShellLayout {
     pub input: Rect,
     pub status: Rect,
     pub palette: Option<Rect>,
-    pub cmdline: Option<Rect>,
 }
 
 /// True when (col,row) falls inside `r` (half-open on right/bottom).
@@ -271,16 +270,6 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
     } else {
         None
     };
-    let cmdline = if state.overlay == Overlay::CommandLine {
-        Some(Rect {
-            x: area.x,
-            y: status.y,
-            width: area.width,
-            height: 1,
-        })
-    } else {
-        None
-    };
 
     ShellLayout {
         title,
@@ -292,7 +281,6 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
         input,
         status,
         palette,
-        cmdline,
     }
 }
 

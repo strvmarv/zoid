@@ -12,7 +12,7 @@ The **visual source of truth** for zoid's TUI. The visual-language contract and 
 |---|---|
 | `modes.html` | The two isolated modes (Chat vs Build), mode indicator, switching |
 | `chat-mode.html` | **Chat mode** (full scale): conversation + *manual* implementation, flush-left stream + measure-cap slack, light rail (**repo / session / context ⑤**, no drawer keybinds; files via palette), ① semantic zoom, ④ object-first verbs, markdown + highlighted-code message rendering, single-step cadence, single-subagent delegation |
-| `palette.html` | **Command palette (^P)** + command line (`:`); mode-aware grouped actions with keybinds |
+| `palette.html` | **Command palette (^P)** — adaptive: fuzzy mode-aware list, or type `:` inside it for direct commands; grouped actions with keybinds |
 | `rust-unlocks.html` | Rust-enabled UX: Ⓡ2 motion, Ⓡ3 tree-sitter rendering, Ⓡ4 live data viz (Ⓡ1 inline graphics = later) |
 
 *Build-mode screens (`build-pipeline`, `build-mode`, `finalize-and-decisions`, `blocker-notifications`) and the `_superseded-*` scenes are archived under `docs/superpowers/archive/2026-07-02/ux/`.*

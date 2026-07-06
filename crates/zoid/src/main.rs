@@ -2230,9 +2230,10 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             app.shell.overlay = Overlay::Palette;
             app.shell.palette = Default::default();
         }
-        Action::OpenCommandLine => {
-            app.shell.overlay = Overlay::CommandLine;
-            app.shell.cmdline = Default::default();
+        Action::OpenPaletteDirect => {
+            app.shell.overlay = Overlay::Palette;
+            app.shell.palette = Default::default();
+            app.shell.palette.query.push(':');
         }
         Action::CloseOverlay => {
             // Defense-in-depth: if a question overlay is closed via this generic
@@ -2270,9 +2271,14 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         },
         Action::PaletteRun => match app.shell.palette.stage.clone() {
             zoid_tui::state::PaletteStage::Pick => {
-                // No matching palette row → do nothing (overlay stays open).
+                if app.shell.palette.query.starts_with(':') {
+                    // Direct phase — parse the whole buffer and run it.
+                    let cmd = zoid_tui::command::parse_command(&app.shell.palette.query);
+                    app.shell.close_overlay();
+                    return exec_command(app, cmd).await;
+                }
+                // Pick phase — fuzzy list resolution.
                 if let Some(cmd) = palette_selected_command(&app.shell) {
-                    // Parameterized command → enter inline Arg phase, stay open.
                     match zoid_tui::palette::arg_kind_for(&cmd) {
                         Some(kind) => {
                             app.shell.palette.stage = zoid_tui::state::PaletteStage::Arg {
@@ -2288,9 +2294,6 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 }
             }
             zoid_tui::state::PaletteStage::Arg { kind, input } => {
-                // Blank argument (empty or whitespace-only) is a no-op — cannot
-                // rename to empty; stay in Arg. Trim so a padded entry stores a
-                // clean name.
                 let trimmed = input.trim();
                 if !trimmed.is_empty() {
                     let cmd = kind.build(trimmed.to_string());
@@ -2301,14 +2304,6 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         },
         Action::PaletteArgCancel => {
             app.shell.palette.stage = zoid_tui::state::PaletteStage::Pick;
-        }
-        Action::CmdlineChar(c) => app.shell.cmdline.buffer.push(c),
-        Action::CmdlineBackspace => {
-            app.shell.cmdline.buffer.pop();
-        }
-        Action::RunCommand(c) => {
-            app.shell.close_overlay();
-            return exec_command(app, c).await;
         }
         Action::ScrollConversation(d) => {
             app.shell.scroll_conversation(d, app.last_conv_max_scroll);
@@ -3300,9 +3295,10 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
         }
         Command::RenameSession(name) => {
             if name.is_empty() {
-                // Seed the command line so the user types the name.
-                app.shell.overlay = zoid_tui::Overlay::CommandLine;
-                app.shell.cmdline.buffer = "rename ".into();
+                // Seed the palette in Direct phase so the user types the name.
+                app.shell.overlay = zoid_tui::Overlay::Palette;
+                app.shell.palette = Default::default();
+                app.shell.palette.query = ":rename ".into();
             } else {
                 app.session
                     .rename_session(app.session_id, name.clone())

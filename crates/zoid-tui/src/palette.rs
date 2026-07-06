@@ -11,6 +11,9 @@ use crate::command::Command;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArgKind {
     Rename,
+    Delegate,
+    ModeImport,
+    ModeUpdate,
 }
 
 impl ArgKind {
@@ -18,6 +21,9 @@ impl ArgKind {
     pub fn prompt(&self) -> &'static str {
         match self {
             ArgKind::Rename => "Rename to",
+            ArgKind::Delegate => "Delegate task",
+            ArgKind::ModeImport => "Import mode from URL",
+            ArgKind::ModeUpdate => "Update mode",
         }
     }
 
@@ -25,6 +31,43 @@ impl ArgKind {
     pub fn build(&self, input: String) -> Command {
         match self {
             ArgKind::Rename => Command::RenameSession(input),
+            ArgKind::Delegate => Command::Delegate(input),
+            ArgKind::ModeImport => Command::ModeImport(input),
+            ArgKind::ModeUpdate => Command::ModeUpdate(input),
+        }
+    }
+}
+
+/// What a given `PaletteState` means at this instant. Pure — used by rendering
+/// to branch on the `:` prefix without storing a phase. Routing derives the
+/// same classification inline (`in_direct: query.starts_with(':')`, a boolean)
+/// to avoid the per-keystroke `parse_command` cost. `Arg` is `PaletteStage::Arg`,
+/// not a `Phase` variant — it's a real stage transition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Phase {
+    /// Empty or non-`:` query → fuzzy ranked list.
+    Pick,
+    /// Query starts with `:` → live `parse_command` preview, list hidden.
+    Direct { cmd: crate::command::Command },
+    /// `PaletteStage::Arg` is active → inline argument entry.
+    Arg,
+}
+
+/// Resolve the current phase from the palette state. Pure. Calls
+/// `parse_command`, which returns an owned `Command` — one `String` heap
+/// allocation per frame for `:`-prefix queries (e.g. `:mode Build`). The render
+/// path needs the `Command` regardless.
+pub fn resolve_phase(state: &crate::state::PaletteState) -> Phase {
+    match state.stage {
+        crate::state::PaletteStage::Arg { .. } => Phase::Arg,
+        crate::state::PaletteStage::Pick => {
+            if state.query.starts_with(':') {
+                Phase::Direct {
+                    cmd: crate::command::parse_command(&state.query),
+                }
+            } else {
+                Phase::Pick
+            }
         }
     }
 }
@@ -34,6 +77,9 @@ impl ArgKind {
 pub fn arg_kind_for(cmd: &Command) -> Option<ArgKind> {
     match cmd {
         Command::RenameSession(_) => Some(ArgKind::Rename),
+        Command::Delegate(_) => Some(ArgKind::Delegate),
+        Command::ModeImport(_) => Some(ArgKind::ModeImport),
+        Command::ModeUpdate(_) => Some(ArgKind::ModeUpdate),
         _ => None,
     }
 }
@@ -53,6 +99,8 @@ pub struct PaletteItem {
 /// running server); the companion row offers the *opposite* action, mirroring
 /// how the mode rows offer every mode other than the active one.
 pub fn all_items(active_mode: &str, mode_names: &[String], companion_on: bool) -> Vec<PaletteItem> {
+    use crate::state::DrawerId;
+
     // One "Switch to <mode>" row per mode other than the active one, in order,
     // then a reload row.
     let mut mode_rows: Vec<PaletteItem> = mode_names
@@ -86,8 +134,32 @@ pub fn all_items(active_mode: &str, mode_names: &[String], companion_on: bool) -
             label: "Rename session…".to_string(),
             command: Command::RenameSession(String::new()),
         },
+        PaletteItem {
+            label: "Delegate task…".to_string(),
+            command: Command::Delegate(String::new()),
+        },
+        PaletteItem {
+            label: "Import mode from URL…".to_string(),
+            command: Command::ModeImport(String::new()),
+        },
+        PaletteItem {
+            label: "Update mode…".to_string(),
+            command: Command::ModeUpdate(String::new()),
+        },
     ];
     items.extend(mode_rows);
+    items.push(PaletteItem {
+        label: "Toggle repo drawer".to_string(),
+        command: Command::OpenDrawer(DrawerId::Repo),
+    });
+    items.push(PaletteItem {
+        label: "Toggle session drawer".to_string(),
+        command: Command::OpenDrawer(DrawerId::Session),
+    });
+    items.push(PaletteItem {
+        label: "Toggle context drawer".to_string(),
+        command: Command::OpenDrawer(DrawerId::Context),
+    });
     items.push(PaletteItem {
         label: "Open settings".to_string(),
         command: Command::OpenConfig,
@@ -181,9 +253,6 @@ mod tests {
 
     #[test]
     fn all_items_is_flat_curated() {
-        // Runnable-only is now a *type-level* guarantee (the field is `Command`,
-        // not `Option<Command>`), so there's nothing to assert at runtime for it.
-        // This pins the flat curated set and its at-rest order.
         let items = all_items("Chat", &names(), false);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         assert_eq!(
@@ -192,8 +261,14 @@ mod tests {
                 "New session",
                 "Resume session…",
                 "Rename session…",
+                "Delegate task…",
+                "Import mode from URL…",
+                "Update mode…",
                 "Switch to Build",
                 "Reload modes",
+                "Toggle repo drawer",
+                "Toggle session drawer",
+                "Toggle context drawer",
                 "Open settings",
                 "Enable companion",
                 "Quit zoid",
@@ -266,22 +341,61 @@ mod tests {
     }
 
     #[test]
-    fn arg_kind_for_flags_only_parameterized_commands() {
+    fn arg_kind_for_flags_all_parameterized_commands() {
         assert_eq!(
             arg_kind_for(&Command::RenameSession(String::new())),
             Some(ArgKind::Rename)
         );
-        assert_eq!(arg_kind_for(&Command::CompanionEnable), None);
-        assert_eq!(arg_kind_for(&Command::Quit), None);
-        assert_eq!(arg_kind_for(&Command::NewSession), None);
+        assert_eq!(
+            arg_kind_for(&Command::Delegate(String::new())),
+            Some(ArgKind::Delegate)
+        );
+        assert_eq!(
+            arg_kind_for(&Command::ModeImport(String::new())),
+            Some(ArgKind::ModeImport)
+        );
+        assert_eq!(
+            arg_kind_for(&Command::ModeUpdate(String::new())),
+            Some(ArgKind::ModeUpdate)
+        );
     }
 
     #[test]
-    fn arg_kind_builds_command_and_prompt() {
+    fn arg_kind_for_returns_none_for_zero_arg_commands() {
+        assert_eq!(arg_kind_for(&Command::CompanionEnable), None);
+        assert_eq!(arg_kind_for(&Command::Quit), None);
+        assert_eq!(arg_kind_for(&Command::NewSession), None);
+        assert_eq!(arg_kind_for(&Command::ResumeSessionPicker), None);
+        assert_eq!(arg_kind_for(&Command::OpenConfig), None);
+        assert_eq!(arg_kind_for(&Command::ReloadModes), None);
+        assert_eq!(
+            arg_kind_for(&Command::OpenDrawer(crate::state::DrawerId::Repo)),
+            None
+        );
+        assert_eq!(arg_kind_for(&Command::SwitchMode("Build".into())), None);
+    }
+
+    #[test]
+    fn arg_kind_prompts_and_builds_for_all_variants() {
         assert_eq!(ArgKind::Rename.prompt(), "Rename to");
         assert_eq!(
             ArgKind::Rename.build("my-feature".to_string()),
             Command::RenameSession("my-feature".to_string())
+        );
+        assert_eq!(ArgKind::Delegate.prompt(), "Delegate task");
+        assert_eq!(
+            ArgKind::Delegate.build("add a test for parse()".to_string()),
+            Command::Delegate("add a test for parse()".to_string())
+        );
+        assert_eq!(ArgKind::ModeImport.prompt(), "Import mode from URL");
+        assert_eq!(
+            ArgKind::ModeImport.build("github.com/o/r/tree/main/skills".to_string()),
+            Command::ModeImport("github.com/o/r/tree/main/skills".to_string())
+        );
+        assert_eq!(ArgKind::ModeUpdate.prompt(), "Update mode");
+        assert_eq!(
+            ArgKind::ModeUpdate.build("Superpowers".to_string()),
+            Command::ModeUpdate("Superpowers".to_string())
         );
     }
 }

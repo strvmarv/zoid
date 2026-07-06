@@ -1,13 +1,14 @@
 //! `render_shell` — the shell frame: the active-mode title + status chip, the
 //! main surface (the conversation, or a mode-error card when the active mode
-//! failed to load), the rail of drawers, the input box, and palette /
-//! command-line overlays. Every glyph/color comes from `tokens` (spec §16).
+//! failed to load), the rail of drawers, the input box, and the palette
+//! overlay. Every glyph/color comes from `tokens` (spec §16).
 //! Geometry comes from `layout::compute` — the same rects mouse hit-testing uses.
 
 use crate::chat::{conversation_view, ChatView};
+use crate::command::Command;
 use crate::economy_view::EconomyView;
 use crate::layout::{compute, ShellLayout, CONV_PAD};
-use crate::palette::{all_items, nav, selectable_matches, PaletteItem};
+use crate::palette::{all_items, nav, resolve_phase, selectable_matches, PaletteItem, Phase};
 use crate::state::{DrawerId, Focus, Overlay, PaletteStage, ShellState};
 use crate::tokens::{color, glyph};
 use ratatui::{
@@ -197,10 +198,6 @@ pub fn render_shell(
     if state.overlay == Overlay::Palette {
         if let Some(p) = layout.palette {
             render_palette(frame, state, p);
-        }
-    } else if state.overlay == Overlay::CommandLine {
-        if let Some(c) = layout.cmdline {
-            render_cmdline(frame, state, c);
         }
     } else if state.overlay == Overlay::Objects {
         if let Some(p) = layout.palette {
@@ -671,9 +668,10 @@ fn render_tasks_body(frame: &mut Frame, area: Rect, items: &[zoid_core::tasks::T
 fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
     frame.render_widget(Clear, area);
 
-    // Title reflects the phase: Pick shows the search prompt + query; Arg shows
-    // the argument prompt + typed input so far.
     let title = match &state.palette.stage {
+        PaletteStage::Pick if state.palette.query.starts_with(':') => {
+            format!(" {} ", state.palette.query)
+        }
         PaletteStage::Pick => format!(" {} {} ", glyph::USER_TURN, state.palette.query),
         PaletteStage::Arg { kind, input } => format!(" {}: {} ", kind.prompt(), input),
     };
@@ -687,18 +685,37 @@ fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
     });
     frame.render_widget(block, area);
 
-    match &state.palette.stage {
-        PaletteStage::Arg { .. } => {
-            // Inline argument entry: a single dim hint line under the prompt.
+    match resolve_phase(&state.palette) {
+        Phase::Arg => {
             let hint = Line::styled("Enter apply · Esc back", Style::new().fg(color::DIM));
             frame.render_widget(Paragraph::new(vec![hint]), inner);
         }
-        PaletteStage::Pick => {
+        Phase::Direct { cmd } => {
+            let preview: String = match cmd {
+                Command::Unknown(s) if s.is_empty() => "type :mode, :q, :delegate …".to_string(),
+                Command::Unknown(_) => "unknown command".to_string(),
+                Command::SwitchMode(name) => format!("→ Switch to {name}"),
+                Command::ReloadModes => "→ Reload modes".to_string(),
+                Command::ModeImport(url) => format!("→ Import mode: {url}"),
+                Command::ModeUpdate(name) => format!("→ Update mode: {name}"),
+                Command::RenameSession(name) => format!("→ Rename session: {name}"),
+                Command::Delegate(task) => format!("→ Delegate: {task}"),
+                Command::Quit => "→ Quit zoid".to_string(),
+                Command::OpenDrawer(id) => format!("→ Toggle {:?} drawer", id),
+                Command::NewSession => "→ New session".to_string(),
+                Command::ResumeSessionPicker => "→ Resume session…".to_string(),
+                Command::OpenConfig => "→ Open settings".to_string(),
+                Command::CompanionEnable => "→ Enable companion".to_string(),
+                Command::CompanionDisable => "→ Disable companion".to_string(),
+            };
+            let line = Line::styled(preview, Style::new().fg(color::DIM));
+            frame.render_widget(Paragraph::new(vec![line]), inner);
+        }
+        Phase::Pick => {
             let items = all_items(&state.active_mode, &state.mode_names, state.companion_on);
             let matches = selectable_matches(&items, &state.palette.query);
             let sel = nav(state.palette.selected, 0, matches.len());
 
-            // Flat single-column list of ranked matches; highlight the selected row.
             let mut lines: Vec<Line> = Vec::new();
             let mut selected_line: usize = 0;
             for (rank, &i) in matches.iter().enumerate() {
@@ -708,8 +725,6 @@ fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
                 lines.push(palette_row_line(&items[i], rank == sel));
             }
 
-            // Scroll-follow: keep the selected line within the visible viewport.
-            // The curated list is short today, but this stays correct if it grows.
             let vh = inner.height as usize;
             let off = selected_line.saturating_sub(vh.saturating_sub(1));
             frame.render_widget(Paragraph::new(lines).scroll((off as u16, 0)), inner);
@@ -723,19 +738,6 @@ fn palette_row_line(it: &PaletteItem, selected: bool) -> Line<'static> {
         format!(" {}", it.label),
         bg(Style::new().fg(color::TXT)),
     ))
-}
-
-fn render_cmdline(frame: &mut Frame, state: &ShellState, area: Rect) {
-    frame.render_widget(Clear, area);
-    let line = Line::from(vec![
-        Span::styled(":", Style::new().fg(color::CHAT_ACCENT)),
-        Span::styled(state.cmdline.buffer.clone(), Style::new().fg(color::TXT)),
-        Span::styled(
-            glyph::CARET.to_string(),
-            Style::new().fg(color::CHAT_ACCENT),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(line), area);
 }
 
 /// A bordered, titled, single-selection list — shared by the object, verb, and

@@ -2,9 +2,9 @@
 //! `Action` vocabulary. Pure — synthetic events in, `Action` out (spec §13/§14.1).
 //! Precedence: an active overlay captures keys first; then global combos
 //! (`^Q`/`^P`/`⇧Tab`); then focus-contextual keys (Input edits; Conversation/Rail
-//! navigate). `:` opens the command line only when focus ≠ Input.
+//! navigate). `:` opens the palette in Direct phase only when focus ≠ Input.
 
-use crate::command::{parse_command, Command};
+use crate::command::Command;
 use crate::config_view::FieldKind;
 use crate::layout::{in_rect, ShellLayout};
 use crate::palette::{all_items, nav, selectable_matches};
@@ -20,7 +20,7 @@ pub enum Action {
     FocusNext,
     FocusRegion(Focus),
     OpenPalette,
-    OpenCommandLine,
+    OpenPaletteDirect,
     CloseOverlay,
     ToggleDrawer(DrawerId),
     PaletteMove(i32),
@@ -31,10 +31,6 @@ pub enum Action {
     /// Esc while in the palette's Arg (argument-entry) phase: return to the Pick
     /// list without closing the overlay.
     PaletteArgCancel,
-    CmdlineChar(char),
-    CmdlineBackspace,
-    /// Run the command line buffer (parsed into a `Command`).
-    RunCommand(Command),
     ScrollConversation(i32),
     /// Left-button press landed on the scrollbar at this screen row (begin drag).
     ScrollbarGrab(u16),
@@ -131,7 +127,6 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
     // 1. Overlays capture keys first.
     match state.overlay {
         Overlay::Palette => return route_palette_key(state, key),
-        Overlay::CommandLine => return route_cmdline_key(state, key),
         Overlay::Objects => return route_objects_key(key),
         Overlay::Verbs => return route_verbs_key(key),
         Overlay::Sessions => return route_sessions_key(key),
@@ -200,7 +195,7 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
         Focus::Conversation => match key.code {
             KeyCode::Char('=') | KeyCode::Char('+') => Action::ZoomIn,
             KeyCode::Char('-') | KeyCode::Char('_') => Action::ZoomOut,
-            KeyCode::Char(':') => Action::OpenCommandLine,
+            KeyCode::Char(':') => Action::OpenPaletteDirect,
             KeyCode::Char('j') | KeyCode::Down => Action::ScrollConversation(1),
             KeyCode::Char('k') | KeyCode::Up => Action::ScrollConversation(-1),
             // ⇧Home/⇧End jump the scroll to the top/bottom of the transcript.
@@ -212,7 +207,7 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
         },
         Focus::Rail => match key.code {
             // Rail j/k item-nav lands with economy content in P3 — Noop for now.
-            KeyCode::Char(':') => Action::OpenCommandLine,
+            KeyCode::Char(':') => Action::OpenPaletteDirect,
             KeyCode::Esc => Action::FocusRegion(Focus::Input),
             _ => Action::Noop,
         },
@@ -221,29 +216,18 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
 
 fn route_palette_key(state: &ShellState, key: KeyEvent) -> Action {
     let in_arg = matches!(state.palette.stage, crate::state::PaletteStage::Arg { .. });
+    let in_direct = !in_arg && state.palette.query.starts_with(':');
     match key.code {
-        // Esc: in Arg phase return to the Pick list; in Pick phase close.
+        // Esc: in Arg phase return to the Pick list; otherwise close.
         KeyCode::Esc if in_arg => Action::PaletteArgCancel,
         KeyCode::Esc => Action::CloseOverlay,
         KeyCode::Enter => Action::PaletteRun,
-        // Selection nav only applies to the Pick list.
-        KeyCode::Up if !in_arg => Action::PaletteMove(-1),
-        KeyCode::Down if !in_arg => Action::PaletteMove(1),
+        // Selection nav only applies to the Pick list (not Direct, not Arg).
+        KeyCode::Up if !in_arg && !in_direct => Action::PaletteMove(-1),
+        KeyCode::Down if !in_arg && !in_direct => Action::PaletteMove(1),
         KeyCode::Backspace => Action::PaletteBackspace,
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             Action::PaletteChar(c)
-        }
-        _ => Action::Noop,
-    }
-}
-
-fn route_cmdline_key(state: &ShellState, key: KeyEvent) -> Action {
-    match key.code {
-        KeyCode::Esc => Action::CloseOverlay,
-        KeyCode::Enter => Action::RunCommand(parse_command(&state.cmdline.buffer)),
-        KeyCode::Backspace => Action::CmdlineBackspace,
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Action::CmdlineChar(c)
         }
         _ => Action::Noop,
     }
@@ -291,7 +275,7 @@ fn route_provider_switch_key(_state: &ShellState, key: KeyEvent) -> Action {
 ///    ↑/↓/Enter/←/Esc for movement/select/back while it's open.
 /// 2. An in-flight inline text edit buffer (Text/Uint/Secret fields) captures
 ///    Enter/Esc/Backspace/Char — the same buffer/commit/cancel shape as the
-///    palette/cmdline overlays, scoped to a single field.
+///    palette overlay (Pick/Arg phases), scoped to a single field.
 /// 3. Otherwise, field-list navigation: Up/Down move fields, Tab/Shift+Tab
 ///    switch sections, and Right/Enter act on the focused field (drill into a
 ///    `Pick` field's picker, toggle a `Bool`, or begin editing Text/Uint).
@@ -656,7 +640,7 @@ mod tests {
     }
 
     #[test]
-    fn colon_opens_cmdline_only_when_not_input() {
+    fn colon_opens_palette_direct_when_not_input() {
         let mut s = ShellState::new();
         // focus Input → ':' is literal text
         assert!(matches!(
@@ -666,7 +650,12 @@ mod tests {
         s.focus = Focus::Conversation;
         assert_eq!(
             route_key(&s, key(KeyCode::Char(':'), KeyModifiers::NONE)),
-            Action::OpenCommandLine
+            Action::OpenPaletteDirect
+        );
+        s.focus = Focus::Rail;
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char(':'), KeyModifiers::NONE)),
+            Action::OpenPaletteDirect
         );
     }
 
@@ -686,6 +675,28 @@ mod tests {
         assert_eq!(
             route_key(&s, k(KeyCode::Char('r'))),
             Action::PaletteChar('r')
+        );
+    }
+
+    #[test]
+    fn palette_direct_phase_routing() {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Palette;
+        s.palette.query = ":mode Build".into(); // Direct — derived from ':' prefix
+        let k = |c: KeyCode| KeyEvent::new(c, KeyModifiers::NONE);
+        // Esc closes (same as Pick); arrows are inert (no list to navigate).
+        assert_eq!(route_key(&s, k(KeyCode::Esc)), Action::CloseOverlay);
+        assert_eq!(route_key(&s, k(KeyCode::Enter)), Action::PaletteRun);
+        assert_eq!(route_key(&s, k(KeyCode::Up)), Action::Noop);
+        assert_eq!(route_key(&s, k(KeyCode::Down)), Action::Noop);
+        // Char/Backspace still edit the buffer.
+        assert_eq!(
+            route_key(&s, k(KeyCode::Char('x'))),
+            Action::PaletteChar('x')
+        );
+        assert_eq!(
+            route_key(&s, k(KeyCode::Backspace)),
+            Action::PaletteBackspace
         );
     }
 
@@ -739,23 +750,6 @@ mod tests {
         assert_eq!(
             route_key(&s, key(KeyCode::Char('x'), KeyModifiers::NONE)),
             Action::PaletteChar('x')
-        );
-        // Same guard applies to CommandLine overlay.
-        s.overlay = Overlay::CommandLine;
-        assert_eq!(
-            route_key(&s, key(KeyCode::Char('q'), KeyModifiers::CONTROL)),
-            Action::Noop
-        );
-    }
-
-    #[test]
-    fn cmdline_enter_parses_command() {
-        let mut s = ShellState::new();
-        s.overlay = Overlay::CommandLine;
-        s.cmdline.buffer = ":mode Build".into();
-        assert_eq!(
-            route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)),
-            Action::RunCommand(Command::SwitchMode("Build".into()))
         );
     }
 
