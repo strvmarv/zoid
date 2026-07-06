@@ -2373,6 +2373,16 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             if text.trim().is_empty() {
                 return Ok(false);
             }
+            // A `:`-prefixed line is a command, not a user message — parse +
+            // dispatch it instead of spawning a turn. Multi-line text is never
+            // a command (the command-line overlay is the path for those); only
+            // a single line starting with `:` is intercepted here.
+            if text.lines().count() == 1 && text.trim_start().starts_with(':') {
+                app.textarea = make_input(TextArea::default());
+                app.shell.status_hint = None;
+                let cmd = zoid_tui::command::parse_command(&text);
+                return exec_command(app, cmd).await;
+            }
             let first = !app
                 .events
                 .iter()
