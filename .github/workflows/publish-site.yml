@@ -1,0 +1,107 @@
+name: publish-site
+
+# Mirrors the marketing site in /public from this PRIVATE source repo
+# (strvmarv/zoid) into the PUBLIC strvmarv/zoid-releases repo, where it is
+# served via GitHub Pages from a /docs folder on the main branch.
+#
+# Why a separate repo: the source repo is private. GitHub Pages cannot be
+# enabled on a private repo for anonymous/public viewing, so the site must
+# live in the public releases repo alongside the binary assets.
+#
+# Why copy-as-is: /public/index.html is already self-contained (inlined CSS,
+# inlined frames under /public/frames/). There is no build step at serve
+# time. The committed artifact is what we ship, so CI needs no Rust toolchain
+# and no regeneration of frames — deterministic and fast.
+#
+# Token: uses RELEASES_REPO_TOKEN (a PAT with contents:write on
+# strvmarv/zoid-releases) configured as a repo secret on the private repo.
+# The default GITHUB_TOKEN is scoped to THIS repo and cannot push elsewhere.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'public/**'
+  workflow_dispatch:
+    # Manual republish without needing a /public change. Useful after
+    # toggling GitHub Pages settings or backfilling the site to an
+    # already-set-up releases repo.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-site
+  cancel-in-progress: false
+
+jobs:
+  publish-site:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source (private repo)
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          # Only /public matters; sparse-checkout keeps the checkout tiny.
+          sparse-checkout: |
+            public
+
+      - name: Validate site is present and self-contained
+        # Guard against shipping a broken or half-regenerated site. The
+        # build pipeline (public/build.sh) is supposed to commit a fully
+        # inlined index.html; if it is missing, or if the frames directory
+        # the inlined HTML references is empty, fail loudly here rather
+        # than publishing a 404'ing Pages site.
+        run: |
+          set -euo pipefail
+          test -f public/index.html || { echo "::error::public/index.html missing"; exit 1; }
+          test -d public/frames    || { echo "::error::public/frames missing";  exit 1; }
+          # frames/ must contain at least the known set produced by build.sh.
+          for f in hero.html summary.html detail.html palette.html economy.html; do
+            test -s "public/frames/$f" || { echo "::error::public/frames/$f missing or empty"; exit 1; }
+          done
+          # README and the build scripts are dev-only; do NOT ship them.
+          echo "site validated"
+
+      - name: Checkout releases repo
+        uses: actions/checkout@v6
+        with:
+          repository: strvmarv/zoid-releases
+          token: ${{ secrets.RELEASES_REPO_TOKEN }}
+          path: releases-repo
+          persist-credentials: false
+
+      - name: Sync site into releases-repo/docs
+        # Mirror /public → /docs, replacing any prior site entirely. We wipe
+        # docs/ first so deleted/renamed frames in the source don't linger as
+        # stale files in the public repo. The root README.md (the releases
+        # landing page) is left untouched — Pages serves from /docs only.
+        run: |
+          set -euo pipefail
+          cd releases-repo
+          # Keep .git and any root files; only manage docs/.
+          rm -rf docs
+          mkdir -p docs
+          # Copy the site payload, excluding the dev-only build scripts and
+          # the README that documents the private-repo build pipeline.
+          cp -r ../public/. docs/
+          rm -f docs/build.sh docs/capture.sh docs/README.md
+          echo "synced site into docs/"
+          ls -la docs/ docs/frames/
+
+      - name: Commit and push
+        # No-op if nothing changed (e.g. a re-run of workflow_dispatch with no
+        # site changes). Avoids empty commits and spurious Pages rebuilds.
+        run: |
+          set -euo pipefail
+          cd releases-repo
+          git config user.name  "zoid-ci[bot]"
+          git config user.email "actions@github.com"
+          git add -A docs
+          if git diff --cached --quiet; then
+            echo "no site changes to publish"
+            exit 0
+          fi
+          git commit -m "site: publish marketing site from zoid@${GITHUB_SHA::7}"
+          git push
+          echo "published site to strvmarv/zoid-releases:docs/"
