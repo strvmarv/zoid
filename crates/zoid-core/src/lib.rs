@@ -19,6 +19,7 @@ pub mod sessions;
 pub mod skill;
 pub mod store;
 pub mod tasks;
+pub mod wizard;
 pub mod zoom;
 
 #[cfg(test)]
