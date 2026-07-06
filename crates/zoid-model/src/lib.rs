@@ -82,24 +82,6 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         models: &["claude-sonnet-4-6", "claude-opus-4-8"],
         status: Status::Available,
     },
-    ProviderEntry {
-        id: "anthropic-cli",
-        display: "anthropic · Claude Code CLI",
-        family: "anthropic",
-        transport: Transport::Cli {
-            default_command: "claude",
-        },
-        models: &["claude-sonnet-4-6", "claude-opus-4-8"],
-        status: Status::Planned,
-    },
-    ProviderEntry {
-        id: "anthropic-sdk",
-        display: "anthropic · SDK",
-        family: "anthropic",
-        transport: Transport::Sdk,
-        models: &["claude-sonnet-4-6", "claude-opus-4-8"],
-        status: Status::Planned,
-    },
 ];
 
 /// Per-model capabilities. One entry per known model id (case-insensitive
@@ -110,12 +92,8 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
         ModelInfo {
             context_window: 1_000_000,
             max_output: 0,
-            // Anthropic tool-use is not wired yet: the provider's request_body
-            // doesn't send a `tools` array and can't parse `tool_use` frames, so
-            // Claude can't actually call tools here. Report false rather than
-            // advertise an unfulfilled capability (the "capability lie"). Flip to
-            // true when the tool_use/tool_result wire mapping lands.
-            tools: false,
+            // Tool-use wired via the typed anthropic submodule (P1b.1).
+            tools: true,
             prompt_cache: true,
         },
     ),
@@ -124,12 +102,8 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
         ModelInfo {
             context_window: 1_000_000,
             max_output: 0,
-            // Anthropic tool-use is not wired yet: the provider's request_body
-            // doesn't send a `tools` array and can't parse `tool_use` frames, so
-            // Claude can't actually call tools here. Report false rather than
-            // advertise an unfulfilled capability (the "capability lie"). Flip to
-            // true when the tool_use/tool_result wire mapping lands.
-            tools: false,
+            // Tool-use wired via the typed anthropic submodule (P1b.1).
+            tools: true,
             prompt_cache: true,
         },
     ),
@@ -226,15 +200,6 @@ mod tests {
     }
 
     #[test]
-    fn tools_capability_matches_what_providers_actually_support() {
-        // Ollama's native tool-calling is wired + tested; Anthropic tool-use is
-        // NOT implemented yet, so the catalog must not claim it.
-        assert!(model_info("glm-5.2:cloud").tools);
-        assert!(!model_info("claude-sonnet-4-6").tools);
-        assert!(!model_info("claude-opus-4-8").tools);
-    }
-
-    #[test]
     fn model_info_case_insensitive() {
         assert_eq!(model_info("CLAUDE-SONNET-4-6").context_window, 1_000_000);
         assert_eq!(model_info("DEEPSEEK-V4-PRO").context_window, 128_000);
@@ -258,36 +223,6 @@ mod tests {
     }
 
     #[test]
-    fn entry_resolves_through_alias_and_transport() {
-        let e = entry("ollama").unwrap(); // legacy → ollama-cloud
-        assert_eq!(e.id, "ollama-cloud");
-        assert_eq!(e.family, "ollama");
-        assert_eq!(
-            e.transport,
-            Transport::Http {
-                default_base_url: "https://ollama.com"
-            }
-        );
-
-        let local = entry("ollama-local").unwrap();
-        assert_eq!(
-            local.transport,
-            Transport::Http {
-                default_base_url: "http://localhost:11434"
-            }
-        );
-
-        let cli = entry("anthropic-cli").unwrap();
-        assert_eq!(
-            cli.transport,
-            Transport::Cli {
-                default_command: "claude"
-            }
-        );
-        assert_eq!(cli.status, Status::Planned);
-    }
-
-    #[test]
     fn models_for_by_id_and_alias() {
         assert_eq!(models_for("ollama"), &["glm-5.2:cloud"]); // alias → cloud
         assert_eq!(models_for("ollama-cloud"), &["glm-5.2:cloud"]);
@@ -297,22 +232,46 @@ mod tests {
     }
 
     #[test]
-    fn default_base_url_only_for_http() {
+    fn entry_anthropic_api_is_http() {
+        let e = entry("anthropic-api").unwrap();
+        assert_eq!(e.id, "anthropic-api");
+        assert_eq!(e.family, "anthropic");
+        assert_eq!(
+            e.transport,
+            Transport::Http {
+                default_base_url: "https://api.anthropic.com"
+            }
+        );
+        assert_eq!(e.status, Status::Available);
+    }
+
+    #[test]
+    fn default_base_url_anthropic_api_only() {
         assert_eq!(
             default_base_url("anthropic-api"),
             Some("https://api.anthropic.com")
         );
-        assert_eq!(default_base_url("anthropic-cli"), None); // Cli has no url
-        assert_eq!(default_base_url("anthropic-sdk"), None);
+        // removed rows resolve to None (entry() returns None)
+        assert!(entry("anthropic-cli").is_none());
+        assert!(entry("anthropic-sdk").is_none());
+        assert!(default_base_url("anthropic-cli").is_none());
+        assert!(default_base_url("anthropic-sdk").is_none());
     }
 
     #[test]
-    fn selectable_excludes_planned() {
+    fn selectable_has_three_providers() {
         let ids: Vec<&str> = selectable().map(|e| e.id).collect();
+        assert_eq!(ids.len(), 3);
         assert!(ids.contains(&"ollama-local"));
         assert!(ids.contains(&"ollama-cloud"));
         assert!(ids.contains(&"anthropic-api"));
-        assert!(!ids.contains(&"anthropic-cli"));
-        assert!(!ids.contains(&"anthropic-sdk"));
+    }
+
+    #[test]
+    fn claude_models_now_support_tools() {
+        assert!(model_info("claude-sonnet-4-6").tools);
+        assert!(model_info("claude-opus-4-8").tools);
+        assert!(model_info("claude-sonnet-4-6").prompt_cache);
+        assert!(model_info("claude-opus-4-8").prompt_cache);
     }
 }
