@@ -573,6 +573,7 @@ fn key_env_for(id: &str) -> Option<&'static str> {
         return None;
     }
     match zoid_provider::model::entry(id).map(|e| e.family) {
+        Some("opencode-go") => Some("OPENCODE_GO_API_KEY"),
         Some("anthropic") => Some("ANTHROPIC_API_KEY"),
         _ => Some("OLLAMA_API_KEY"),
     }
@@ -616,6 +617,16 @@ fn select_provider(
         .map(|e| e.family)
         .unwrap_or("ollama");
     match family {
+        "opencode-go" => match key_for("OPENCODE_GO_API_KEY") {
+            Some(k) => (
+                Arc::new(
+                    zoid_provider::opencode_go::OpenCodeGoProvider::new(k).with_base_url(base_url),
+                ),
+                "opencode-go",
+                true,
+            ),
+            None => (default_provider(), "opencode-go", false),
+        },
         "anthropic" => match key_for("ANTHROPIC_API_KEY") {
             Some(k) => (
                 Arc::new(
@@ -710,6 +721,10 @@ fn provider_for_id(
         .map(|e| e.family)
         .unwrap_or("ollama");
     match family {
+        "opencode-go" => key_for("OPENCODE_GO_API_KEY").map(|k| {
+            Arc::new(zoid_provider::opencode_go::OpenCodeGoProvider::new(k).with_base_url(base_url))
+                as Arc<dyn Provider>
+        }),
         "anthropic" => key_for("ANTHROPIC_API_KEY").map(|k| {
             Arc::new(zoid_provider::anthropic::AnthropicProvider::new(k).with_base_url(base_url))
                 as Arc<dyn Provider>
@@ -2013,6 +2028,7 @@ fn refresh_config_sections(app: &mut App) {
     let key_status = [
         ("OLLAMA_API_KEY", status("OLLAMA_API_KEY")),
         ("ANTHROPIC_API_KEY", status("ANTHROPIC_API_KEY")),
+        ("OPENCODE_GO_API_KEY", status("OPENCODE_GO_API_KEY")),
     ];
     app.shell.config_sections =
         zoid_tui::config_view::build_sections(&app.config, &app.prov, &key_status);
@@ -4164,6 +4180,16 @@ mod tests {
         assert_eq!(key_env_for("anthropic-api"), Some("ANTHROPIC_API_KEY"));
         assert_eq!(key_env_for("ollama-cloud"), Some("OLLAMA_API_KEY"));
         assert_eq!(key_env_for("ollama-local"), None); // no key needed
+    }
+
+    #[test]
+    fn key_env_for_opencode_go_is_opencode_go_api_key() {
+        assert_eq!(key_env_for("opencode-go"), Some("OPENCODE_GO_API_KEY"));
+    }
+
+    #[test]
+    fn entry_requires_key_opencode_go_is_true() {
+        assert!(entry_requires_key("opencode-go"));
     }
 
     #[test]

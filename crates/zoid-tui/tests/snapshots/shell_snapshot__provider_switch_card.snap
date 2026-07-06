@@ -1,5 +1,6 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
+assertion_line: 1242
 expression: terminal.backend().to_string()
 ---
 "                                                                                                                                                                "
@@ -14,10 +15,10 @@ expression: terminal.backend().to_string()
 "                                │ Provider                                       Model                                         │                                "
 "                                │   ollama · local  http  http://localhost:11…     claude-opus-4-8                             │                                "
 "                                │ ▸ ollama · cloud  http  https://ollama.com       claude-sonnet-4-6                           │                                "
+"                                │   opencode · go  http  https://opencode.ai/…                                                 │                                "
 "                                │   anthropic · api key  http  https://api.an…                                                 │                                "
 "                                │   anthropic · Claude Code CLI  cli  claude …                                                 │                                "
 "                                │   anthropic · SDK  sdk  —  planned                                                           │                                "
-"                                │                                                                                              │                                "
 "                                │                                                                                              │                                "
 "                                │                                                                                              │                                "
 "                                │                                                                                              │                                "
