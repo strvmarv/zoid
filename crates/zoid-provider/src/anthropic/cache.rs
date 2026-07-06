@@ -14,11 +14,24 @@ pub fn place_breakpoints(req: &mut AnthropicRequest) {
         }
     }
     if let Some(last_msg) = req.messages.last_mut() {
-        if let MessageContent::Blocks(blocks) = &mut last_msg.content {
-            if let Some(ContentBlock::Text { cache_control, .. }) = blocks.last_mut() {
-                *cache_control = Some(CacheControl {
-                    kind: CacheKind::Ephemeral1h,
-                });
+        match &mut last_msg.content {
+            MessageContent::Text(s) => {
+                // Convert plain-text last message to a block array with a
+                // breakpoint, mirroring the legacy request_body (anthropic.rs:42-47)
+                // which unconditionally wrapped the last message's content.
+                last_msg.content = MessageContent::Blocks(vec![ContentBlock::Text {
+                    text: std::mem::take(s),
+                    cache_control: Some(CacheControl {
+                        kind: CacheKind::Ephemeral1h,
+                    }),
+                }]);
+            }
+            MessageContent::Blocks(blocks) => {
+                if let Some(ContentBlock::Text { cache_control, .. }) = blocks.last_mut() {
+                    *cache_control = Some(CacheControl {
+                        kind: CacheKind::Ephemeral1h,
+                    });
+                }
             }
         }
     }
@@ -181,5 +194,55 @@ mod tests {
             thinking: None,
         };
         place_breakpoints(&mut req); // must not panic
+    }
+
+    #[test]
+    fn places_breakpoint_converts_plain_text_last_message() {
+        // The common case: a user turn as the last message is plain
+        // MessageContent::Text (not Blocks). place_breakpoints must convert it
+        // to Blocks([Text{ cache_control: Some(Ephemeral1h) }]) so the rolling
+        // breakpoint lands — mirroring the legacy request_body behavior.
+        let mut req = AnthropicRequest {
+            model: "m".into(),
+            max_tokens: 8,
+            stream: true,
+            messages: vec![
+                user_text("a"),
+                AnthropicMessage {
+                    role: AnthropicRole::Assistant,
+                    content: MessageContent::Text("b".into()),
+                },
+                user_text("c"), // plain Text, not Blocks
+            ],
+            system: None,
+            tools: vec![],
+            thinking: None,
+        };
+        place_breakpoints(&mut req);
+        // interior messages stay plain
+        assert!(matches!(req.messages[0].content, MessageContent::Text(_)));
+        assert!(matches!(req.messages[1].content, MessageContent::Text(_)));
+        // last message was converted to Blocks with a breakpoint
+        match &req.messages[2].content {
+            MessageContent::Blocks(blocks) => {
+                assert_eq!(blocks.len(), 1);
+                match &blocks[0] {
+                    ContentBlock::Text {
+                        text,
+                        cache_control,
+                    } => {
+                        assert_eq!(text, "c");
+                        assert_eq!(
+                            *cache_control,
+                            Some(CacheControl {
+                                kind: CacheKind::Ephemeral1h
+                            })
+                        );
+                    }
+                    other => panic!("expected Text block, got {other:?}"),
+                }
+            }
+            other => panic!("expected Blocks, got {other:?} — conversion missing"),
+        }
     }
 }
