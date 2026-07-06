@@ -1,7 +1,9 @@
 # Command Surfaces Consolidation (Adaptive Palette) — Design Spec
 
+> **Partially superseded 2026-07-06** by `2026-07-06-direct-autocomplete-design.md`, which extends the Direct phase from a single preview line into a three-stage autocomplete with a grouped vocabulary. The "Direct is a single preview line, list hidden" lock in §2 below is reversed by that spec. Everything else here (one overlay, Pick/Arg phases, deletions, `exec_command` seam) stands.
+
 **Date:** 2026-07-06
-**Status:** Approved for planning
+**Status:** Approved for planning (partially superseded)
 **Scope:** Single implementation plan. `zoid-tui`-local logic + `zoid` bin match arms. No cross-crate refactor. Supersedes the "keep both" lock in `2026-07-04-command-palette-redesign-design.md` §Decisions.5.
 
 ## Goal
