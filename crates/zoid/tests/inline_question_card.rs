@@ -213,8 +213,8 @@ async fn apply_mode_mapping_emits_question_asked_with_mapping() {
     assert!(
         results
             .iter()
-            .any(|(n, out, err)| n == "apply_mode_mapping" && !err && out == "Approve"),
-        "expected a non-error apply_mode_mapping ToolResult with output \"Approve\", got: {results:?}"
+            .any(|(n, out, err)| n == "apply_mode_mapping" && !err && out.contains("Approved and materialized")),
+        "expected a non-error apply_mode_mapping ToolResult mentioning materialization, got: {results:?}"
     );
 }
 

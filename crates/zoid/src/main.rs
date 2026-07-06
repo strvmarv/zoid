@@ -1803,7 +1803,11 @@ where
                                         zoid_core::event::EventKind::UserMessage {
                                             text: "Import wizard started. Call propose_mode_mapping \
                                                 to see the upstream scan, then call apply_mode_mapping \
-                                                with your proposed mapping onto the canonical contract."
+                                                with your proposed mapping onto the canonical contract. \
+                                                The user will approve or reject via the card — do NOT \
+                                                call ask_user to confirm the approval; the \
+                                                apply_mode_mapping result tells you whether it was \
+                                                approved and materialized."
                                                 .into(),
                                         },
                                     );
@@ -1840,7 +1844,10 @@ where
                                     zoid_core::event::EventKind::UserMessage {
                                         text: "Update wizard started. Call propose_mode_mapping \
                                             to see the reconciliation brief, then call \
-                                            apply_mode_mapping with your merged mapping."
+                                            apply_mode_mapping with your merged mapping. The user \
+                                            will approve or reject via the card — do NOT call \
+                                            ask_user to confirm; the apply_mode_mapping result \
+                                            tells you whether it was approved and materialized."
                                             .into(),
                                     },
                                 );

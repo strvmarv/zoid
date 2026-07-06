@@ -954,6 +954,23 @@ async fn run_turn_inner(
                     } else {
                         output == "[user aborted]"
                     };
+                    // For apply_mode_mapping, enrich the tool result so the
+                    // model knows the materialization already happened (no
+                    // need to ask the user to confirm again).
+                    let tool_output = if tc.name == "apply_mode_mapping" && !is_error {
+                        match output.as_str() {
+                            "Approve" => "Approved and materialized. The mode files have been \
+                                written to disk and the mode registry reloaded. No further \
+                                confirmation needed — the import is complete."
+                                .to_string(),
+                            "Adjust" => "User requested adjustments. Re-propose the mapping \
+                                with the user's feedback."
+                                .to_string(),
+                            _ => output.clone(),
+                        }
+                    } else {
+                        output.clone()
+                    };
                     emit(
                         &session,
                         &mut events,
@@ -962,7 +979,7 @@ async fn run_turn_inner(
                         EventKind::ToolResult {
                             id: tc.id,
                             name: tc.name,
-                            output,
+                            output: tool_output,
                             is_error,
                         },
                         session_id,
