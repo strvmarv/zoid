@@ -1,10 +1,14 @@
 use super::types::{AnthropicRequest, CacheControl, CacheKind, ContentBlock, MessageContent};
 
 /// Place ephemeral (1h) cache breakpoints on the system block and on the last
-/// message's last block. Interior messages stay plain. Mirrors the rolling-
-/// breakpoint behavior of the legacy `request_body` (anthropic.rs:42-58): the
-/// previous turn's breakpoint becomes an interior read on the next turn, and
-/// the new breakpoint extends the cached prefix.
+/// message's last `Text` block. Interior messages stay plain. Mirrors the
+/// rolling-breakpoint behavior of the legacy `request_body` (anthropic.rs:42-58):
+/// the previous turn's breakpoint becomes an interior read on the next turn,
+/// and the new breakpoint extends the cached prefix.
+///
+/// Note: only `Text` blocks receive breakpoints (legacy parity);
+/// `tool_result`/`tool_use`/`thinking` blocks as the trailing block are
+/// left unmarked — extending breakpoints to those is a future enhancement.
 pub fn place_breakpoints(req: &mut AnthropicRequest) {
     if let Some(sys) = req.system.as_mut() {
         for block in sys.iter_mut() {
