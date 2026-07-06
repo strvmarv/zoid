@@ -277,6 +277,7 @@ pub fn direct_selected_action(state: &ShellState) -> DirectAction {
     // - Anything else → Run.
     let is_fill = match &item.command {
         Command::Unknown(_) => true,
+        Command::SwitchMode(s) if s.is_empty() => true,
         Command::RenameSession(s) if s.is_empty() => true,
         Command::ModeImport(s) if s.is_empty() => true,
         Command::ModeUpdate(s) if s.is_empty() => true,
@@ -765,6 +766,20 @@ mod tests {
         assert_eq!(
             direct_selected_action(&s),
             DirectAction::Fill(":session ".into())
+        );
+    }
+
+    #[test]
+    fn direct_selected_action_select_mode_namespace_fills() {
+        // `mode` at Stage 1 carries SwitchMode("") — a bare sentinel, not
+        // Unknown. The is_fill match must treat it as Fill (advance to :mode ),
+        // not Run (which would close the overlay on an empty mode switch).
+        let s = shell_for_direct(":");
+        let mut s = s;
+        s.palette.selected = 2; // "mode" is the 3rd row (index 2) in stage1_items.
+        assert_eq!(
+            direct_selected_action(&s),
+            DirectAction::Fill(":mode ".into())
         );
     }
 
