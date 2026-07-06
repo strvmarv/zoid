@@ -24,7 +24,7 @@ pub enum Command {
     OpenDrawer(DrawerId),
     NewSession,
     /// Rename the active session. Empty string = "prompt me" (the bin seeds the
-    /// palette in Direct phase with `:rename `); non-empty = apply directly.
+    /// palette in Direct phase with `:session rename `); non-empty = apply directly.
     RenameSession(String),
     /// Open the resume-session picker overlay (palette-only; no `:` form).
     ResumeSessionPicker,
