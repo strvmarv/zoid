@@ -121,3 +121,132 @@ async fn oversized_tool_result_is_compacted_when_over_threshold() {
         "a large tool-result over threshold must be compacted"
     );
 }
+
+#[tokio::test]
+async fn compaction_emits_started_and_complete_updates() {
+    let command =
+        "for i in $(seq 1 2000); do echo \"line $i: filler text to pad out tokens\"; done";
+
+    let provider = zoid_testkit::script(vec![
+        zoid_testkit::tool_call("shell", serde_json::json!({ "command": command })),
+        zoid_testkit::text("done"),
+        ProviderEvent::Done,
+    ]);
+
+    let session = SessionHandle::spawn(":memory:").unwrap();
+    let seed = vec![Event::new(
+        Ulid::new(),
+        None,
+        0,
+        EventKind::UserMessage {
+            text: "run the big command".into(),
+        },
+    )];
+    session.append(seed[0].clone()).await.unwrap();
+
+    let (tx, mut rx) = mpsc::channel::<AgentUpdate>(64);
+
+    let mut config = zoid::agent::chat_turn_config();
+    config.policy = ContextPolicy {
+        token_ceiling: None,
+        auto_evict_cold: false,
+        compact_threshold: Some(50),
+    };
+
+    let handle = tokio::spawn(async move {
+        run_agent_turn(
+            config,
+            provider,
+            Arc::new(zoid_tools::registry()),
+            Arc::new(zoid_tools::AllowAll),
+            session,
+            zoid::eventlog::EventLog::from_vec(seed),
+            "fake".into(),
+            tx,
+            Ulid::new(),
+            zoid_companion::CompanionHub::new(),
+            now,
+        )
+        .await
+        .unwrap();
+    });
+
+    let mut saw_started = false;
+    let mut saw_complete = false;
+    while let Some(update) = rx.recv().await {
+        match update {
+            AgentUpdate::CompactionStarted => saw_started = true,
+            AgentUpdate::CompactionComplete => saw_complete = true,
+            _ => {}
+        }
+    }
+    let _ = handle.await;
+
+    assert!(saw_started, "CompactionStarted must be emitted");
+    assert!(saw_complete, "CompactionComplete must be emitted");
+}
+
+#[tokio::test]
+async fn compaction_does_not_emit_updates_when_nothing_compacted() {
+    // A turn with a tiny tool-result well below the compaction threshold —
+    // plan_compactions returns empty, so no CompactionStarted/Complete.
+    let provider = zoid_testkit::script(vec![
+        zoid_testkit::tool_call("shell", serde_json::json!({ "command": "echo hi" })),
+        zoid_testkit::text("done"),
+        ProviderEvent::Done,
+    ]);
+
+    let session = SessionHandle::spawn(":memory:").unwrap();
+    let seed = vec![Event::new(
+        Ulid::new(),
+        None,
+        0,
+        EventKind::UserMessage {
+            text: "run the tiny command".into(),
+        },
+    )];
+    session.append(seed[0].clone()).await.unwrap();
+
+    let (tx, mut rx) = mpsc::channel::<AgentUpdate>(64);
+
+    let mut config = zoid::agent::chat_turn_config();
+    config.policy = ContextPolicy {
+        token_ceiling: None,
+        auto_evict_cold: false,
+        compact_threshold: Some(50),
+    };
+
+    let handle = tokio::spawn(async move {
+        run_agent_turn(
+            config,
+            provider,
+            Arc::new(zoid_tools::registry()),
+            Arc::new(zoid_tools::AllowAll),
+            session,
+            zoid::eventlog::EventLog::from_vec(seed),
+            "fake".into(),
+            tx,
+            Ulid::new(),
+            zoid_companion::CompanionHub::new(),
+            now,
+        )
+        .await
+        .unwrap();
+    });
+
+    let mut saw_any_compaction = false;
+    while let Some(update) = rx.recv().await {
+        match update {
+            AgentUpdate::CompactionStarted | AgentUpdate::CompactionComplete => {
+                saw_any_compaction = true;
+            }
+            _ => {}
+        }
+    }
+    let _ = handle.await;
+
+    assert!(
+        !saw_any_compaction,
+        "no CompactionStarted/Complete when nothing was compacted"
+    );
+}

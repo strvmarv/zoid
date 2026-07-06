@@ -132,6 +132,10 @@ pub enum AgentUpdate {
         model: String,
         info: zoid_provider::model::ModelInfo,
     },
+    /// Automated compaction is running (before a burst of ToolResultCompacted events).
+    CompactionStarted,
+    /// Automated compaction finished (after the burst).
+    CompactionComplete,
 }
 
 /// The tool specs to advertise to the provider.
@@ -1192,6 +1196,9 @@ async fn record_compactions(
         *calibration_ratio,
         overhead,
     );
+    if !plan.compactions.is_empty() {
+        let _ = ui.send(AgentUpdate::CompactionStarted).await;
+    }
     for c in &plan.compactions {
         emit(
             session,
@@ -1207,6 +1214,9 @@ async fn record_compactions(
             now,
         )
         .await?;
+    }
+    if !plan.compactions.is_empty() {
+        let _ = ui.send(AgentUpdate::CompactionComplete).await;
     }
     Ok(())
 }
@@ -1267,6 +1277,9 @@ async fn preflight_gate(
             overhead,
         );
         let compacted = !plan.compactions.is_empty();
+        if compacted {
+            let _ = ui.send(AgentUpdate::CompactionStarted).await;
+        }
         for c in &plan.compactions {
             emit(
                 session,
@@ -1282,6 +1295,9 @@ async fn preflight_gate(
                 now,
             )
             .await?;
+        }
+        if compacted {
+            let _ = ui.send(AgentUpdate::CompactionComplete).await;
         }
         if compacted {
             est = estimate(events);
