@@ -92,6 +92,17 @@ pub fn digests(msgs: &[ChatMsg]) -> Vec<TurnDigest> {
                 });
                 d.has_error |= !ok;
             }
+            ChatMsg::Question { .. } => {
+                // An inline question card belongs to the current turn; it carries
+                // no tool/file counts and is not an error. (Rendering of the card
+                // at Summary altitude is a later slice.)
+                cur.get_or_insert_with(|| TurnDigest {
+                    headline: String::new(),
+                    tools: 0,
+                    files: 0,
+                    has_error: false,
+                });
+            }
         }
     }
     if let Some(d) = cur.take() {
