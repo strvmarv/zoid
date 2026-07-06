@@ -14,6 +14,10 @@ pub enum Command {
     /// command line. Reach it via the Shift+Tab cycle or the Ctrl+P palette (both
     /// build `SwitchMode` directly, bypassing this parser).
     ReloadModes,
+    /// Start the URL import wizard (`:mode import <url>`). Empty = usage hint.
+    ModeImport(String),
+    /// Start the update wizard for an existing imported mode (`:mode update <name>`).
+    ModeUpdate(String),
     Quit,
     OpenDrawer(DrawerId),
     NewSession,
@@ -39,6 +43,14 @@ pub fn parse_command(raw: &str) -> Command {
     let t = raw.trim().trim_start_matches(':').trim();
     match t {
         "mode reload" => Command::ReloadModes,
+        s if s.starts_with("mode import ") => {
+            Command::ModeImport(s["mode import ".len()..].trim().to_string())
+        }
+        "mode import" => Command::ModeImport(String::new()),
+        s if s.starts_with("mode update ") => {
+            Command::ModeUpdate(s["mode update ".len()..].trim().to_string())
+        }
+        "mode update" => Command::ModeUpdate(String::new()),
         // Bare `:mode` (or `:mode` + only whitespace, already trimmed to "mode"):
         // an empty target the bin renders as a usage hint rather than a silent no-op.
         "mode" => Command::SwitchMode(String::new()),
@@ -137,5 +149,31 @@ mod tests {
             parse_command(":rename fix login"),
             Command::RenameSession("fix login".into())
         );
+    }
+
+    #[test]
+    fn mode_import_parses() {
+        assert_eq!(
+            parse_command(":mode import github.com/o/r/tree/main/skills"),
+            Command::ModeImport("github.com/o/r/tree/main/skills".into())
+        );
+    }
+
+    #[test]
+    fn mode_update_parses() {
+        assert_eq!(
+            parse_command(":mode update Superpowers"),
+            Command::ModeUpdate("Superpowers".into())
+        );
+    }
+
+    #[test]
+    fn bare_mode_import_is_empty_arg() {
+        assert_eq!(parse_command(":mode import"), Command::ModeImport(String::new()));
+    }
+
+    #[test]
+    fn mode_reload_still_wins_over_import() {
+        assert_eq!(parse_command(":mode reload"), Command::ReloadModes);
     }
 }
