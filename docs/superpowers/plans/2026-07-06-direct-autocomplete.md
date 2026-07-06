@@ -170,7 +170,7 @@ Expected: PASS — all new tests green; all kept tests green.
 - [ ] **Step 5: Run the full workspace to catch downstream breakage**
 
 Run: `cargo test --workspace`
-Expected: The `RenameSession("")` reseed in `main.rs` still seeds `":rename "` (now `Unknown("rename")` under the new grammar). The `palette_direct_phase_frame` snapshot may also drift (it uses `:mode Build` which is unchanged). Any integration tests using `:new`/`:rename`/`:repo` will break. **Do not fix those here** — Task 6 fixes the bin; Task 7 fixes snapshots. Confirm failures are only in the bin + snapshots, not in `zoid-tui` lib tests.
+Expected: The `RenameSession("")` reseed in `main.rs` still seeds `":rename "` (now `Unknown("rename")` under the new grammar). The `palette_direct_phase_frame` snapshot is unchanged at this point (`:mode Build` parses identically; Task 7 regenerates it when the render changes). Any integration tests using `:new`/`:rename`/`:repo` will break. **Do not fix those here** — Task 6 fixes the bin; Task 7-8 fix snapshots. Confirm failures are only in the bin, not in `zoid-tui` lib tests.
 
 - [ ] **Step 6: Commit**
 
@@ -479,32 +479,11 @@ fn stage3_items(ns: &str, sub: &str, state: &ShellState) -> Vec<PaletteItem> {
         ("mode", "update") => state.mode_names.iter().map(|n| {
             PaletteItem { label: n.clone(), command: Command::ModeUpdate(n.clone()) }
         }).collect(),
-        // Free-text args — no completion list.
-        ("delegate", _) | ("mode", "import") | ("session", "rename") if false => vec![],
-        _ => vec![],
-    }
-}
-```
-
-Wait — the `("delegate", _) | ("mode", "import") | ("session", "rename") if false => vec![]` arm is wrong (the `if false` guard never fires). The free-text cases fall through to the `_ => vec![]` catch-all. Let me simplify `stage3_items`:
-
-```rust
-fn stage3_items(ns: &str, sub: &str, state: &ShellState) -> Vec<PaletteItem> {
-    use crate::command::Command;
-    match (ns, sub) {
-        ("session", "rename") => state.sessions.iter().map(|s| {
-            PaletteItem { label: s.clone(), command: Command::RenameSession(s.clone()) }
-        }).collect(),
-        ("mode", "update") => state.mode_names.iter().map(|n| {
-            PaletteItem { label: n.clone(), command: Command::ModeUpdate(n.clone()) }
-        }).collect(),
         // Free-text args (delegate, mode import) — no completion list.
         _ => vec![],
     }
 }
 ```
-
-Use the simplified version (drop the `if false` arm).
 
 - [ ] **Step 4: Run the tests to verify they pass**
 

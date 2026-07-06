@@ -69,7 +69,7 @@ It inspects `state.palette.query` (including the `:` prefix) and returns the app
 - **Stage 2 — subcommands.** Buffer is `:ns ` (recognized namespace + trailing space). Returns:
   - `:session ` → `new`, `rename`, `resume`
   - `:drawer ` → `repo`, `session`, `context`
-  - `:mode ` → `reload`, `import`, `update`, plus one row per mode name (the `:mode <name>` direct-switch path)
+  - `:mode ` → `reload`, `import`, `update`, plus one row per *non-active* mode name (the `:mode <name>` direct-switch path — excludes the active mode, consistent with `all_items`)
   - `:companion ` → `on`, `off`
   
   Zero-arg subcommands run immediately on select. Parameterized ones (`rename`, `import`, `update`) are bare sentinels — selecting fills the buffer to `:ns sub ` and advances to Stage 3.
