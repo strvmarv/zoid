@@ -120,6 +120,14 @@ fn alt(key: &KeyEvent, c: char) -> bool {
 }
 
 pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
+    // 0. An open inline question card captures input (soft-capture): while
+    // state.question is Some, typing goes to the card's free-text buffer,
+    // arrows move the highlight, Enter submits, Esc cancels. The message
+    // textarea is not focused during a question.
+    if let Some(q) = &state.question {
+        return crate::question::route_question_key(q, key);
+    }
+
     // 1. Overlays capture keys first.
     match state.overlay {
         Overlay::Palette => return route_palette_key(state, key),
@@ -381,6 +389,15 @@ pub fn hit_test(layout: &ShellLayout, col: u16, row: u16) -> Target {
 }
 
 pub fn route_mouse(state: &ShellState, layout: &ShellLayout, m: MouseEvent) -> Action {
+    // An open inline question card captures scroll (navigate choices); other
+    // mouse input is ignored while a question is pending.
+    if state.question.is_some() {
+        return match m.kind {
+            MouseEventKind::ScrollDown => Action::QuestionMove(1),
+            MouseEventKind::ScrollUp => Action::QuestionMove(-1),
+            _ => Action::Noop,
+        };
+    }
     // Overlays are keyboard-driven. A stray mouse click or scroll outside the
     // overlay must NOT silently dismiss it — accidental clicks are common, and
     // losing an in-progress edit buffer, query, or selection position is
