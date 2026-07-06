@@ -4,8 +4,14 @@
 //! No opencode-go-specifics — a generic leaf reusable by any OpenAI-compat
 //! provider (Go, Zen, OpenRouter, etc.).
 
-use crate::{CompletionRequest, MsgRole, ProviderEvent, ToolCall, Usage};
+use crate::{CompletionRequest, MsgRole, Provider, ProviderEvent, ToolCall, Usage};
+use anyhow::Result;
+use async_trait::async_trait;
+use eventsource_stream::Eventsource;
+use futures_util::StreamExt;
 use serde_json::{json, Value};
+use std::time::Duration;
+use tokio::sync::mpsc;
 
 /// Build the OpenAI Chat Completions `/v1/chat/completions` request body.
 /// System prompt is a leading `{"role":"system"}` message. Tool-call
@@ -163,6 +169,183 @@ pub fn parse_chunk(data: &str, acc: &mut ToolCallAccumulator) -> Vec<ProviderEve
         out.push(ProviderEvent::Usage(Usage { input_tokens: input, output_tokens: output, cached }));
     }
     out
+}
+
+/// Default base URL when none is configured. Callers override via
+/// `with_base_url`; the OpenAI-compat leaf has no single canonical host
+/// (OpenAI, OpenRouter, OpenCode Go/Zen all differ), so this is a placeholder
+/// that real callers always override.
+const DEFAULT_BASE_URL: &str = "https://api.openai.com";
+
+/// Streaming OpenAI Chat Completions provider.
+pub struct OpenAICompatProvider {
+    api_key: String,
+    base_url: String,
+    client: reqwest::Client,
+    idle_timeout: Duration,
+}
+
+impl OpenAICompatProvider {
+    pub fn new(api_key: String) -> Self {
+        Self {
+            api_key,
+            base_url: DEFAULT_BASE_URL.to_string(),
+            client: crate::http_client(),
+            idle_timeout: crate::stream_idle_timeout(),
+        }
+    }
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        let b = base_url.into();
+        let b = b.trim().trim_end_matches('/');
+        if !b.is_empty() {
+            self.base_url = b.to_string();
+        }
+        self
+    }
+    pub fn with_idle_timeout(mut self, idle: Duration) -> Self {
+        self.idle_timeout = idle;
+        self
+    }
+}
+
+#[async_trait]
+impl Provider for OpenAICompatProvider {
+    async fn stream(&self, req: &CompletionRequest, sink: mpsc::Sender<ProviderEvent>) -> Result<()> {
+        let start = std::time::Instant::now();
+        let mut ttft: Option<u64> = None;
+        let mut acc = ToolCallAccumulator::new();
+
+        let resp = match tokio::time::timeout(
+            self.idle_timeout,
+            self.client
+                .post(format!("{}/v1/chat/completions", self.base_url))
+                .header("authorization", format!("Bearer {}", self.api_key))
+                .header("content-type", "application/json")
+                .json(&request_body(req))
+                .send(),
+        )
+        .await
+        {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(e)) => {
+                let _ = sink.send(ProviderEvent::Error(e.to_string())).await;
+                return Ok(());
+            }
+            Err(_) => {
+                let _ = sink
+                    .send(ProviderEvent::Error(format!(
+                        "provider request timed out after {}s (no response)",
+                        self.idle_timeout.as_secs()
+                    )))
+                    .await;
+                return Ok(());
+            }
+        };
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = match tokio::time::timeout(self.idle_timeout, resp.text()).await {
+                Ok(Ok(t)) => t,
+                _ => String::new(),
+            };
+            let _ = sink
+                .send(ProviderEvent::Error(format!("HTTP {status}: {text}")))
+                .await;
+            return Ok(());
+        }
+
+        let mut stream = resp.bytes_stream().eventsource();
+        let mut ended_early = false;
+        loop {
+            let item = match tokio::time::timeout(self.idle_timeout, stream.next()).await {
+                Ok(Some(item)) => item,
+                Ok(None) => break,
+                Err(_) => {
+                    let _ = sink
+                        .send(ProviderEvent::Error(format!(
+                            "provider idle timeout: no data for {}s",
+                            self.idle_timeout.as_secs()
+                        )))
+                        .await;
+                    ended_early = true;
+                    break;
+                }
+            };
+            let item = match item {
+                Ok(ev) => ev,
+                Err(e) => {
+                    let _ = sink.send(ProviderEvent::Error(e.to_string())).await;
+                    ended_early = true;
+                    break;
+                }
+            };
+            // OpenAI uses `data: [DONE]` as the terminator; eventsource may
+            // surface it as an event with data "[DONE]" (no event type).
+            if item.data == "[DONE]" {
+                for tc in acc.take() {
+                    if ttft.is_none() {
+                        ttft = Some(start.elapsed().as_millis() as u64);
+                    }
+                    if sink.send(tc).await.is_err() {
+                        ended_early = true;
+                        break;
+                    }
+                }
+                if !ended_early {
+                    let _ = sink.send(ProviderEvent::Done).await;
+                }
+                break;
+            }
+            for pe in parse_chunk(&item.data, &mut acc) {
+                if ttft.is_none() {
+                    ttft = Some(start.elapsed().as_millis() as u64);
+                }
+                let is_done = matches!(pe, ProviderEvent::Done);
+                if sink.send(pe).await.is_err() {
+                    ended_early = true;
+                    break;
+                }
+                if is_done {
+                    break;
+                }
+            }
+            if ended_early {
+                break;
+            }
+        }
+        // If the transport closed without an explicit [DONE], flush + Done
+        // (matches the ollama.rs trailing-line flush philosophy).
+        if !ended_early {
+            for tc in acc.take() {
+                if ttft.is_none() {
+                    ttft = Some(start.elapsed().as_millis() as u64);
+                }
+                if sink.send(tc).await.is_err() {
+                    break;
+                }
+            }
+            let _ = sink.send(ProviderEvent::Done).await;
+        }
+        tracing::info!(
+            kind = "provider",
+            provider = "openai-compat",
+            model = %req.model,
+            ttft_ms = ttft.unwrap_or(0),
+            total_ms = start.elapsed().as_millis() as u64,
+            "provider stream complete"
+        );
+        Ok(())
+    }
+
+    async fn list_models(&self) -> Result<Vec<String>> {
+        let resp = self
+            .client
+            .get(format!("{}/v1/models", self.base_url))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await?;
+        Ok(crate::parse_data_id_models(&resp.text().await?))
+    }
 }
 
 #[cfg(test)]
@@ -405,5 +588,106 @@ mod tests {
         assert_eq!(first.len(), 1);
         let second = acc.take();
         assert!(second.is_empty(), "take() must drain — second call should be empty");
+    }
+
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Throwaway server that accepts one connection, optionally writes
+    /// `headers`, then stalls. Mirrors ollama.rs:773-789.
+    async fn spawn_stalling_server(headers: Option<&'static [u8]>) -> std::net::SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                if let Some(hdr) = headers {
+                    let _ = sock.write_all(hdr).await;
+                    let _ = sock.flush().await;
+                }
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
+        });
+        addr
+    }
+
+    const OK_SSE_HEADERS: &[u8] =
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+
+    fn probe_req() -> CompletionRequest {
+        CompletionRequest {
+            model: "m".into(),
+            system: None,
+            messages: vec![Message::user("hi")],
+            max_tokens: 8,
+            tools: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn idle_timeout_emits_error_when_stream_stalls() {
+        let addr = spawn_stalling_server(Some(OK_SSE_HEADERS)).await;
+        let provider = OpenAICompatProvider::new("k".into())
+            .with_base_url(format!("http://{addr}"))
+            .with_idle_timeout(Duration::from_millis(150));
+        let (tx, mut rx) = mpsc::channel(16);
+        let done =
+            tokio::time::timeout(Duration::from_secs(5), provider.stream(&probe_req(), tx)).await;
+        assert!(done.is_ok(), "stream() hung — idle timeout not enforced");
+        done.unwrap().unwrap();
+        let mut got = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            got.push(ev);
+        }
+        assert!(
+            matches!(got.last(), Some(ProviderEvent::Error(_))),
+            "expected trailing idle-timeout Error, got {got:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_timeout_emits_error_when_no_response() {
+        let addr = spawn_stalling_server(None).await;
+        let provider = OpenAICompatProvider::new("k".into())
+            .with_base_url(format!("http://{addr}"))
+            .with_idle_timeout(Duration::from_millis(150));
+        let (tx, mut rx) = mpsc::channel(16);
+        let done =
+            tokio::time::timeout(Duration::from_secs(5), provider.stream(&probe_req(), tx)).await;
+        assert!(done.is_ok(), "stream() hung waiting for response headers");
+        done.unwrap().unwrap();
+        let mut got = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            got.push(ev);
+        }
+        assert!(
+            matches!(got.last(), Some(ProviderEvent::Error(_))),
+            "expected a request-timeout Error, got {got:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn error_body_timeout_emits_error_with_status() {
+        let addr = spawn_stalling_server(Some(
+            b"HTTP/1.1 429 Too Many Requests\r\nContent-Length: 100\r\n\r\n",
+        ))
+        .await;
+        let provider = OpenAICompatProvider::new("k".into())
+            .with_base_url(format!("http://{addr}"))
+            .with_idle_timeout(Duration::from_millis(150));
+        let (tx, mut rx) = mpsc::channel(16);
+        let done =
+            tokio::time::timeout(Duration::from_secs(5), provider.stream(&probe_req(), tx)).await;
+        assert!(done.is_ok(), "stream() hung reading a stalled error body");
+        done.unwrap().unwrap();
+        let mut got = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            got.push(ev);
+        }
+        assert!(
+            matches!(got.last(), Some(ProviderEvent::Error(e)) if e.contains("429")),
+            "expected an HTTP 429 Error, got {got:?}"
+        );
     }
 }
