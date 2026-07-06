@@ -192,10 +192,6 @@ pub fn render_shell(
         if let Some(p) = layout.palette {
             render_palette(frame, state, p);
         }
-    } else if state.overlay == Overlay::CommandLine {
-        if let Some(c) = layout.cmdline {
-            render_cmdline(frame, state, c);
-        }
     } else if state.overlay == Overlay::Objects {
         if let Some(p) = layout.palette {
             render_object_overlay(frame, msgs, state, p);
@@ -721,19 +717,6 @@ fn palette_row_line(it: &PaletteItem, selected: bool) -> Line<'static> {
         format!(" {}", it.label),
         bg(Style::new().fg(color::TXT)),
     ))
-}
-
-fn render_cmdline(frame: &mut Frame, state: &ShellState, area: Rect) {
-    frame.render_widget(Clear, area);
-    let line = Line::from(vec![
-        Span::styled(":", Style::new().fg(color::CHAT_ACCENT)),
-        Span::styled(state.cmdline.buffer.clone(), Style::new().fg(color::TXT)),
-        Span::styled(
-            glyph::CARET.to_string(),
-            Style::new().fg(color::CHAT_ACCENT),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(line), area);
 }
 
 /// A bordered, titled, single-selection list — shared by the object, verb, and

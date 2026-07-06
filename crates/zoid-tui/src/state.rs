@@ -47,7 +47,6 @@ pub enum ConfigCol {
 pub enum Overlay {
     None,
     Palette,
-    CommandLine,
     Objects,
     Verbs,
     Sessions,
@@ -99,11 +98,6 @@ pub enum PaletteStage {
     },
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CmdlineState {
-    pub buffer: String,
-}
-
 /// Object-first picker state (spec ④): which object/verb row is highlighted
 /// across the two-step Objects → Verbs overlay.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -126,7 +120,6 @@ pub struct ShellState {
     pub drawers: Vec<Drawer>,
     pub rail_visible: bool,
     pub palette: PaletteState,
-    pub cmdline: CmdlineState,
     pub objects: ObjectState,
     pub conversation_scroll: u16,
     /// Tail-follow: when true the bin pins `conversation_scroll` to the last
@@ -293,7 +286,6 @@ impl ShellState {
             drawers,
             rail_visible: true,
             palette: PaletteState::default(),
-            cmdline: CmdlineState::default(),
             objects: ObjectState::default(),
             conversation_scroll: 0,
             follow_tail: true,
@@ -388,7 +380,6 @@ impl ShellState {
     pub fn close_overlay(&mut self) {
         self.overlay = Overlay::None;
         self.palette = PaletteState::default();
-        self.cmdline = CmdlineState::default();
         self.objects = ObjectState::default();
         self.sessions.clear();
         self.session_selected = 0;
@@ -584,7 +575,6 @@ mod tests {
         s.close_overlay();
         assert_eq!(s.overlay, Overlay::None);
         assert_eq!(s.palette, PaletteState::default());
-        assert_eq!(s.cmdline, CmdlineState::default());
     }
 
     #[test]

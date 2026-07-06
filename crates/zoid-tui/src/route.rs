@@ -130,7 +130,7 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
             };
         }
         Overlay::ProviderSwitch => return route_provider_switch_key(state, key),
-        Overlay::None | Overlay::CommandLine => {}
+        Overlay::None => {}
     }
 
     // 2. Global combos.
@@ -691,7 +691,10 @@ mod tests {
         assert_eq!(route_key(&s, k(KeyCode::Up)), Action::Noop);
         assert_eq!(route_key(&s, k(KeyCode::Down)), Action::Noop);
         // Char/Backspace still edit the buffer.
-        assert_eq!(route_key(&s, k(KeyCode::Char('x'))), Action::PaletteChar('x'));
+        assert_eq!(
+            route_key(&s, k(KeyCode::Char('x'))),
+            Action::PaletteChar('x')
+        );
         assert_eq!(
             route_key(&s, k(KeyCode::Backspace)),
             Action::PaletteBackspace

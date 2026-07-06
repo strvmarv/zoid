@@ -178,10 +178,6 @@ pub fn scene(name: &str) -> (ShellState, Vec<ChatMsg>, EconomyView) {
             s.overlay = Overlay::Palette;
             s.palette.query = "build".into();
         }
-        "cmdline" => {
-            s.overlay = Overlay::CommandLine;
-            s.cmdline.buffer = "build".into();
-        }
         "build" => {
             s.active_mode = "Build".into();
             return (s, vec![], empty_economy());

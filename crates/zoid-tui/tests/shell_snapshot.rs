@@ -420,14 +420,6 @@ fn palette_arg_stage_frame() {
 }
 
 #[test]
-fn command_line_frame() {
-    let mut s = ShellState::new();
-    s.overlay = Overlay::CommandLine;
-    s.cmdline.buffer = "build".into();
-    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
-}
-
-#[test]
 fn economy_drawer_frame() {
     let s = ShellState::new(); // economy open by default
     insta::assert_snapshot!(draw_econ(&s, &seeded_economy(), &seeded(), 100, 24));
