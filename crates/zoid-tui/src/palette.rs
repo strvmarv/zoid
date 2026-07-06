@@ -38,6 +38,37 @@ impl ArgKind {
     }
 }
 
+/// What a given `PaletteState` means at this instant. Pure — used by routing
+/// and rendering to branch on the `:` prefix without storing a phase.
+/// `Arg` is `PaletteStage::Arg`, not a `Phase` variant — it's a real stage
+/// transition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Phase {
+    /// Empty or non-`:` query → fuzzy ranked list.
+    Pick,
+    /// Query starts with `:` → live `parse_command` preview, list hidden.
+    Direct { cmd: crate::command::Command },
+    /// `PaletteStage::Arg` is active → inline argument entry.
+    Arg,
+}
+
+/// Resolve the current phase from the palette state. Pure. Owns the parsed
+/// `Command` (cheap: a trim + string compares per frame).
+pub fn resolve_phase(state: &crate::state::PaletteState) -> Phase {
+    match state.stage {
+        crate::state::PaletteStage::Arg { .. } => Phase::Arg,
+        crate::state::PaletteStage::Pick => {
+            if state.query.starts_with(':') {
+                Phase::Direct {
+                    cmd: crate::command::parse_command(&state.query),
+                }
+            } else {
+                Phase::Pick
+            }
+        }
+    }
+}
+
 /// Which inline-argument flow (if any) a command needs when chosen from the
 /// palette. Pure — the bin uses this to decide the Pick→Arg transition.
 pub fn arg_kind_for(cmd: &Command) -> Option<ArgKind> {
