@@ -63,9 +63,34 @@ contract, and can the update flow reconcile upstream changes with local edits?
 
 ## Recorded outcome
 
-- Date run:
-- Model / build commit:
-- Import verdict (PASS / PARTIAL / FAIL):
-- Update verdict (PASS / PARTIAL / FAIL):
-- Observed mapping / reconciliation:
-- Notes / next action:
+- Date run: 2026-07-06
+- Model / build commit: `0a0e981` (merge of slice 4); no model-driven run (no
+  `OLLAMA_API_KEY` / `GITHUB_TOKEN` in the run environment — plumbing verified
+  via a standalone dry-run binary, not the interactive TUI).
+- **Plumbing verdict: PASS**
+  - Real fetch against `github.com/obra/superpowers/tree/main/skills` →
+    48 files, 14 `SKILL.md`s, ref `d884ae04…`, real SHAs + content.
+    `using-superpowers/SKILL.md` present (3063 bytes) — the mode.md body
+    candidate.
+  - Full deterministic materialize dry-run with the real scan → `mode.md`
+    synthesized with `name: Superpowers` (NOT the source's `using-superpowers`),
+    13 skills + bundled siblings materialized (45 entries), sidecar with 45
+    files, mode loads as `Ready` via `mode_import::build_mode_registry`,
+    `brainstorming` resolvable with `base_dir` pointing at the materialized
+    folder.
+  - Double-frontmatter edge case: when the model proposes the raw source file
+    as `mode_body` (which includes the source's own `---` frontmatter),
+    `mode.md` has a double `---`. `parse_skill_md` handles this correctly
+    (first frontmatter wins → `name: Superpowers`), so the runtime loads it.
+    A real model proposing the parsed body produces clean `mode.md`.
+- **Behavioral verdict: PENDING** — needs an interactive TUI run with a
+  configured provider (`OLLAMA_API_KEY` set) + `$GITHUB_TOKEN`. The plumbing
+  is proven; the open question is whether the active model drives
+  `propose_mode_mapping` → `apply_mode_mapping` and proposes a good
+  mode/skill split. Run the protocol below to record the behavioral verdict.
+- Notes / next action: run the interactive smoke (launch zoid, `:mode import
+  github.com/obra/superpowers/tree/main/skills`, observe the model's proposal,
+  Approve/Adjust). If the model gets the split right on the first try, the
+  slice ships. If it puts `using-superpowers` as a skill instead of the mode
+  body, tune the `propose_mode_mapping` tool description / the seed user
+  message.
