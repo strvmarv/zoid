@@ -1,6 +1,5 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
-assertion_line: 1090
 expression: "draw_config(&s, &sections, 80, 24)"
 ---
 "╭ zoid · settings ─────────────────────────────────────────────────────────────╮"
@@ -8,14 +7,14 @@ expression: "draw_config(&s, &sections, 80, 24)"
 "│   Economy               model                                       [default]│"
 "│   Interface             base_url                                    [default]│"
 "│   Secrets                                                                    │"
+"│                                                                              │"
 "│                       ╭────────────────────────────────────────────────────╮ │"
 "│                       │   ollama · local  http  http://localhost:11434     │ │"
 "│                       │ ▸ ollama · cloud  http  https://ollama.com         │ │"
-"│                       │   opencode · go  http  https://opencode.ai/zen/go  │ │"
 "│                       │   anthropic · api key  http  https://api.anthropi… │ │"
-"│                       │   anthropic · Claude Code CLI  cli  claude  plann… │ │"
-"│                       │   anthropic · SDK  sdk  —  planned                 │ │"
 "│                       ╰────────────────────────────────────────────────────╯ │"
+"│                                                                              │"
+"│                                                                              │"
 "│                                                                              │"
 "│                                                                              │"
 "│                                                                              │"

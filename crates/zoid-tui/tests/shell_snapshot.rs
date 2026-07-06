@@ -954,10 +954,9 @@ fn config_overlay_provider_picker() {
 }
 
 /// The snapshot above renders via `to_string()`, which captures glyphs but not
-/// cell styles — so the picker's `SEL_BG` selection highlight and the `DIM`
-/// styling of `[planned]` rows are otherwise unverified. Build the identical
-/// state and render into a raw `Buffer` this time, then assert specific cell
-/// styles directly.
+/// cell styles — so the picker's `SEL_BG` selection highlight is otherwise
+/// unverified. Build the identical state and render into a raw `Buffer` this
+/// time, then assert the selected row's cell style directly.
 ///
 /// Row/col offsets come from the layout in `render_config`: with the picker
 /// open, columns are [rail 22 | fields 40 | picker Min(20)] inside the inner
@@ -967,10 +966,11 @@ fn config_overlay_provider_picker() {
 /// (right under the top border, no header row), one per `config_picker`
 /// entry — confirmed against
 /// `tests/snapshots/shell_snapshot__config_overlay_provider_picker.snap`,
-/// where row y=1 is the selected `provider` entry and row y=4 is the first
-/// `[planned]`, non-selectable entry.
+/// where row y=1 is the selected `provider` entry. (The registry previously
+/// also carried `[planned]`, non-selectable entries styled `DIM`; those were
+/// removed in Task 8 and the styling assertion retired alongside them.)
 #[test]
-fn config_overlay_provider_picker_selection_and_planned_styles() {
+fn config_overlay_provider_picker_selection_styles() {
     use zoid_core::config::{Config, Provenance, Source};
     use zoid_core::secret::SecretStatus;
     use zoid_tui::config_view::{build_sections, provider_options};
@@ -1003,19 +1003,13 @@ fn config_overlay_provider_picker_selection_and_planned_styles() {
     s.config_picker = provider_options(&cfg.provider);
     s.config_picker_sel = 0;
 
-    // Locate a non-selectable ("planned") row instead of hardcoding its
-    // index, so the test still holds if the registry gains/loses entries;
-    // still assert the fixture has the shape this test needs (a selectable
-    // row 0 to select, plus at least one planned row to check DIM against).
+    // The fixture's selected row must be selectable so the SEL_BG
+    // highlight is meaningful; every surviving registry entry is
+    // selectable now that the `[planned]` rows have been removed.
     assert!(
         s.config_picker[s.config_picker_sel].selectable,
         "fixture's selected row must be selectable"
     );
-    let planned_idx = s
-        .config_picker
-        .iter()
-        .position(|o| !o.selectable)
-        .expect("fixture must include at least one [planned] provider row");
 
     let backend = TestBackend::new(160, 40);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -1029,20 +1023,12 @@ fn config_overlay_provider_picker_selection_and_planned_styles() {
 
     let picker_x: u16 = 70;
     let sel_y = 1 + s.config_picker_sel as u16;
-    let planned_y = 1 + planned_idx as u16;
 
     let sel_cell = &buffer[(picker_x, sel_y)];
     assert_eq!(
         sel_cell.bg,
         color::SEL_BG,
         "selected picker row must render the SEL_BG highlight"
-    );
-
-    let planned_cell = &buffer[(picker_x, planned_y)];
-    assert_eq!(
-        planned_cell.fg,
-        color::DIM,
-        "non-selectable [planned] row must render DIM"
     );
 }
 

@@ -58,7 +58,12 @@ pub fn buffer_to_html(buf: &Buffer) -> String {
                 if style.is_empty() {
                     out.push_str(run);
                 } else {
-                    let _ = write!(out, "<span style=\"{}\">{}</span>", style.trim_end_matches(';'), run);
+                    let _ = write!(
+                        out,
+                        "<span style=\"{}\">{}</span>",
+                        style.trim_end_matches(';'),
+                        run
+                    );
                 }
             } else {
                 out.push_str(run);
@@ -99,7 +104,12 @@ mod tests {
     #[test]
     fn emits_rgb_span_and_escapes_html() {
         let mut buf = Buffer::empty(Rect::new(0, 0, 3, 1));
-        buf.set_string(0, 0, "a<b", Style::default().fg(Color::Rgb(0x58, 0xa6, 0xff)));
+        buf.set_string(
+            0,
+            0,
+            "a<b",
+            Style::default().fg(Color::Rgb(0x58, 0xa6, 0xff)),
+        );
         let html = buffer_to_html(&buf);
         assert!(html.starts_with("<pre class=\"tui\">"));
         assert!(html.contains("color:#58a6ff"));
