@@ -50,7 +50,7 @@ impl Default for CompanionConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EconomyConfig {
     /// The soft setpoint the controller manages toward (tokens). None → the bin
-    /// defaults it to min(capacity, 384_000). Renamed from `context_ceiling`.
+    /// defaults it to min(capacity, 300_000). Renamed from `context_ceiling`.
     pub context_target: Option<u64>,
     pub auto_evict_cold: bool,
     /// 0 disables compaction; else percent of the target (1–100).

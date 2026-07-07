@@ -1333,7 +1333,7 @@ struct App {
     /// its own copy of `main`'s `config` local.
     economy: zoid_core::config::EconomyConfig,
     /// The resolved soft setpoint (config `economy.context_target`, defaulted to
-    /// `min(capacity, 384_000)` when unset) — separate from `shell.ctx_ceiling`
+    /// `min(capacity, 300_000)` when unset) — separate from `shell.ctx_ceiling`
     /// (capacity, the model window). Recomputed on config reload and once the
     /// model's real capacity lands via `ModelInfoFetched`.
     context_target: u64,
@@ -1654,13 +1654,13 @@ async fn main() -> Result<()> {
     shell.model = model.clone();
     // Economy ⑤ denominator: capacity is always the model window; the user's
     // target (ZOID_CONTEXT_CEILING → config.economy.context_target) is a
-    // separate soft knob, defaulted to min(capacity, 384_000) when unset.
+    // separate soft knob, defaulted to min(capacity, 300_000) when unset.
     // Constant for the process lifetime, so set once here rather than per frame.
     let capacity = zoid_provider::context_ceiling(&model);
     let context_target = config
         .economy
         .context_target
-        .unwrap_or_else(|| capacity.min(384_000));
+        .unwrap_or_else(|| capacity.min(300_000));
     shell.ctx_ceiling = capacity;
     shell.provider = provider_label(provider_name, has_key);
     shell.cache_supported = zoid_provider::has_prompt_cache(&model);
@@ -2373,7 +2373,7 @@ where
                                 .config
                                 .economy
                                 .context_target
-                                .unwrap_or_else(|| app.shell.ctx_ceiling.min(384_000));
+                                .unwrap_or_else(|| app.shell.ctx_ceiling.min(300_000));
                             app.shell.cache_supported = info.prompt_cache;
                         }
                     }
@@ -2741,7 +2741,7 @@ fn apply_config_write(
         .config
         .economy
         .context_target
-        .unwrap_or_else(|| app.shell.ctx_ceiling.min(384_000));
+        .unwrap_or_else(|| app.shell.ctx_ceiling.min(300_000));
     // Live-apply the provider (same selection as startup) so a provider change
     // takes effect on the next turn, and keep the cached drawer label truthful
     // (shell.provider is set once at startup, not recomputed per frame).
@@ -4804,7 +4804,7 @@ mod tests {
             pending_adjust: None,
             model: "test-model".into(),
             economy: zoid_core::config::EconomyConfig::default(),
-            context_target: 384_000,
+            context_target: 300_000,
             config: zoid_core::config::Config::default(),
             prov: {
                 use zoid_core::config::Source;
