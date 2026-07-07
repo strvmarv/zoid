@@ -13,6 +13,12 @@ pub struct SessionRow {
     pub root_path: String,
     pub created_ts: i64,
     pub last_touched_ts: i64,
+    /// Multi-instance safety (spec §2.2): an interface has this session open.
+    pub active: bool,
+    /// The OS PID of the interface holding this session, or None when inactive.
+    pub active_pid: Option<i64>,
+    /// Epoch-ms the holder last refreshed its liveness, or None when inactive.
+    pub active_heartbeat: Option<i64>,
 }
 
 /// A session folded for the resume picker / rail widget: the row plus a
@@ -78,6 +84,9 @@ mod tests {
             root_path: root.into(),
             created_ts: 0,
             last_touched_ts: touched,
+            active: false,
+            active_pid: None,
+            active_heartbeat: None,
         }
     }
     fn usage(session: u128, input: u64, output: u64) -> Event {

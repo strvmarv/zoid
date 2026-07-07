@@ -82,6 +82,19 @@ impl EventStore {
         if has_active_mode == 0 {
             conn.execute("ALTER TABLE sessions ADD COLUMN active_mode TEXT", [])?;
         }
+        // Liveness columns (multi-instance safety spec §2.2). Idempotent —
+        // probe-then-ALTER, mirroring `active_mode` above (SQLite has no ADD
+        // COLUMN IF NOT EXISTS).
+        let has_active: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'active'",
+            [],
+            |r| r.get(0),
+        )?;
+        if has_active == 0 {
+            conn.execute("ALTER TABLE sessions ADD COLUMN active INTEGER NOT NULL DEFAULT 0", [])?;
+            conn.execute("ALTER TABLE sessions ADD COLUMN active_pid INTEGER", [])?;
+            conn.execute("ALTER TABLE sessions ADD COLUMN active_heartbeat INTEGER", [])?;
+        }
         Ok(EventStore { conn })
     }
 
@@ -251,6 +264,33 @@ impl EventStore {
         Ok(())
     }
 
+    /// Claim or clear a session's "active interface" liveness flag (spec §2.2).
+    /// `active=true` with `active_pid`/`active_heartbeat` claims the row for
+    /// this process; `active=false` (with NULL pid/heartbeat) releases it.
+    /// Overwrites any prior claim — this is also the reclaim path (a stale
+    /// flag from a crashed process) and the takeover path (another process
+    /// overwrites the row, which the old process detects via `heartbeat`).
+    pub fn set_active(
+        &self,
+        id: Ulid,
+        active: bool,
+        active_pid: i64,
+        active_heartbeat: i64,
+    ) -> Result<()> {
+        if active {
+            self.conn.execute(
+                "UPDATE sessions SET active = 1, active_pid = ?2, active_heartbeat = ?3 WHERE id = ?1",
+                params![id.to_string(), active_pid, active_heartbeat],
+            )?;
+        } else {
+            self.conn.execute(
+                "UPDATE sessions SET active = 0, active_pid = NULL, active_heartbeat = NULL WHERE id = ?1",
+                params![id.to_string()],
+            )?;
+        }
+        Ok(())
+    }
+
     /// The stored active mode for a session, or `None` if never set.
     pub fn get_active_mode(&self, id: Ulid) -> Result<Option<String>> {
         let v = self
@@ -267,7 +307,7 @@ impl EventStore {
 
     pub fn list_session_rows(&self) -> Result<Vec<SessionRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, root_path, created_ts, last_touched_ts FROM sessions ORDER BY id ASC",
+            "SELECT id, name, root_path, created_ts, last_touched_ts, active, active_pid, active_heartbeat FROM sessions ORDER BY id ASC",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -276,17 +316,23 @@ impl EventStore {
                 row.get::<_, String>(2)?,
                 row.get::<_, i64>(3)?,
                 row.get::<_, i64>(4)?,
+                row.get::<_, bool>(5)?,
+                row.get::<_, Option<i64>>(6)?,
+                row.get::<_, Option<i64>>(7)?,
             ))
         })?;
         let mut out = Vec::new();
         for r in rows {
-            let (id, name, root_path, created_ts, last_touched_ts) = r?;
+            let (id, name, root_path, created_ts, last_touched_ts, active, active_pid, active_heartbeat) = r?;
             out.push(SessionRow {
                 id: id.parse()?,
                 name,
                 root_path,
                 created_ts,
                 last_touched_ts,
+                active,
+                active_pid,
+                active_heartbeat,
             });
         }
         Ok(out)
@@ -403,6 +449,9 @@ mod tests {
                 root_path: "/repo/a".into(),
                 created_ts: 100,
                 last_touched_ts: 200,
+                active: false,
+                active_pid: None,
+                active_heartbeat: None,
             }]
         );
     }
@@ -719,6 +768,56 @@ mod tests {
         assert_eq!(rows.len(), 1);
         let id: Ulid = rows[0].id;
         assert_eq!(store.get_active_mode(id).unwrap(), None);
+    }
+
+    #[test]
+    fn open_migrates_active_liveness_columns_idempotently() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("z.db");
+        let p = path.to_str().unwrap();
+        // First open adds the columns.
+        {
+            let s = EventStore::open(p).unwrap();
+            let id = Ulid::new();
+            s.insert_session(id, "s", "/r", 1, 1).unwrap();
+            s.set_active(id, true, 12345, 1000).unwrap();
+        }
+        // Re-open: the columns already exist; re-migration must NOT error.
+        let s2 = EventStore::open(p).unwrap();
+        let rows = s2.list_session_rows().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].active, true);
+        assert_eq!(rows[0].active_pid, Some(12345));
+        assert_eq!(rows[0].active_heartbeat, Some(1000));
+    }
+
+    #[test]
+    fn migrates_an_old_shape_db_without_active_columns() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.db");
+        let p = path.to_str().unwrap();
+        // Simulate a pre-liveness DB: sessions WITHOUT the three columns.
+        {
+            let conn = rusqlite::Connection::open(p).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE sessions (id TEXT PRIMARY KEY, name TEXT NOT NULL, \
+                 root_path TEXT NOT NULL, created_ts INTEGER NOT NULL, last_touched_ts INTEGER NOT NULL, \
+                 active_mode TEXT);",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id,name,root_path,created_ts,last_touched_ts) VALUES (?1,'s','/r',1,1)",
+                rusqlite::params![Ulid::new().to_string()],
+            )
+            .unwrap();
+        }
+        // Opening must add the columns (not throw) and they default to inactive.
+        let s = EventStore::open(p).unwrap();
+        let rows = s.list_session_rows().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].active, false);
+        assert_eq!(rows[0].active_pid, None);
+        assert_eq!(rows[0].active_heartbeat, None);
     }
 
     #[test]
