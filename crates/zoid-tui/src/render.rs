@@ -1164,13 +1164,14 @@ pub fn render_config(
             let marker = if cur { glyph::COLLAPSED } else { ' ' };
             let left = format!(" {marker} {}", pad_to(r.label, 12));
             let fixed = left.width() + tag_txt.width() + warn.width();
-            let mid = field_w.saturating_sub(fixed).max(1);
+            let mid = field_w.saturating_sub(fixed + 2).max(1); // +2 gap between label and value
             let val_shown = pad_to(&truncate(&val, mid), mid);
             let mut spans = vec![
                 Span::styled(
                     left,
                     Style::new().fg(if cur { color::CHAT_ACCENT } else { color::TXT }),
                 ),
+                Span::styled("  ", Style::new()), // 2-space gap between label and value
                 Span::styled(val_shown, Style::new().fg(color::TXT)),
                 Span::styled(tag_txt.to_string(), Style::new().fg(tag_col)),
             ];
