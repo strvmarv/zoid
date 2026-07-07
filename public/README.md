@@ -3,7 +3,19 @@
 Self-contained, terminal-authentic teaser page. No build step at serve time —
 `index.html` is fully inlined.
 
-## Regenerate
+> **`index.html` is now hand-authored.** The terminal scenes are hand-built
+> HTML/CSS mockups living directly in `index.html` (responsive, animated) — not
+> injected captures. Edit `index.html` directly.
+>
+> ⚠️ **Do NOT run `build.sh`.** It still does `cp template.html index.html` and
+> would **overwrite the current hand-authored page** with the stale captured
+> design in `template.html`. The capture pipeline below is legacy and kept only
+> for reference; `template.html` and `frames/` are out of date.
+
+## Regenerate (legacy — do not use without syncing template.html first)
+
+The capture pipeline that used to generate `index.html`. Superseded by the
+hand-authored mockups; running it will clobber the live page.
 
 ```sh
 sh public/capture.sh   # re-render TUI frames from the live renderer → public/frames/
