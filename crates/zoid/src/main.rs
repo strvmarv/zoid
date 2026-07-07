@@ -455,6 +455,53 @@ fn last4(s: &str) -> String {
     v[v.len().saturating_sub(4)..].iter().collect()
 }
 
+/// Error from `resolve_resume_id` — drives the stderr message the bin emits
+/// for a failed `--resume <id>`.
+#[derive(Debug)]
+enum ResumeIdError {
+    /// No session for this CWD matched the query.
+    NotFound,
+    /// Multiple sessions share the same last-4; the query is ambiguous.
+    /// Carries the full ULIDs of all candidates for the error message.
+    Ambiguous(Vec<String>),
+    /// The query is not 4 or 26 characters long.
+    InvalidLength,
+}
+
+/// Resolve a `--resume <id>` query against sessions for the current CWD.
+/// Accepts a 4-char last-4 form (matching the dashboard's `last4(...)` display)
+/// or a 26-char full ULID. A 4-char query that matches multiple sessions
+/// (same last-4) is `Ambiguous`. Any other length is `InvalidLength`. Pure.
+fn resolve_resume_id(
+    sessions: &[zoid_core::sessions::SessionInfo],
+    query: &str,
+) -> std::result::Result<Ulid, ResumeIdError> {
+    match query.len() {
+        4 => {
+            let matches: Vec<&zoid_core::sessions::SessionInfo> = sessions
+                .iter()
+                .filter(|s| last4(&s.id.to_string()) == query)
+                .collect();
+            match matches.len() {
+                0 => Err(ResumeIdError::NotFound),
+                1 => Ok(matches[0].id),
+                _ => Err(ResumeIdError::Ambiguous(
+                    matches.iter().map(|s| s.id.to_string()).collect(),
+                )),
+            }
+        }
+        26 => match query.parse::<Ulid>() {
+            Ok(id) => sessions
+                .iter()
+                .find(|s| s.id == id)
+                .map(|s| s.id)
+                .ok_or(ResumeIdError::NotFound),
+            Err(_) => Err(ResumeIdError::NotFound),
+        },
+        _ => Err(ResumeIdError::InvalidLength),
+    }
+}
+
 /// Human provider label for the provider actually constructed at startup
 /// (see the `config.provider` + secret-store match in `main`) — `provider_name`
 /// is the configured provider id ("anthropic"/"ollama"), `has_key` is whether a
@@ -5181,5 +5228,80 @@ mod tests {
         let (_provider, name, has_key) = select_provider(&config, &None);
         assert_eq!(name, "ollama");
         assert!(has_key, "ollama-local must be usable (ready) with no key");
+    }
+
+    // --- resolve_resume_id tests ---
+
+    fn mk_session_info(id_val: u128, name: &str) -> zoid_core::sessions::SessionInfo {
+        zoid_core::sessions::SessionInfo {
+            id: Ulid::from(id_val),
+            name: name.into(),
+            root_path: "/repo".into(),
+            created_ts: 0,
+            last_touched_ts: 0,
+            token_total: 0,
+            active: false,
+            active_pid: None,
+            active_heartbeat: None,
+        }
+    }
+
+    #[test]
+    fn resolve_resume_id_full_ulid_match() {
+        let id = Ulid::from(123456789u128);
+        let sessions = vec![mk_session_info(123456789, "test")];
+        let result = resolve_resume_id(&sessions, &id.to_string());
+        assert_eq!(result.unwrap(), id);
+    }
+
+    #[test]
+    fn resolve_resume_id_last4_match() {
+        let id = Ulid::from(123456789u128);
+        let sessions = vec![mk_session_info(123456789, "test")];
+        let l4 = last4(&id.to_string());
+        let result = resolve_resume_id(&sessions, &l4);
+        assert_eq!(result.unwrap(), id);
+    }
+
+    #[test]
+    fn resolve_resume_id_not_found() {
+        let sessions = vec![mk_session_info(1, "test")];
+        let result = resolve_resume_id(&sessions, "ABCD");
+        assert!(matches!(result, Err(ResumeIdError::NotFound)));
+    }
+
+    #[test]
+    fn resolve_resume_id_not_found_empty() {
+        let sessions: Vec<zoid_core::sessions::SessionInfo> = Vec::new();
+        let result = resolve_resume_id(&sessions, "ABCD");
+        assert!(matches!(result, Err(ResumeIdError::NotFound)));
+    }
+
+    #[test]
+    fn resolve_resume_id_ambiguous_real_collision() {
+        let id_a = Ulid::from(100u128);
+        let id_b = Ulid::from(200u128);
+        let la = last4(&id_a.to_string());
+        let lb = last4(&id_b.to_string());
+        let sessions = vec![mk_session_info(100, "a"), mk_session_info(200, "b")];
+        if la == lb {
+            let result = resolve_resume_id(&sessions, &la);
+            assert!(matches!(result, Err(ResumeIdError::Ambiguous(_))));
+        } else {
+            assert_eq!(resolve_resume_id(&sessions, &la).unwrap(), id_a);
+            assert_eq!(resolve_resume_id(&sessions, &lb).unwrap(), id_b);
+        }
+    }
+
+    #[test]
+    fn resolve_resume_id_invalid_length() {
+        let result = resolve_resume_id(&[], "ABC");
+        assert!(matches!(result, Err(ResumeIdError::InvalidLength)));
+    }
+
+    #[test]
+    fn resolve_resume_id_invalid_ulid_syntax() {
+        let result = resolve_resume_id(&[], "!!!!!!!!!!!!!!!!!!!!!!!!!!");
+        assert!(result.is_err());
     }
 }
