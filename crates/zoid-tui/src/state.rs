@@ -172,6 +172,18 @@ pub struct ShellState {
     /// Line count of the message input, sampled by the bin each frame so
     /// `layout::compute` can grow/shrink the box (spec §2.2). Default 1 (resting).
     pub input_rows: u16,
+    /// Whether the message input buffer is currently empty, sampled by the bin
+    /// each frame. Routing reads this so a leading `:` typed into an empty box
+    /// opens the palette in direct-command mode (the same UX as `:` from
+    /// Conversation/Rail focus), instead of inserting a literal colon. Once the
+    /// buffer has any text, `:` is literal again (so mid-sentence colons,
+    /// `:shrug:`, pasted URLs, … are untouched). Default true (resting).
+    pub input_empty: bool,
+    /// Whether the one-time "type any other key first to start a message with
+    /// ':'" hint has been surfaced. Set true by the bin's `OpenPaletteDirect`
+    /// arm after it shows the hint; the hint is never shown again. Purely a
+    /// bin-owned mirror so the pure routing layer doesn't gate on wall clock.
+    pub colon_trigger_hinted: bool,
     /// Number of items the Tasks rail drawer would show, sampled by the bin each
     /// frame from `tasks(&events)` so `layout::compute` can grow the drawer to fit
     /// a longer list (rehydrate-safe: this is a layout hint, not the task list —
@@ -318,6 +330,8 @@ impl ShellState {
             companion_on: false,
             status_hint: None,
             input_rows: 1,
+            input_empty: true,
+            colon_trigger_hinted: false,
             tasks_len: 0,
             sessions: Vec::new(),
             session_selected: 0,

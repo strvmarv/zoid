@@ -183,6 +183,13 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
                 Action::Newline
             }
             (KeyCode::Enter, _) => Action::Submit,
+            // A leading `:` typed into an empty message box opens the palette in
+            // direct-command mode — the same UX as `:` from Conversation/Rail
+            // focus — instead of inserting a literal colon. Once the buffer has
+            // any text, `:` is literal again (mid-sentence colons, URLs, …).
+            (KeyCode::Char(':'), KeyModifiers::NONE) if state.input_empty => {
+                Action::OpenPaletteDirect
+            }
             // Editing chords the message box needs beyond tui-textarea's defaults
             // (§30): ⇧Delete drops the whole line, ⇧Home/⇧End jump to the buffer
             // extremes. Guarded on SHIFT so a plain Delete/Home/End still reaches
@@ -642,11 +649,18 @@ mod tests {
     #[test]
     fn colon_opens_palette_direct_when_not_input() {
         let mut s = ShellState::new();
-        // focus Input → ':' is literal text
+        // focus Input with a non-empty buffer → ':' is literal text.
+        s.input_empty = false;
         assert!(matches!(
             route_key(&s, key(KeyCode::Char(':'), KeyModifiers::NONE)),
             Action::Edit(_)
         ));
+        // focus Input with an empty buffer → ':' opens the palette (direct).
+        s.input_empty = true;
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char(':'), KeyModifiers::NONE)),
+            Action::OpenPaletteDirect
+        );
         s.focus = Focus::Conversation;
         assert_eq!(
             route_key(&s, key(KeyCode::Char(':'), KeyModifiers::NONE)),
@@ -657,6 +671,28 @@ mod tests {
             route_key(&s, key(KeyCode::Char(':'), KeyModifiers::NONE)),
             Action::OpenPaletteDirect
         );
+    }
+
+    #[test]
+    fn input_focus_colon_is_literal_once_buffer_has_text() {
+        let mut s = ShellState::new(); // focus Input, input_empty defaults true
+                                       // Empty box → opens the palette.
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char(':'), KeyModifiers::NONE)),
+            Action::OpenPaletteDirect
+        );
+        // Once the buffer has any text, ':' is a literal edit again — mid-sentence
+        // colons, `:shrug:`, pasted URLs, … must not grab focus.
+        s.input_empty = false;
+        assert!(matches!(
+            route_key(&s, key(KeyCode::Char(':'), KeyModifiers::NONE)),
+            Action::Edit(_)
+        ));
+        // A control-modified ':' (Ctrl+:) never triggers — falls through to Edit.
+        assert!(matches!(
+            route_key(&s, key(KeyCode::Char(':'), KeyModifiers::CONTROL)),
+            Action::Edit(_)
+        ));
     }
 
     #[test]

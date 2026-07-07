@@ -1480,6 +1480,13 @@ where
         app.shell.tasks_len = app.proj.tasks.len() as u16;
         app.shell.duration = fmt_duration(app.session_started_ms, now_ms());
         app.shell.input_rows = app.textarea.lines().len().max(1) as u16;
+        // Empty-buffer flag for routing: a leading `:` in an empty box opens the
+        // palette (direct mode) instead of inserting a literal colon. The textarea
+        // lives in the bin, not ShellState, so sample it here each frame (mirrors
+        // `input_rows`). A multi-line box is never "empty" for this purpose even if
+        // every line is blank — `:` is literal once any structure exists.
+        app.shell.input_empty =
+            app.textarea.lines().iter().all(|l| l.is_empty()) && app.textarea.lines().len() == 1;
         let mut frame_conv_max = 0u16;
         // Whether the frame we're about to draw is "settled" (no reveal truncation).
         // Used to end the zoom animation only after a full-body frame is actually
@@ -1533,10 +1540,8 @@ where
             // lines directly. When the first message arrives, proj.msgs becomes
             // non-empty and the else branch takes over (key is None → full
             // rebuild). Excluded from the body-render cache-hit ratio (None).
-            app.body_cache.body = zoid_tui::onboarding::empty_state_lines(
-                app.shell.first_time_user,
-                body_w,
-            );
+            app.body_cache.body =
+                zoid_tui::onboarding::empty_state_lines(app.shell.first_time_user, body_w);
             app.body_cache.key = None;
             app.body_cache.msg_count = 0;
             None
@@ -2308,6 +2313,18 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             app.shell.overlay = Overlay::Palette;
             app.shell.palette = Default::default();
             app.shell.palette.query.push(':');
+            // One-time escape-hatch hint: a leading `:` in an empty box now opens
+            // the palette (instead of being literal). Teach the user once how to
+            // start a message with a literal ':' — type any other char first.
+            if !app.shell.colon_trigger_hinted {
+                app.shell.colon_trigger_hinted = true;
+                if app.shell.focus == zoid_tui::state::Focus::Input {
+                    app.shell.status_hint = Some(
+                        "':' opens commands. Type any other key first to start a message with ':'"
+                            .into(),
+                    );
+                }
+            }
         }
         Action::CloseOverlay => {
             // Defense-in-depth: if a question overlay is closed via this generic
@@ -4546,6 +4563,56 @@ mod tests {
             app.modes.active_name(),
             chat_name,
             "a vanished saved mode must degrade cleanly to Chat, not panic"
+        );
+    }
+
+    /// A leading `:` in an empty message box now opens the palette (direct mode)
+    /// instead of inserting a literal colon. The first time this happens from
+    /// Input focus, a one-time status hint teaches the escape hatch (type any
+    /// other key first to start a message with ':'); subsequent triggers (from
+    /// any focus) never re-show it. `Ctrl+P` (`OpenPalette`) never shows it —
+    /// only the `:`-from-empty-box trigger does.
+    #[tokio::test]
+    async fn colon_from_empty_input_shows_one_time_hint_then_stops() {
+        use zoid_tui::route::Action;
+        use zoid_tui::state::{Focus, Overlay};
+
+        let mut app = test_app().await;
+        app.shell.focus = Focus::Input;
+        // First trigger from Input focus → opens the palette AND shows the hint.
+        handle_action(&mut app, Action::OpenPaletteDirect)
+            .await
+            .unwrap();
+        assert_eq!(app.shell.overlay, Overlay::Palette);
+        assert_eq!(app.shell.palette.query, ":");
+        assert!(app.shell.colon_trigger_hinted, "hint flag latches");
+        assert!(
+            app.shell.status_hint.is_some(),
+            "the first Input-triggered colon should surface the escape-hatch hint"
+        );
+
+        // Second trigger (still from Input) → palette opens, hint NOT re-shown.
+        app.shell.close_overlay();
+        app.shell.status_hint = None;
+        handle_action(&mut app, Action::OpenPaletteDirect)
+            .await
+            .unwrap();
+        assert_eq!(app.shell.overlay, Overlay::Palette);
+        assert!(
+            app.shell.status_hint.is_none(),
+            "the colon hint must be one-shot"
+        );
+
+        // `Ctrl+P` (plain OpenPalette) never triggers the hint, even before the
+        // flag latches — it's a different entry point with its own discoverability.
+        app.shell.close_overlay();
+        app.shell.colon_trigger_hinted = false;
+        app.shell.status_hint = None;
+        handle_action(&mut app, Action::OpenPalette).await.unwrap();
+        assert_eq!(app.shell.overlay, Overlay::Palette);
+        assert!(
+            app.shell.status_hint.is_none(),
+            "OpenPalette (Ctrl+P) must not surface the colon hint"
         );
     }
 
