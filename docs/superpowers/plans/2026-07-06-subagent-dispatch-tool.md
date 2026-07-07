@@ -358,7 +358,27 @@ cd ~/source/zoid && cargo test -p zoid-tools subagent_dispatch 2>&1 | tail -5
 ```
 Expected: PASS
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Add a test that the base registry excludes dispatch_subagent**
+
+In `crates/zoid-tools/src/lib.rs` tests, add:
+
+```rust
+#[test]
+fn registry_excludes_chat_only_tools() {
+    let reg = registry();
+    assert!(!reg.iter().any(|t| t.name() == "dispatch_subagent"), "dispatch_subagent must not be in base registry (subagents can't dispatch)");
+    assert!(!reg.iter().any(|t| t.name() == "subagent_diff"), "subagent_diff must not be in base registry");
+}
+```
+
+- [ ] **Step 5: Run the test**
+
+```bash
+cd ~/source/zoid && cargo test -p zoid-tools registry_excludes_chat_only -- --nocapture 2>&1 | tail -5
+```
+Expected: PASS
+
+- [ ] **Step 6: Commit**
 
 ```bash
 cd ~/source/zoid
@@ -441,16 +461,26 @@ impl Tool for SubagentDiff {
         }
 
         // Gather the diff: commit list + stat + full diff.
+        // Use merge-base to diff only what the subagent committed, not working-tree changes.
+        let merge_base = Command::new("git")
+            .args(["merge-base", "HEAD", &branch])
+            .current_dir(cwd)
+            .output();
+        let base = match merge_base {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            _ => branch.clone(), // fall back to diffing the branch itself
+        };
+        let range = format!("{base}..{branch}");
         let log = Command::new("git")
-            .args(["log", "--oneline", &branch])
+            .args(["log", "--oneline", &range])
             .current_dir(cwd)
             .output();
         let stat = Command::new("git")
-            .args(["diff", "--stat", &branch])
+            .args(["diff", "--stat", &range])
             .current_dir(cwd)
             .output();
         let diff = Command::new("git")
-            .args(["diff", "-U10", &branch])
+            .args(["diff", "-U10", &range])
             .current_dir(cwd)
             .output();
 
@@ -625,6 +655,7 @@ git commit -m "feat: wire dispatch_subagent and subagent_diff into chat_tools"
 
 **Files:**
 - Modify: `crates/zoid/src/agent.rs` (new `Emitting` arm in `run_turn_inner`)
+- Modify: `crates/zoid/src/subagent.rs` (accept an optional `id` parameter in `run_subagent`)
 
 **Interfaces:**
 - Consumes: `run_subagent`, `create_worktree`, `AgentProfile::builtin()` from existing code.
@@ -634,9 +665,64 @@ This is the core task. The Emitting arm needs to:
 1. Parse `task`, `worktree`, `model` from the tool call args.
 2. Generate a subagent ID.
 3. If `worktree: true`, create a worktree (absolute path).
-4. Spawn `run_subagent` via `tokio::spawn` (fire-and-forget).
+4. Spawn `run_subagent` via `tokio::spawn` (fire-and-forget), passing the generated ID so the `DelegationResult` event carries the same ID the in-flight set tracks.
 5. Emit a `ToolResult` with the subagent ID immediately.
 6. The spawned task emits `DelegationResult` when it completes (same as `start_delegation`).
+
+**Subagent ID sharing:** Both `dispatch_subagent` (Task 5) and `start_delegation` (Task 6) must use the SAME ID for the in-flight set and the `DelegationResult` event. The fix: `run_subagent` accepts an `id: String` parameter and uses it instead of generating its own. This way the caller controls the ID.
+
+- [ ] **Step 0: Modify `run_subagent` to accept an `id` parameter**
+
+In `crates/zoid/src/subagent.rs`, change `run_subagent`'s signature to accept an `id: String` parameter. Find:
+
+```rust
+pub async fn run_subagent(
+    task: &str,
+    context_events: &crate::eventlog::EventLog,
+    profile: &AgentProfile,
+    provider: Arc<dyn Provider>,
+    cwd: PathBuf,
+    default_model: String,
+    session: SessionHandle,
+    session_id: Ulid,
+    ui: mpsc::Sender<AgentUpdate>,
+    now: fn() -> i64,
+) -> Result<SubagentResult> {
+    let branch = BranchId(format!("subagent:{}", Ulid::new()));
+```
+
+Replace with (add `id: String` parameter, use it for the branch):
+
+```rust
+pub async fn run_subagent(
+    task: &str,
+    context_events: &crate::eventlog::EventLog,
+    profile: &AgentProfile,
+    provider: Arc<dyn Provider>,
+    cwd: PathBuf,
+    default_model: String,
+    session: SessionHandle,
+    session_id: Ulid,
+    ui: mpsc::Sender<AgentUpdate>,
+    now: fn() -> i64,
+    id: String,
+) -> Result<SubagentResult> {
+    let sub_ulid = id.strip_prefix("sub-").unwrap_or(&id).to_string();
+    let branch = BranchId(format!("subagent:{sub_ulid}"));
+```
+
+And the return:
+
+```rust
+    Ok(SubagentResult {
+        id: id,
+        branch: branch.0,
+        summary,
+        ok,
+    })
+```
+
+Fix all callers of `run_subagent` (in `subagent.rs` tests and `main.rs`'s `start_delegation`) to pass an `id` argument. In tests: `id: "sub-test".into()`. In `start_delegation`: `id: sub_id.clone()` (see Task 6).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -806,6 +892,7 @@ After the entire `show` arm (its closing `}`), add the `dispatch_subagent` arm:
                             sub_session_id,
                             sub_ui.clone(),
                             now,
+                            sub_id.clone(),
                         )
                         .await;
                         drop(wt);
@@ -957,11 +1044,7 @@ Replace each according to these rules:
 
 3. **`app.streaming || app.delegating`** (in motion_tick guard, Submit guard, SessionPick guard, NewSession guard, start_delegation) → replace all with `app.streaming || !app.in_flight_subagents.is_empty()`.
 
-4. **`app.delegating = true;`** (in `start_delegation`) → replace with:
-   ```rust
-   app.in_flight_subagents.insert(sub_id.clone());
-   ```
-   (where `sub_id` is generated the same way — see Step 4 below.)
+4. **`app.delegating = true;`** (in `start_delegation`) → `start_delegation` must use the SAME subagent ID that `run_subagent` returns, so the in-flight set matches the `DelegationResult` event. The cleanest approach: generate the ID in `start_delegation`, pass it to `run_subagent` (which needs to accept an `id: String` parameter — see Step 4 below), and insert it into the in-flight set. See Step 4 for the full code.
 
 5. **Tests that set `app.delegating = true;`** → replace with:
    ```rust
@@ -1060,7 +1143,36 @@ git commit -m "refactor: replace delegating bool with in-flight subagent set"
 
 - [ ] **Step 1: Update the SDD process flowchart**
 
-In `~/source/superpowers/skills/subagent-driven-development/SKILL.md`, find all occurrences of `"Dispatch implementer subagent (./implementer-prompt.md)"` in the flowchart and replace with `"Dispatch implementer (dispatch_subagent tool)"`. Similarly for the reviewer nodes.
+In `~/source/superpowers/skills/subagent-driven-development/SKILL.md`, find the `digraph process` block. Replace these node labels:
+
+Find:
+```
+        "Dispatch implementer subagent (./implementer-prompt.md)" [shape=box];
+```
+→
+```
+        "Dispatch implementer (dispatch_subagent tool)" [shape=box];
+```
+
+Find all edge labels referencing `"Write diff file, dispatch task reviewer (gilfoyle + ./task-reviewer-prompt.md)"` — these stay as-is (the reviewer dispatch also uses `dispatch_subagent` but the flowchart node name doesn't need to change since the arm already says "gilfoyle").
+
+Find:
+```
+    "More tasks remain?" -> "Dispatch final code reviewer (gilfoyle-tech-reviewer + ../requesting-code-review/code-reviewer.md)" [label="no"];
+```
+→
+```
+    "More tasks remain?" -> "Dispatch final reviewer (dispatch_subagent + gilfoyle)" [label="no"];
+```
+
+Find:
+```
+    "Dispatch final code reviewer (gilfoyle-tech-reviewer + ../requesting-code-review/code-reviewer.md)" -> "Use superpowers:finishing-a-development-branch";
+```
+→
+```
+    "Dispatch final reviewer (dispatch_subagent + gilfoyle)" -> "Use superpowers:finishing-a-development-branch";
+```
 
 - [ ] **Step 2: Update the Red Flags section**
 
@@ -1073,20 +1185,102 @@ Find the Red Flag:
 Replace with:
 
 ```markdown
-- Dispatch multiple subagents with worktree: false that edit the same files (they will conflict). Use worktree: true for isolation, or dispatch sequentially for shared files.
+- Dispatch multiple subagents with `worktree: false` that edit the same files — they will conflict. Use `worktree: true` for isolation, or dispatch sequentially for tasks touching shared files.
 ```
 
 - [ ] **Step 3: Update the Example Workflow**
 
-Replace the `Subagent (general-purpose):` template syntax in the Example Workflow section with `dispatch_subagent` tool calls and `subagent_diff` for review.
+Find the `## Example Workflow` section. Replace the entire section with:
+
+```markdown
+## Example Workflow
+
+```
+You: I'm using Subagent-Driven Development to execute this plan.
+
+[Read plan file once: docs/superpowers/plans/feature-plan.md]
+[Create todos for all tasks]
+
+Task 1: Hook installation script
+
+[Run task-brief for Task 1; dispatch_subagent with task brief path in the task argument, worktree: true]
+
+Subagent: "Before I begin - should the hook be installed at user or system level?"
+
+You: "User level (~/.config/superpowers/hooks/)"
+
+[DelegationResult event arrives with subagent_id, summary, ok=true]
+[subagent_diff with the subagent_id to review the diff]
+
+Task reviewer (dispatch_subagent with gilfoyle persona + task-reviewer-prompt):
+  Spec ✅ - all requirements met, nothing extra.
+  Strengths: Good test coverage, clean. Issues: None. Task quality: Approved.
+
+[Mark Task 1 complete]
+
+Task 2: Recovery modes
+
+[dispatch_subagent with Task 2 brief, worktree: true]
+
+[DelegationResult arrives]
+[subagent_diff review]
+Task reviewer: Spec ❌:
+  - Missing: Progress reporting (spec says "report every 100 items")
+  - Extra: Added --json flag (not requested)
+  Issues (Important): Magic number (100)
+
+[dispatch_subagent with fix task + all findings]
+[DelegationResult arrives]
+[subagent_diff re-review]
+Task reviewer: Spec ✅. Task quality: Approved.
+
+[Mark Task 2 complete]
+
+...
+
+[After all tasks]
+[dispatch_subagent with gilfoyle + code-reviewer.md for final whole-branch review]
+Final reviewer: All requirements met, ready to merge
+
+Done!
+```
+```
 
 - [ ] **Step 4: Update the File Handoffs section**
 
-Add a note: "The controller dispatches via the `dispatch_subagent` tool with the task brief path in the `task` argument. The subagent's summary arrives as a `DelegationResult` event. Call `subagent_diff` with the subagent ID to retrieve the diff for review."
+In the `## File Handoffs` section, after the existing bullets, add this paragraph:
+
+```markdown
+
+**Dispatching subagents:** The controller dispatches via the `dispatch_subagent` tool with the task brief path in the `task` argument. The subagent's summary arrives as a `DelegationResult` event carrying the `subagent_id`. Call `subagent_diff` with the `subagent_id` to retrieve the diff for review. The `DelegationResult` event's `subagent_id` matches the ID returned by `dispatch_subagent`.
+```
 
 - [ ] **Step 5: Update dispatching-parallel-agents**
 
-In `~/source/superpowers/skills/dispatching-parallel-agents/SKILL.md`, find the "Dispatch in Parallel" section and replace the template syntax with multiple `dispatch_subagent` calls, each with `worktree: true`.
+In `~/source/superpowers/skills/dispatching-parallel-agents/SKILL.md`, find the `### 3. Dispatch in Parallel` section. Replace the code block:
+
+Find:
+```text
+Subagent (general-purpose): "Fix agent-tool-abort.test.ts failures"
+Subagent (general-purpose): "Fix batch-completion-behavior.test.ts failures"
+Subagent (general-purpose): "Fix tool-approval-race-conditions.test.ts failures"
+# All three run concurrently.
+```
+
+Replace with:
+```text
+dispatch_subagent(task: "Fix agent-tool-abort.test.ts failures", worktree: true)
+dispatch_subagent(task: "Fix batch-completion-behavior.test.ts failures", worktree: true)
+dispatch_subagent(task: "Fix tool-approval-race-conditions.test.ts failures", worktree: true)
+# All three run concurrently; results arrive as DelegationResult events.
+```
+
+And in the `### 4. Review and Integrate` section, add after the existing bullets:
+
+```markdown
+- Call `subagent_diff` for each completed subagent to review its changes
+- Verify no two subagents edited the same files (worktree isolation prevents this, but verify)
+```
 
 - [ ] **Step 6: Commit to the fork**
 
