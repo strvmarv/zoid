@@ -356,19 +356,16 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
     let compact_fg = color::BRANCH;
 
     let mut spans = left;
-    // Tool indicator at the ⅓ anchor (left of center, with a 4-space gap
-    // before "working"). Falls back to abutting center if space is tight.
+    // Tool indicator just left of "working" (4-space gap), so the two cluster
+    // together at center. "Working" stays dead-center regardless.
     if let Some(text) = &tool_text {
-        let tool_slot = w / 3;
-        let tool_pad = tool_slot.saturating_sub(left_w + tool_w + 4);
+        let tool_right = center_start.saturating_sub(4);
+        let tool_left = tool_right.saturating_sub(tool_w);
+        let tool_pad = tool_left.saturating_sub(left_w);
         if tool_pad > 0 {
             spans.push(Span::styled(" ".repeat(tool_pad), Style::new()));
         }
-        spans.push(Span::styled(text.clone(), Style::new().fg(tool_fg)));
-        // Gap to dead-center: at least 4 spaces, but grows to fill the distance
-        // from the tool's right edge to the center start.
-        let consumed = left_w + tool_pad + tool_w;
-        let actual_gap = center_start.saturating_sub(consumed).max(4);
+        let actual_gap = center_start.saturating_sub(tool_left + tool_w).max(4);
         if actual_gap > 0 {
             spans.push(Span::styled(" ".repeat(actual_gap), Style::new()));
         }
