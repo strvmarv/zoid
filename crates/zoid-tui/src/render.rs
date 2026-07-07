@@ -219,7 +219,7 @@ fn render_mode_error(frame: &mut Frame, state: &ShellState, area: Rect) {
 
 fn render_title(frame: &mut Frame, _state: &ShellState, area: Rect) {
     let wordmark = "zoid";
-    let palette_hint = "^P palette";
+    let palette_hint = "Esc interrupt · : command · ^P palette";
     let w = area.width as usize;
     let wm_w = wordmark.width();
     let pad = w.saturating_sub(wm_w) / 2;
