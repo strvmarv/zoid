@@ -52,10 +52,12 @@ Find the compaction color (`pub const COMPACT` or the purple used for compaction
 In `crates/zoid-tui/src/tokens.rs`, delete the `COMPACT_SPINNER` array and its test (`glyph::COMPACT_SPINNER`). Search:
 
 ```bash
-grep -n "COMPACT_SPINNER" crates/zoid-tui/src/tokens.rs
+grep -rn "COMPACT_SPINNER" crates/ | grep -v "test\|plan\|spec\|target/"
 ```
 
-Delete the `pub const COMPACT_SPINNER: [char; 6] = ...` line and the test that asserts its shape. Keep `pub const COMPACT: char = '⊟'` (the static glyph — still used as the pulse-then-steady-state glyph).
+Delete the `pub const COMPACT_SPINNER: [char; 6] = ...` line (line 47) and the test `compaction_spinner_token_present` (line 204) in `tokens.rs`. Keep `pub const COMPACT: char = '⊟'` (the static glyph — still used as the pulse-then-steady-state glyph).
+
+**ALSO:** `COMPACT_SPINNER` is referenced in `crates/zoid-tui/src/render.rs:1347` (the `compaction_segment_visible_when_compacting` test) and at `render.rs:1323` (`state.compact_spinner = glyph::COMPACT_SPINNER[0]`). These will not compile after deleting the token. Update the render test NOW (Task 1) to use `glyph::COMPACT` instead of `glyph::COMPACT_SPINNER[0]`, and remove the `state.compact_spinner = ...` line (the field is removed in Task 2, but the `COMPACT_SPINNER` reference breaks compilation in Task 1). See Task 4 Step 1 for the full rewrite of this test — for now, just replace `glyph::COMPACT_SPINNER[0]` with `glyph::COMPACT` and comment out or remove the `state.compact_spinner = ...` line so it compiles.
 
 - [ ] **Step 3: Build the crate**
 
@@ -395,9 +397,18 @@ In `crates/zoid-tui/src/render.rs`, replace the indicator section of `render_sta
     // Compaction at the ⅔ anchor (right of center, with a 4-space gap).
     if let Some(text) = &compact_text {
         let gap2 = 4usize;
-        let actual_gap = (center_start + center_w + gap2).saturating_sub(center_start + center_w).min(gap2);
+        let compact_slot = (2 * w) / 3;
+        let actual_gap = compact_slot
+            .saturating_sub(center_start + center_w)
+            .min(gap2);
         if actual_gap > 0 {
             spans.push(Span::styled(" ".repeat(actual_gap), Style::new()));
+        } else {
+            // Not enough room for the full gap; abut "working" instead.
+            let min_gap = (center_start + center_w + 1).saturating_sub(center_start + center_w);
+            if min_gap > 0 {
+                spans.push(Span::styled(" ", Style::new()));
+            }
         }
         spans.push(Span::styled(text.clone(), Style::new().fg(compact_fg)));
     }
@@ -463,6 +474,13 @@ Expected: PASS.
 - [ ] **Step 7: Build the workspace**
 
 Run: `cargo build --workspace`
+Expected: PASS.
+
+- [ ] **Step 7b: Update the compaction render unit test**
+
+The existing `compaction_segment_visible_when_compacting` test (render.rs:1314) asserts the old spinner glyph (`COMPACT_SPINNER[0]`) and sets `state.compact_spinner`. Rewrite it to assert the static `glyph::COMPACT` glyph and remove the `compact_spinner` assignment. The test should assert `content.contains("⊟")` (the static glyph) and `content.contains("compacting")` (the label), and verify the indicator is at the ⅔ anchor (right of center). Remove any assertion on `state.compact_spinner` (the field is gone).
+
+Run: `cargo test -p zoid-tui --lib render::tests::compaction_segment_visible`
 Expected: PASS.
 
 - [ ] **Step 8: Commit**
