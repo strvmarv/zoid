@@ -405,27 +405,30 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
     let right_start = w.saturating_sub(right_w);
 
     let mut spans = left;
-    // Tool indicator just left of "working" (4-space gap), always present.
-    // Dim glyph when idle; bright + label + rotation when active.
-    let tool_right = center_start.saturating_sub(4);
-    let tool_left = tool_right.saturating_sub(tool_w);
-    let tool_pad = tool_left.saturating_sub(left_w);
-    if tool_pad > 0 {
-        spans.push(Span::styled(" ".repeat(tool_pad), Style::new()));
+    // Compact indicator just left of "working" (4-space gap), always present.
+    // Compact has static text (never changes width), so the gap to "working"
+    // never jumps. Dim glyph when idle; bright + label + rotation when active.
+    let compact_right = center_start.saturating_sub(4);
+    let compact_left = compact_right.saturating_sub(compact_w);
+    let compact_pad = compact_left.saturating_sub(left_w);
+    if compact_pad > 0 {
+        spans.push(Span::styled(" ".repeat(compact_pad), Style::new()));
     }
-    spans.push(Span::styled(tool_text.clone(), Style::new().fg(tool_fg)));
-    // Fixed 4-space gap between tool and working.
-    let actual_gap = 4;
-    spans.push(Span::styled(" ".repeat(actual_gap), Style::new()));
-    // Working — dead center.
-    spans.push(Span::styled(center, Style::new().fg(fg)));
-    // Fixed 4-space gap between working and compact (symmetric with tool gap).
-    let actual_gap = 4;
-    spans.push(Span::styled(" ".repeat(actual_gap), Style::new()));
     spans.push(Span::styled(
         compact_text.clone(),
         Style::new().fg(compact_fg),
     ));
+    // Fixed 4-space gap between compact and working.
+    spans.push(Span::styled(" ".repeat(4), Style::new()));
+    // Working — dead center.
+    spans.push(Span::styled(center, Style::new().fg(fg)));
+    // Fixed 4-space gap between working and tool (symmetric with compact gap).
+    spans.push(Span::styled(" ".repeat(4), Style::new()));
+    // Tool indicator right of "working" (4-space gap), always present.
+    // Tool has dynamic text (idle "tool" vs active "shell ..."), but since
+    // it's on the outside, width changes only affect the right padding to zoom,
+    // not the gap to "working". Dim glyph when idle; bright + animated when active.
+    spans.push(Span::styled(tool_text.clone(), Style::new().fg(tool_fg)));
 
     // Pad to the zoom hint (right edge).
     let consumed_so_far: usize = spans.iter().map(|s| s.content.width()).sum();
