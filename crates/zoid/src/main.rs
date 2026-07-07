@@ -1754,24 +1754,25 @@ async fn main() -> Result<()> {
         enable_raw_mode()?;
     }
     let mut out = stdout();
+    // Kitty keyboard protocol: lets the terminal report ⇧⏎ distinctly from ⏎ so
+    // route.rs can map Shift+Enter → newline. Degrade gracefully — only push the
+    // flags when supported; otherwise the Alt+⏎ fallback stands. Push BEFORE
+    // EnterAlternateScreen / EnableBracketedPaste so the terminal doesn't
+    // drop the kitty protocol sequence when bracketed paste is already active
+    // (Ghostty exhibits this ordering sensitivity).
+    let kbd_enhanced = supports_keyboard_enhancement().unwrap_or(false);
+    if kbd_enhanced {
+        let _ = execute!(
+            out,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
+    }
     execute!(
         out,
         EnterAlternateScreen,
         EnableMouseCapture,
         EnableBracketedPaste
     )?;
-    // Kitty keyboard protocol: lets the terminal report ⇧⏎ distinctly from ⏎ so
-    // route.rs can map Shift+Enter → newline. Degrade gracefully — only push the
-    // flags when supported; otherwise the Alt+⏎ fallback stands.
-    let kbd_enhanced = supports_keyboard_enhancement().unwrap_or(false);
-    if kbd_enhanced {
-        // Best-effort: a failed push just means ⇧⏎ falls back to Alt+⏎ — it must
-        // not skip the terminal restore below, so don't propagate with `?`.
-        let _ = execute!(
-            out,
-            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-        );
-    }
     let mut terminal = Terminal::new(CrosstermBackend::new(out))?;
 
     // Fetch the active model's capabilities (context window, prompt cache) from
@@ -1781,7 +1782,6 @@ async fn main() -> Result<()> {
 
     let result = run(&mut terminal, &mut app, &mut ui_rx, &obs.state).await;
 
-    // Restore the terminal on every exit path — drive through errors, don't bail.
     if kbd_enhanced {
         let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
     }
