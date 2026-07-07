@@ -490,6 +490,7 @@ fn render_rail(
                 DrawerId::Repo => render_repo_body(frame, state, body_rect),
                 DrawerId::Session => render_session_body(frame, state, body_rect), // Task 13
                 DrawerId::Tasks => render_tasks_body(frame, body_rect, tasks),
+                DrawerId::Subagents => {} // 4b adds render_subagents_body
             }
         }
     }
