@@ -68,6 +68,9 @@ pub enum Action {
     VerbBack,
     SessionMove(i32),
     SessionPick,
+    /// The user pressed Enter on a live ("in use") resume-picker row. Raise a
+    /// confirm card before taking it over. Spec §3.2.
+    SessionTakeoverConfirm,
     ConfigMoveField(i32),
     ConfigMoveSection(i32),
     ConfigBeginEdit,
@@ -129,7 +132,7 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
         Overlay::Palette => return route_palette_key(state, key),
         Overlay::Objects => return route_objects_key(key),
         Overlay::Verbs => return route_verbs_key(key),
-        Overlay::Sessions => return route_sessions_key(key),
+        Overlay::Sessions => return route_sessions_key(state, key),
         Overlay::Config => return route_config_key(state, key),
         Overlay::ProviderSwitch => return route_provider_switch_key(state, key),
         Overlay::None => {}
@@ -248,10 +251,23 @@ fn route_objects_key(key: KeyEvent) -> Action {
     }
 }
 
-fn route_sessions_key(key: KeyEvent) -> Action {
+fn route_sessions_key(state: &ShellState, key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Esc => Action::CloseOverlay,
-        KeyCode::Enter => Action::SessionPick,
+        KeyCode::Enter => {
+            // If the highlighted row is live, raise the takeover confirm card
+            // instead of resuming directly. Spec §3.2.
+            let live = state
+                .sessions_live
+                .get(state.session_selected)
+                .copied()
+                .unwrap_or(false);
+            if live {
+                Action::SessionTakeoverConfirm
+            } else {
+                Action::SessionPick
+            }
+        }
         KeyCode::Up | KeyCode::Char('k') => Action::SessionMove(-1),
         KeyCode::Down | KeyCode::Char('j') => Action::SessionMove(1),
         _ => Action::Noop,
@@ -735,6 +751,24 @@ mod tests {
             kind: crate::palette::ArgKind::Rename,
             input: String::new(),
         }
+    }
+
+    #[test]
+    fn sessions_live_row_enter_raises_confirm_not_pick() {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Sessions;
+        s.sessions = vec!["a".into(), "b".into()];
+        s.sessions_live = vec![false, true];
+        let k = |c: KeyCode| KeyEvent::new(c, KeyModifiers::NONE);
+        // Non-live row → direct pick.
+        s.session_selected = 0;
+        assert_eq!(route_key(&s, k(KeyCode::Enter)), Action::SessionPick);
+        // Live row → confirm card.
+        s.session_selected = 1;
+        assert_eq!(
+            route_key(&s, k(KeyCode::Enter)),
+            Action::SessionTakeoverConfirm
+        );
     }
 
     #[test]

@@ -1182,6 +1182,10 @@ struct App {
     /// in-flight turn was cancelled and no further turns may start against it.
     /// The user can `:new` or `:resume` elsewhere, or quit. Spec §2.4.
     yielded: bool,
+    /// A takeover confirmation in flight: the session id the user is about to
+    /// forcibly claim from another instance. Set by `SessionTakeoverConfirm`,
+    /// consumed by the "Take over" answer in `QuestionSelect`. Spec §3.2.
+    pending_takeover: Option<Ulid>,
 }
 
 impl App {
@@ -1407,6 +1411,7 @@ async fn main() -> Result<()> {
         compaction_started_at: None,
         compaction_complete: false,
         yielded: false,
+        pending_takeover: None,
     };
 
     // Restore the resumed session's persisted active mode (a no-op if that mode
@@ -2617,6 +2622,25 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             app.shell.session_selected =
                 zoid_tui::palette::nav(app.shell.session_selected, d, app.shell.sessions.len());
         }
+        Action::SessionTakeoverConfirm => {
+            // The user picked a live row. Raise a confirm card; on "Take over",
+            // overwrite the row's active_pid/heartbeat to claim it, then resume.
+            let sid = match app.session_ids.get(app.shell.session_selected) {
+                Some(&sid) => sid,
+                None => {
+                    app.shell.close_overlay();
+                    return Ok(false);
+                }
+            };
+            app.shell.question = Some(zoid_tui::question::QuestionState::new(
+                "This session is active in another instance. Take it over? \
+                 The other instance will detect this and yield."
+                    .to_string(),
+                vec!["Take over".into(), "Cancel".into()],
+            ));
+            // Stash the takeover target so QuestionSelect can act on it.
+            app.pending_takeover = Some(sid);
+        }
         Action::SessionPick => {
             if app.streaming || app.delegating {
                 app.shell.status_hint = Some("finish the current turn first".into());
@@ -2980,6 +3004,35 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::QuestionSelect => {
             use zoid_tui::question::{QuestionMode, QuestionOutcome};
+            // A takeover confirm card's answer. NB: QuestionState resolves the
+            // last choice row to LetYouDecide, so `Cancel` arrives as
+            // LetYouDecide, not Choice("Cancel"). Anything that isn't
+            // Choice("Take over") is treated as a cancel — the intended contract.
+            if let Some(sid) = app.pending_takeover.take() {
+                let outcome = app.shell.question.as_ref().map(|q| q.resolved());
+                let take =
+                    matches!(outcome, Some(QuestionOutcome::Choice(s)) if s == "Take over");
+                app.shell.question = None;
+                if !take {
+                    // Cancel: return to the picker.
+                    app.shell.overlay = zoid_tui::Overlay::Sessions;
+                    return Ok(false);
+                }
+                // Take over: claim the row, then load it via the SessionPick path.
+                let self_pid = std::process::id() as i64;
+                app.session.set_active(sid, true, self_pid, now_ms()).await.ok();
+                app.shell.session_selected = app
+                    .session_ids
+                    .iter()
+                    .position(|&x| x == sid)
+                    .unwrap_or(app.shell.session_selected);
+                // Box::pin the recursive call (async fn can't recurse directly).
+                return Box::pin(handle_action(
+                    app,
+                    zoid_tui::route::Action::SessionPick,
+                ))
+                .await;
+            }
             let outcome = app.shell.question.as_ref().map(|q| q.resolved());
             match outcome {
                 Some(QuestionOutcome::EnterFreeText) => {
@@ -3487,6 +3540,19 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
                         s.name,
                         fmt_since(s.last_touched_ts, now_ms()),
                         zoid_tui::economy_view::human_tokens(s.token_total)
+                    )
+                })
+                .collect();
+            let now = now_ms();
+            app.shell.sessions_live = list
+                .iter()
+                .map(|s| {
+                    zoid_core::store::is_live(
+                        s.active,
+                        s.active_pid,
+                        s.active_heartbeat,
+                        now,
+                        pid_alive,
                     )
                 })
                 .collect();
@@ -4253,6 +4319,7 @@ mod tests {
             compaction_started_at: None,
             compaction_complete: false,
             yielded: false,
+            pending_takeover: None,
         }
     }
 

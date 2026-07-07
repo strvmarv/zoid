@@ -870,7 +870,19 @@ fn render_sessions_overlay(frame: &mut Frame, state: &ShellState, area: Rect) {
     let rows = if state.sessions.is_empty() {
         vec!["(no sessions for this repo)".to_string()]
     } else {
-        state.sessions.clone()
+        state
+            .sessions
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let live = state.sessions_live.get(i).copied().unwrap_or(false);
+                if live {
+                    format!("{r}  · in use")
+                } else {
+                    r.clone()
+                }
+            })
+            .collect()
     };
     let sel = nav(state.session_selected, 0, rows.len());
     list_overlay(
@@ -1377,6 +1389,31 @@ mod tests {
         assert!(
             !content.contains("compacting"),
             "status bar must NOT contain 'compacting' when not compacting: got {content:?}"
+        );
+    }
+
+    #[test]
+    fn sessions_overlay_marks_live_rows() {
+        use crate::state::{Overlay, ShellState};
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Sessions;
+        s.sessions = vec!["a  ·  1m ago  ·  10".into(), "b  ·  2m ago  ·  20".into()];
+        s.sessions_live = vec![false, true];
+        let backend = TestBackend::new(60, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| render_sessions_overlay(f, &s, f.area()))
+            .unwrap();
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
+        assert!(
+            content.contains("in use"),
+            "live row must carry the 'in use' marker: {content:?}"
         );
     }
 }

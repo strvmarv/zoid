@@ -179,6 +179,10 @@ pub struct ShellState {
     pub tasks_len: u16,
     /// Display rows for the resume-session picker (bin-formatted, most-recent-first).
     pub sessions: Vec<String>,
+    /// Per-row "in use" flags for the resume-session picker, index-aligned with
+    /// `sessions`/`session_ids`. `true` when `is_live` for that row at the time
+    /// the picker was populated. Spec §3.2.
+    pub sessions_live: Vec<bool>,
     /// Highlighted row in the resume-session picker.
     pub session_selected: usize,
     /// Session name shown in the session drawer header line.
@@ -320,6 +324,7 @@ impl ShellState {
             input_rows: 1,
             tasks_len: 0,
             sessions: Vec::new(),
+            sessions_live: Vec::new(),
             session_selected: 0,
             session_name: String::new(),
             model: String::new(),
@@ -399,6 +404,7 @@ impl ShellState {
         self.palette = PaletteState::default();
         self.objects = ObjectState::default();
         self.sessions.clear();
+        self.sessions_live.clear();
         self.session_selected = 0;
     }
 
