@@ -1207,7 +1207,7 @@ async fn main() -> Result<()> {
             );
             std::process::exit(2);
         }
-        zoid::cli::Cli::Run { companion } => companion,
+        zoid::cli::Cli::Run { companion, new: _, resume: _ } => companion,
     };
 
     let path = db_path()?;

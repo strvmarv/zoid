@@ -5,8 +5,13 @@
 #[derive(Debug, PartialEq, Eq)]
 pub enum Cli {
     /// Launch the TUI (default; no recognised args). `companion` starts the
-    /// companion server at boot when set.
-    Run { companion: bool },
+    /// companion server at boot when set. `new` forces a fresh session. `resume`
+    /// carries a session id (full ULID or last-4) to resume directly.
+    Run {
+        companion: bool,
+        new: bool,
+        resume: Option<String>,
+    },
     /// Print version and exit.
     Version,
     /// Print help and exit.
@@ -17,16 +22,52 @@ pub enum Cli {
     Unknown(String),
 }
 
-/// Parse process arguments (excluding argv[0]) into a [`Cli`] intent. Only the
-/// first token is significant; the subcommands/flags take no operands.
+/// Parse process arguments (excluding argv[0]) into a [`Cli`] intent.
+///
+/// Recognised flags (any order): `--companion`, `--new`, `--resume <id>`.
+/// `--new` and `--resume` are mutually exclusive. `--resume` requires exactly
+/// one following argument (the id). Subcommands (`update`) and standalone flags
+/// (`--version`, `--help`) take precedence and exit immediately.
 pub fn parse_args(args: impl IntoIterator<Item = String>) -> Cli {
-    match args.into_iter().next().as_deref() {
-        None => Cli::Run { companion: false },
-        Some("--version" | "-V") => Cli::Version,
-        Some("--help" | "-h") => Cli::Help,
-        Some("update") => Cli::Update,
-        Some("--companion") => Cli::Run { companion: true },
-        Some(other) => Cli::Unknown(other.to_string()),
+    let args: Vec<String> = args.into_iter().collect();
+    // Subcommands and standalone flags take precedence (first token only).
+    match args.first().map(|s| s.as_str()) {
+        Some("--version") | Some("-V") => return Cli::Version,
+        Some("--help") | Some("-h") => return Cli::Help,
+        Some("update") => return Cli::Update,
+        _ => {}
+    }
+
+    let mut companion = false;
+    let mut new = false;
+    let mut resume: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--companion" => companion = true,
+            "--new" => new = true,
+            "--resume" => {
+                // Require exactly one id argument following --resume.
+                if i + 1 >= args.len() || args[i + 1].starts_with("--") {
+                    return Cli::Unknown("--resume".to_string());
+                }
+                resume = Some(args[i + 1].clone());
+                i += 1; // consume the id
+            }
+            other => return Cli::Unknown(other.to_string()),
+        }
+        i += 1;
+    }
+
+    // --new and --resume are mutually exclusive.
+    if new && resume.is_some() {
+        return Cli::Unknown("--new --resume".to_string());
+    }
+
+    Cli::Run {
+        companion,
+        new,
+        resume,
     }
 }
 
@@ -41,11 +82,13 @@ pub fn help_text() -> String {
 zoid - event-sourced terminal agent
 
 USAGE:
-    zoid            Launch the TUI
-    zoid update     Download and install the latest release
-    zoid --version  Print version
-    zoid --help     Print this help
-    zoid --companion  Launch with the companion browser view enabled"
+    zoid                      Launch the TUI
+    zoid --new                Start a fresh session (no picker)
+    zoid --resume <id>        Resume a session by ULID (full or last-4)
+    zoid --companion          Launch with the companion browser view enabled
+    zoid update               Download and install the latest release
+    zoid --version            Print version
+    zoid --help               Print this help"
         .to_string()
 }
 
@@ -55,15 +98,60 @@ mod tests {
     fn parses_companion_flag() {
         assert_eq!(
             super::parse_args(vec!["--companion".to_string()]),
-            super::Cli::Run { companion: true }
+            super::Cli::Run { companion: true, new: false, resume: None }
         );
         assert_eq!(
             super::parse_args(Vec::<String>::new()),
-            super::Cli::Run { companion: false }
+            super::Cli::Run { companion: false, new: false, resume: None }
         );
         assert_eq!(
             super::parse_args(vec!["--version".to_string()]),
             super::Cli::Version
         );
+    }
+
+    #[test]
+    fn parses_new_flag() {
+        assert_eq!(
+            super::parse_args(vec!["--new".to_string()]),
+            super::Cli::Run { companion: false, new: true, resume: None }
+        );
+    }
+
+    #[test]
+    fn parses_resume_with_id() {
+        assert_eq!(
+            super::parse_args(vec!["--resume".to_string(), "01AB".to_string()]),
+            super::Cli::Run { companion: false, new: false, resume: Some("01AB".to_string()) }
+        );
+    }
+
+    #[test]
+    fn parses_companion_and_new_together() {
+        assert_eq!(
+            super::parse_args(vec!["--companion".to_string(), "--new".to_string()]),
+            super::Cli::Run { companion: true, new: true, resume: None }
+        );
+    }
+
+    #[test]
+    fn parses_companion_and_resume_together() {
+        assert_eq!(
+            super::parse_args(vec!["--companion".to_string(), "--resume".to_string(), "XYZW".to_string()]),
+            super::Cli::Run { companion: true, new: false, resume: Some("XYZW".to_string()) }
+        );
+    }
+
+    #[test]
+    fn new_and_resume_together_is_unknown() {
+        // Mutually exclusive — both flags together must be an error.
+        let result = super::parse_args(vec!["--new".to_string(), "--resume".to_string(), "01AB".to_string()]);
+        assert!(matches!(result, super::Cli::Unknown(_)), "--new + --resume together must be an error");
+    }
+
+    #[test]
+    fn resume_without_id_is_unknown() {
+        let result = super::parse_args(vec!["--resume".to_string()]);
+        assert!(matches!(result, super::Cli::Unknown(_)), "--resume without an id must be an error");
     }
 }
