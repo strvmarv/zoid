@@ -82,6 +82,7 @@ pub fn build_subagent_request(
 /// The outcome of a dispatched subagent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubagentResult {
+    pub id: String,
     pub branch: String,
     pub summary: String,
     pub ok: bool,
@@ -110,8 +111,10 @@ pub async fn run_subagent(
     session_id: Ulid,
     ui: mpsc::Sender<AgentUpdate>,
     now: fn() -> i64,
+    id: String,
 ) -> Result<SubagentResult> {
-    let branch = BranchId(format!("subagent:{}", Ulid::new()));
+    let sub_ulid = id.strip_prefix("sub-").unwrap_or(&id).to_string();
+    let branch = BranchId(format!("subagent:{sub_ulid}"));
     let model = profile.model.clone().unwrap_or(default_model);
 
     // Only the tools this profile allows (fresh registry, filtered by allow-list).
@@ -192,6 +195,7 @@ pub async fn run_subagent(
     let ok = !summary.starts_with(WARN_GLYPH);
 
     Ok(SubagentResult {
+        id,
         branch: branch.0,
         summary,
         ok,
@@ -354,6 +358,7 @@ mod tests {
             Ulid::new(),
             tx,
             || 0,
+            "sub-test".into(),
         )
         .await
         .unwrap();

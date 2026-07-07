@@ -516,6 +516,7 @@ mod tests {
             None,
             0,
             EventKind::DelegationResult {
+                subagent_id: "sub-ax3".into(),
                 branch: "subagent:ax3".into(),
                 summary: "Refactored parse()".into(),
                 ok: true,

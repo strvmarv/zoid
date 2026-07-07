@@ -51,6 +51,7 @@ async fn delegated_result_folds_into_main_conversation() {
         Ulid::new(),
         tx,
         || 0,
+        "sub-test".into(),
     )
     .await
     .unwrap();
@@ -62,6 +63,7 @@ async fn delegated_result_folds_into_main_conversation() {
             None,
             0,
             EventKind::DelegationResult {
+                subagent_id: res.id,
                 branch: res.branch,
                 summary: res.summary,
                 ok: res.ok,
@@ -118,6 +120,7 @@ async fn delegation_spend_lands_in_the_session_ledger() {
         sid,
         tx,
         || 0,
+        "sub-test2".into(),
     )
     .await
     .unwrap();

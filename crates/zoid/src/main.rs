@@ -3635,13 +3635,15 @@ fn start_delegation(app: &mut App, task: String) {
         return;
     }
     app.delegating = true;
+    let sub_ulid = Ulid::new();
+    let sub_id = format!("sub-{sub_ulid}");
     app.shell.status_hint = Some(format!("{} delegating…", zoid_tui::tokens::glyph::RUNNING));
 
     // Create the isolated worktree up front so a genuine failure (a real repo
     // where worktree creation failed) can surface a hint; "not a git repo"
     // falls back to the process cwd silently (isolation isn't possible there).
     let wt = if Path::new(".git").exists() {
-        match zoid::worktree::create_worktree(Path::new("."), &format!("sub-{}", Ulid::new())) {
+        match zoid::worktree::create_worktree(Path::new("."), &format!("sub-{sub_ulid}")) {
             Ok(w) => Some(w),
             Err(_) => {
                 app.shell.status_hint = Some(format!(
@@ -3677,15 +3679,21 @@ fn start_delegation(app: &mut App, task: String) {
             session_id,
             ui.clone(),
             now_ms,
+            sub_id,
         )
         .await;
         // WorktreeGuard `wt` drops here → worktree cleaned up (isolation preserved
         // even on failure — the main copy never saw the subagent's edits).
         drop(wt);
 
-        let (branch, summary, ok) = match res {
-            Ok(r) => (r.branch, r.summary, r.ok),
-            Err(e) => (String::new(), format!("delegation failed: {e}"), false),
+        let (subagent_id, branch, summary, ok) = match res {
+            Ok(r) => (r.id, r.branch, r.summary, r.ok),
+            Err(e) => (
+                String::new(),
+                String::new(),
+                format!("delegation failed: {e}"),
+                false,
+            ),
         };
         // Record the outcome on the MAIN branch, tagged to this session, so
         // conversation() folds it (Plan 2 seam: untagged events land in the nil
@@ -3695,6 +3703,7 @@ fn start_delegation(app: &mut App, task: String) {
             None,
             now_ms(),
             EventKind::DelegationResult {
+                subagent_id,
                 branch,
                 summary,
                 ok,

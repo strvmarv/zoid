@@ -98,6 +98,7 @@ pub enum EventKind {
     /// A finished subagent's outcome, recorded on the MAIN branch. `branch`
     /// names the subagent's sub-branch; `summary` is its closing report.
     DelegationResult {
+        subagent_id: String,
         branch: String,
         summary: String,
         ok: bool,
@@ -314,6 +315,7 @@ mod tests {
             None,
             0,
             EventKind::DelegationResult {
+                subagent_id: "sub-test".into(),
                 branch: "subagent:zz".into(),
                 summary: "did it".into(),
                 ok: false,
@@ -321,6 +323,29 @@ mod tests {
         );
         let json = serde_json::to_string(&ev).unwrap();
         assert_eq!(ev, serde_json::from_str::<Event>(&json).unwrap());
+    }
+
+    #[test]
+    fn delegation_result_with_subagent_id_round_trips() {
+        let ev = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::DelegationResult {
+                subagent_id: "sub-01HZTEST".into(),
+                branch: "subagent:01HZTEST".into(),
+                summary: "did it".into(),
+                ok: true,
+            },
+        );
+        let json = serde_json::to_string(&ev).unwrap();
+        let restored: Event = serde_json::from_str(&json).unwrap();
+        match &restored.kind {
+            EventKind::DelegationResult { subagent_id, .. } => {
+                assert_eq!(subagent_id, "sub-01HZTEST");
+            }
+            _ => panic!("expected DelegationResult"),
+        }
     }
 
     #[test]

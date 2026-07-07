@@ -100,6 +100,7 @@ async fn subagent_writes_inside_its_worktree_not_the_main_copy() {
             ulid::Ulid::new(), // session_id (B4)
             tx,
             || 0,
+            "sub-test".into(),
         )
         .await
         .unwrap();
