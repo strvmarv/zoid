@@ -552,6 +552,164 @@ fn pick_choice(n_sessions: usize, selected: usize, key: PickKey) -> PickOutcome 
     }
 }
 
+/// The startup picker's resolution: which session to load (or whether to
+/// create a new one) before `run()` begins.
+enum PickResult {
+    /// Resume this session (id, name, created_ts).
+    Resume { id: Ulid, name: String, created_ts: i64 },
+    /// Create a fresh session.
+    CreateNew,
+}
+
+/// The startup session picker (spec §2). A self-contained render+input loop
+/// entered after crossterm raw mode is set up but before `run()`. Shows one row
+/// per session for the current CWD (name, age, tokens, live marker) plus a
+/// trailing "Create new session" row. Arrow keys move, Enter selects, Esc
+/// aborts to a clean exit. Selecting a live session takes it over immediately
+/// (no confirm card — spec §1). Returns the chosen session id + name, or
+/// `CreateNew`.
+async fn pick_session(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    session: &SessionHandle,
+    root: &str,
+    repo_name: &str,
+    boot_ts: i64,
+) -> Result<PickResult> {
+    use crossterm::event::{Event as CEvent, EventStream};
+    use futures_util::StreamExt;
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Borders, Paragraph};
+    use zoid_tui::economy_view::human_tokens;
+
+    let sessions: Vec<zoid_core::sessions::SessionInfo> = session
+        .list_sessions(Some(root.to_string()))
+        .await
+        .unwrap_or_default();
+    let n = sessions.len();
+    let live: Vec<bool> = sessions
+        .iter()
+        .map(|s| {
+            zoid_core::store::is_live(
+                s.active,
+                s.active_pid,
+                s.active_heartbeat,
+                boot_ts,
+                pid_alive,
+            )
+        })
+        .collect();
+    let mut selected: usize = 0;
+    let mut term_events = EventStream::new();
+
+    loop {
+        terminal.draw(|f| {
+            let area = f.area();
+            let title = format!(" Resume a session for {} ", repo_name);
+            let mut lines: Vec<Line> = Vec::new();
+            lines.push(Line::from(Span::styled(title, Style::new().fg(Color::Cyan))));
+            lines.push(Line::from(""));
+
+            for (i, s) in sessions.iter().enumerate() {
+                let age = fmt_since(s.last_touched_ts, boot_ts);
+                let tokens = human_tokens(s.token_total);
+                let live_marker = if live[i] { " ●" } else { "" };
+                let row_text = format!("  {}  ·  {}  ·  {}{}", s.name, age, tokens, live_marker);
+                let style = if i == selected {
+                    Style::new()
+                        .fg(Color::White)
+                        .bg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::new().fg(Color::White)
+                };
+                lines.push(Line::from(Span::styled(row_text, style)));
+            }
+
+            let create_text = "  Create new session".to_string();
+            let create_style = if selected == n {
+                Style::new()
+                    .fg(Color::White)
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::new().fg(Color::DarkGray)
+            };
+            lines.push(Line::from(Span::styled(create_text, create_style)));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                " ↑↓ move · ⏎ select · esc abort",
+                Style::new().fg(Color::DarkGray),
+            )));
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(Color::DarkGray));
+            f.render_widget(Paragraph::new(lines).block(block), area);
+        })?;
+
+        match term_events.next().await {
+            Some(Ok(CEvent::Key(key))) => {
+                let pick_key = match key.code {
+                    crossterm::event::KeyCode::Up => PickKey::Up,
+                    crossterm::event::KeyCode::Down => PickKey::Down,
+                    crossterm::event::KeyCode::Enter => PickKey::Enter,
+                    crossterm::event::KeyCode::Esc => PickKey::Esc,
+                    _ => continue,
+                };
+                match pick_choice(n, selected, pick_key) {
+                    PickOutcome::Pending(new_sel) => selected = new_sel,
+                    PickOutcome::Resume(idx) => {
+                        let s = &sessions[idx];
+                        return Ok(PickResult::Resume {
+                            id: s.id,
+                            name: s.name.clone(),
+                            created_ts: s.created_ts,
+                        });
+                    }
+                    PickOutcome::CreateNew => return Ok(PickResult::CreateNew),
+                    PickOutcome::Abort => {
+                        anyhow::bail!("startup picker aborted");
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Which startup path to take, decided from the session count and CLI flags.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BootPath {
+    /// 0 sessions → create one silently.
+    AutoCreate,
+    /// 1 session → resume it silently.
+    AutoResume,
+    /// 2+ sessions → show the picker.
+    Picker,
+    /// `--new` → create a fresh session, skip the picker.
+    ForceNew,
+    /// `--resume <id>` → resume this id, skip the picker.
+    ForceResume(String),
+}
+
+/// Pure decision: which startup path to take. Spec §1. The session count is
+/// the number of sessions for the current CWD; `new`/`resume` are the CLI
+/// flags. `--new` and `--resume` take precedence over the count-based paths.
+fn boot_decision(n_sessions: usize, new: bool, resume: Option<&str>) -> BootPath {
+    if let Some(id) = resume {
+        return BootPath::ForceResume(id.to_string());
+    }
+    if new {
+        return BootPath::ForceNew;
+    }
+    match n_sessions {
+        0 => BootPath::AutoCreate,
+        1 => BootPath::AutoResume,
+        _ => BootPath::Picker,
+    }
+}
+
 /// Human provider label for the provider actually constructed at startup
 /// (see the `config.provider` + secret-store match in `main`) — `provider_name`
 /// is the configured provider id ("anthropic"/"ollama"), `has_key` is whether a
@@ -1285,6 +1443,9 @@ impl App {
 async fn main() -> Result<()> {
     let obs = obs::init();
 
+    let cli_new;
+    let cli_resume: Option<String>;
+
     let companion_at_boot = match zoid::cli::parse_args(std::env::args().skip(1)) {
         zoid::cli::Cli::Version => {
             println!("{}", zoid::cli::version_string());
@@ -1304,7 +1465,11 @@ async fn main() -> Result<()> {
             );
             std::process::exit(2);
         }
-        zoid::cli::Cli::Run { companion, new: _, resume: _ } => companion,
+        zoid::cli::Cli::Run { companion, new, resume } => {
+            cli_new = new;
+            cli_resume = resume;
+            companion
+        }
     };
 
     let path = db_path()?;
@@ -1327,44 +1492,111 @@ async fn main() -> Result<()> {
             .context("session DB path is not valid UTF-8")?,
     )?;
 
-    // Auto-resume the most-recently-touched session for this repo, else create
-    // one. If the most-recent session is live (another interface holds it),
-    // create a FRESH session instead of colliding. Spec §3.1.
     let sessions = session
         .list_sessions(Some(root.clone()))
         .await
         .unwrap_or_default();
     let first_time_user = sessions.is_empty();
     let self_pid = std::process::id() as i64;
-    let (session_id, session_name, session_started_ms) = if first_time_user {
-        // No sessions for this repo yet → create one.
-        let id = Ulid::new();
-        let name = derive_session_name(None, boot_ts, tz_offset_secs);
-        session
-            .new_session(id, name.clone(), root.clone(), boot_ts)
-            .await?;
-        (id, name, boot_ts)
-    } else {
-        let s = &sessions[0];
-        let live = zoid_core::store::is_live(
-            s.active,
-            s.active_pid,
-            s.active_heartbeat,
-            boot_ts,
-            pid_alive,
-        );
-        if live {
-            // Another instance is on it → create a fresh session, leave it alone.
+
+    // Apply the CLI flags first: --resume and --new bypass the picker.
+    let boot_path = boot_decision(sessions.len(), cli_new, cli_resume.as_deref());
+
+    let (session_id, session_name, session_started_ms) = match boot_path {
+        BootPath::ForceResume(ref id) => match resolve_resume_id(&sessions, id) {
+            Ok(sid) => {
+                let s = sessions.iter().find(|s| s.id == sid).unwrap();
+                session.touch_session(sid, boot_ts).await.ok();
+                (sid, s.name.clone(), s.created_ts)
+            }
+            Err(e) => {
+                let msg = match e {
+                    ResumeIdError::NotFound => {
+                        format!("zoid: no session matches '{id}' in this repo")
+                    }
+                    ResumeIdError::Ambiguous(candidates) => {
+                        format!(
+                            "zoid: '{id}' is ambiguous (matches {} sessions: {})",
+                            candidates.len(),
+                            candidates.join(", ")
+                        )
+                    }
+                    ResumeIdError::InvalidLength => {
+                        format!("zoid: '{id}' is not a valid ULID (expected 4 or 26 chars)")
+                    }
+                };
+                eprintln!("{msg}");
+                std::process::exit(2);
+            }
+        },
+        BootPath::ForceNew => {
             let id = Ulid::new();
             let name = derive_session_name(None, boot_ts, tz_offset_secs);
             session
                 .new_session(id, name.clone(), root.clone(), boot_ts)
                 .await?;
             (id, name, boot_ts)
-        } else {
-            // Reclaim it: load + touch + claim.
-            session.touch_session(s.id, boot_ts).await.ok();
-            (s.id, s.name.clone(), s.created_ts)
+        }
+        BootPath::AutoCreate => {
+            let id = Ulid::new();
+            let name = derive_session_name(None, boot_ts, tz_offset_secs);
+            session
+                .new_session(id, name.clone(), root.clone(), boot_ts)
+                .await?;
+            (id, name, boot_ts)
+        }
+        BootPath::AutoResume => {
+            let s = &sessions[0];
+            let live = zoid_core::store::is_live(
+                s.active,
+                s.active_pid,
+                s.active_heartbeat,
+                boot_ts,
+                pid_alive,
+            );
+            if live {
+                let id = Ulid::new();
+                let name = derive_session_name(None, boot_ts, tz_offset_secs);
+                session
+                    .new_session(id, name.clone(), root.clone(), boot_ts)
+                    .await?;
+                (id, name, boot_ts)
+            } else {
+                session.touch_session(s.id, boot_ts).await.ok();
+                (s.id, s.name.clone(), s.created_ts)
+            }
+        }
+        BootPath::Picker => {
+            // Enter the terminal early for the picker, then continue to the
+            // common path (which re-enters alt screen + mouse capture for run()).
+            enable_raw_mode()?;
+            let mut picker_out = stdout();
+            execute!(picker_out, EnterAlternateScreen)?;
+            let mut picker_term = Terminal::new(CrosstermBackend::new(picker_out))?;
+            let repo_name = Path::new(&root)
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| root.clone());
+            let pick = pick_session(&mut picker_term, &session, &root, &repo_name, boot_ts).await;
+            let _ = execute!(picker_term.backend_mut(), LeaveAlternateScreen);
+            match pick {
+                Ok(PickResult::Resume { id, name, created_ts }) => {
+                    session.touch_session(id, boot_ts).await.ok();
+                    (id, name, created_ts)
+                }
+                Ok(PickResult::CreateNew) => {
+                    let id = Ulid::new();
+                    let name = derive_session_name(None, boot_ts, tz_offset_secs);
+                    session
+                        .new_session(id, name.clone(), root.clone(), boot_ts)
+                        .await?;
+                    (id, name, boot_ts)
+                }
+                Err(_) => {
+                    let _ = disable_raw_mode();
+                    std::process::exit(0);
+                }
+            }
         }
     };
     // Claim the session (whether fresh or reclaimed) and start the heartbeat.
@@ -1514,7 +1746,12 @@ async fn main() -> Result<()> {
         enable_companion(&mut app);
     }
 
-    enable_raw_mode()?;
+    // The picker path (BootPath::Picker) already entered raw mode + alt screen
+    // for the picker; skip the re-entry but still enter mouse capture for run().
+    let raw_mode_entered = matches!(boot_path, BootPath::Picker);
+    if !raw_mode_entered {
+        enable_raw_mode()?;
+    }
     let mut out = stdout();
     execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
     // Kitty keyboard protocol: lets the terminal report ⇧⏎ distinctly from ⏎ so
@@ -5394,5 +5631,35 @@ mod tests {
     fn pick_choice_clamps_selection_to_total_rows() {
         // If selected is somehow past the end, Down should wrap to 0.
         assert_eq!(pick_choice(2, 5, PickKey::Down), PickOutcome::Pending(0));
+    }
+
+    // --- boot_decision tests ---
+
+    #[test]
+    fn boot_decision_no_sessions_creates() {
+        assert_eq!(boot_decision(0, false, None), BootPath::AutoCreate);
+    }
+
+    #[test]
+    fn boot_decision_one_session_auto_resumes() {
+        assert_eq!(boot_decision(1, false, None), BootPath::AutoResume);
+    }
+
+    #[test]
+    fn boot_decision_two_sessions_shows_picker() {
+        assert_eq!(boot_decision(2, false, None), BootPath::Picker);
+    }
+
+    #[test]
+    fn boot_decision_new_flag_forces_create() {
+        assert_eq!(boot_decision(5, true, None), BootPath::ForceNew);
+    }
+
+    #[test]
+    fn boot_decision_resume_flag_forces_resume() {
+        assert_eq!(
+            boot_decision(5, false, Some("ABCD")),
+            BootPath::ForceResume("ABCD".to_string())
+        );
     }
 }
