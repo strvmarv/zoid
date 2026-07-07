@@ -311,7 +311,6 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
     } else {
         None
     };
-    let compact_w = compact_text.as_ref().map(|t| t.width()).unwrap_or(0);
 
     // Dead-center for "working", always.
     let center_start = w.saturating_sub(center_w) / 2;
@@ -358,9 +357,7 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
     // Compaction at the ⅔ anchor (right of center, with a 4-space gap).
     if let Some(text) = &compact_text {
         let compact_slot = (2 * w) / 3;
-        let actual_gap = compact_slot
-            .saturating_sub(center_start + center_w)
-            .min(4);
+        let actual_gap = compact_slot.saturating_sub(center_start + center_w).min(4);
         if actual_gap > 0 {
             spans.push(Span::styled(" ".repeat(actual_gap), Style::new()));
         } else {
@@ -1426,7 +1423,6 @@ mod tests {
     #[test]
     fn working_stays_dead_center_with_all_indicators() {
         use crate::state::ShellState;
-        use ratatui::layout::Rect;
 
         let mut s = ShellState::new();
         s.busy = true; // "working"
@@ -1437,12 +1433,19 @@ mod tests {
         let backend = TestBackend::new(100, 3);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| render_status(f, &s, &ChatView {
-                zoom: Zoom::Normal,
-                caret_on: false,
-                reveal: None,
-                tz_offset_secs: 0,
-            }, f.area()))
+            .draw(|f| {
+                render_status(
+                    f,
+                    &s,
+                    &ChatView {
+                        zoom: Zoom::Normal,
+                        caret_on: false,
+                        reveal: None,
+                        tz_offset_secs: 0,
+                    },
+                    f.area(),
+                )
+            })
             .unwrap();
 
         // "working" should be dead-center: its start ≈ (W - working_w) / 2.
@@ -1476,12 +1479,19 @@ mod tests {
         let backend = TestBackend::new(100, 3);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|f| render_status(f, &s, &ChatView {
-                zoom: Zoom::Normal,
-                caret_on: false,
-                reveal: None,
-                tz_offset_secs: 0,
-            }, f.area()))
+            .draw(|f| {
+                render_status(
+                    f,
+                    &s,
+                    &ChatView {
+                        zoom: Zoom::Normal,
+                        caret_on: false,
+                        reveal: None,
+                        tz_offset_secs: 0,
+                    },
+                    f.area(),
+                )
+            })
             .unwrap();
         // After the pulse window, the tool indicator uses WARN_DIM.
         // Verify it renders without panic and the tool name is present.
