@@ -1634,15 +1634,14 @@ async fn main() -> Result<()> {
     // once at startup: populate + keep the drawer when present, drop it when not.
     let repo_present = in_git_repo();
     if repo_present {
-        shell.branch = current_branch();
         shell.repo_name = Path::new(&root)
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| root.clone());
-        shell.worktree = git2::Repository::open(".")
-            .ok()
-            .map(|r| worktree_label(&r))
-            .unwrap_or_else(|| "(none)".into());
+        // Branch, worktree, and changes are all polled by the 5s background
+        // task below — no boot-time call needed (the first tick fires within
+        // 5s of startup, and the initial (0, 0, 0, "", "(none)") default is
+        // harmless for that brief window).
         let (boot_added, boot_removed, boot_files) = git_status();
         shell.changes_added = boot_added;
         shell.changes_removed = boot_removed;
@@ -1837,20 +1836,37 @@ where
     // Off-load `git status` to a background task so the subprocess never blocks
     // the render loop (it previously ran synchronously on the loop every second,
     // hitching typing/scrolling). The loop reads the latest value non-blocking.
-    let (git_tx, mut git_rx) = tokio::sync::watch::channel((0usize, 0usize, 0usize));
+    let (git_tx, mut git_rx) = tokio::sync::watch::channel((
+        0usize, 0usize, 0usize, // added, removed, files
+        String::new(),           // branch
+        "(none)".to_string(),   // worktree
+    ));
     // Only poll git when the Repo drawer is actually present; outside a repo the
     // stats are neither shown nor meaningful, so we skip the per-second `git`
     // subprocess entirely. The drawer's presence is the git-repo signal decided
     // at startup. The receiver still reads its initial (0, 0, 0).
     if app.shell.drawer(zoid_tui::DrawerId::Repo).is_some() {
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
             loop {
                 tick.tick().await;
-                let r = tokio::task::spawn_blocking(git_status)
+                let (added, removed, files) =
+                    tokio::task::spawn_blocking(git_status).await.unwrap_or((0, 0, 0));
+                let branch = tokio::task::spawn_blocking(current_branch)
                     .await
-                    .unwrap_or((0, 0, 0));
-                if git_tx.send(r).is_err() {
+                    .unwrap_or("main".into());
+                let worktree = tokio::task::spawn_blocking(|| {
+                    git2::Repository::open(".")
+                        .ok()
+                        .map(|r| worktree_label(&r))
+                        .unwrap_or_else(|| "(none)".into())
+                })
+                .await
+                .unwrap_or("(none)".into());
+                if git_tx
+                    .send((added, removed, files, branch, worktree))
+                    .is_err()
+                {
                     break; // receiver dropped — app is exiting
                 }
             }
@@ -1865,10 +1881,12 @@ where
         }
         // Latest git status from the background watcher (non-blocking read).
         {
-            let (a, r, f) = *git_rx.borrow_and_update();
-            app.shell.changes_added = a;
-            app.shell.changes_removed = r;
-            app.shell.changes_files = f;
+            let (a, r, f, branch, worktree) = &*git_rx.borrow_and_update();
+            app.shell.changes_added = *a;
+            app.shell.changes_removed = *r;
+            app.shell.changes_files = *f;
+            app.shell.branch = branch.clone();
+            app.shell.worktree = worktree.clone();
         }
         // Refresh cached projections only when the event log grew (append-only),
         // so typing / scrolling / zoom reuse them instead of rebuilding O(events)
