@@ -317,11 +317,23 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
     let center = format!("{icon} {label}");
     // Pad to a fixed width so "working" (9 chars) and "idle" (6 chars) occupy
     // the same slot — the right edge (gap to compact) never jumps.
+    // Center-align the text within the fixed slot so the visual weight is
+    // balanced — "● idle" (6 chars) gets padding split left+right within the
+    // 9-char slot, not all on the right. This keeps it from looking lop-sided
+    // next to "⠋ working" (9 chars, no padding needed).
     const CENTER_SLOT: usize = 9; // "⠋ working"
     let center = {
         let cw = center.width();
         if cw < CENTER_SLOT {
-            format!("{}{}", center, " ".repeat(CENTER_SLOT - cw))
+            let total_pad = CENTER_SLOT - cw;
+            let left_pad = total_pad / 2;
+            let right_pad = total_pad - left_pad;
+            format!(
+                "{}{}{}",
+                " ".repeat(left_pad),
+                center,
+                " ".repeat(right_pad)
+            )
         } else {
             center
         }
