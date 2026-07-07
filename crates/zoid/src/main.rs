@@ -1639,13 +1639,8 @@ async fn main() -> Result<()> {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| root.clone());
         // Branch, worktree, and changes are all polled by the 5s background
-        // task below — no boot-time call needed (the first tick fires within
-        // 5s of startup, and the initial (0, 0, 0, "", "(none)") default is
-        // harmless for that brief window).
-        let (boot_added, boot_removed, boot_files) = git_status();
-        shell.changes_added = boot_added;
-        shell.changes_removed = boot_removed;
-        shell.changes_files = boot_files;
+        // task below — no boot-time call needed (the initial defaults are
+        // harmless for the brief window before the first tick).
     } else {
         shell.remove_drawer(zoid_tui::DrawerId::Repo);
     }
