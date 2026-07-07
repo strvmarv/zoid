@@ -1135,6 +1135,13 @@ struct App {
     /// `CompactionComplete` arrived; the indicator stays visible until the 3s
     /// minimum display duration elapses (checked per-frame in `run()`).
     compaction_complete: bool,
+    /// When the current tool started (for the 2s minimum-display debounce).
+    /// Set by `set_active_tool`; the per-frame debounce clears the indicator
+    /// 2s after it started, even if the tool finished faster.
+    tool_started_at: Option<std::time::Instant>,
+    /// The tool finished (`ToolResult`/`TurnComplete`); the indicator stays
+    /// bright + animated until 2s have elapsed since `tool_started_at`.
+    tool_complete: bool,
     /// Set when this process's session was taken over by another instance; the
     /// in-flight turn was cancelled and no further turns may start against it.
     /// The user can `:new` or `:resume` elsewhere, or quit. Spec §2.4.
@@ -1371,6 +1378,8 @@ async fn main() -> Result<()> {
         companion_hub: zoid_companion::CompanionHub::new(),
         compaction_started_at: None,
         compaction_complete: false,
+        tool_started_at: None,
+        tool_complete: false,
         yielded: false,
         pending_takeover: None,
     };
@@ -1640,12 +1649,12 @@ where
             app.shell.reduced_motion,
         )];
         // Debounce: if CompactionComplete arrived, keep the indicator visible
-        // until 3s have elapsed since CompactionStarted. The motion tick guard
+        // until 2s have elapsed since CompactionStarted. The motion tick guard
         // wakes while `compacting` is true, so this timer drains without an
         // extra wake source.
         if app.compaction_complete {
             if let Some(start) = app.compaction_started_at {
-                if start.elapsed() >= std::time::Duration::from_secs(3) {
+                if start.elapsed() >= std::time::Duration::from_secs(2) {
                     app.shell.compacting = false;
                     app.compaction_complete = false;
                     app.compaction_started_at = None;
@@ -1653,8 +1662,28 @@ where
             }
         }
         // Mirror compaction_started_at onto the shell so the pure renderer can
-        // drive the pulse-on-appear brightness ramp. Spec §3.
+        // drive the animation. Spec §3.
         app.shell.compaction_started_at = app.compaction_started_at;
+
+        // Tool indicator debounce: if the tool finished (ToolResult/TurnComplete),
+        // keep the indicator bright + animated until 2s have elapsed since it
+        // started, then clear it back to the dim idle glyph. The motion tick guard
+        // wakes while `active_tool` is set, so this drains without an extra source.
+        if app.tool_complete {
+            if let Some(start) = app.tool_started_at {
+                if start.elapsed() >= std::time::Duration::from_secs(2) {
+                    app.shell.clear_active_tool();
+                    app.tool_complete = false;
+                    app.tool_started_at = None;
+                }
+            } else {
+                // No start timestamp (shouldn't happen, but defensive): clear now.
+                app.shell.clear_active_tool();
+                app.tool_complete = false;
+            }
+        }
+        // Mirror tool_started_at onto the shell for the renderer's animation.
+        app.shell.tool_started_at = app.tool_started_at;
 
         let frame_start = std::time::Instant::now();
         terminal.draw(|f| {
@@ -1771,8 +1800,10 @@ where
                             }
                         }
                         // A tool result ends the in-flight indicator for that tool.
+                        // Don't clear immediately — set tool_complete for the 2s
+                        // minimum-display debounce (mirrors compaction).
                         if matches!(ev.kind, EventKind::ToolResult { .. }) {
-                            app.shell.clear_active_tool();
+                            app.tool_complete = true;
                         }
                         // Incremental streaming: ModelDelta and ToolCall events
                         // append directly into the cached ChatMsg vec in O(1)
@@ -1804,10 +1835,14 @@ where
                     }
                     AgentUpdate::ToolStarted { name } => {
                         app.shell.set_active_tool(name);
+                        app.tool_started_at = Some(std::time::Instant::now());
+                        app.tool_complete = false;
                     }
                     AgentUpdate::TurnComplete => {
                         app.streaming = false;
-                        app.shell.clear_active_tool();
+                        // Don't clear the tool immediately — set tool_complete for
+                        // the 2s minimum-display debounce (mirrors compaction).
+                        app.tool_complete = true;
                         app.pending_answer = None;
                         app.turn_cancel = None;
                         // Clear any lingering "cancelling…" hint now the turn ended.
@@ -4386,6 +4421,8 @@ mod tests {
             companion_hub: zoid_companion::CompanionHub::new(),
             compaction_started_at: None,
             compaction_complete: false,
+            tool_started_at: None,
+            tool_complete: false,
             yielded: false,
             pending_takeover: None,
         }
