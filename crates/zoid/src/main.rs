@@ -502,6 +502,56 @@ fn resolve_resume_id(
     }
 }
 
+/// A key the startup picker recognizes (an abstraction over crossterm KeyEvent
+/// so the input logic is testable without a terminal).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PickKey {
+    Up,
+    Down,
+    Enter,
+    Esc,
+}
+
+/// The outcome of a single keystroke in the startup picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PickOutcome {
+    /// The user moved the cursor; the new index is `usize`.
+    Pending(usize),
+    /// The user picked a session row (index into the session list).
+    Resume(usize),
+    /// The user picked the "Create new session" row.
+    CreateNew,
+    /// The user pressed Esc — abort to a clean exit.
+    Abort,
+}
+
+/// Handle one keystroke in the startup picker. `n_sessions` is the number of
+/// session rows (the "Create new" row is at index `n_sessions`, so the total
+/// row count is `n_sessions + 1`). `selected` is the current cursor index.
+/// Pure — no IO, no terminal. Spec §2.
+fn pick_choice(n_sessions: usize, selected: usize, key: PickKey) -> PickOutcome {
+    let total = n_sessions + 1; // sessions + "Create new"
+    let cur = selected.min(total.saturating_sub(1));
+    match key {
+        PickKey::Up => {
+            let next = if cur == 0 { total - 1 } else { cur - 1 };
+            PickOutcome::Pending(next)
+        }
+        PickKey::Down => {
+            let next = if cur + 1 >= total { 0 } else { cur + 1 };
+            PickOutcome::Pending(next)
+        }
+        PickKey::Enter => {
+            if cur < n_sessions {
+                PickOutcome::Resume(cur)
+            } else {
+                PickOutcome::CreateNew
+            }
+        }
+        PickKey::Esc => PickOutcome::Abort,
+    }
+}
+
 /// Human provider label for the provider actually constructed at startup
 /// (see the `config.provider` + secret-store match in `main`) — `provider_name`
 /// is the configured provider id ("anthropic"/"ollama"), `has_key` is whether a
@@ -5303,5 +5353,46 @@ mod tests {
     fn resolve_resume_id_invalid_ulid_syntax() {
         let result = resolve_resume_id(&[], "!!!!!!!!!!!!!!!!!!!!!!!!!!");
         assert!(result.is_err());
+    }
+
+    // --- pick_choice tests ---
+
+    #[test]
+    fn pick_choice_down_advances_selection() {
+        assert_eq!(pick_choice(3, 0, PickKey::Down), PickOutcome::Pending(1));
+    }
+
+    #[test]
+    fn pick_choice_up_wraps() {
+        // n_sessions=3 → total rows = 4 (0..3). Up from 0 → 3.
+        assert_eq!(pick_choice(3, 0, PickKey::Up), PickOutcome::Pending(3));
+    }
+
+    #[test]
+    fn pick_choice_down_wraps() {
+        // n_sessions=2 → total rows = 3 (0,1,2). Down from 2 → 0.
+        assert_eq!(pick_choice(2, 2, PickKey::Down), PickOutcome::Pending(0));
+    }
+
+    #[test]
+    fn pick_choice_enter_on_session_resumes() {
+        assert_eq!(pick_choice(3, 1, PickKey::Enter), PickOutcome::Resume(1));
+    }
+
+    #[test]
+    fn pick_choice_enter_on_create_new() {
+        // n_sessions=3 → "Create new" is row 3. Enter on row 3 → CreateNew.
+        assert_eq!(pick_choice(3, 3, PickKey::Enter), PickOutcome::CreateNew);
+    }
+
+    #[test]
+    fn pick_choice_esc_aborts() {
+        assert_eq!(pick_choice(3, 0, PickKey::Esc), PickOutcome::Abort);
+    }
+
+    #[test]
+    fn pick_choice_clamps_selection_to_total_rows() {
+        // If selected is somehow past the end, Down should wrap to 0.
+        assert_eq!(pick_choice(2, 5, PickKey::Down), PickOutcome::Pending(0));
     }
 }
