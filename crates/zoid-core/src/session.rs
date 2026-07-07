@@ -131,12 +131,8 @@ impl SessionHandle {
                         active_heartbeat,
                         reply,
                     } => {
-                        let _ = reply.send(store.set_active(
-                            id,
-                            active,
-                            active_pid,
-                            active_heartbeat,
-                        ));
+                        let _ =
+                            reply.send(store.set_active(id, active, active_pid, active_heartbeat));
                     }
                     Cmd::Heartbeat {
                         id,

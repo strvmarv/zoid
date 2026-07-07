@@ -116,9 +116,15 @@ impl EventStore {
             |r| r.get(0),
         )?;
         if has_active == 0 {
-            conn.execute("ALTER TABLE sessions ADD COLUMN active INTEGER NOT NULL DEFAULT 0", [])?;
+            conn.execute(
+                "ALTER TABLE sessions ADD COLUMN active INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
             conn.execute("ALTER TABLE sessions ADD COLUMN active_pid INTEGER", [])?;
-            conn.execute("ALTER TABLE sessions ADD COLUMN active_heartbeat INTEGER", [])?;
+            conn.execute(
+                "ALTER TABLE sessions ADD COLUMN active_heartbeat INTEGER",
+                [],
+            )?;
         }
         Ok(EventStore { conn })
     }
@@ -365,7 +371,16 @@ impl EventStore {
         })?;
         let mut out = Vec::new();
         for r in rows {
-            let (id, name, root_path, created_ts, last_touched_ts, active, active_pid, active_heartbeat) = r?;
+            let (
+                id,
+                name,
+                root_path,
+                created_ts,
+                last_touched_ts,
+                active,
+                active_pid,
+                active_heartbeat,
+            ) = r?;
             out.push(SessionRow {
                 id: id.parse()?,
                 name,
@@ -828,7 +843,7 @@ mod tests {
         let s2 = EventStore::open(p).unwrap();
         let rows = s2.list_session_rows().unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].active, true);
+        assert!(rows[0].active);
         assert_eq!(rows[0].active_pid, Some(12345));
         assert_eq!(rows[0].active_heartbeat, Some(1000));
     }
@@ -857,7 +872,7 @@ mod tests {
         let s = EventStore::open(p).unwrap();
         let rows = s.list_session_rows().unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].active, false);
+        assert!(!rows[0].active);
         assert_eq!(rows[0].active_pid, None);
         assert_eq!(rows[0].active_heartbeat, None);
     }
@@ -910,7 +925,7 @@ mod tests {
     #[test]
     fn is_live_requires_flag_pid_and_fresh_heartbeat() {
         let alive = |_: i64| true; // pretend every PID is alive
-        // flag set, live PID, fresh heartbeat ⇒ live
+                                   // flag set, live PID, fresh heartbeat ⇒ live
         assert!(is_live(true, Some(99), Some(1000), 2000, alive));
     }
 

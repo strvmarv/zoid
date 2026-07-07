@@ -1599,10 +1599,8 @@ where
             // lines directly. When the first message arrives, proj.msgs becomes
             // non-empty and the else branch takes over (key is None → full
             // rebuild). Excluded from the body-render cache-hit ratio (None).
-            app.body_cache.body = zoid_tui::onboarding::empty_state_lines(
-                app.shell.first_time_user,
-                body_w,
-            );
+            app.body_cache.body =
+                zoid_tui::onboarding::empty_state_lines(app.shell.first_time_user, body_w);
             app.body_cache.key = None;
             app.body_cache.msg_count = 0;
             None
@@ -2522,8 +2520,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::Submit => {
             if app.streaming || app.delegating || app.yielded {
                 if app.yielded {
-                    app.shell.status_hint =
-                        Some("session taken over — :new or :resume".into());
+                    app.shell.status_hint = Some("session taken over — :new or :resume".into());
                 }
                 return Ok(false);
             }
@@ -3010,8 +3007,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             // Choice("Take over") is treated as a cancel — the intended contract.
             if let Some(sid) = app.pending_takeover.take() {
                 let outcome = app.shell.question.as_ref().map(|q| q.resolved());
-                let take =
-                    matches!(outcome, Some(QuestionOutcome::Choice(s)) if s == "Take over");
+                let take = matches!(outcome, Some(QuestionOutcome::Choice(s)) if s == "Take over");
                 app.shell.question = None;
                 if !take {
                     // Cancel: return to the picker.
@@ -3020,18 +3016,17 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 }
                 // Take over: claim the row, then load it via the SessionPick path.
                 let self_pid = std::process::id() as i64;
-                app.session.set_active(sid, true, self_pid, now_ms()).await.ok();
+                app.session
+                    .set_active(sid, true, self_pid, now_ms())
+                    .await
+                    .ok();
                 app.shell.session_selected = app
                     .session_ids
                     .iter()
                     .position(|&x| x == sid)
                     .unwrap_or(app.shell.session_selected);
                 // Box::pin the recursive call (async fn can't recurse directly).
-                return Box::pin(handle_action(
-                    app,
-                    zoid_tui::route::Action::SessionPick,
-                ))
-                .await;
+                return Box::pin(handle_action(app, zoid_tui::route::Action::SessionPick)).await;
             }
             let outcome = app.shell.question.as_ref().map(|q| q.resolved());
             match outcome {
