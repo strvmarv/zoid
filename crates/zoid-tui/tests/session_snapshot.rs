@@ -34,7 +34,6 @@ fn draw(state: &ShellState, msgs: &[ChatMsg], w: u16, h: u16) -> String {
                 msgs,
                 None,
                 &[],
-                &[],
                 &input,
                 false,
                 &normal_view(),

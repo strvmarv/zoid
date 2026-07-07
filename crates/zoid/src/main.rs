@@ -1297,6 +1297,7 @@ impl BodyCache {
 }
 
 /// One in-flight subagent, tracked for the Subagents drawer + busy guard.
+#[allow(dead_code)] // subagent delegation temporarily disabled
 struct SubagentInfo {
     id: String,
     task: String,
@@ -1880,7 +1881,6 @@ where
             .last_input_tokens
             .unwrap_or(app.proj.window.total_tokens);
         app.shell.tasks_len = app.proj.tasks.len() as u16;
-        app.shell.subagents_len = app.in_flight_subagents.len() as u16;
         app.shell.duration = fmt_duration(app.session_started_ms, now_ms());
         app.shell.input_rows = app.textarea.lines().len().max(1) as u16;
         // Empty-buffer flag for routing: a leading `:` in an empty box opens the
@@ -2059,14 +2059,6 @@ where
             // O(events) or re-render work on an ordinary frame.
             let economy = zoid_tui::EconomyView::build(&app.proj.window, &app.proj.churn, 0);
             let task_items = &app.proj.tasks;
-            let subagent_rows: Vec<zoid_tui::state::SubagentRow> = app
-                .in_flight_subagents
-                .iter()
-                .map(|s| zoid_tui::state::SubagentRow {
-                    id: s.id.clone(),
-                    task: s.task.clone(),
-                })
-                .collect();
             let body: &[ratatui::text::Line<'static>] = if is_overview {
                 &app.overview_body
             } else {
@@ -2104,7 +2096,6 @@ where
                 &app.proj.msgs,
                 Some(body),
                 task_items,
-                &subagent_rows,
                 &app.textarea,
                 streaming,
                 &view,
@@ -3040,9 +3031,9 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 let verbs = zoid_tui::objects::verbs_for(obj.kind);
                 let vsel = zoid_tui::palette::nav(app.shell.objects.verb_selected, 0, verbs.len());
                 if let Some(verb) = verbs.get(vsel) {
-                    let task = zoid_tui::objects::verb_prompt(verb, obj);
+                    let _task = zoid_tui::objects::verb_prompt(verb, obj);
                     app.shell.close_overlay();
-                    start_delegation(app, task); // dispatches (P5) — closes P4d's "queued"
+                    app.shell.status_hint = Some("delegation is temporarily disabled".into());
                     return Ok(false);
                 }
             }
@@ -4009,8 +4000,8 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             app.shell.overlay = zoid_tui::Overlay::Sessions;
             Ok(false)
         }
-        Command::Delegate(task) => {
-            start_delegation(app, task);
+        Command::Delegate(_task) => {
+            app.shell.status_hint = Some("delegation is temporarily disabled".into());
             Ok(false)
         }
         Command::OpenConfig => {
@@ -4085,6 +4076,7 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
 /// runs in an isolated git worktree (falls back to cwd if not a repo); its
 /// DelegationResult folds back as a card. (Trivial edits use the normal inline
 /// chat path — this is the explicit delegate path only.)
+#[allow(dead_code)] // subagent delegation temporarily disabled
 fn start_delegation(app: &mut App, task: String) {
     if app.streaming || !app.in_flight_subagents.is_empty() {
         app.shell.status_hint = Some("busy · one subagent at a time".into());

@@ -2115,6 +2115,7 @@ mod tests {
         assert!(out2.iter().any(|e| matches!(&e.kind, EventKind::ToolResult { name, output, .. } if name == "recall" && output.contains("zephyrbackend"))), "recall result carries content");
     }
     #[tokio::test]
+    #[ignore = "dispatch_subagent is temporarily disabled"]
     async fn dispatch_subagent_returns_id_as_tool_result() {
         use serde_json::json;
         use zoid_core::event::{Event, EventKind};
@@ -2189,6 +2190,7 @@ mod tests {
         }
     }
     #[tokio::test]
+    #[ignore = "dispatch_subagent is temporarily disabled"]
     async fn dispatch_two_subagents_concurrently() {
         use serde_json::json;
         use zoid_core::event::{Event, EventKind};
