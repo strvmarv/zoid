@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use crossterm::{
     event::{
-        DisableMouseCapture, EnableMouseCapture, Event as CEvent, EventStream,
-        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event as CEvent, EventStream, KeyboardEnhancementFlags,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{
@@ -1753,7 +1754,12 @@ async fn main() -> Result<()> {
         enable_raw_mode()?;
     }
     let mut out = stdout();
-    execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(
+        out,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )?;
     // Kitty keyboard protocol: lets the terminal report ⇧⏎ distinctly from ⏎ so
     // route.rs can map Shift+Enter → newline. Degrade gracefully — only push the
     // flags when supported; otherwise the Alt+⏎ fallback stands.
@@ -1783,6 +1789,7 @@ async fn main() -> Result<()> {
     let _ = execute!(
         terminal.backend_mut(),
         DisableMouseCapture,
+        DisableBracketedPaste,
         LeaveAlternateScreen
     );
     let _ = terminal.show_cursor();
@@ -2151,6 +2158,9 @@ where
                                 }
                             }
                         }
+                    }
+                    Some(Ok(CEvent::Paste(text))) => {
+                        app.textarea.insert_str(&text);
                     }
                     Some(Ok(_)) => { /* resize: redraw next loop */ }
                     Some(Err(_)) | None => return Ok(()),
