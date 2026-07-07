@@ -15,7 +15,7 @@
 - No `<example>` tags in any `description` frontmatter field.
 - Every `description` field starts with "Use when" and stays under 200 characters.
 - The gilfoyle agent persona body (perspectives, communication style, QA sections) stays unchanged.
-- Commit to the fork's `main` branch. One commit per task.
+- Commit to the fork's `main` branch. One commit per task (a task may touch multiple files).
 
 ---
 
@@ -136,38 +136,58 @@ git commit -m "feat: add gilfoyle-tech-reviewer agent persona"
 
 - [ ] **Step 1: Add gilfoyle to the process flowchart**
 
-In `skills/subagent-driven-development/SKILL.md`, find this line in the `digraph process` block:
+In `skills/subagent-driven-development/SKILL.md`, the `digraph process` block has 4 lines referencing the task reviewer and 3 lines referencing the final reviewer. Replace each exactly:
 
+**Line 57** (the box definition):
 ```
         "Write diff file, dispatch task reviewer subagent (./task-reviewer-prompt.md)" [shape=box];
 ```
-
-Replace all four occurrences of `"Write diff file, dispatch task reviewer subagent (./task-reviewer-prompt.md)"` with:
-
+→
 ```
         "Write diff file, dispatch task reviewer (gilfoyle + ./task-reviewer-prompt.md)" [shape=box];
 ```
 
-And find this line:
+**Line 73** (edge from implementer):
+```
+    "Implementer subagent implements, tests, commits, self-reviews" -> "Write diff file, dispatch task reviewer subagent (./task-reviewer-prompt.md)";
+```
+→
+```
+    "Implementer subagent implements, tests, commits, self-reviews" -> "Write diff file, dispatch task reviewer (gilfoyle + ./task-reviewer-prompt.md)";
+```
 
+**Line 74** (edge to verdict diamond):
+```
+    "Write diff file, dispatch task reviewer subagent (./task-reviewer-prompt.md)" -> "Task reviewer reports spec ✅ and quality approved?";
+```
+→
+```
+    "Write diff file, dispatch task reviewer (gilfoyle + ./task-reviewer-prompt.md)" -> "Task reviewer reports spec ✅ and quality approved?";
+```
+
+**Line 76** (re-review edge):
+```
+    "Dispatch fix subagent for Critical/Important findings" -> "Write diff file, dispatch task reviewer subagent (./task-reviewer-prompt.md)" [label="re-review"];
+```
+→
+```
+    "Dispatch fix subagent for Critical/Important findings" -> "Write diff file, dispatch task reviewer (gilfoyle + ./task-reviewer-prompt.md)" [label="re-review"];
+```
+
+**Line 80** (no-more-tasks edge):
 ```
     "More tasks remain?" -> "Dispatch final code reviewer subagent (../requesting-code-review/code-reviewer.md)" [label="no"];
 ```
-
-Replace with:
-
+→
 ```
     "More tasks remain?" -> "Dispatch final code reviewer (gilfoyle-tech-reviewer + ../requesting-code-review/code-reviewer.md)" [label="no"];
 ```
 
-And find this line:
-
+**Line 81** (final reviewer → finish):
 ```
     "Dispatch final code reviewer subagent (../requesting-code-review/code-reviewer.md)" -> "Use superpowers:finishing-a-development-branch";
 ```
-
-Replace with:
-
+→
 ```
     "Dispatch final code reviewer (gilfoyle-tech-reviewer + ../requesting-code-review/code-reviewer.md)" -> "Use superpowers:finishing-a-development-branch";
 ```
@@ -241,7 +261,7 @@ In `skills/requesting-code-review/SKILL.md`, find the `## How to Request` sectio
 
 - [ ] **Step 2: Add a "Default Reviewer" subsection after the How to Request section**
 
-Find the `## When to Request Review` section (which comes before `## How to Request`). After the `## How to Request` section ends (before the next `##` heading), insert:
+Find the `## Example` heading (this is the section immediately after `## How to Request`). Insert the new section immediately **before** the `## Example` heading:
 
 ```markdown
 ## Default Reviewer
@@ -257,6 +277,7 @@ The default reviewer is **gilfoyle-tech-reviewer** (`../agents/gilfoyle-tech-rev
 The structured output format (strengths, issues by severity, assessment, verdict) from `code-reviewer.md` is the report contract. Gilfoyle's methodology is the review lens — how the reviewer thinks, not what it produces.
 
 If gilfoyle is unavailable, fall back to a plain `general-purpose` subagent with the `code-reviewer.md` template. The output format is identical either way.
+
 ```
 
 - [ ] **Step 3: Verify**
@@ -409,30 +430,36 @@ git commit -m "fix: add worktree absolute-path safety to using-git-worktrees and
 **Interfaces:**
 - None — this is a standalone prose tightening.
 
-- [ ] **Step 1: Remove the "Why Order Matters" section (lines 206-255)**
+- [ ] **Step 1: Verify the rationalization table covers the "Why Order Matters" excuses**
 
-The `## Why Order Matters` section (from `## Why Order Matters` through the end of the "30 minutes of tests after ≠ TDD" paragraph, just before `## Common Rationalizations`) duplicates the rationalization table that follows it. Delete the entire `## Why Order Matters` section. The rationalization table covers every excuse it contained ("I'll test after", "manually tested", "deleting is wasteful", "TDD is dogmatic", "tests after achieve the same goals").
-
-Verify every excuse from the deleted section is in the rationalization table:
-- "I'll write tests after" → covered by "I'll test after"
-- "manually tested all edge cases" → covered by "Already manually tested"
-- "Deleting X hours is wasteful" → covered by "Deleting X hours is wasteful"
-- "TDD is dogmatic, being pragmatic" → covered by "TDD will slow me down" (same concept)
-- "Tests after achieve the same goals" → covered by "Tests after achieve same goals"
-
-- [ ] **Step 2: Verify no excuse was dropped**
+Before deleting anything, confirm the `## Common Rationalizations` table covers every excuse in `## Why Order Matters`. Check that each key excuse from the "Why Order Matters" section is present in the table:
 
 ```bash
 cd ~/source/superpowers/skills
-# Every key excuse phrase from the deleted section must still appear in the rationalization table
+# These must all return >= 1 BEFORE we delete the section
 grep -c "I'll test after" test-driven-development/SKILL.md
 grep -c "manually tested" test-driven-development/SKILL.md
 grep -c "Deleting.*wasteful" test-driven-development/SKILL.md
 grep -c "Tests after achieve" test-driven-development/SKILL.md
 ```
-Expected: all counts >= 1
+If any return 0, do NOT delete the section — the table doesn't cover it yet. Add the missing excuse to the table first.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 2: Remove the "Why Order Matters" section**
+
+The `## Why Order Matters` section (from `## Why Order Matters` through the end of the "30 minutes of tests after ≠ TDD" paragraph, just before `## Common Rationalizations`) duplicates the rationalization table that follows it. Delete the entire `## Why Order Matters` section.
+
+- [ ] **Step 3: Verify no excuse was dropped after deletion**
+
+```bash
+cd ~/source/superpowers/skills
+grep -c "I'll test after" test-driven-development/SKILL.md
+grep -c "manually tested" test-driven-development/SKILL.md
+grep -c "Deleting.*wasteful" test-driven-development/SKILL.md
+grep -c "Tests after achieve" test-driven-development/SKILL.md
+```
+Expected: all counts >= 1 (the table entries survive the deletion)
+
+- [ ] **Step 4: Commit**
 
 ```bash
 cd ~/source/superpowers
@@ -588,11 +615,7 @@ In `skills/subagent-driven-development/task-reviewer-prompt.md`, find the line t
     Keep your final message under 30 lines. The verdict, findings with file:line, and your assessment — nothing else.
 ```
 
-- [ ] **Step 3: Reinforce the "one task, not session history" rule in SDD**
-
-In `skills/subagent-driven-development/SKILL.md`, find the `## Constructing Reviewer Prompts` section, and the bullet `- A dispatch prompt describes one task, not the session's history.`. The existing text already says "Do not paste accumulated prior-task summaries... Nothing else." — no change needed; this is covered. Skip to Step 4.
-
-- [ ] **Step 4: Add token-budget note to writing-skills/SKILL.md**
+- [ ] **Step 3: Add token-budget note to writing-skills/SKILL.md**
 
 In `skills/writing-skills/SKILL.md`, find the `### 4. Token Efficiency (Critical)` section. After the `**Target word counts:**` bullet list (the three bullets ending with `# Other skills: <500 words (still be concise)`), add:
 
@@ -601,7 +624,7 @@ In `skills/writing-skills/SKILL.md`, find the `### 4. Token Efficiency (Critical
 **Skill body budget:** Frequently-loaded skill files (mode body, using-superpowers) must stay under 200 words for the body. Other skills should stay under 500 words for the main body; push heavy reference to separate files. Trim narrative storytelling and marketing stats — they bloat every load and teach nothing.
 ```
 
-- [ ] **Step 5: Verify**
+- [ ] **Step 4: Verify**
 
 ```bash
 cd ~/source/superpowers/skills
@@ -611,7 +634,7 @@ grep -c "Skill body budget" writing-skills/SKILL.md
 ```
 Expected: all counts >= 1
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 cd ~/source/superpowers
@@ -664,16 +687,19 @@ grep -c "Real-World Impact" ~/.config/zoid/modes/superpowers/systematic-debuggin
 ```
 Expected: `agent OK`, gilfoyle count > 0, absolute-path count >= 1, Real-World Impact count = 0
 
-- [ ] **Step 4: Final commit (clean up the spent design doc in the mode dir)**
+- [ ] **Step 4: Clean up the spent design doc in the mode dir**
 
-The mode directory has `gilfoyle-reviewer-design.md` and `agents/gilfoyle-tech-reviewer.md` from the local edits. After `:mode update`, the re-import overwrites the mode directory from the fork. The design doc (`gilfoyle-reviewer-design.md`) is not in the fork, so it will be removed by the re-import (the materializer writes only the upstream files). Verify it's gone:
-
-```bash
-test ! -f ~/.config/zoid/modes/superpowers/gilfoyle-reviewer-design.md && echo "design doc removed" || echo "design doc still present — remove manually"
-```
-
-If still present, remove it:
+The mode directory has `gilfoyle-reviewer-design.md` from the earlier local edits. The re-import may or may not remove files not present upstream (the materializer may merge rather than replace). Unconditionally remove it:
 
 ```bash
-rm ~/.config/zoid/modes/superpowers/gilfoyle-reviewer-design.md
+rm -f ~/.config/zoid/modes/superpowers/gilfoyle-reviewer-design.md
+test ! -f ~/.config/zoid/modes/superpowers/gilfoyle-reviewer-design.md && echo "design doc removed" || echo "ERROR: still present"
 ```
+Expected: `design doc removed`
+
+Also verify the gilfoyle agent file's frontmatter parses — check the first 5 lines:
+
+```bash
+head -5 ~/.config/zoid/modes/superpowers/agents/gilfoyle-tech-reviewer.md
+```
+Expected: YAML frontmatter with `name: gilfoyle-tech-reviewer` and a `description:` line starting with "Use when".
