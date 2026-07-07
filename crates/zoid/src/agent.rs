@@ -846,6 +846,101 @@ async fn run_turn_inner(
                         "tool executed"
                     );
                 }
+                Some(zoid_tools::ToolKind::Emitting) if tc.name == "dispatch_subagent" => {
+                    let task = tc
+                        .args
+                        .get("task")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if task.trim().is_empty() {
+                        emit(
+                            &session,
+                            &mut events,
+                            ui,
+                            &config.branch,
+                            EventKind::ToolResult {
+                                id: tc.id,
+                                name: tc.name,
+                                output: "dispatch_subagent: 'task' is required".into(),
+                                is_error: true,
+                            },
+                            session_id,
+                            now,
+                        )
+                        .await?;
+                        continue;
+                    }
+                    let want_worktree = tc
+                        .args
+                        .get("worktree")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let model_override = tc
+                        .args
+                        .get("model")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+
+                    let sub_ulid = Ulid::new();
+                    let sub_id = format!("sub-{sub_ulid}");
+
+                    let wt = if want_worktree && std::path::Path::new(".git").exists() {
+                        match crate::worktree::create_worktree(
+                            std::path::Path::new("."),
+                            &format!("sub-{sub_ulid}"),
+                        ) {
+                            Ok(w) => Some(w),
+                            Err(_) => None,
+                        }
+                    } else {
+                        None
+                    };
+                    let cwd = wt
+                        .as_ref()
+                        .map(|w| {
+                            std::fs::canonicalize(w.path())
+                                .unwrap_or_else(|_| w.path().to_path_buf())
+                        })
+                        .unwrap_or_else(|| config.cwd.clone());
+
+                    crate::spawn_subagent::spawn_subagent(
+                        task,
+                        events.snapshot(),
+                        provider.clone(),
+                        cwd,
+                        model_override.unwrap_or_else(|| model.clone()),
+                        session.clone(),
+                        session_id,
+                        ui.clone(),
+                        now,
+                        sub_id.clone(),
+                        wt,
+                    );
+
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::ToolResult {
+                            id: tc.id,
+                            name: tc.name,
+                            output: format!("{{\"subagent_id\": \"{sub_id}\"}}"),
+                            is_error: false,
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                    tracing::info!(
+                        kind = "tool",
+                        name = "dispatch_subagent",
+                        ms = tool_start.elapsed().as_millis() as u64,
+                        ok = true,
+                        "subagent dispatched"
+                    );
+                }
                 Some(zoid_tools::ToolKind::Interactive)
                     if tc.name == "ask_user" || tc.name == "apply_mode_mapping" =>
                 {
@@ -2015,6 +2110,151 @@ mod tests {
         .unwrap();
         assert!(out2.iter().any(|e| matches!(&e.kind, EventKind::TurnsReadmitted { ids } if ids.contains(&Ulid::from(1u128)))), "recall re-admits the evicted turn");
         assert!(out2.iter().any(|e| matches!(&e.kind, EventKind::ToolResult { name, output, .. } if name == "recall" && output.contains("zephyrbackend"))), "recall result carries content");
+    }
+    #[tokio::test]
+    async fn dispatch_subagent_returns_id_as_tool_result() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage { text: "dispatch a subagent".into() },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d1".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({"task": "do something", "worktree": false}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![
+                ProviderEvent::TextDelta("ok dispatched".into()),
+                ProviderEvent::Done,
+            ],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(std::sync::Arc::new(
+            zoid_core::skill::SkillRegistry::builtin(),
+        )));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let tool_result = out
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ToolResult { name, .. } if name == "dispatch_subagent"
+                )
+            })
+            .expect("dispatch_subagent tool result must be emitted");
+        match &tool_result.kind {
+            EventKind::ToolResult { output, is_error, .. } => {
+                assert!(!*is_error, "dispatch should not error");
+                assert!(
+                    output.contains("sub-"),
+                    "result must contain subagent ID: got {output}"
+                );
+            }
+            _ => panic!(),
+        }
+    }
+    #[tokio::test]
+    async fn dispatch_two_subagents_concurrently() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage { text: "dispatch two subagents".into() },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d1".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({"task": "task one", "worktree": false}),
+                }),
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d2".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({"task": "task two", "worktree": false}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![
+                ProviderEvent::TextDelta("both dispatched".into()),
+                ProviderEvent::Done,
+            ],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(std::sync::Arc::new(
+            zoid_core::skill::SkillRegistry::builtin(),
+        )));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let ids: Vec<String> = out
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EventKind::ToolResult { name, output, .. } if name == "dispatch_subagent" => {
+                    Some(output.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids.len(), 2, "two dispatch tool results");
+        assert_ne!(ids[0], ids[1], "distinct subagent IDs");
     }
 }
 
