@@ -32,6 +32,12 @@ pub struct SessionInfo {
     pub created_ts: i64,
     pub last_touched_ts: i64,
     pub token_total: u64,
+    /// Multi-instance safety (spec §2.2): an interface has this session open.
+    pub active: bool,
+    /// The OS PID of the interface holding this session, or None when inactive.
+    pub active_pid: Option<i64>,
+    /// Epoch-ms the holder last refreshed its liveness, or None when inactive.
+    pub active_heartbeat: Option<i64>,
 }
 
 /// Fold session rows into `SessionInfo`, most-recent-first by `last_touched_ts`
@@ -62,6 +68,9 @@ pub fn session_list(
             created_ts: r.created_ts,
             last_touched_ts: r.last_touched_ts,
             token_total: totals.get(&r.id).copied().unwrap_or(0),
+            active: r.active,
+            active_pid: r.active_pid,
+            active_heartbeat: r.active_heartbeat,
         })
         .collect();
     out.sort_by(|a, b| {
@@ -139,5 +148,18 @@ mod tests {
         let events = vec![usage_cached(1, 200, 150, 50)];
         let all = session_list(&rows, &events, None);
         assert_eq!(all[0].token_total, 100); // net, not 250
+    }
+
+    #[test]
+    fn session_list_carries_liveness_columns() {
+        let mut r = row(1, "a", "/repo", 100);
+        r.active = true;
+        r.active_pid = Some(42);
+        r.active_heartbeat = Some(1000);
+        let rows = vec![r];
+        let list = session_list(&rows, &[], None);
+        assert!(list[0].active);
+        assert_eq!(list[0].active_pid, Some(42));
+        assert_eq!(list[0].active_heartbeat, Some(1000));
     }
 }
