@@ -343,15 +343,17 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
         };
         (text, color::WARN)
     } else {
-        (glyph::RUNNING.to_string(), color::DIM)
+        // Idle: dim glyph + "tool" label.
+        (format!("{} tool", glyph::RUNNING), color::DIM)
     };
     let tool_w = tool_text.width();
 
     let (compact_text, compact_fg) = if state.compacting {
         let frame = compact_frame(state.compaction_started_at);
-        (format!("{} compacting", frame), color::BRANCH)
+        (format!("{} compact", frame), color::BRANCH)
     } else {
-        (glyph::COMPACT.to_string(), color::DIM)
+        // Idle: dim glyph + "compact" label.
+        (format!("{} compact", glyph::COMPACT), color::DIM)
     };
 
     // Dead-center for "working", always.

@@ -28,7 +28,7 @@ Buffer {
         "┌ message ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐",
         "│                                                                                                                                          │",
         "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘",
-        " CHAT                                                         ◐    ● idle    ⊟                                                  zoom normal ",
+        " CHAT                                                    ◐ tool    ● idle    ⊟ compact                                          zoom normal ",
     ],
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
@@ -155,12 +155,12 @@ Buffer {
         x: 139, y: 21, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 23, fg: Rgb(88, 166, 255), bg: Rgb(13, 42, 77), underline: Reset, modifier: NONE,
         x: 6, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 62, y: 23, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
+        x: 57, y: 23, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 63, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 67, y: 23, fg: Rgb(63, 185, 80), bg: Reset, underline: Reset, modifier: NONE,
         x: 73, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 77, y: 23, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 78, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 86, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 127, y: 23, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
     ]
 }
