@@ -4,6 +4,31 @@ use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
 use ulid::Ulid;
 
+/// How often a live process refreshes its `active_heartbeat` (ms). Spec §2.1.
+pub const HEARTBEAT_INTERVAL_MS: i64 = 5_000;
+/// A session is "live" only if its heartbeat is within this window (ms). 3× the
+/// interval: a single missed heartbeat (GC pause, system suspend) does NOT mark
+/// a live session stale. Spec §2.1.
+pub const LIVE_WINDOW_MS: i64 = 15_000;
+
+/// Is the session described by these columns currently held by a live
+/// interface? Pure except for the injected `pid_alive` OS check (kept injectable
+/// for testing). A session is live iff its flag is set, its PID is still alive,
+/// and its heartbeat is within `LIVE_WINDOW_MS` of `now_ms`. Spec §2.2.
+pub fn is_live(
+    active: bool,
+    active_pid: Option<i64>,
+    active_heartbeat: Option<i64>,
+    now_ms: i64,
+    pid_alive: impl Fn(i64) -> bool,
+) -> bool {
+    active
+        && match (active_pid, active_heartbeat) {
+            (Some(pid), Some(hb)) => pid_alive(pid) && now_ms - hb < LIVE_WINDOW_MS,
+            _ => false,
+        }
+}
+
 /// Single-writer, append-only event log backed by SQLite. The store owns the
 /// connection; readers obtain owned `Vec<Event>` snapshots via `load_all`.
 pub struct EventStore {
@@ -28,6 +53,11 @@ fn fts_content(kind: &crate::event::EventKind) -> Option<String> {
 impl EventStore {
     pub fn open(path: &str) -> Result<Self> {
         let conn = Connection::open(path)?;
+        // WAL allows concurrent readers + one writer without blocking (spec §1).
+        // `busy_timeout` makes a contended writer retry for 5s before returning
+        // SQLITE_BUSY — turns "two zoids → random turn failures" into brief stalls.
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "busy_timeout", 5000)?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS events (
                 id         TEXT PRIMARY KEY,
@@ -76,6 +106,25 @@ impl EventStore {
         )?;
         if has_active_mode == 0 {
             conn.execute("ALTER TABLE sessions ADD COLUMN active_mode TEXT", [])?;
+        }
+        // Liveness columns (multi-instance safety spec §2.2). Idempotent —
+        // probe-then-ALTER, mirroring `active_mode` above (SQLite has no ADD
+        // COLUMN IF NOT EXISTS).
+        let has_active: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'active'",
+            [],
+            |r| r.get(0),
+        )?;
+        if has_active == 0 {
+            conn.execute(
+                "ALTER TABLE sessions ADD COLUMN active INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+            conn.execute("ALTER TABLE sessions ADD COLUMN active_pid INTEGER", [])?;
+            conn.execute(
+                "ALTER TABLE sessions ADD COLUMN active_heartbeat INTEGER",
+                [],
+            )?;
         }
         Ok(EventStore { conn })
     }
@@ -246,6 +295,50 @@ impl EventStore {
         Ok(())
     }
 
+    /// Claim or clear a session's "active interface" liveness flag (spec §2.2).
+    /// `active=true` with `active_pid`/`active_heartbeat` claims the row for
+    /// this process; `active=false` (with NULL pid/heartbeat) releases it.
+    /// Overwrites any prior claim — this is also the reclaim path (a stale
+    /// flag from a crashed process) and the takeover path (another process
+    /// overwrites the row, which the old process detects via `heartbeat`).
+    pub fn set_active(
+        &self,
+        id: Ulid,
+        active: bool,
+        active_pid: i64,
+        active_heartbeat: i64,
+    ) -> Result<()> {
+        if active {
+            self.conn.execute(
+                "UPDATE sessions SET active = 1, active_pid = ?2, active_heartbeat = ?3 WHERE id = ?1",
+                params![id.to_string(), active_pid, active_heartbeat],
+            )?;
+        } else {
+            self.conn.execute(
+                "UPDATE sessions SET active = 0, active_pid = NULL, active_heartbeat = NULL WHERE id = ?1",
+                params![id.to_string()],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Refresh `active_heartbeat` for `id` ONLY if `active_pid` still matches
+    /// (i.e. this process is still the owner). Returns `true` when the row was
+    /// updated (still owner), `false` when zero rows matched (another process
+    /// took over, or the session row is gone). The `false` return is the
+    /// takeover-detection signal the bin uses to yield. Spec §2.3.
+    ///
+    /// Invariant relied on here: there is no `DELETE FROM sessions` anywhere in
+    /// the codebase, so a zero-row match unambiguously means takeover (not row
+    /// deletion). Do not introduce a session-delete path without revisiting this.
+    pub fn heartbeat(&self, id: Ulid, active_pid: i64, active_heartbeat: i64) -> Result<bool> {
+        let n = self.conn.execute(
+            "UPDATE sessions SET active_heartbeat = ?3 WHERE id = ?1 AND active_pid = ?2",
+            params![id.to_string(), active_pid, active_heartbeat],
+        )?;
+        Ok(n == 1)
+    }
+
     /// The stored active mode for a session, or `None` if never set.
     pub fn get_active_mode(&self, id: Ulid) -> Result<Option<String>> {
         let v = self
@@ -262,7 +355,7 @@ impl EventStore {
 
     pub fn list_session_rows(&self) -> Result<Vec<SessionRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, root_path, created_ts, last_touched_ts FROM sessions ORDER BY id ASC",
+            "SELECT id, name, root_path, created_ts, last_touched_ts, active, active_pid, active_heartbeat FROM sessions ORDER BY id ASC",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -271,17 +364,32 @@ impl EventStore {
                 row.get::<_, String>(2)?,
                 row.get::<_, i64>(3)?,
                 row.get::<_, i64>(4)?,
+                row.get::<_, bool>(5)?,
+                row.get::<_, Option<i64>>(6)?,
+                row.get::<_, Option<i64>>(7)?,
             ))
         })?;
         let mut out = Vec::new();
         for r in rows {
-            let (id, name, root_path, created_ts, last_touched_ts) = r?;
+            let (
+                id,
+                name,
+                root_path,
+                created_ts,
+                last_touched_ts,
+                active,
+                active_pid,
+                active_heartbeat,
+            ) = r?;
             out.push(SessionRow {
                 id: id.parse()?,
                 name,
                 root_path,
                 created_ts,
                 last_touched_ts,
+                active,
+                active_pid,
+                active_heartbeat,
             });
         }
         Ok(out)
@@ -398,6 +506,9 @@ mod tests {
                 root_path: "/repo/a".into(),
                 created_ts: 100,
                 last_touched_ts: 200,
+                active: false,
+                active_pid: None,
+                active_heartbeat: None,
             }]
         );
     }
@@ -717,6 +828,56 @@ mod tests {
     }
 
     #[test]
+    fn open_migrates_active_liveness_columns_idempotently() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("z.db");
+        let p = path.to_str().unwrap();
+        // First open adds the columns.
+        {
+            let s = EventStore::open(p).unwrap();
+            let id = Ulid::new();
+            s.insert_session(id, "s", "/r", 1, 1).unwrap();
+            s.set_active(id, true, 12345, 1000).unwrap();
+        }
+        // Re-open: the columns already exist; re-migration must NOT error.
+        let s2 = EventStore::open(p).unwrap();
+        let rows = s2.list_session_rows().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].active);
+        assert_eq!(rows[0].active_pid, Some(12345));
+        assert_eq!(rows[0].active_heartbeat, Some(1000));
+    }
+
+    #[test]
+    fn migrates_an_old_shape_db_without_active_columns() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.db");
+        let p = path.to_str().unwrap();
+        // Simulate a pre-liveness DB: sessions WITHOUT the three columns.
+        {
+            let conn = rusqlite::Connection::open(p).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE sessions (id TEXT PRIMARY KEY, name TEXT NOT NULL, \
+                 root_path TEXT NOT NULL, created_ts INTEGER NOT NULL, last_touched_ts INTEGER NOT NULL, \
+                 active_mode TEXT);",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id,name,root_path,created_ts,last_touched_ts) VALUES (?1,'s','/r',1,1)",
+                rusqlite::params![Ulid::new().to_string()],
+            )
+            .unwrap();
+        }
+        // Opening must add the columns (not throw) and they default to inactive.
+        let s = EventStore::open(p).unwrap();
+        let rows = s.list_session_rows().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].active);
+        assert_eq!(rows[0].active_pid, None);
+        assert_eq!(rows[0].active_heartbeat, None);
+    }
+
+    #[test]
     fn fts5_virtual_table_is_available() {
         let store = EventStore::open(":memory:").unwrap();
         // If FTS5 is compiled in, this query against the events_fts table succeeds.
@@ -725,5 +886,102 @@ mod tests {
             .query_row("SELECT count(*) FROM events_fts", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn open_sets_wal_journal_mode_and_busy_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("z.db");
+        let p = path.to_str().unwrap();
+        let s = EventStore::open(p).unwrap();
+        let mode: String = s
+            .conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
+        let timeout: i64 = s
+            .conn
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(timeout, 5000);
+    }
+
+    #[test]
+    fn wal_mode_persists_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("z.db");
+        let p = path.to_str().unwrap();
+        {
+            let _s = EventStore::open(p).unwrap();
+        }
+        let s2 = EventStore::open(p).unwrap();
+        let mode: String = s2
+            .conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
+    }
+
+    #[test]
+    fn is_live_requires_flag_pid_and_fresh_heartbeat() {
+        let alive = |_: i64| true; // pretend every PID is alive
+                                   // flag set, live PID, fresh heartbeat ⇒ live
+        assert!(is_live(true, Some(99), Some(1000), 2000, alive));
+    }
+
+    #[test]
+    fn is_live_false_for_stale_heartbeat() {
+        let alive = |_: i64| true;
+        // heartbeat 20s ago, window is 15s ⇒ stale ⇒ not live
+        assert!(!is_live(true, Some(99), Some(1000), 21000, alive));
+    }
+
+    #[test]
+    fn is_live_false_for_dead_pid() {
+        let alive = |pid: i64| pid != 99; // 99 is dead
+        assert!(!is_live(true, Some(99), Some(1000), 2000, alive));
+    }
+
+    #[test]
+    fn is_live_false_when_flag_cleared() {
+        let alive = |_: i64| true;
+        assert!(!is_live(false, Some(99), Some(1000), 2000, alive));
+    }
+
+    #[test]
+    fn is_live_false_for_null_pid_or_heartbeat() {
+        let alive = |_: i64| true;
+        assert!(!is_live(true, None, Some(1000), 2000, alive));
+        assert!(!is_live(true, Some(99), None, 2000, alive));
+    }
+
+    #[test]
+    fn heartbeat_refreshes_when_still_owner_and_returns_true() {
+        let s = EventStore::open(":memory:").unwrap();
+        let id = Ulid::new();
+        s.insert_session(id, "s", "/r", 1, 1).unwrap();
+        s.set_active(id, true, 1234, 1000).unwrap();
+        // Same PID refreshes → true (still the owner).
+        assert!(s.heartbeat(id, 1234, 2000).unwrap());
+        let row = s.list_session_rows().unwrap().pop().unwrap();
+        assert_eq!(row.active_heartbeat, Some(2000));
+    }
+
+    #[test]
+    fn heartbeat_returns_false_when_taken_over() {
+        let s = EventStore::open(":memory:").unwrap();
+        let id = Ulid::new();
+        s.insert_session(id, "s", "/r", 1, 1).unwrap();
+        s.set_active(id, true, 1234, 1000).unwrap();
+        // Another process takes over (overwrites active_pid).
+        s.set_active(id, true, 5678, 1500).unwrap();
+        // The old process's heartbeat (pid 1234) matches zero rows → false.
+        assert!(!s.heartbeat(id, 1234, 2000).unwrap());
+    }
+
+    #[test]
+    fn heartbeat_returns_false_for_unknown_session() {
+        let s = EventStore::open(":memory:").unwrap();
+        assert!(!s.heartbeat(Ulid::new(), 1234, 1000).unwrap());
     }
 }

@@ -44,6 +44,19 @@ enum Cmd {
         id: Ulid,
         reply: oneshot::Sender<Result<Option<String>>>,
     },
+    SetActive {
+        id: Ulid,
+        active: bool,
+        active_pid: i64,
+        active_heartbeat: i64,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    Heartbeat {
+        id: Ulid,
+        active_pid: i64,
+        active_heartbeat: i64,
+        reply: oneshot::Sender<Result<bool>>,
+    },
     ListSessions {
         root_filter: Option<String>,
         reply: oneshot::Sender<Result<Vec<SessionInfo>>>,
@@ -110,6 +123,24 @@ impl SessionHandle {
                     }
                     Cmd::GetActiveMode { id, reply } => {
                         let _ = reply.send(store.get_active_mode(id));
+                    }
+                    Cmd::SetActive {
+                        id,
+                        active,
+                        active_pid,
+                        active_heartbeat,
+                        reply,
+                    } => {
+                        let _ =
+                            reply.send(store.set_active(id, active, active_pid, active_heartbeat));
+                    }
+                    Cmd::Heartbeat {
+                        id,
+                        active_pid,
+                        active_heartbeat,
+                        reply,
+                    } => {
+                        let _ = reply.send(store.heartbeat(id, active_pid, active_heartbeat));
                     }
                     Cmd::ListSessions { root_filter, reply } => {
                         let out = (|| {
@@ -237,6 +268,51 @@ impl SessionHandle {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(Cmd::GetActiveMode { id, reply })
+            .await
+            .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
+    }
+
+    /// Claim or release the active-interface flag for a session (spec §2.2).
+    pub async fn set_active(
+        &self,
+        id: Ulid,
+        active: bool,
+        active_pid: i64,
+        active_heartbeat: i64,
+    ) -> Result<()> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Cmd::SetActive {
+                id,
+                active,
+                active_pid,
+                active_heartbeat,
+                reply,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
+    }
+
+    /// Refresh the heartbeat for the current session. Returns `false` when
+    /// another process has taken over (the yield signal). Spec §2.3.
+    pub async fn heartbeat(
+        &self,
+        id: Ulid,
+        active_pid: i64,
+        active_heartbeat: i64,
+    ) -> Result<bool> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Cmd::Heartbeat {
+                id,
+                active_pid,
+                active_heartbeat,
+                reply,
+            })
             .await
             .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
         rx.await
@@ -376,5 +452,18 @@ mod tests {
             .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, Ulid::from(1u128));
+    }
+
+    #[tokio::test]
+    async fn set_active_and_heartbeat_round_trip_via_actor() {
+        let h = SessionHandle::spawn(":memory:").unwrap();
+        let id = Ulid::from(7u128);
+        h.new_session(id, "s".into(), "/r".into(), 0).await.unwrap();
+        h.set_active(id, true, 1234, 1000).await.unwrap();
+        // Heartbeat as the owner refreshes the timestamp.
+        assert!(h.heartbeat(id, 1234, 2000).await.unwrap());
+        // A takeover (overwrite pid) makes the old owner's heartbeat return false.
+        h.set_active(id, true, 5678, 1500).await.unwrap();
+        assert!(!h.heartbeat(id, 1234, 2500).await.unwrap());
     }
 }
