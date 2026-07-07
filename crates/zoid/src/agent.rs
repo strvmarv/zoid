@@ -879,12 +879,6 @@ async fn run_turn_inner(
                         .get("worktree")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
-                    let model_override = tc
-                        .args
-                        .get("model")
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
-
                     let sub_ulid = Ulid::new();
                     let sub_id = format!("sub-{sub_ulid}");
 
@@ -918,7 +912,7 @@ async fn run_turn_inner(
                         events.snapshot(),
                         provider.clone(),
                         cwd,
-                        model_override.unwrap_or_else(|| model.clone()),
+                        model.clone(),
                         session.clone(),
                         session_id,
                         ui.clone(),

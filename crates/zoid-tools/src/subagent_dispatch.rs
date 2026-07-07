@@ -20,8 +20,7 @@ impl Tool for DispatchSubagent {
                 "type": "object",
                 "properties": {
                     "task": { "type": "string", "description": "The task description for the subagent" },
-                    "worktree": { "type": "boolean", "description": "Isolate in a git worktree (default: false)", "default": false },
-                    "model": { "type": "string", "description": "Model override; omit to inherit the session model" }
+                    "worktree": { "type": "boolean", "description": "Isolate in a git worktree (default: false)", "default": false }
                 },
                 "required": ["task"]
             }),
@@ -48,6 +47,9 @@ mod tests {
         let params = DispatchSubagent.spec().parameters;
         assert_eq!(params["required"][0], "task");
         assert!(params["properties"]["worktree"]["default"].is_boolean());
-        assert!(params["properties"]["model"].is_object());
+        assert!(
+            params["properties"].get("model").is_none(),
+            "model must not be in the dispatch_subagent spec — subagents inherit the session model"
+        );
     }
 }
