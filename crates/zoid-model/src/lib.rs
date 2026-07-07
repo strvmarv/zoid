@@ -137,7 +137,10 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
             context_window: 1_000_000,
             max_output: 0,
             tools: true,
-            prompt_cache: false,
+            // Ollama's `keep_alive` holds the KV cache warm (implicit prompt cache).
+            // Cache-read tokens are approximated via prefix overlap in the
+            // ollama provider's `parse_line`, not reported natively by the API.
+            prompt_cache: true,
         },
     ),
     // deepseek-v4-pro: corrected via api-docs.deepseek.com (was 128_000/0/false).
@@ -340,7 +343,10 @@ mod tests {
         assert!(model_info("claude-sonnet-4-6").prompt_cache);
         assert_eq!(model_info("claude-opus-4-8").context_window, 1_000_000);
         assert_eq!(model_info("glm-5.2:cloud").context_window, 1_000_000);
-        assert!(!model_info("glm-5.2:cloud").prompt_cache);
+        assert!(
+            model_info("glm-5.2:cloud").prompt_cache,
+            "glm-5.2:cloud now reports prompt_cache=true (Ollama keep_alive implicit cache, approximated via prefix overlap)"
+        );
         assert_eq!(model_info("deepseek-v4-pro").context_window, 1_000_000);
         assert_eq!(model_info("deepseek-v4-pro").max_output, 384_000);
         assert!(model_info("deepseek-v4-pro").prompt_cache);

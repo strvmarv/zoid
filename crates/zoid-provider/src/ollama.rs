@@ -438,7 +438,10 @@ impl Provider for OllamaProvider {
             context_window: w,
             max_output: 0,
             tools: true,
-            prompt_cache: false, // Ollama has no token-level prompt cache
+            // Ollama's `keep_alive` holds the KV cache warm for 30m — an implicit
+            // prompt cache. The provider doesn't report cache-read tokens
+            // separately, so we approximate them via prefix overlap in `parse_line`.
+            prompt_cache: true,
         }))
     }
 }
