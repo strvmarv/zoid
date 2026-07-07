@@ -188,11 +188,10 @@ prior-task summaries.
 
 - All edits target the mode files at `~/.config/zoid/modes/superpowers/`.
   After editing, `:mode reload` picks up changes without a restart.
-- The mode directory is a materialized snapshot (not a git clone). To publish
-  to the fork: clone `strvmarv/superpowers`, apply the same edits to the
-  corresponding `skills/` files, commit, push. Then `:mode update superpowers`
-  re-imports from the fork. For local testing, edit the mode files directly
-  first, then mirror the changes to the fork clone.
+- The fork clone is at `~/source/superpowers/`. Edit the `skills/` files there
+  directly, commit, and push. Then `:mode update superpowers` re-imports from
+  the fork. The mode directory at `~/.config/zoid/modes/superpowers/` is a
+  materialized snapshot of this — don't edit it by hand; update via the fork.
 
 ## Non-Goals
 
