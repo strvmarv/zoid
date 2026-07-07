@@ -1699,8 +1699,6 @@ where
             zoid_tui::tokens::glyph::SPINNER.len(),
             app.shell.reduced_motion,
         )];
-        app.shell.compact_spinner = zoid_tui::tokens::glyph::COMPACT_SPINNER
-            [zoid_tui::motion::spinner_frame(elapsed, 120, 6, app.shell.reduced_motion)];
         // Debounce: if CompactionComplete arrived, keep the indicator visible
         // until 3s have elapsed since CompactionStarted. The motion tick guard
         // wakes while `compacting` is true, so this timer drains without an
@@ -1714,6 +1712,9 @@ where
                 }
             }
         }
+        // Mirror compaction_started_at onto the shell so the pure renderer can
+        // drive the pulse-on-appear brightness ramp. Spec §3.
+        app.shell.compaction_started_at = app.compaction_started_at;
 
         let frame_start = std::time::Instant::now();
         terminal.draw(|f| {
@@ -2017,7 +2018,7 @@ where
                     }
                 }
             }
-            _ = motion_tick.tick(), if app.streaming || !app.in_flight_subagents.is_empty() || app.shell.compacting || app.zoom_changed_at.is_some() => {
+            _ = motion_tick.tick(), if app.streaming || !app.in_flight_subagents.is_empty() || app.shell.compacting || app.shell.active_tool.is_some() || app.zoom_changed_at.is_some() => {
                 // Wake to redraw the blinking caret or the activity spinner (which
                 // animates while streaming OR delegating). Zoom is instant now (the
                 // reveal animation was retired for cross-zoom anchoring), so

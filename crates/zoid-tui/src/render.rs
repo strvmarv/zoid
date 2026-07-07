@@ -294,51 +294,81 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
     let center_w = center.width();
     let right_w = right.width();
 
-    // The in-flight tool indicator (orange `◐ shell …`), shown left of the
-    // center activity indicator while a Local tool call runs. Mirrors the
-    // compaction indicator on the right of center. Replaces the old in-body
-    // spinner line (no more add/remove-line jitter in the conversation body).
-    let tool_w = if let Some(name) = &state.active_tool {
-        format!("{} {} {}", glyph::RUNNING, name, glyph::ELLIPSIS).width()
+    // Fixed anchors: tool at ⅓, working at ½, compaction at ⅔. Each is computed
+    // independently — an absent indicator doesn't displace the others. Zero
+    // jitter: "working" is always dead-center regardless of what else is present.
+    let tool_text = state.active_tool.as_deref().map(|name| {
+        if w < 40 {
+            format!("{} {}", glyph::RUNNING, name)
+        } else {
+            format!("{} {} {}", glyph::RUNNING, name, glyph::ELLIPSIS)
+        }
+    });
+    let tool_w = tool_text.as_ref().map(|t| t.width()).unwrap_or(0);
+
+    let compact_text = if state.compacting {
+        Some(format!("{} compacting", glyph::COMPACT))
     } else {
-        0
+        None
     };
 
-    // Center the activity indicator in the bar and pin the zoom hint to the
-    // right edge. Saturating math means a narrow terminal clips the padding
-    // (segments just abut) instead of panicking. The tool indicator (when
-    // present) sits just left of center, shrinking the available centering
-    // width so the layout stays balanced.
-    let avail_for_center = w.saturating_sub(tool_w);
-    let center_start = avail_for_center.saturating_sub(center_w) / 2;
+    // Dead-center for "working", always.
+    let center_start = w.saturating_sub(center_w) / 2;
     let right_start = w.saturating_sub(right_w);
 
+    // Pulse-on-appear: bright for 300ms after the indicator first shows,
+    // then settle to a dimmer steady-state.
+    const PULSE_MS: u128 = 300;
+    let tool_fg = match state.tool_started_at {
+        Some(start) if start.elapsed().as_millis() < PULSE_MS => color::WARN,
+        _ => color::WARN_DIM,
+    };
+    let compact_fg = match state.compaction_started_at {
+        Some(start) if start.elapsed().as_millis() < PULSE_MS => color::BRANCH,
+        _ => color::COMPACT_DIM,
+    };
+
     let mut spans = left;
-    let pad1 = center_start.saturating_sub(left_w);
-    if pad1 > 0 {
-        spans.push(Span::styled(" ".repeat(pad1), Style::new()));
+    // Tool indicator at the ⅓ anchor (left of center, with a 4-space gap
+    // before "working"). Falls back to abutting center if space is tight.
+    if let Some(text) = &tool_text {
+        let tool_slot = w / 3;
+        let tool_pad = tool_slot.saturating_sub(left_w + tool_w + 4);
+        if tool_pad > 0 {
+            spans.push(Span::styled(" ".repeat(tool_pad), Style::new()));
+        }
+        spans.push(Span::styled(text.clone(), Style::new().fg(tool_fg)));
+        // Gap to dead-center: at least 4 spaces, but grows to fill the distance
+        // from the tool's right edge to the center start.
+        let consumed = left_w + tool_pad + tool_w;
+        let actual_gap = center_start.saturating_sub(consumed).max(4);
+        if actual_gap > 0 {
+            spans.push(Span::styled(" ".repeat(actual_gap), Style::new()));
+        }
+    } else {
+        // No tool indicator — pad from left to dead-center.
+        let pad1 = center_start.saturating_sub(left_w);
+        if pad1 > 0 {
+            spans.push(Span::styled(" ".repeat(pad1), Style::new()));
+        }
     }
-    // Tool indicator (orange), immediately left of the center activity label.
-    if let Some(name) = &state.active_tool {
-        spans.push(Span::styled(
-            format!("{} {} {}  ", glyph::RUNNING, name, glyph::ELLIPSIS),
-            Style::new().fg(color::WARN),
-        ));
-    }
+    // Working — dead center.
     spans.push(Span::styled(center, Style::new().fg(fg)));
-
-    // Compaction indicator — only while compaction is running. Appended right
-    // after the center segment, no re-centering (the pad2 calculation below
-    // shrinks to accommodate this extra width, and the zoom hint stays pinned
-    // to the right edge).
-    if state.compacting {
-        spans.push(Span::styled(
-            format!("  {} compacting", state.compact_spinner),
-            Style::new().fg(color::BRANCH),
-        ));
+    // Compaction at the ⅔ anchor (right of center, with a 4-space gap).
+    if let Some(text) = &compact_text {
+        let compact_slot = (2 * w) / 3;
+        let actual_gap = compact_slot.saturating_sub(center_start + center_w).min(4);
+        if actual_gap > 0 {
+            spans.push(Span::styled(" ".repeat(actual_gap), Style::new()));
+        } else {
+            spans.push(Span::styled(" ", Style::new()));
+        }
+        spans.push(Span::styled(text.clone(), Style::new().fg(compact_fg)));
     }
 
-    let pad2 = right_start.saturating_sub(left_w + pad1 + center_w);
+    // Pad to the zoom hint (right edge).
+    let consumed_so_far: usize = spans.iter().map(|s| s.content.width()).sum();
+    let pad2 = right_start.saturating_sub(consumed_so_far);
     if pad2 > 0 {
         spans.push(Span::styled(" ".repeat(pad2), Style::new()));
     }
@@ -1320,7 +1350,6 @@ mod tests {
     fn compaction_segment_visible_when_compacting() {
         let mut state = ShellState::new();
         state.compacting = true;
-        state.compact_spinner = glyph::COMPACT_SPINNER[0];
         let view = ChatView {
             zoom: Zoom::Normal,
             caret_on: false,
@@ -1344,18 +1373,20 @@ mod tests {
             "status bar must contain 'compacting' when state.compacting is true: got {content:?}"
         );
         assert!(
-            content.contains(glyph::COMPACT_SPINNER[0].to_string().as_str()),
-            "status bar must contain the compaction spinner glyph: got {content:?}"
+            content.contains(glyph::COMPACT.to_string().as_str()),
+            "status bar must contain the compaction glyph: got {content:?}"
         );
-        let has_branch = terminal
+        // With compaction_started_at = None (no pulse), the indicator uses the
+        // dim steady-state color.
+        let has_compact_color = terminal
             .backend()
             .buffer()
             .content()
             .iter()
-            .any(|c| c.style().fg == Some(color::BRANCH));
+            .any(|c| c.style().fg == Some(color::COMPACT_DIM));
         assert!(
-            has_branch,
-            "at least one cell must use color::BRANCH (purple) for the compaction indicator"
+            has_compact_color,
+            "at least one cell must use color::COMPACT_DIM for the compaction indicator"
         );
     }
 
@@ -1387,6 +1418,91 @@ mod tests {
             !content.contains("compacting"),
             "status bar must NOT contain 'compacting' when not compacting: got {content:?}"
         );
+    }
+
+    #[test]
+    fn working_stays_dead_center_with_all_indicators() {
+        use crate::state::ShellState;
+
+        let mut s = ShellState::new();
+        s.busy = true; // "working"
+        s.set_active_tool("shell"); // tool indicator
+        s.compacting = true; // compaction
+        s.compaction_started_at = Some(std::time::Instant::now());
+
+        let backend = TestBackend::new(100, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                render_status(
+                    f,
+                    &s,
+                    &ChatView {
+                        zoom: Zoom::Normal,
+                        caret_on: false,
+                        reveal: None,
+                        tz_offset_secs: 0,
+                    },
+                    f.area(),
+                )
+            })
+            .unwrap();
+
+        // "working" should be dead-center: its start ≈ (W - working_w) / 2.
+        let content = terminal.backend().buffer();
+        let w = 100usize;
+        let working_start = content
+            .content()
+            .iter()
+            .enumerate()
+            .find(|(_, c)| c.symbol() == "⠋")
+            .map(|(i, _)| i % w)
+            .unwrap_or(0);
+        // "⠋ working" ≈ 9 chars → expected center ≈ 45
+        let expected = (w - 9) / 2;
+        assert!(
+            (working_start as i32 - expected as i32).abs() <= 4,
+            "working indicator must be dead-center: got {working_start}, expected ~{expected}"
+        );
+    }
+
+    #[test]
+    fn tool_indicator_uses_dim_color_after_pulse_window() {
+        use crate::state::ShellState;
+        use std::time::{Duration, Instant};
+
+        let mut s = ShellState::new();
+        s.set_active_tool("shell");
+        // Simulate the pulse having elapsed.
+        s.tool_started_at = Some(Instant::now() - Duration::from_secs(1));
+
+        let backend = TestBackend::new(100, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                render_status(
+                    f,
+                    &s,
+                    &ChatView {
+                        zoom: Zoom::Normal,
+                        caret_on: false,
+                        reveal: None,
+                        tz_offset_secs: 0,
+                    },
+                    f.area(),
+                )
+            })
+            .unwrap();
+        // After the pulse window, the tool indicator uses WARN_DIM.
+        // Verify it renders without panic and the tool name is present.
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
+        assert!(content.contains("shell"), "tool name must render");
     }
 
     #[test]

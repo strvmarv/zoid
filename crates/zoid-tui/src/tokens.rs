@@ -66,8 +66,12 @@ pub mod color {
     pub const BUILD_ACCENT: Color = Color::Rgb(0xe3, 0xb3, 0x41);
     pub const OK: Color = Color::Rgb(0x3f, 0xb9, 0x50);
     pub const WARN: Color = Color::Rgb(0xd2, 0x99, 0x22);
+    /// Dimmed steady-state for the tool indicator (after the 300ms pulse).
+    pub const WARN_DIM: Color = Color::Rgb(0x8a, 0x66, 0x1a);
     pub const ERROR: Color = Color::Rgb(0xf8, 0x51, 0x49);
     pub const BRANCH: Color = Color::Rgb(0xbc, 0x8c, 0xff);
+    /// Dimmed steady-state for the compaction indicator (after the 300ms pulse).
+    pub const COMPACT_DIM: Color = Color::Rgb(0x6b, 0x5a, 0x8a);
     pub const DIM: Color = Color::Rgb(0x6e, 0x76, 0x81);
     pub const TXT: Color = Color::Rgb(0xc9, 0xd1, 0xd9);
     pub const SEL_BG: Color = Color::Rgb(0x16, 0x33, 0x5c);
@@ -196,13 +200,5 @@ mod tests {
     #[test]
     fn acm1_compact_token_present() {
         assert_eq!(glyph::COMPACT, '⊟');
-    }
-
-    #[test]
-    fn compaction_spinner_token_present() {
-        assert_eq!(
-            glyph::COMPACT_SPINNER,
-            ['⊟', '⊞', '⊟', '⊕', '⊞', '⊕']
-        );
     }
 }
