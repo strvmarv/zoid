@@ -94,6 +94,11 @@ pub fn chat_tools(skills: Arc<SkillRegistry>) -> Vec<Box<dyn Tool>> {
     // `show` renders an HTML card in the companion browser view. Chat-only (it
     // needs the companion hub); never in the subagent registry.
     tools.push(Box::new(zoid_tools::show::Show));
+    // `dispatch_subagent` lets the model spawn subagents during a turn (chat-only;
+    // never in the subagent registry — subagents can't spawn subagents).
+    tools.push(Box::new(zoid_tools::subagent_dispatch::DispatchSubagent));
+    // `subagent_diff` retrieves a completed subagent's diff for review.
+    tools.push(Box::new(zoid_tools::subagent_diff::SubagentDiff));
     tools
 }
 
@@ -169,5 +174,18 @@ mod tests {
         let out = tool().run(&json!({ "name": "spike-plan" }), Path::new("."));
         assert!(!out.is_error);
         assert!(!out.text.contains("Skill files are in:"));
+    }
+
+    #[test]
+    fn chat_tools_includes_dispatch_and_diff() {
+        let tools = chat_tools(std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()));
+        assert!(
+            tools.iter().any(|t| t.name() == "dispatch_subagent"),
+            "dispatch_subagent in chat_tools"
+        );
+        assert!(
+            tools.iter().any(|t| t.name() == "subagent_diff"),
+            "subagent_diff in chat_tools"
+        );
     }
 }
