@@ -2416,12 +2416,22 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::ToggleDrawer(id) => app.shell.toggle_drawer(id),
         Action::PaletteMove(d) => {
-            let items = zoid_tui::palette::all_items(
-                &app.shell.active_mode,
-                &app.shell.mode_names,
-                app.shell.companion_on,
-            );
-            let n = zoid_tui::palette::selectable_matches(&items, &app.shell.palette.query).len();
+            // In Direct mode (`:`-prefixed), the list is `direct_items` filtered
+            // by `direct_filter` — NOT the Pick fuzzy list. The old code always
+            // used `all_items` (Pick), which doesn't contain `:session`/`:mode`
+            // etc., so the match count was 0 and the selection never moved.
+            let n = if app.shell.palette.query.starts_with(':') {
+                let items = zoid_tui::palette::direct_items(&app.shell);
+                let filter = zoid_tui::palette::direct_filter(&app.shell.palette.query);
+                zoid_tui::palette::selectable_matches(&items, filter).len()
+            } else {
+                let items = zoid_tui::palette::all_items(
+                    &app.shell.active_mode,
+                    &app.shell.mode_names,
+                    app.shell.companion_on,
+                );
+                zoid_tui::palette::selectable_matches(&items, &app.shell.palette.query).len()
+            };
             app.shell.palette.selected = zoid_tui::palette::nav(app.shell.palette.selected, d, n);
         }
         Action::PaletteChar(c) => match &mut app.shell.palette.stage {
@@ -4703,6 +4713,38 @@ mod tests {
     /// session (it's a turn-start path, symmetric with `Submit`'s `yielded`
     /// guard). And `:new` is the documented escape hatch: it must clear
     /// `yielded` and reclaim the fresh session so the user can keep working.
+    /// Regression: `PaletteMove` in Direct mode (`:`-prefixed) must navigate the
+    /// direct list, not the Pick fuzzy list. Before the fix the handler always
+    /// used `all_items` (Pick), which doesn't contain `:session`/`:mode` etc.,
+    /// so the match count was 0 and the selection never moved — arrows were
+    /// dead in direct mode despite the router correctly firing `PaletteMove`.
+    #[tokio::test]
+    async fn palette_move_navigates_direct_list() {
+        let mut app = test_app().await;
+        app.shell.overlay = zoid_tui::Overlay::Palette;
+        app.shell.mode_names = vec!["Chat".into(), "Build".into()];
+        // `:mode ` → Stage 2: reload, import, update, + mode names.
+        app.shell.palette.query = ":mode ".into();
+        app.shell.palette.selected = 0;
+
+        // Down → selection moves (was stuck at 0 before the fix).
+        handle_action(&mut app, zoid_tui::route::Action::PaletteMove(1))
+            .await
+            .unwrap();
+        assert_eq!(
+            app.shell.palette.selected, 1,
+            "PaletteMove(Down) in direct mode must advance the selection"
+        );
+        // Up wraps (4+ items, so from 1 → 0).
+        handle_action(&mut app, zoid_tui::route::Action::PaletteMove(-1))
+            .await
+            .unwrap();
+        assert_eq!(
+            app.shell.palette.selected, 0,
+            "PaletteMove(Up) must move back"
+        );
+    }
+
     #[tokio::test]
     async fn delegate_blocked_and_new_clears_yielded() {
         let mut app = test_app().await;
