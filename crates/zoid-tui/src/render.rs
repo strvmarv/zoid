@@ -1320,7 +1320,6 @@ mod tests {
     fn compaction_segment_visible_when_compacting() {
         let mut state = ShellState::new();
         state.compacting = true;
-        state.compact_spinner = glyph::COMPACT_SPINNER[0];
         let view = ChatView {
             zoom: Zoom::Normal,
             caret_on: false,

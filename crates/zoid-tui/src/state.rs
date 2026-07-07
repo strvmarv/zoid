@@ -247,6 +247,11 @@ pub struct ShellState {
     pub config_picker_sel: usize,
     /// Name of the tool currently executing (in-flight indicator), or `None`.
     pub active_tool: Option<String>,
+    /// When the current tool started (pulse-on-appear anchor). Set by
+    /// `set_active_tool`; cleared by `clear_active_tool`. The renderer reads
+    /// `elapsed` to drive the 300ms brightness pulse. `None` when no tool is
+    /// in flight. Spec §3.
+    pub tool_started_at: Option<std::time::Instant>,
     /// The active `ask_user` question overlay's state, or `None` when no
     /// question is pending (Task 11 renders it; Task 9 populates it via
     /// `AgentUpdate::AskUser`).
@@ -262,10 +267,10 @@ pub struct ShellState {
     /// after `CompactionComplete` + the 3s minimum display duration. Pure
     /// renderer reads this to show/hide the compaction indicator.
     pub compacting: bool,
-    /// Current compaction-spinner frame glyph, refreshed by the bin each frame
-    /// from wall-clock elapsed at ~120ms. Defaults to the first frame so
-    /// snapshot tests are deterministic unless they opt into `compacting`.
-    pub compact_spinner: char,
+    /// When the current compaction phase started (pulse-on-appear anchor),
+    /// mirrored from `App.compaction_started_at` each frame. The renderer reads
+    /// `elapsed` to drive the 300ms brightness pulse. `None` when not compacting.
+    pub compaction_started_at: Option<std::time::Instant>,
     /// Highlighted row in the quick-switch overlay's provider list (Task 11
     /// renders it; Task 10 only plumbs the state through).
     pub switch_provider_sel: usize,
@@ -359,10 +364,11 @@ impl ShellState {
             config_picker: Vec::new(),
             config_picker_sel: 0,
             active_tool: None,
+            tool_started_at: None,
             question: None,
             first_time_user: false,
             compacting: false,
-            compact_spinner: crate::tokens::glyph::COMPACT_SPINNER[0],
+            compaction_started_at: None,
             switch_provider_sel: 0,
             switch_model_sel: 0,
             switch_pane: SwitchPane::Provider,
@@ -485,11 +491,13 @@ impl ShellState {
     /// Show the in-flight spinner for a tool that has just started running.
     pub fn set_active_tool(&mut self, name: impl Into<String>) {
         self.active_tool = Some(name.into());
+        self.tool_started_at = Some(std::time::Instant::now());
     }
 
     /// Clear the in-flight spinner (its `ToolResult` arrived, or the turn ended).
     pub fn clear_active_tool(&mut self) {
         self.active_tool = None;
+        self.tool_started_at = None;
     }
 
     /// True when the col-3 contextual picker is drilled open.
@@ -653,14 +661,24 @@ mod tests {
     }
 
     #[test]
+    fn set_active_tool_stamps_tool_started_at() {
+        let mut s = ShellState::new();
+        assert!(s.tool_started_at.is_none(), "default: no timestamp");
+        s.set_active_tool("shell");
+        assert!(s.tool_started_at.is_some(), "set_active_tool must stamp tool_started_at");
+        s.clear_active_tool();
+        assert!(s.tool_started_at.is_none(), "clear must null the timestamp");
+    }
+
+    #[test]
+    fn compaction_started_at_defaults_none() {
+        assert!(ShellState::new().compaction_started_at.is_none());
+    }
+
+    #[test]
     fn compacting_defaults_false() {
         let s = ShellState::new();
         assert!(!s.compacting, "compacting must default to false");
-        assert_eq!(
-            s.compact_spinner,
-            crate::tokens::glyph::COMPACT_SPINNER[0],
-            "compact_spinner must default to the first frame"
-        );
     }
 
     #[test]
