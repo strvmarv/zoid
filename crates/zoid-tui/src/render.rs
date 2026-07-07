@@ -333,7 +333,7 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
     // to the right edge).
     if state.compacting {
         spans.push(Span::styled(
-            format!("  {} compacting", state.compact_spinner),
+            format!("  {} compacting", glyph::COMPACT),
             Style::new().fg(color::BRANCH),
         ));
     }
@@ -1344,7 +1344,7 @@ mod tests {
             "status bar must contain 'compacting' when state.compacting is true: got {content:?}"
         );
         assert!(
-            content.contains(glyph::COMPACT_SPINNER[0].to_string().as_str()),
+            content.contains(glyph::COMPACT.to_string().as_str()),
             "status bar must contain the compaction spinner glyph: got {content:?}"
         );
         let has_branch = terminal
