@@ -222,7 +222,7 @@ pub fn render_shell_scene(name: &str, w: u16, h: u16) -> Buffer {
     };
     terminal
         .draw(|f| {
-            render_shell(f, &state, &economy, &msgs, None, &[], &input, false, &view);
+            render_shell(f, &state, &economy, &msgs, None, &[], &[], &input, false, &view);
         })
         .unwrap();
     terminal.backend().buffer().clone()

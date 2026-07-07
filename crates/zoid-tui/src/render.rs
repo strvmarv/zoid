@@ -38,6 +38,7 @@ pub fn render_shell(
     // in-flight tool spinner are applied here before scroll/paint.
     body: Option<&[Line<'static>]>,
     tasks: &[zoid_core::tasks::TaskItem],
+    subagents: &[crate::state::SubagentRow],
     input: &TextArea<'_>,
     streaming: bool,
     view: &ChatView,
@@ -168,7 +169,7 @@ pub fn render_shell(
     render_title(frame, state, layout.title);
 
     if layout.rail.is_some() {
-        render_rail(frame, state, economy, tasks, &layout);
+        render_rail(frame, state, economy, tasks, subagents, &layout);
     }
 
     render_input(frame, input, layout.input);
@@ -448,6 +449,7 @@ fn render_rail(
     state: &ShellState,
     economy: &EconomyView,
     tasks: &[zoid_core::tasks::TaskItem],
+    subagents: &[crate::state::SubagentRow],
     layout: &ShellLayout,
 ) {
     // Each drawer is a rounded bordered box (spec `docs/ux/chat-mode.html`
@@ -490,7 +492,7 @@ fn render_rail(
                 DrawerId::Repo => render_repo_body(frame, state, body_rect),
                 DrawerId::Session => render_session_body(frame, state, body_rect), // Task 13
                 DrawerId::Tasks => render_tasks_body(frame, body_rect, tasks),
-                DrawerId::Subagents => {} // 4b adds render_subagents_body
+                DrawerId::Subagents => render_subagents_body(frame, body_rect, subagents),
             }
         }
     }
@@ -772,6 +774,34 @@ fn render_tasks_body(frame: &mut Frame, area: Rect, items: &[zoid_core::tasks::T
         })
         .collect();
     frame.render_widget(Paragraph::new(rows), area);
+}
+
+/// The subagents drawer body: one row per in-flight subagent — a running glyph
+/// + truncated id + truncated task label. Empty → dim "no subagents". Capped
+/// to the body rows the allocator gave the drawer.
+fn render_subagents_body(frame: &mut Frame, area: Rect, rows: &[crate::state::SubagentRow]) {
+    use crate::text::truncate;
+    if rows.is_empty() {
+        let line = Line::from(Span::styled("no subagents", Style::new().fg(color::DIM)));
+        frame.render_widget(Paragraph::new(line), area);
+        return;
+    }
+    let rows_rendered: Vec<Line> = rows
+        .iter()
+        .take(area.height as usize)
+        .map(|r| {
+            let id_w = 14; // "sub-01HZ..." is ~13-14 chars
+            let id = truncate(&r.id, id_w);
+            let task_budget = area.width.saturating_sub(id_w as u16 + 3) as usize;
+            let task = truncate(&r.task, task_budget);
+            Line::from(vec![
+                Span::styled(format!("{} ", glyph::RUNNING), Style::new().fg(color::WARN)),
+                Span::styled(format!("{id}  "), Style::new().fg(color::TXT)),
+                Span::styled(task, Style::new().fg(color::DIM)),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(rows_rendered), area);
 }
 
 fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {

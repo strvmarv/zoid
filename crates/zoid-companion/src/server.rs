@@ -355,10 +355,7 @@ mod tests {
             "wrong content-type: {acc}"
         );
         assert!(acc.contains("event: card"), "no card frame: {acc}");
-        assert!(
-            acc.contains("e2e card"),
-            "frame missing data: {acc}"
-        );
+        assert!(acc.contains("e2e card"), "frame missing data: {acc}");
 
         server.shutdown();
     }
