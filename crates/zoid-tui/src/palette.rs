@@ -134,6 +134,10 @@ fn stage1_items() -> Vec<PaletteItem> {
             command: Command::Unknown("companion".into()),
         },
         PaletteItem {
+            label: "compact".into(),
+            command: Command::CompactNow,
+        },
+        PaletteItem {
             label: "delegate".into(),
             command: Command::Delegate(String::new()),
         },
