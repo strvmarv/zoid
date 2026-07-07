@@ -69,7 +69,10 @@ pub fn request_body(req: &CompletionRequest) -> Value {
 /// `error` short-circuits to `[Error]`; otherwise non-empty `message.content`
 /// → `TextDelta`, each `message.tool_calls[]` → `ToolCall`, then `done:true`
 /// → `Done`. Empty/thinking-only/blank/malformed lines → `[]`. Never panics.
-pub fn parse_line(line: &str) -> Vec<ProviderEvent> {
+pub fn parse_line(
+    line: &str,
+    last_prompt_eval: &std::sync::atomic::AtomicU64,
+) -> Vec<ProviderEvent> {
     let line = line.trim();
     if line.is_empty() {
         return Vec::new();
@@ -130,10 +133,21 @@ pub fn parse_line(line: &str) -> Vec<ProviderEvent> {
         let input = v.get("prompt_eval_count").and_then(|n| n.as_u64());
         let output = v.get("eval_count").and_then(|n| n.as_u64());
         if input.is_some() || output.is_some() {
+            let curr = input.unwrap_or(0);
+            // Approximate the prompt-cache hit: Ollama's `keep_alive` holds the
+            // model's KV cache warm for 30m, so the overlap between this prompt
+            // and the previous sub-turn's prompt is served from the warm cache.
+            // The native `/api/chat` `done` frame reports the whole prompt as
+            // `prompt_eval_count` with no cache-read breakdown, so we derive it:
+            // `cached = min(curr, prev)`. The first sub-turn (prev=0) yields
+            // cached=0 — correct, nothing was warm yet. Store curr for next time.
+            use std::sync::atomic::Ordering;
+            let prev = last_prompt_eval.swap(curr, Ordering::Relaxed);
+            let cached_approx = curr.min(prev);
             out.push(ProviderEvent::Usage(Usage {
-                input_tokens: input.unwrap_or(0),
+                input_tokens: curr,
                 output_tokens: output.unwrap_or(0),
-                cached: 0, // native /api/chat has no token-level prompt cache
+                cached: cached_approx,
             }));
         }
         // `done_reason:"length"` = the model hit the output cap; its reply is
@@ -222,6 +236,14 @@ pub struct OllamaProvider {
     /// Idle deadline for the initial response and between streamed chunks; see
     /// `crate::stream_idle_timeout`.
     idle_timeout: Duration,
+    /// The previous sub-turn's `prompt_eval_count` (full prompt size). Ollama's
+    /// `keep_alive` holds the model's KV cache warm for 30m, so the bulk of each
+    /// new prompt is a re-evaluation of a warm prefix — but the native `/api/chat`
+    /// `done` frame reports it all as `prompt_eval_count` with no cache-read
+    /// breakdown. We approximate: the overlap with the previous prompt is
+    /// "cached" (warm in KV). Cross-stream state so `parse_line`'s `done` frame
+    /// can read it. Ollama implicit-cache approximation.
+    last_prompt_eval: std::sync::atomic::AtomicU64,
 }
 
 impl OllamaProvider {
@@ -233,6 +255,7 @@ impl OllamaProvider {
                 .to_string(),
             client: crate::http_client(),
             idle_timeout: crate::stream_idle_timeout(),
+            last_prompt_eval: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -342,7 +365,7 @@ impl Provider for OllamaProvider {
                     while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
                         let line: Vec<u8> = buf.drain(..=pos).collect();
                         let line = String::from_utf8_lossy(&line);
-                        for pe in parse_line(&line) {
+                        for pe in parse_line(&line, &self.last_prompt_eval) {
                             if ttft.is_none() {
                                 ttft = Some(start.elapsed().as_millis() as u64);
                             }
@@ -369,7 +392,7 @@ impl Provider for OllamaProvider {
         // Flush any trailing line without a final newline.
         if !ended_early && !buf.is_empty() {
             let line = String::from_utf8_lossy(&buf);
-            for pe in parse_line(&line) {
+            for pe in parse_line(&line, &self.last_prompt_eval) {
                 if ttft.is_none() {
                     ttft = Some(start.elapsed().as_millis() as u64);
                 }
@@ -425,6 +448,21 @@ mod tests {
     use super::*;
     use crate::{Message, ToolCall, ToolSpec};
     use serde_json::json;
+    use std::sync::atomic::AtomicU64;
+
+    /// Call `parse_line` with a fresh (zero) `last_prompt_eval`. Used by tests
+    /// that don't exercise the implicit-cache approximation (the first sub-turn:
+    /// prev=0, so cached=0, matching the old behavior).
+    fn parse_first(line: &str) -> Vec<ProviderEvent> {
+        parse_line(line, &AtomicU64::new(0))
+    }
+
+    /// Call `parse_line` with a shared `last_prompt_eval` across multiple
+    /// sub-turns, so the implicit-cache approximation sees a growing prefix.
+    fn parse_seq(lines: &[&str]) -> Vec<Vec<ProviderEvent>> {
+        let le = AtomicU64::new(0);
+        lines.iter().map(|l| parse_line(l, &le)).collect()
+    }
 
     #[test]
     fn new_uses_default_base_url() {
@@ -560,7 +598,7 @@ mod tests {
     fn parses_content_delta_line() {
         let line = r#"{"model":"glm-5.2:cloud","message":{"role":"assistant","content":"Hel"},"done":false}"#;
         assert_eq!(
-            parse_line(line),
+            parse_first(line),
             vec![ProviderEvent::TextDelta("Hel".into())]
         );
     }
@@ -569,7 +607,7 @@ mod tests {
     fn thinking_only_line_yields_none() {
         let line =
             r#"{"message":{"role":"assistant","content":"","thinking":"reasoning"},"done":false}"#;
-        assert!(parse_line(line).is_empty());
+        assert!(parse_first(line).is_empty());
     }
 
     #[test]
@@ -578,7 +616,7 @@ mod tests {
         // both surface as a Usage event ahead of Done.
         let line = r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":124,"eval_count":58}"#;
         assert_eq!(
-            parse_line(line),
+            parse_first(line),
             vec![
                 ProviderEvent::Usage(Usage {
                     input_tokens: 124,
@@ -595,7 +633,7 @@ mod tests {
         // Only eval_count present → input defaults to 0, still emits Usage.
         let line = r#"{"message":{"role":"assistant","content":""},"done":true,"eval_count":58}"#;
         assert_eq!(
-            parse_line(line),
+            parse_first(line),
             vec![
                 ProviderEvent::Usage(Usage {
                     input_tokens: 0,
@@ -611,7 +649,7 @@ mod tests {
     fn done_line_without_counts_yields_only_done() {
         let line =
             r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop"}"#;
-        assert_eq!(parse_line(line), vec![ProviderEvent::Done]);
+        assert_eq!(parse_first(line), vec![ProviderEvent::Done]);
     }
 
     #[test]
@@ -621,7 +659,7 @@ mod tests {
         // Done).
         let line = r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"length","prompt_eval_count":124,"eval_count":4096}"#;
         assert_eq!(
-            parse_line(line),
+            parse_first(line),
             vec![
                 ProviderEvent::Usage(Usage {
                     input_tokens: 124,
@@ -641,7 +679,7 @@ mod tests {
         // agent, so a stray emission would double-count. Content still surfaces.
         let line = r#"{"message":{"role":"assistant","content":"hi"},"done":false,"prompt_eval_count":100,"eval_count":50}"#;
         assert_eq!(
-            parse_line(line),
+            parse_first(line),
             vec![ProviderEvent::TextDelta("hi".into())]
         );
     }
@@ -649,23 +687,23 @@ mod tests {
     #[test]
     fn error_line_yields_error() {
         assert_eq!(
-            parse_line(r#"{"error":"Unauthorized"}"#),
+            parse_first(r#"{"error":"Unauthorized"}"#),
             vec![ProviderEvent::Error("Unauthorized".into())]
         );
     }
 
     #[test]
     fn empty_and_malformed_lines_yield_none() {
-        assert!(parse_line("").is_empty());
-        assert!(parse_line("   ").is_empty());
-        assert!(parse_line("not json").is_empty());
+        assert!(parse_first("").is_empty());
+        assert!(parse_first("   ").is_empty());
+        assert!(parse_first("not json").is_empty());
     }
 
     #[test]
     fn parses_tool_call_line() {
         let line = r#"{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"read_file","arguments":{"path":"a.txt"}}}]},"done":false}"#;
         assert_eq!(
-            parse_line(line),
+            parse_first(line),
             vec![ProviderEvent::ToolCall(ToolCall {
                 id: "".into(),
                 name: "read_file".into(),
@@ -680,7 +718,7 @@ mod tests {
         // object; it must be decoded to the object so dispatch sees real args.
         let line = r#"{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"read_file","arguments":"{\"path\":\"a.txt\"}"}}]},"done":false}"#;
         assert_eq!(
-            parse_line(line),
+            parse_first(line),
             vec![ProviderEvent::ToolCall(ToolCall {
                 id: "".into(),
                 name: "read_file".into(),
@@ -694,7 +732,7 @@ mod tests {
         // Missing arguments → {}.
         let missing = r#"{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"list_dir"}}]},"done":false}"#;
         assert_eq!(
-            parse_line(missing),
+            parse_first(missing),
             vec![ProviderEvent::ToolCall(ToolCall {
                 id: "".into(),
                 name: "list_dir".into(),
@@ -704,7 +742,7 @@ mod tests {
         // A non-JSON string → {} (rather than an unusable raw string).
         let garbage = r#"{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"list_dir","arguments":"not json"}}]},"done":false}"#;
         assert_eq!(
-            parse_line(garbage),
+            parse_first(garbage),
             vec![ProviderEvent::ToolCall(ToolCall {
                 id: "".into(),
                 name: "list_dir".into(),
@@ -715,7 +753,7 @@ mod tests {
         // object args; an array/scalar is unusable).
         let non_object = r#"{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"list_dir","arguments":"[1,2]"}}]},"done":false}"#;
         assert_eq!(
-            parse_line(non_object),
+            parse_first(non_object),
             vec![ProviderEvent::ToolCall(ToolCall {
                 id: "".into(),
                 name: "list_dir".into(),
@@ -728,7 +766,7 @@ mod tests {
     fn parses_text_then_done_as_two_events() {
         let line = r#"{"message":{"role":"assistant","content":"hi"},"done":true}"#;
         assert_eq!(
-            parse_line(line),
+            parse_first(line),
             vec![ProviderEvent::TextDelta("hi".into()), ProviderEvent::Done]
         );
     }
@@ -874,5 +912,70 @@ mod tests {
             matches!(got.last(), Some(ProviderEvent::Error(e)) if e.contains("429")),
             "expected an HTTP 429 Error, got {got:?}"
         );
+    }
+
+    #[test]
+    fn implicit_cache_approx_first_subturn_has_zero_cached() {
+        // First sub-turn: prev=0, so cached=min(curr,0)=0 (nothing warm yet).
+        let out = parse_first(
+            r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":12000,"eval_count":40}"#,
+        );
+        assert_eq!(
+            out,
+            vec![
+                ProviderEvent::Usage(Usage {
+                    input_tokens: 12000,
+                    output_tokens: 40,
+                    cached: 0
+                }),
+                ProviderEvent::Done
+            ]
+        );
+    }
+
+    #[test]
+    fn implicit_cache_approx_second_subturn_credits_overlap() {
+        // Two sub-turns: 12k then 13k tokens. The second credits min(13k,12k)=12k
+        // as cached (the warm prefix overlap), input stays the full 13k.
+        let out = parse_seq(&[
+            r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":12000,"eval_count":40}"#,
+            r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":13000,"eval_count":10}"#,
+        ]);
+        // First sub-turn: cached 0 (prev 0).
+        assert!(matches!(
+            out[0][0],
+            ProviderEvent::Usage(Usage {
+                cached: 0,
+                input_tokens: 12000,
+                output_tokens: 40
+            })
+        ));
+        // Second sub-turn: cached 12000 (min(13000, 12000)), input 13000.
+        assert!(matches!(
+            out[1][0],
+            ProviderEvent::Usage(Usage {
+                cached: 12000,
+                input_tokens: 13000,
+                output_tokens: 10
+            })
+        ));
+    }
+
+    #[test]
+    fn implicit_cache_approx_shrinking_prompt_credits_smaller_overlap() {
+        // A turn whose prompt is SMALLER than the previous (e.g. after eviction)
+        // credits min(curr, prev) = curr (all of it warm).
+        let out = parse_seq(&[
+            r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":50000,"eval_count":40}"#,
+            r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":30000,"eval_count":10}"#,
+        ]);
+        assert!(matches!(
+            out[1][0],
+            ProviderEvent::Usage(Usage {
+                cached: 30000,
+                input_tokens: 30000,
+                output_tokens: 10
+            })
+        ));
     }
 }
