@@ -23,6 +23,8 @@ pub enum Command {
     Quit,
     OpenDrawer(DrawerId),
     NewSession,
+    /// Explicitly trigger context compaction on the current event log.
+    CompactNow,
     /// Rename the active session. Empty string = "prompt me" (the bin seeds the
     /// palette in Direct phase with `:session rename `); non-empty = apply directly.
     RenameSession(String),
@@ -73,6 +75,7 @@ pub fn parse_command(raw: &str) -> Command {
         "companion off" => Command::CompanionDisable,
         // --- flat commands ---
         "q" | "quit" => Command::Quit,
+        "compact" => Command::CompactNow,
         "config" => Command::OpenConfig,
         rest if rest == "delegate" || rest.starts_with("delegate ") => {
             Command::Delegate(rest.strip_prefix("delegate").unwrap().trim().to_string())
@@ -85,6 +88,12 @@ pub fn parse_command(raw: &str) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_compact_command() {
+        assert_eq!(parse_command(":compact"), Command::CompactNow);
+        assert_eq!(parse_command("compact"), Command::CompactNow);
+    }
 
     #[test]
     fn parses_known_commands_with_or_without_colon() {
