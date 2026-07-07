@@ -12,6 +12,7 @@ pub mod shell;
 pub mod show;
 pub mod tasks;
 pub mod write;
+pub mod subagent_diff;
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
