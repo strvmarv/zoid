@@ -318,7 +318,7 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
 
     // Pulse-on-appear: bright for 300ms after the indicator first shows,
     // then settle to a dimmer steady-state.
-    const PULSE_MS: u128 = 300;
+    const PULSE_MS: u128 = 600;
     let tool_fg = match state.tool_started_at {
         Some(start) if start.elapsed().as_millis() < PULSE_MS => color::WARN,
         _ => color::WARN_DIM,
