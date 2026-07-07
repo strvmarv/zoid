@@ -2,7 +2,6 @@
 //! SSE `/events` stream. All threads are std threads — no tokio.
 
 use crate::hub::{CompanionHub, Frame};
-use crate::snapshot::DashboardSnapshot;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -193,7 +192,6 @@ pub(crate) struct SseReader {
     hub: Arc<CompanionHub>,
     running: Arc<AtomicBool>,
     last_version: u64,
-    last_snapshot: Option<DashboardSnapshot>,
     last_card: Option<String>,
     buf: Vec<u8>,
     pos: usize,
@@ -206,7 +204,6 @@ impl SseReader {
             hub,
             running,
             last_version: 0,
-            last_snapshot: None,
             last_card: None,
             buf: Vec::new(),
             pos: 0,
@@ -215,14 +212,6 @@ impl SseReader {
     }
 
     fn absorb(&mut self, frame: Frame) {
-        if frame.snapshot != self.last_snapshot {
-            if let Some(s) = &frame.snapshot {
-                let json = serde_json::to_string(s).unwrap_or_default();
-                self.buf
-                    .extend_from_slice(format!("event: dashboard\ndata: {json}\n\n").as_bytes());
-            }
-            self.last_snapshot = frame.snapshot.clone();
-        }
         if frame.card != self.last_card {
             if let Some(c) = &frame.card {
                 let json = serde_json::to_string(c).unwrap_or_default();
@@ -299,8 +288,8 @@ mod tests {
             resp.contains(&format!("Content-Security-Policy: {CSP}")),
             "missing CSP header: {resp}"
         );
-        assert!(resp.contains("id=\"dashboard\""), "missing shell body");
-        // CSP must permit the app's own SSE, else the dashboard is dead on
+        assert!(resp.contains("id=\"card\""), "missing card section: {resp}");
+        // CSP must permit the app's own SSE, else the card host is dead on
         // arrival: connect-src is 'self' (not 'none'), and the shell pulls its
         // JS from a same-origin file so script-src can stay 'self'.
         assert!(
@@ -329,28 +318,13 @@ mod tests {
     }
 
     #[test]
-    fn events_stream_flushes_first_frame_over_http() {
-        // End-to-end over a real socket (not `SseReader` in isolation): proves the
-        // `/events` body reaches the client without waiting for the endless stream
-        // to finish — the flush bug that pinned the dashboard on "waiting for
-        // session…". A `read` here must return the dashboard frame, not block.
+    fn events_stream_flushes_first_card_frame_over_http() {
+        // End-to-end over a real socket: proves the `/events` body reaches the
+        // client without waiting for the endless stream to finish — the flush
+        // bug that pinned the card host on "waiting…". A `read` here must
+        // return the card frame, not block.
         let hub = CompanionHub::new();
-        hub.publish_snapshot(DashboardSnapshot {
-            session_name: "e2e".into(),
-            model: "m".into(),
-            provider: "p".into(),
-            cwd: "/".into(),
-            ctx_used: 0,
-            ctx_ceiling: 0,
-            session_tokens: 0,
-            cached_tokens: 0,
-            cache_supported: false,
-            tasks_len: 0,
-            busy: false,
-            tiers: vec![],
-            churn: vec![],
-            updated_ms: 0,
-        });
+        hub.publish_card("<b>e2e card</b>".into());
         let server = start(hub, 0, "tok123".into()).unwrap();
 
         let mut s = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
@@ -362,7 +336,7 @@ mod tests {
         .unwrap();
 
         // Accumulate a couple of reads; each must return promptly (the timeout is
-        // the failure mode). The status line + dashboard frame arrive right away.
+        // the failure mode). The status line + card frame arrive right away.
         let mut acc = String::new();
         let mut buf = [0u8; 1024];
         for _ in 0..3 {
@@ -371,7 +345,7 @@ mod tests {
                 Ok(n) => acc.push_str(&String::from_utf8_lossy(&buf[..n])),
                 Err(_) => break,
             }
-            if acc.contains("event: dashboard") {
+            if acc.contains("event: card") {
                 break;
             }
         }
@@ -380,12 +354,9 @@ mod tests {
             acc.contains("text/event-stream"),
             "wrong content-type: {acc}"
         );
+        assert!(acc.contains("event: card"), "no card frame: {acc}");
         assert!(
-            acc.contains("event: dashboard"),
-            "no dashboard frame: {acc}"
-        );
-        assert!(
-            acc.contains("\"session_name\":\"e2e\""),
+            acc.contains("e2e card"),
             "frame missing data: {acc}"
         );
 
@@ -424,42 +395,26 @@ mod tests {
     }
 
     #[test]
-    fn sse_reader_emits_dashboard_then_card_frames() {
-        use crate::snapshot::DashboardSnapshot;
+    fn sse_reader_emits_card_frames() {
         let hub = CompanionHub::new();
-        // Publish a snapshot BEFORE the reader starts, so the first read returns
+        // Publish a card BEFORE the reader starts, so the first read returns
         // it immediately from `current()` without blocking.
-        hub.publish_snapshot(DashboardSnapshot {
-            session_name: "s".into(),
-            model: "m".into(),
-            provider: "p".into(),
-            cwd: "/".into(),
-            ctx_used: 5,
-            ctx_ceiling: 10,
-            session_tokens: 0,
-            cached_tokens: 0,
-            cache_supported: false,
-            tasks_len: 0,
-            busy: false,
-            tiers: vec![],
-            churn: vec![1, 2],
-            updated_ms: 0,
-        });
+        hub.publish_card("<b>first</b>".into());
         let running = Arc::new(AtomicBool::new(true));
         let mut reader = SseReader::new(hub.clone(), running.clone());
 
         let mut buf = [0u8; 4096];
         let n = reader.read(&mut buf).unwrap();
         let frame = String::from_utf8_lossy(&buf[..n]).to_string();
-        assert!(frame.contains("event: dashboard"), "got: {frame}");
-        assert!(frame.contains("\"churn\":[1,2]"), "got: {frame}");
+        assert!(frame.contains("event: card"), "got: {frame}");
+        assert!(frame.contains("<b>first</b>"), "got: {frame}");
 
-        // Now push a card; the next read should surface it.
-        hub.publish_card("<b>card</b>".into());
+        // Now push a second card; the next read should surface it.
+        hub.publish_card("<i>second</i>".into());
         let n = reader.read(&mut buf).unwrap();
         let frame = String::from_utf8_lossy(&buf[..n]).to_string();
         assert!(frame.contains("event: card"), "got: {frame}");
-        assert!(frame.contains("<b>card</b>"), "got: {frame}");
+        assert!(frame.contains("<i>second</i>"), "got: {frame}");
 
         // When running flips false, read returns EOF.
         running.store(false, Ordering::Relaxed);

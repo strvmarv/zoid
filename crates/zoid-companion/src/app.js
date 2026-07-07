@@ -1,41 +1,11 @@
-// Companion dashboard client. Served same-origin as /s/<token>/app.js so the
-// page needs no inline <script> — which lets the shell CSP use `script-src
-// 'self'` (no 'unsafe-inline'). This is the only JS that runs in the
-// token-bearing origin; agent card JS runs isolated in a sandboxed iframe (see
-// the `card` handler below).
-const dash = document.getElementById("dashboard");
+// Companion card host. Served same-origin as /s/<token>/app.js so the page
+// needs no inline <script> — which lets the shell CSP use `script-src 'self'`
+// (no 'unsafe-inline'). This is the only JS that runs in the token-bearing
+// origin; agent card JS runs isolated in a sandboxed iframe (see the `card`
+// handler below).
 const card = document.getElementById("card");
 
-// Escape interpolated *metric* text before it touches innerHTML. These fields
-// (provider/model/session name, tier labels) are data, not markup.
-const esc = (s) =>
-  String(s).replace(
-    /[&<>"']/g,
-    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
-  );
-
 const es = new EventSource("events");
-
-es.addEventListener("dashboard", (e) => {
-  const d = JSON.parse(e.data);
-  const pct = d.ctx_ceiling
-    ? Math.min(100, Math.round((d.ctx_used / d.ctx_ceiling) * 100))
-    : 0;
-  const tiers = (d.tiers || [])
-    .map(
-      (t) =>
-        `<div><span class="k">${esc(t.label)}</span> <span class="v">${t.tokens}</span>${
-          t.cold ? " · cold" : ""
-        }</div>`
-    )
-    .join("");
-  dash.innerHTML =
-    `<div class="k">${esc(d.provider)} · ${esc(d.model)} · ${esc(d.session_name)}</div>` +
-    `<div class="v">${d.ctx_used} / ${d.ctx_ceiling} (${pct}%)</div>` +
-    `<div class="bar"><i style="width:${pct}%"></i></div>` +
-    `<div class="k">tiers</div>${tiers}` +
-    `<div class="k">tasks: ${d.tasks_len}${d.busy ? " · busy" : ""}</div>`;
-});
 
 // The card is raw, agent-authored HTML by design (the `show` tool), and it may
 // be interactive — its own inline scripts run. To let that happen without
@@ -44,8 +14,9 @@ es.addEventListener("dashboard", (e) => {
 // gets an opaque origin (so its scripts execute — the shell CSP does not apply
 // to it), while `sandbox="allow-scripts"` (no `allow-same-origin`, no
 // `allow-top-navigation`) walls it off: card JS cannot read this page's URL
-// (the session token), the dashboard DOM, or the SSE stream, and cannot redirect
-// the top page. Latest-only: one iframe, its `src` swapped on each new card.
+// (the session token), the card host DOM, or the SSE stream, and cannot
+// redirect the top page. Latest-only: one iframe, its `src` swapped on each
+// new card.
 let frame = null;
 
 // Appended to every card document so the parent can size the frame to its

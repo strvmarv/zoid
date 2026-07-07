@@ -1,14 +1,12 @@
-//! The async↔blocking bridge. The render loop (async) publishes state; the
+//! The async↔blocking bridge. The render loop (async) publishes cards; the
 //! blocking SSE reader threads park on the condvar until the version bumps.
 
-use crate::snapshot::DashboardSnapshot;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 #[derive(Default)]
 struct Latest {
-    snapshot: Option<DashboardSnapshot>,
     card: Option<String>,
     version: u64,
 }
@@ -16,7 +14,6 @@ struct Latest {
 #[derive(Clone, Debug)]
 pub struct Frame {
     pub version: u64,
-    pub snapshot: Option<DashboardSnapshot>,
     pub card: Option<String>,
 }
 
@@ -43,17 +40,6 @@ impl CompanionHub {
         self.enabled.load(Ordering::Relaxed)
     }
 
-    pub fn publish_snapshot(&self, snapshot: DashboardSnapshot) {
-        let mut l = self.inner.lock().unwrap();
-        if l.snapshot.as_ref() == Some(&snapshot) {
-            return; // dedupe: identical state, no wake
-        }
-        l.snapshot = Some(snapshot);
-        l.version += 1;
-        drop(l);
-        self.cv.notify_all();
-    }
-
     pub fn publish_card(&self, html: String) {
         let mut l = self.inner.lock().unwrap();
         l.card = Some(html);
@@ -66,7 +52,6 @@ impl CompanionHub {
         let l = self.inner.lock().unwrap();
         Frame {
             version: l.version,
-            snapshot: l.snapshot.clone(),
             card: l.card.clone(),
         }
     }
@@ -80,7 +65,6 @@ impl CompanionHub {
             .unwrap();
         Frame {
             version: l.version,
-            snapshot: l.snapshot.clone(),
             card: l.card.clone(),
         }
     }
@@ -89,45 +73,15 @@ impl CompanionHub {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::snapshot::DashboardSnapshot;
-
-    fn snap(name: &str) -> DashboardSnapshot {
-        DashboardSnapshot {
-            session_name: name.into(),
-            model: "m".into(),
-            provider: "p".into(),
-            cwd: "/".into(),
-            ctx_used: 0,
-            ctx_ceiling: 0,
-            session_tokens: 0,
-            cached_tokens: 0,
-            cache_supported: false,
-            tasks_len: 0,
-            busy: false,
-            tiers: vec![],
-            churn: vec![],
-            updated_ms: 0,
-        }
-    }
 
     #[test]
-    fn publish_bumps_version_and_current_reflects() {
+    fn publish_card_bumps_version_and_current_reflects() {
         let hub = CompanionHub::new();
         assert_eq!(hub.current().version, 0);
-        hub.publish_snapshot(snap("a"));
+        hub.publish_card("<b>a</b>".into());
         let f = hub.current();
         assert_eq!(f.version, 1);
-        assert_eq!(f.snapshot.unwrap().session_name, "a");
-    }
-
-    #[test]
-    fn identical_snapshot_does_not_bump() {
-        let hub = CompanionHub::new();
-        hub.publish_snapshot(snap("a"));
-        hub.publish_snapshot(snap("a")); // identical → no bump
-        assert_eq!(hub.current().version, 1);
-        hub.publish_snapshot(snap("b")); // different → bump
-        assert_eq!(hub.current().version, 2);
+        assert_eq!(f.card.as_deref(), Some("<b>a</b>"));
     }
 
     #[test]
