@@ -334,6 +334,10 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
     // Always-present indicators: dim glyph when idle, bright + label + rotation
     // when active (mirrors the ● idle / ⠋ working pattern). Never appears or
     // disappears — only the state (dim-static vs bright-animated) changes.
+    // The tool indicator is right-padded to a fixed width so its right edge
+    // (the gap before "working") never moves when switching between idle
+    // ("◐ tool") and active ("◐ shell …") — no horizontal jump.
+    const TOOL_SLOT: usize = 12; // "◐ shell …" + padding
     let (tool_text, tool_fg) = if let Some(name) = &state.active_tool {
         let frame = tool_frame(state.tool_started_at);
         let text = if w < 40 {
@@ -343,8 +347,25 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
         };
         (text, color::WARN)
     } else {
-        // Idle: dim glyph + "tool" label.
+        // Idle: dim glyph + "tool" label, padded to the fixed slot width.
         (format!("{} tool", glyph::RUNNING), color::DIM)
+    };
+    // Right-pad (or truncate) the tool text to the fixed slot so the right
+    // edge is stable — "working" never shifts when the tool text changes.
+    let tool_text = {
+        let tw = tool_text.width();
+        if tw < TOOL_SLOT {
+            format!("{}{}", tool_text, " ".repeat(TOOL_SLOT - tw))
+        } else if tw > TOOL_SLOT {
+            // Truncate from the left (keep the glyph + as much of the name as fits).
+            let mut chars: Vec<char> = tool_text.chars().collect();
+            while chars.iter().collect::<String>().width() > TOOL_SLOT && chars.len() > 2 {
+                chars.remove(1); // remove after the glyph
+            }
+            chars.into_iter().collect::<String>()
+        } else {
+            tool_text
+        }
     };
     let tool_w = tool_text.width();
 
