@@ -1150,7 +1150,7 @@ struct App {
     session_ids: Vec<Ulid>,
     /// One subagent at a time (spec §6): set while a `:delegate` dispatch (or a
     /// verb-picked task) is in flight; cleared when its `DelegationResult` lands.
-    delegating: bool,
+    in_flight_subagents: std::collections::HashSet<String>,
     /// The reply channel for an in-flight `ask_user` question (Task 11): `Some`
     /// while the question overlay is up. Dropping it (Esc-abort) makes the
     /// agent loop record a balanced "[user aborted]" result and end the turn.
@@ -1402,7 +1402,7 @@ async fn main() -> Result<()> {
         tz_offset_secs,
         session_started_ms,
         session_ids: Vec::new(),
-        delegating: false,
+        in_flight_subagents: std::collections::HashSet::new(),
         pending_answer: None,
         turn_cancel: None,
         fetched_model_info: None,
@@ -1667,7 +1667,7 @@ where
         // streaming or delegating. The spinner frame is wall-clock-derived here
         // (kept out of the pure renderer for snapshot determinism); the motion
         // tick below redraws at MOTION_FPS while busy so it actually animates.
-        app.shell.busy = app.streaming || app.delegating;
+        app.shell.busy = app.streaming || !app.in_flight_subagents.is_empty();
         // Feed the companion dashboard when it's enabled. The hub dedupes, so
         // unchanged frames (e.g. motion ticks) don't wake SSE clients.
         if app.companion_hub.is_enabled() {
@@ -1823,9 +1823,11 @@ where
             Some(update) = ui_rx.recv() => {
                 match update {
                     AgentUpdate::Appended(ev) => {
-                        if matches!(ev.kind, EventKind::DelegationResult { .. }) {
-                            app.delegating = false;
-                            app.shell.status_hint = None;
+                        if let EventKind::DelegationResult { subagent_id, .. } = &ev.kind {
+                            app.in_flight_subagents.remove(subagent_id);
+                            if app.in_flight_subagents.is_empty() {
+                                app.shell.status_hint = None;
+                            }
                         }
                         // A tool result ends the in-flight indicator for that tool.
                         if matches!(ev.kind, EventKind::ToolResult { .. }) {
@@ -1877,7 +1879,7 @@ where
                             cancel.cancel();
                         }
                         app.streaming = false;
-                        app.delegating = false;
+                        app.in_flight_subagents.clear();
                         app.yielded = true;
                         app.shell.status_hint =
                             Some("session taken over by another instance".into());
@@ -2015,7 +2017,7 @@ where
                     }
                 }
             }
-            _ = motion_tick.tick(), if app.streaming || app.delegating || app.shell.compacting || app.zoom_changed_at.is_some() => {
+            _ = motion_tick.tick(), if app.streaming || !app.in_flight_subagents.is_empty() || app.shell.compacting || app.zoom_changed_at.is_some() => {
                 // Wake to redraw the blinking caret or the activity spinner (which
                 // animates while streaming OR delegating). Zoom is instant now (the
                 // reveal animation was retired for cross-zoom anchoring), so
@@ -2537,7 +2539,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             .shell
             .scroll_to_offset(app.last_conv_max_scroll, app.last_conv_max_scroll),
         Action::Submit => {
-            if app.streaming || app.delegating || app.yielded {
+            if app.streaming || !app.in_flight_subagents.is_empty() || app.yielded {
                 if app.yielded {
                     app.shell.status_hint = Some("session taken over — :new or :resume".into());
                 }
@@ -2658,7 +2660,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             app.pending_takeover = Some(sid);
         }
         Action::SessionPick => {
-            if app.streaming || app.delegating {
+            if app.streaming || !app.in_flight_subagents.is_empty() {
                 app.shell.status_hint = Some("finish the current turn first".into());
                 app.shell.close_overlay();
                 return Ok(false);
@@ -3509,7 +3511,7 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             Ok(false)
         }
         Command::NewSession => {
-            if app.streaming || app.delegating {
+            if app.streaming || !app.in_flight_subagents.is_empty() {
                 app.shell.status_hint = Some("finish the current turn first".into());
                 app.shell.close_overlay();
                 return Ok(false);
@@ -3622,7 +3624,7 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
 /// DelegationResult folds back as a card. (Trivial edits use the normal inline
 /// chat path — this is the explicit delegate path only.)
 fn start_delegation(app: &mut App, task: String) {
-    if app.streaming || app.delegating {
+    if app.streaming || !app.in_flight_subagents.is_empty() {
         app.shell.status_hint = Some("busy · one subagent at a time".into());
         return;
     }
@@ -3634,10 +3636,10 @@ fn start_delegation(app: &mut App, task: String) {
         app.shell.status_hint = Some("usage: :delegate <task>".into());
         return;
     }
-    app.delegating = true;
     let sub_ulid = Ulid::new();
     let sub_id = format!("sub-{sub_ulid}");
-    app.shell.status_hint = Some(format!("{} delegating…", zoid_tui::tokens::glyph::RUNNING));
+    app.in_flight_subagents.insert(sub_id.clone());
+    app.shell.status_hint = Some(format!("{} {} subagent running…", zoid_tui::tokens::glyph::RUNNING, app.in_flight_subagents.len()));
 
     // Create the isolated worktree up front so a genuine failure (a real repo
     // where worktree creation failed) can surface a hint; "not a git repo"
@@ -4356,7 +4358,7 @@ mod tests {
             tz_offset_secs: 0,
             session_started_ms: 0,
             session_ids: Vec::new(),
-            delegating: false,
+            in_flight_subagents: std::collections::HashSet::new(),
             pending_answer: None,
             turn_cancel: None,
             fetched_model_info: None,
@@ -4586,7 +4588,7 @@ mod tests {
 
     /// Regression for the busy-guard bug: `Action::Submit` must be a no-op
     /// while a delegation is in flight (`app.delegating`), symmetric with
-    /// `start_delegation`'s `app.streaming || app.delegating` check. Before the
+    /// `start_delegation`'s `app.streaming || !app.in_flight_subagents.is_empty()` check. Before the
     /// fix, `Submit` only checked `app.streaming`, so a chat turn could be
     /// submitted while a subagent delegation was running — both turns would
     /// then race to send `AgentUpdate::TurnComplete` on the same `ui_tx`,
@@ -4594,7 +4596,7 @@ mod tests {
     #[tokio::test]
     async fn submit_is_noop_while_delegating() {
         let mut app = test_app().await;
-        app.delegating = true;
+        app.in_flight_subagents.insert("sub-test".into());
         app.textarea = make_input(TextArea::from(vec!["hello".to_string()]));
 
         let quit = handle_action(&mut app, zoid_tui::route::Action::Submit)
@@ -4603,8 +4605,8 @@ mod tests {
 
         assert!(!quit, "Submit must not signal quit");
         assert!(
-            app.delegating,
-            "delegating flag must be untouched by a blocked Submit"
+            !app.in_flight_subagents.is_empty(),
+            "in_flight set must be untouched by a blocked Submit"
         );
         assert!(
             !app.streaming,
@@ -4620,7 +4622,7 @@ mod tests {
 
     /// Regression for I-1: `Action::SessionPick` must be a no-op while a
     /// delegation is in flight, symmetric with `Submit`/`start_delegation`'s
-    /// `app.streaming || app.delegating` guard. Before the fix, `SessionPick`
+    /// `app.streaming || !app.in_flight_subagents.is_empty()` guard. Before the fix, `SessionPick`
     /// only checked `app.streaming`, so a mid-delegation session switch would
     /// let the still-running subagent push session A's events into session
     /// B's in-memory log via `AgentUpdate::Appended`.
@@ -4638,7 +4640,7 @@ mod tests {
         app.session_ids = vec![other_id];
         app.shell.session_selected = 0;
 
-        app.delegating = true;
+        app.in_flight_subagents.insert("sub-test".into());
         let quit = handle_action(&mut app, zoid_tui::route::Action::SessionPick)
             .await
             .unwrap();
@@ -4653,8 +4655,8 @@ mod tests {
             "events must not be swapped in while delegating"
         );
         assert!(
-            app.delegating,
-            "delegating flag must be untouched by a blocked SessionPick"
+            !app.in_flight_subagents.is_empty(),
+            "in_flight set must be untouched by a blocked SessionPick"
         );
         assert_eq!(
             app.shell.status_hint.as_deref(),
@@ -4669,7 +4671,7 @@ mod tests {
     async fn new_session_is_noop_while_delegating() {
         let mut app = test_app().await;
         let original_session_id = app.session_id;
-        app.delegating = true;
+        app.in_flight_subagents.insert("sub-test".into());
 
         let quit = exec_command(&mut app, zoid_tui::command::Command::NewSession)
             .await
@@ -4685,8 +4687,8 @@ mod tests {
             "events must not be cleared/reset while delegating"
         );
         assert!(
-            app.delegating,
-            "delegating flag must be untouched by a blocked NewSession"
+            !app.in_flight_subagents.is_empty(),
+            "in_flight set must be untouched by a blocked NewSession"
         );
         assert_eq!(
             app.shell.status_hint.as_deref(),
@@ -4706,7 +4708,7 @@ mod tests {
 
         // `:delegate` is blocked while yielded — no subagent starts.
         start_delegation(&mut app, "do something".into());
-        assert!(!app.delegating, "delegate must not start while yielded");
+        assert!(!!app.in_flight_subagents.is_empty(), "delegate must not start while yielded");
         assert_eq!(
             app.shell.status_hint.as_deref(),
             Some("session taken over — :new or :resume"),
