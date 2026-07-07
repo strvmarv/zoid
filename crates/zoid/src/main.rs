@@ -212,6 +212,7 @@ fn import_legacy_if_present(
 fn make_input(textarea: TextArea<'static>) -> TextArea<'static> {
     let mut textarea = textarea;
     textarea.set_cursor_line_style(ratatui::style::Style::default());
+    textarea.set_wrap_mode(ratatui_textarea::WrapMode::WordOrGlyph);
     textarea
 }
 
@@ -4023,6 +4024,25 @@ mod tests {
             !has_underline(&plain),
             "make_input must disable the cursor-line underline"
         );
+    }
+
+    #[test]
+    fn make_input_sets_word_or_glyph_wrap() {
+        use ratatui::widgets::Widget;
+        let ta = make_input(TextArea::from(vec!["a very long line that exceeds twenty columns".to_string()]));
+        let backend = TestBackend::new(20, 5);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| f.render_widget(&ta, f.area())).unwrap();
+        // With WordOrGlyph wrap, the long line spans rows beyond the first.
+        // Check that the second buffer row (y==1) has non-space content —
+        // without wrap, only row 0 would carry text and rows 1+ would be blank.
+        let buf = term.backend().buffer();
+        let row1_has_text = (0..buf.area().width)
+            .any(|x| {
+                let s = buf.cell((x, 1)).map(|c| c.symbol()).unwrap_or(" ");
+                !s.is_empty() && s != " "
+            });
+        assert!(row1_has_text, "wrapped line must occupy row 1 (wrap mode active)");
     }
 
     fn env_of<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
