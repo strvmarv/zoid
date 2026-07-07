@@ -7,6 +7,7 @@ pub mod edit;
 pub mod read;
 pub mod recall;
 pub mod search;
+pub mod subagent_dispatch;
 pub mod shell;
 pub mod show;
 pub mod tasks;
@@ -206,5 +207,18 @@ mod tests {
                 t.name()
             );
         }
+    }
+
+    #[test]
+    fn registry_excludes_chat_only_tools() {
+        let reg = registry();
+        assert!(
+            !reg.iter().any(|t| t.name() == "dispatch_subagent"),
+            "dispatch_subagent must not be in base registry (subagents can't dispatch)"
+        );
+        assert!(
+            !reg.iter().any(|t| t.name() == "subagent_diff"),
+            "subagent_diff must not be in base registry"
+        );
     }
 }
