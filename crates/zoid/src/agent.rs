@@ -886,13 +886,11 @@ async fn run_turn_inner(
                     let sub_id = format!("sub-{sub_ulid}");
 
                     let wt = if want_worktree && std::path::Path::new(".git").exists() {
-                        match crate::worktree::create_worktree(
+                        crate::worktree::create_worktree(
                             std::path::Path::new("."),
                             &format!("sub-{sub_ulid}"),
-                        ) {
-                            Ok(w) => Some(w),
-                            Err(_) => None,
-                        }
+                        )
+                        .ok()
                     } else {
                         None
                     };

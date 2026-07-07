@@ -3649,16 +3649,14 @@ fn start_delegation(app: &mut App, task: String) {
     // where worktree creation failed) can surface a hint; "not a git repo"
     // falls back to the process cwd silently (isolation isn't possible there).
     let wt = if Path::new(".git").exists() {
-        match zoid::worktree::create_worktree(Path::new("."), &format!("sub-{sub_ulid}")) {
-            Ok(w) => Some(w),
-            Err(_) => {
+        zoid::worktree::create_worktree(Path::new("."), &format!("sub-{sub_ulid}"))
+            .inspect_err(|_| {
                 app.shell.status_hint = Some(format!(
                     "{} worktree failed — running in the main tree",
                     zoid_tui::tokens::glyph::WARNING
                 ));
-                None
-            }
-        }
+            })
+            .ok()
     } else {
         None // not a git repo: run in the process cwd, isolation not possible
     };
@@ -4713,7 +4711,7 @@ mod tests {
         // `:delegate` is blocked while yielded — no subagent starts.
         start_delegation(&mut app, "do something".into());
         assert!(
-            !!app.in_flight_subagents.is_empty(),
+            app.in_flight_subagents.is_empty(),
             "delegate must not start while yielded"
         );
         assert_eq!(
