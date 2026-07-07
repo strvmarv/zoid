@@ -316,6 +316,23 @@ impl EventStore {
         Ok(())
     }
 
+    /// Refresh `active_heartbeat` for `id` ONLY if `active_pid` still matches
+    /// (i.e. this process is still the owner). Returns `true` when the row was
+    /// updated (still owner), `false` when zero rows matched (another process
+    /// took over, or the session row is gone). The `false` return is the
+    /// takeover-detection signal the bin uses to yield. Spec §2.3.
+    ///
+    /// Invariant relied on here: there is no `DELETE FROM sessions` anywhere in
+    /// the codebase, so a zero-row match unambiguously means takeover (not row
+    /// deletion). Do not introduce a session-delete path without revisiting this.
+    pub fn heartbeat(&self, id: Ulid, active_pid: i64, active_heartbeat: i64) -> Result<bool> {
+        let n = self.conn.execute(
+            "UPDATE sessions SET active_heartbeat = ?3 WHERE id = ?1 AND active_pid = ?2",
+            params![id.to_string(), active_pid, active_heartbeat],
+        )?;
+        Ok(n == 1)
+    }
+
     /// The stored active mode for a session, or `None` if never set.
     pub fn get_active_mode(&self, id: Ulid) -> Result<Option<String>> {
         let v = self
@@ -921,5 +938,35 @@ mod tests {
         let alive = |_: i64| true;
         assert!(!is_live(true, None, Some(1000), 2000, alive));
         assert!(!is_live(true, Some(99), None, 2000, alive));
+    }
+
+    #[test]
+    fn heartbeat_refreshes_when_still_owner_and_returns_true() {
+        let s = EventStore::open(":memory:").unwrap();
+        let id = Ulid::new();
+        s.insert_session(id, "s", "/r", 1, 1).unwrap();
+        s.set_active(id, true, 1234, 1000).unwrap();
+        // Same PID refreshes → true (still the owner).
+        assert!(s.heartbeat(id, 1234, 2000).unwrap());
+        let row = s.list_session_rows().unwrap().pop().unwrap();
+        assert_eq!(row.active_heartbeat, Some(2000));
+    }
+
+    #[test]
+    fn heartbeat_returns_false_when_taken_over() {
+        let s = EventStore::open(":memory:").unwrap();
+        let id = Ulid::new();
+        s.insert_session(id, "s", "/r", 1, 1).unwrap();
+        s.set_active(id, true, 1234, 1000).unwrap();
+        // Another process takes over (overwrites active_pid).
+        s.set_active(id, true, 5678, 1500).unwrap();
+        // The old process's heartbeat (pid 1234) matches zero rows → false.
+        assert!(!s.heartbeat(id, 1234, 2000).unwrap());
+    }
+
+    #[test]
+    fn heartbeat_returns_false_for_unknown_session() {
+        let s = EventStore::open(":memory:").unwrap();
+        assert!(!s.heartbeat(Ulid::new(), 1234, 1000).unwrap());
     }
 }
