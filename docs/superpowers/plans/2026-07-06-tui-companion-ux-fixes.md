@@ -419,11 +419,21 @@ In `drawer_body_rows`, add:
         DrawerId::Subagents => SUBAGENTS_BODY_ROWS,
 ```
 
-In `drawer_fit_priority`, add (lowest priority — yields first when the rail is short):
+In `drawer_fit_priority`, add Subagents with the **lowest** priority so it collapses first when the rail is short (it's transient; the persistent drawers keep their rows). The existing ranking is Repo=0 (yields first), Context=1, Session=2, Tasks=3 (survives longest). To keep Tasks as the survivor and make Subagents yield first, renumber the whole enum:
 
 ```rust
-        DrawerId::Subagents => 4,
+fn drawer_fit_priority(id: DrawerId) -> u8 {
+    match id {
+        DrawerId::Subagents => 0, // transient — collapses first when the rail is short
+        DrawerId::Repo => 1,
+        DrawerId::Context => 2,
+        DrawerId::Session => 3,
+        DrawerId::Tasks => 4,     // the live plan survives longest
+    }
+}
 ```
+
+(Update the existing four arms' numbers — they were 0/1/2/3, now 1/2/3/4.)
 
 Change `allocate_drawer_bodies` signature to take `subagent_count: u16`:
 
@@ -458,7 +468,7 @@ Add a pass-3 (after the Tasks pass-2 surplus) that grows Subagents toward `subag
     }
 ```
 
-(Note: the existing pass-2 already consumes `surplus` for Tasks; the Subagents pass-3 uses whatever's left. Since `surplus` is `mut`, the Tasks block subtracts from it; the Subagents block uses the remainder. This is correct — Tasks has higher priority (3) than Subagents (4), so Tasks grows first.)
+(Note: the existing pass-2 already consumes `surplus` for Tasks; the Subagents pass-3 uses whatever's left. Since `surplus` is `mut`, the Tasks block subtracts from it; the Subagents block uses the remainder. This is correct — Tasks has higher priority (4) than Subagents (0), so Tasks grows first. The renumber above keeps the "higher number = survives longer" invariant the allocator relies on: the `fill_order` pass-1 grows highest-priority-first, and the Tasks pass-2 surplus runs before the Subagents pass-3.)
 
 In `compute()`, update the call:
 
@@ -770,6 +780,9 @@ Find `Action::Submit` (line ~2540) and replace the guard:
             // for after the turn, as an alternative to ESC-steering.
             if app.streaming || !app.in_flight_subagents.is_empty() {
                 let text = app.textarea.lines().join("\n");
+                if text.trim().is_empty() {
+                    return Ok(false); // don't queue empty — no phantom "queued:" hint
+                }
                 app.pending_message = Some(text.clone());
                 app.textarea = make_input(TextArea::default());
                 app.shell.status_hint = Some(format!("queued: {}", truncate_for_hint(&text)));
