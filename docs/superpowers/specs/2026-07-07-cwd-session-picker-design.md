@@ -72,12 +72,13 @@ Add two flags to the existing `cli::Cli` enum (the `Run` variant already carries
 
 - `--new` — skip the list and picker entirely; always create a fresh session
   for the current CWD, claim it, proceed to `run()`.
-- `--resume <id>` — skip the picker; resolve `<id>` as a ULID, accepting either
-  the full form or the last-4 short form (matching the dashboard's `last4(...)`
-  display). Resolution: list all sessions for the current CWD, find the one
-  whose ULID string ends with `<id>` (when `<id>` is 4 chars) or equals `<id>`
-  (full length). If not found (or ambiguous — multiple sessions share the same
-  last-4), print an error to stderr and exit without entering the TUI.
+- `--resume <id>` — skip the picker; resolve `<id>` as a ULID. Only two forms
+  are accepted: the last-4 short form (exactly 4 chars, matching the dashboard's
+  `last4(...)` display) or the full 26-char ULID. Resolution: list all sessions
+  for the current CWD, find the one whose ULID string ends with `<id>` (when
+  `<id>` is 4 chars) or equals `<id>` (when `<id>` is 26 chars). Any other
+  length, no match, or ambiguity (multiple sessions share the same last-4) →
+  print an error to stderr and exit without entering the TUI.
 
 Both flags are mutually exclusive (using them together is a usage error).
 Neither changes the existing no-flag behavior — the decision flow from §1
@@ -124,8 +125,10 @@ command is unchanged.
 ### §6 Testing
 
 Pure functions to extract and unit-test:
-- `resolve_resume_id(sessions: &[SessionInfo], query: &str) -> Option<Ulid>` —
-  full or last-4 ULID match; returns `None` on no match or ambiguity.
+- `resolve_resume_id(sessions: &[SessionInfo], query: &str) -> Result<Ulid, ResolveError>`
+  — accepts a 4-char last-4 form or a 26-char full ULID. Returns the matching
+  `Ulid`, or an error (`NotFound`, `Ambiguous { candidates }`, `InvalidLength`)
+  so the caller can produce the right stderr message.
 - `pick_choice(sessions: &[SessionInfo], live: &[bool], selected: usize,
   key: Key) -> PickOutcome` — the input handler logic, decoupled from rendering.
   Returns one of `Resume(Ulid)`, `CreateNew`, `Abort`, or `Pending(selected)`.
@@ -145,4 +148,5 @@ covered by the integration of a successful boot.
 - **`--resume` with no sessions for the CWD:** error, no TUI.
 - **`--resume` ambiguity (two sessions share last-4):** error listing both
   full ULIDs, no TUI.
-- **Non-UTF-8 / invalid ULID for `--resume`:** error, no TUI.
+- **`--resume` invalid length (not 4 or 26 chars):** error, no TUI.
+- **`--resume` invalid ULID syntax (26 chars but not a valid ULID):** error, no TUI.
