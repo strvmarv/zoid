@@ -2683,6 +2683,17 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                     app.shell.session_name = info.name;
                     app.session_started_ms = info.created_ts;
                 }
+                // Claim the resumed session and clear any yielded state from
+                // the prior (taken-over) session — `:resume` is the documented
+                // yield escape hatch (symmetric with `:new`). Spec §3.2.
+                app.yielded = false;
+                app.shell.status_hint = None;
+                let self_pid = std::process::id() as i64;
+                app.session
+                    .set_active(sid, true, self_pid, now_ms())
+                    .await
+                    .ok();
+                spawn_heartbeat(app);
             }
             app.shell.close_overlay();
         }
@@ -3503,6 +3514,14 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
                                           // A fresh session has no saved mode yet ⇒ this resets to Chat rather
                                           // than carrying over the previous session's active mode.
             restore_mode_for_session(app).await;
+            // Claim the new session and clear any yielded state from the prior
+            // (taken-over) session — `:new` is the documented yield escape hatch.
+            app.yielded = false;
+            app.shell.status_hint = None;
+            let self_pid = std::process::id() as i64;
+            app.session.set_active(id, true, self_pid, ts).await.ok();
+            // Restart the heartbeat for the new session.
+            spawn_heartbeat(app);
             Ok(false)
         }
         Command::RenameSession(name) => {
@@ -3586,6 +3605,10 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
 fn start_delegation(app: &mut App, task: String) {
     if app.streaming || app.delegating {
         app.shell.status_hint = Some("busy · one subagent at a time".into());
+        return;
+    }
+    if app.yielded {
+        app.shell.status_hint = Some("session taken over — :new or :resume".into());
         return;
     }
     if task.trim().is_empty() {
@@ -4641,6 +4664,40 @@ mod tests {
             app.shell.status_hint.as_deref(),
             Some("finish the current turn first"),
             "blocked NewSession should surface the busy hint"
+        );
+    }
+
+    /// After yield, `:delegate` must not start a subagent against the taken-over
+    /// session (it's a turn-start path, symmetric with `Submit`'s `yielded`
+    /// guard). And `:new` is the documented escape hatch: it must clear
+    /// `yielded` and reclaim the fresh session so the user can keep working.
+    #[tokio::test]
+    async fn delegate_blocked_and_new_clears_yielded() {
+        let mut app = test_app().await;
+        app.yielded = true;
+
+        // `:delegate` is blocked while yielded — no subagent starts.
+        start_delegation(&mut app, "do something".into());
+        assert!(!app.delegating, "delegate must not start while yielded");
+        assert_eq!(
+            app.shell.status_hint.as_deref(),
+            Some("session taken over — :new or :resume"),
+            "blocked delegate should surface the yield hint"
+        );
+
+        // `:new` clears yielded and reclaims the fresh session.
+        let quit = exec_command(&mut app, zoid_tui::command::Command::NewSession)
+            .await
+            .unwrap();
+        assert!(!quit);
+        assert!(!app.yielded, ":new must clear the yielded flag");
+        // Submit is now unblocked (the guard passes) — sanity-check the guard
+        // alone, without spawning a real turn (empty input is a no-op).
+        app.textarea = make_input(ratatui_textarea::TextArea::default());
+        let _ = handle_action(&mut app, zoid_tui::route::Action::Submit).await;
+        assert!(
+            app.shell.status_hint.as_deref() != Some("session taken over — :new or :resume"),
+            "after :new, Submit must not surface the yielded hint"
         );
     }
 
