@@ -301,6 +301,18 @@ fn pid_alive(_pid: i64) -> bool {
     true // non-Unix: no portable check; lean on the heartbeat window.
 }
 
+/// Truncate a queued-message hint to ~40 chars with an ellipsis (mirrors
+/// `derive_session_name`'s truncation).
+fn truncate_for_hint(s: &str) -> String {
+    let one_line = s.lines().next().unwrap_or(s);
+    if one_line.chars().count() > 40 {
+        let head: String = one_line.chars().take(39).collect();
+        format!("{head}\u{2026}")
+    } else {
+        one_line.to_string()
+    }
+}
+
 /// Auto-derive a session name: the first user message truncated to 40 chars,
 /// else `session HH:MM` from the injected timestamp.
 fn derive_session_name(first_user_msg: Option<&str>, ts_ms: i64, tz_offset_secs: i32) -> String {
@@ -1151,6 +1163,10 @@ struct App {
     /// in-flight turn was cancelled and no further turns may start against it.
     /// The user can `:new` or `:resume` elsewhere, or quit. Spec §2.4.
     yielded: bool,
+    /// A message queued while the agent was busy; auto-submitted when the
+    /// current turn ends and no subagents are in flight. ESC (CancelTurn)
+    /// does NOT clear it — the queued message runs after the steered turn.
+    pending_message: Option<String>,
     /// A takeover confirmation in flight: the session id the user is about to
     /// forcibly claim from another instance. Set by `SessionTakeoverConfirm`,
     /// consumed by the "Take over" answer in `QuestionSelect`. Spec §3.2.
@@ -1386,6 +1402,7 @@ async fn main() -> Result<()> {
         tool_started_at: None,
         tool_complete: false,
         yielded: false,
+        pending_message: None,
         pending_takeover: None,
     };
 
@@ -1862,6 +1879,33 @@ where
                         app.turn_cancel = None;
                         // Clear any lingering "cancelling…" hint now the turn ended.
                         app.shell.status_hint = None;
+                        // Consume a queued message if the agent is now fully idle.
+                        if app.in_flight_subagents.is_empty() {
+                            if let Some(text) = app.pending_message.take() {
+                                if !text.trim().is_empty() && !app.yielded {
+                                    let first = !app
+                                        .events
+                                        .iter()
+                                        .any(|e| matches!(e.kind, EventKind::UserMessage { .. }));
+                                    app.record(EventKind::UserMessage { text: text.clone() })
+                                        .await?;
+                                    if first {
+                                        let name = derive_session_name(
+                                            Some(&text),
+                                            now_ms(),
+                                            app.tz_offset_secs,
+                                        );
+                                        app.session
+                                            .rename_session(app.session_id, name.clone())
+                                            .await
+                                            .ok();
+                                        app.shell.session_name = name;
+                                    }
+                                    app.streaming = true;
+                                    spawn_turn(app);
+                                }
+                            }
+                        }
                     }
                     AgentUpdate::SessionTakenOver => {
                         // Fire the turn cancel if a turn is in flight (reuses the
@@ -2548,10 +2592,22 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             .shell
             .scroll_to_offset(app.last_conv_max_scroll, app.last_conv_max_scroll),
         Action::Submit => {
-            if app.streaming || !app.in_flight_subagents.is_empty() || app.yielded {
-                if app.yielded {
-                    app.shell.status_hint = Some("session taken over — :new or :resume".into());
+            // Yielded always blocks (even when not busy) — a taken-over session
+            // can't accept new turns until the user :new or :resume.
+            if app.yielded {
+                app.shell.status_hint = Some("session taken over — :new or :resume".into());
+                return Ok(false);
+            }
+            // Busy (streaming or delegating) but not yielded: stash the message
+            // for after the turn, as an alternative to ESC-steering.
+            if app.streaming || !app.in_flight_subagents.is_empty() {
+                let text = app.textarea.lines().join("\n");
+                if text.trim().is_empty() {
+                    return Ok(false); // don't queue empty — no phantom "queued:" hint
                 }
+                app.pending_message = Some(text.clone());
+                app.textarea = make_input(TextArea::default());
+                app.shell.status_hint = Some(format!("queued: {}", truncate_for_hint(&text)));
                 return Ok(false);
             }
             let text = app.textarea.lines().join("\n");
@@ -2717,6 +2773,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 // the prior (taken-over) session — `:resume` is the documented
                 // yield escape hatch (symmetric with `:new`). Spec §3.2.
                 app.yielded = false;
+                app.pending_message = None;
                 app.shell.status_hint = None;
                 let self_pid = std::process::id() as i64;
                 app.session
@@ -3547,6 +3604,7 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             // Claim the new session and clear any yielded state from the prior
             // (taken-over) session — `:new` is the documented yield escape hatch.
             app.yielded = false;
+            app.pending_message = None;
             app.shell.status_hint = None;
             let self_pid = std::process::id() as i64;
             app.session.set_active(id, true, self_pid, ts).await.ok();
@@ -4450,6 +4508,7 @@ mod tests {
             tool_started_at: None,
             tool_complete: false,
             yielded: false,
+            pending_message: None,
             pending_takeover: None,
         }
     }
@@ -4669,15 +4728,11 @@ mod tests {
         assert!(is_live(true, Some(99), Some(1000), 1000, alive));
     }
 
-    /// Regression for the busy-guard bug: `Action::Submit` must be a no-op
-    /// while a delegation is in flight (`app.delegating`), symmetric with
-    /// `start_delegation`'s `app.streaming || !app.in_flight_subagents.is_empty()` check. Before the
-    /// fix, `Submit` only checked `app.streaming`, so a chat turn could be
-    /// submitted while a subagent delegation was running — both turns would
-    /// then race to send `AgentUpdate::TurnComplete` on the same `ui_tx`,
-    /// letting the subagent's completion clear `app.streaming` mid-chat-turn.
+    /// Submit while delegating queues the message instead of being a noop.
+    /// The textarea is cleared, the message is stashed, and a "queued:" hint
+    /// appears — but no turn is spawned and no event is recorded.
     #[tokio::test]
-    async fn submit_is_noop_while_delegating() {
+    async fn submit_while_delegating_queues_message() {
         let mut app = test_app().await;
         app.in_flight_subagents.push(SubagentInfo { id: "sub-test".into(), task: "test".into() });
         app.textarea = make_input(TextArea::from(vec!["hello".to_string()]));
@@ -4687,20 +4742,12 @@ mod tests {
             .unwrap();
 
         assert!(!quit, "Submit must not signal quit");
-        assert!(
-            !app.in_flight_subagents.is_empty(),
-            "in_flight set must be untouched by a blocked Submit"
-        );
-        assert!(
-            !app.streaming,
-            "streaming must stay false — no turn was spawned"
-        );
-        assert!(
-            app.events.is_empty(),
-            "no UserMessage should be recorded while delegating"
-        );
-        // The textarea must be left alone (not cleared) since nothing was submitted.
-        assert_eq!(app.textarea.lines(), &["hello".to_string()]);
+        assert!(!app.in_flight_subagents.is_empty(), "in_flight untouched");
+        assert!(!app.streaming, "no turn spawned");
+        assert!(app.events.is_empty(), "no UserMessage recorded yet");
+        assert_eq!(app.pending_message.as_deref(), Some("hello"), "message queued");
+        assert!(app.textarea.lines()[0].is_empty(), "textarea cleared");
+        assert!(app.shell.status_hint.as_deref().unwrap().contains("queued"));
     }
 
     /// Regression for I-1: `Action::SessionPick` must be a no-op while a
