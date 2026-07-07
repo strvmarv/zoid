@@ -28,6 +28,11 @@ fn fts_content(kind: &crate::event::EventKind) -> Option<String> {
 impl EventStore {
     pub fn open(path: &str) -> Result<Self> {
         let conn = Connection::open(path)?;
+        // WAL allows concurrent readers + one writer without blocking (spec §1).
+        // `busy_timeout` makes a contended writer retry for 5s before returning
+        // SQLITE_BUSY — turns "two zoids → random turn failures" into brief stalls.
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "busy_timeout", 5000)?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS events (
                 id         TEXT PRIMARY KEY,
@@ -725,5 +730,39 @@ mod tests {
             .query_row("SELECT count(*) FROM events_fts", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn open_sets_wal_journal_mode_and_busy_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("z.db");
+        let p = path.to_str().unwrap();
+        let s = EventStore::open(p).unwrap();
+        let mode: String = s
+            .conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
+        let timeout: i64 = s
+            .conn
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(timeout, 5000);
+    }
+
+    #[test]
+    fn wal_mode_persists_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("z.db");
+        let p = path.to_str().unwrap();
+        {
+            let _s = EventStore::open(p).unwrap();
+        }
+        let s2 = EventStore::open(p).unwrap();
+        let mode: String = s2
+            .conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
     }
 }
