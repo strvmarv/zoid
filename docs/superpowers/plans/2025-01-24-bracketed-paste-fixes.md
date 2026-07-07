@@ -42,7 +42,7 @@ use crossterm::{
 
 - [ ] **Step 2: Enable at startup**
 
-Find the line (~line 1422):
+Find the line (~line 1756):
 
 ```rust
 execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
@@ -61,7 +61,7 @@ execute!(
 
 - [ ] **Step 3: Disable on exit**
 
-Find the cleanup block (~line 1450):
+Find the cleanup block (~line 1785):
 
 ```rust
 let _ = execute!(
@@ -84,7 +84,7 @@ let _ = execute!(
 
 - [ ] **Step 4: Handle Event::Paste in the event loop**
 
-Find the `term_events.next()` match block (~line 1797). Before the `Some(Ok(_))` catch-all arm, add a paste arm:
+Find the `term_events.next()` match block (~line 2150). Before the `Some(Ok(_))` catch-all arm, add a paste arm:
 
 ```rust
 Some(Ok(CEvent::Paste(text))) => {
