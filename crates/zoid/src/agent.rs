@@ -136,6 +136,11 @@ pub enum AgentUpdate {
     CompactionStarted,
     /// Automated compaction finished (after the burst).
     CompactionComplete,
+    /// The current session was taken over by another instance (the heartbeat
+    /// detected another process claimed the row). The bin cancels the in-flight
+    /// turn, sets `yielded`, and surfaces a hint. Spec §2.4. Bin-only — subagents
+    /// never heartbeat and never emit this.
+    SessionTakenOver,
 }
 
 /// The tool specs to advertise to the provider.

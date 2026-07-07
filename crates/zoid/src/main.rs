@@ -278,6 +278,28 @@ fn repo_root() -> String {
         .unwrap_or_else(|| ".".into())
 }
 
+/// Whether the given OS PID is currently alive. `kill(pid, 0)` succeeds when the
+/// process exists, returns `ESRCH` when it's dead, and `EPERM` when it exists but
+/// isn't ours (treated as alive — we can't prove it's dead, and a stale-but-alive
+/// row is reclaimable via the heartbeat window anyway). Injected into `is_live`
+/// so callers can substitute a test double. Spec §2.2.
+#[cfg(unix)]
+fn pid_alive(pid: i64) -> bool {
+    use nix::sys::signal::kill;
+    use nix::unistd::Pid;
+    match kill(Pid::from_raw(pid as i32), None) {
+        Ok(()) => true,
+        Err(nix::errno::Errno::ESRCH) => false,
+        Err(nix::errno::Errno::EPERM) => true,
+        Err(_) => true, // unknown failure → lean on the heartbeat window
+    }
+}
+
+#[cfg(not(unix))]
+fn pid_alive(_pid: i64) -> bool {
+    true // non-Unix: no portable check; lean on the heartbeat window.
+}
+
 /// Auto-derive a session name: the first user message truncated to 40 chars,
 /// else `session HH:MM` from the injected timestamp.
 fn derive_session_name(first_user_msg: Option<&str>, ts_ms: i64, tz_offset_secs: i32) -> String {
@@ -1156,6 +1178,10 @@ struct App {
     /// `CompactionComplete` arrived; the indicator stays visible until the 3s
     /// minimum display duration elapses (checked per-frame in `run()`).
     compaction_complete: bool,
+    /// Set when this process's session was taken over by another instance; the
+    /// in-flight turn was cancelled and no further turns may start against it.
+    /// The user can `:new` or `:resume` elsewhere, or quit. Spec §2.4.
+    yielded: bool,
 }
 
 impl App {
@@ -1215,23 +1241,51 @@ async fn main() -> Result<()> {
             .context("session DB path is not valid UTF-8")?,
     )?;
 
-    // Auto-resume the most-recently-touched session for this repo, else create one.
+    // Auto-resume the most-recently-touched session for this repo, else create
+    // one. If the most-recent session is live (another interface holds it),
+    // create a FRESH session instead of colliding. Spec §3.1.
     let sessions = session
         .list_sessions(Some(root.clone()))
         .await
         .unwrap_or_default();
     let first_time_user = sessions.is_empty();
-    let (session_id, session_name, session_started_ms) = if let Some(s) = sessions.first() {
-        session.touch_session(s.id, boot_ts).await.ok();
-        (s.id, s.name.clone(), s.created_ts)
-    } else {
+    let self_pid = std::process::id() as i64;
+    let (session_id, session_name, session_started_ms) = if first_time_user {
+        // No sessions for this repo yet → create one.
         let id = Ulid::new();
         let name = derive_session_name(None, boot_ts, tz_offset_secs);
         session
             .new_session(id, name.clone(), root.clone(), boot_ts)
             .await?;
         (id, name, boot_ts)
+    } else {
+        let s = &sessions[0];
+        let live = zoid_core::store::is_live(
+            s.active,
+            s.active_pid,
+            s.active_heartbeat,
+            boot_ts,
+            pid_alive,
+        );
+        if live {
+            // Another instance is on it → create a fresh session, leave it alone.
+            let id = Ulid::new();
+            let name = derive_session_name(None, boot_ts, tz_offset_secs);
+            session
+                .new_session(id, name.clone(), root.clone(), boot_ts)
+                .await?;
+            (id, name, boot_ts)
+        } else {
+            // Reclaim it: load + touch + claim.
+            session.touch_session(s.id, boot_ts).await.ok();
+            (s.id, s.name.clone(), s.created_ts)
+        }
     };
+    // Claim the session (whether fresh or reclaimed) and start the heartbeat.
+    session
+        .set_active(session_id, true, self_pid, boot_ts)
+        .await
+        .ok();
     let mut events =
         zoid::eventlog::EventLog::from_vec(session.snapshot_session(session_id).await?);
     // #6b: free compacted tool-result bodies on the boot auto-resume path too
@@ -1352,12 +1406,15 @@ async fn main() -> Result<()> {
         companion_hub: zoid_companion::CompanionHub::new(),
         compaction_started_at: None,
         compaction_complete: false,
+        yielded: false,
     };
 
     // Restore the resumed session's persisted active mode (a no-op if that mode
     // no longer exists ⇒ stays Chat) and mirror it onto the shell so the
     // chip/palette are correct before the event loop begins.
     restore_mode_for_session(&mut app).await;
+
+    spawn_heartbeat(&app);
 
     if companion_at_boot {
         enable_companion(&mut app);
@@ -1398,6 +1455,10 @@ async fn main() -> Result<()> {
         LeaveAlternateScreen
     );
     let _ = terminal.show_cursor();
+    // Release the session's active flag on clean exit (best-effort). If the
+    // process is force-killed the flag stays stale and the next evaluator
+    // reclaims it via is_live == false. Spec §2.3.
+    let _ = app.session.set_active(app.session_id, false, 0, 0).await;
     result
 }
 
@@ -1798,6 +1859,18 @@ where
                         app.turn_cancel = None;
                         // Clear any lingering "cancelling…" hint now the turn ended.
                         app.shell.status_hint = None;
+                    }
+                    AgentUpdate::SessionTakenOver => {
+                        // Fire the turn cancel if a turn is in flight (reuses the
+                        // Esc/Ctrl-C path). Stop streaming, mark yielded.
+                        if let Some(cancel) = &app.turn_cancel {
+                            cancel.cancel();
+                        }
+                        app.streaming = false;
+                        app.delegating = false;
+                        app.yielded = true;
+                        app.shell.status_hint =
+                            Some("session taken over by another instance".into());
                     }
                     // Raise the question overlay and hold the reply channel:
                     // the user's answer (or an Esc-abort, which drops `reply`)
@@ -2442,7 +2515,11 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             .shell
             .scroll_to_offset(app.last_conv_max_scroll, app.last_conv_max_scroll),
         Action::Submit => {
-            if app.streaming || app.delegating {
+            if app.streaming || app.delegating || app.yielded {
+                if app.yielded {
+                    app.shell.status_hint =
+                        Some("session taken over — :new or :resume".into());
+                }
                 return Ok(false);
             }
             let text = app.textarea.lines().join("\n");
@@ -3559,6 +3636,35 @@ async fn restore_mode_for_session(app: &mut App) {
     sync_mode_mirror(app);
 }
 
+/// Spawn the 5s heartbeat task for the active session. Each tick refreshes
+/// `active_heartbeat`; if the UPDATE matches zero rows (another process took
+/// over the row), fire the turn cancellation token, set `yielded`, stop the
+/// task, and surface a hint. Spec §2.3/§2.4.
+fn spawn_heartbeat(app: &App) {
+    let session = app.session.clone();
+    let session_id = app.session_id;
+    let pid = std::process::id() as i64;
+    let ui_tx = app.ui_tx.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_millis(
+            zoid_core::store::HEARTBEAT_INTERVAL_MS as u64,
+        ));
+        tick.tick().await; // consume the immediate first tick
+        loop {
+            tick.tick().await;
+            let now = now_ms();
+            match session.heartbeat(session_id, pid, now).await {
+                Ok(true) => { /* still owner */ }
+                Ok(false) | Err(_) => {
+                    // Taken over (or the actor stopped). Signal yield.
+                    let _ = ui_tx.send(AgentUpdate::SessionTakenOver).await;
+                    break;
+                }
+            }
+        }
+    });
+}
+
 fn spawn_turn(app: &mut App) {
     let provider = app.provider.clone();
     let session = app.session.clone();
@@ -4146,6 +4252,7 @@ mod tests {
             companion_hub: zoid_companion::CompanionHub::new(),
             compaction_started_at: None,
             compaction_complete: false,
+            yielded: false,
         }
     }
 
@@ -4350,6 +4457,18 @@ mod tests {
             app.shell.config_picker.is_empty(),
             "no picker was open; a stray fetch result must not open one"
         );
+    }
+
+    #[tokio::test]
+    async fn boot_reclaims_stale_session_and_uses_fresh_when_live() {
+        // The boot decision is `is_live(...)`. A stale-heartbeat row is reclaimable
+        // (is_live == false); a fresh-heartbeat row is not (is_live == true).
+        use zoid_core::store::is_live;
+        let alive = |_: i64| true;
+        // Stale: heartbeat 20s ago, window 15s → not live → reclaim.
+        assert!(!is_live(true, Some(99), Some(1000), 21000, alive));
+        // Live: heartbeat now → live → create a fresh session instead.
+        assert!(is_live(true, Some(99), Some(1000), 1000, alive));
     }
 
     /// Regression for the busy-guard bug: `Action::Submit` must be a no-op
