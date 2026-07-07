@@ -4,6 +4,31 @@ use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
 use ulid::Ulid;
 
+/// How often a live process refreshes its `active_heartbeat` (ms). Spec §2.1.
+pub const HEARTBEAT_INTERVAL_MS: i64 = 5_000;
+/// A session is "live" only if its heartbeat is within this window (ms). 3× the
+/// interval: a single missed heartbeat (GC pause, system suspend) does NOT mark
+/// a live session stale. Spec §2.1.
+pub const LIVE_WINDOW_MS: i64 = 15_000;
+
+/// Is the session described by these columns currently held by a live
+/// interface? Pure except for the injected `pid_alive` OS check (kept injectable
+/// for testing). A session is live iff its flag is set, its PID is still alive,
+/// and its heartbeat is within `LIVE_WINDOW_MS` of `now_ms`. Spec §2.2.
+pub fn is_live(
+    active: bool,
+    active_pid: Option<i64>,
+    active_heartbeat: Option<i64>,
+    now_ms: i64,
+    pid_alive: impl Fn(i64) -> bool,
+) -> bool {
+    active
+        && match (active_pid, active_heartbeat) {
+            (Some(pid), Some(hb)) => pid_alive(pid) && now_ms - hb < LIVE_WINDOW_MS,
+            _ => false,
+        }
+}
+
 /// Single-writer, append-only event log backed by SQLite. The store owns the
 /// connection; readers obtain owned `Vec<Event>` snapshots via `load_all`.
 pub struct EventStore {
@@ -863,5 +888,38 @@ mod tests {
             .query_row("PRAGMA journal_mode", [], |r| r.get(0))
             .unwrap();
         assert_eq!(mode.to_lowercase(), "wal");
+    }
+
+    #[test]
+    fn is_live_requires_flag_pid_and_fresh_heartbeat() {
+        let alive = |_: i64| true; // pretend every PID is alive
+        // flag set, live PID, fresh heartbeat ⇒ live
+        assert!(is_live(true, Some(99), Some(1000), 2000, alive));
+    }
+
+    #[test]
+    fn is_live_false_for_stale_heartbeat() {
+        let alive = |_: i64| true;
+        // heartbeat 20s ago, window is 15s ⇒ stale ⇒ not live
+        assert!(!is_live(true, Some(99), Some(1000), 21000, alive));
+    }
+
+    #[test]
+    fn is_live_false_for_dead_pid() {
+        let alive = |pid: i64| pid != 99; // 99 is dead
+        assert!(!is_live(true, Some(99), Some(1000), 2000, alive));
+    }
+
+    #[test]
+    fn is_live_false_when_flag_cleared() {
+        let alive = |_: i64| true;
+        assert!(!is_live(false, Some(99), Some(1000), 2000, alive));
+    }
+
+    #[test]
+    fn is_live_false_for_null_pid_or_heartbeat() {
+        let alive = |_: i64| true;
+        assert!(!is_live(true, None, Some(1000), 2000, alive));
+        assert!(!is_live(true, Some(99), None, 2000, alive));
     }
 }
