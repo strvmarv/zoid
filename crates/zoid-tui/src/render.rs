@@ -400,6 +400,8 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
         (format!("{} compact", glyph::COMPACT), color::DIM)
     };
 
+    let compact_w = compact_text.width();
+
     // Dead-center for "working", always.
     let center_start = w.saturating_sub(center_w) / 2;
     let right_start = w.saturating_sub(right_w);
