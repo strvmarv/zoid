@@ -3647,6 +3647,54 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             disable_companion(app);
             Ok(false)
         }
+        Command::CompactNow => {
+            if app.shell.compacting {
+                app.shell.status_hint = Some("already compacting".into());
+                return Ok(false);
+            }
+            // Spawn the compaction task (non-blocking; chat turns are not blocked).
+            let session = app.session.clone();
+            let session_id = app.session_id;
+            let ui_tx = app.ui_tx.clone();
+            let events = app.events.snapshot();
+            let ctx_policy = policy_from_config(&app.economy, app.context_target);
+            // Compute the context overhead (system prompt only). The automatic
+            // gate also includes tool-spec tokens, but for an explicit manual
+            // compaction the system-prompt overhead alone is a sufficient
+            // approximation — the user is asking to compact, not relying on
+            // the gate's precise threshold math.
+            let overhead = zoid_core::context::ContextOverhead {
+                system_tokens: zoid_core::economy::estimate_tokens(&app.base_profile.system_prompt),
+                tools_tokens: 0,
+            };
+            tokio::spawn(async move {
+                let plan = zoid_core::compaction::plan_compactions(
+                    events.iter(),
+                    &ctx_policy,
+                    None, // no real_input_tokens (no in-flight turn)
+                    None, // no calibration ratio
+                    &overhead,
+                );
+                let _ = ui_tx.send(AgentUpdate::CompactionStarted).await;
+                for c in &plan.compactions {
+                    let ev = Event::new(
+                        Ulid::new(),
+                        None,
+                        now_ms(),
+                        EventKind::ToolResultCompacted {
+                            id: c.id.clone(),
+                            summary: c.summary.clone(),
+                            original_tokens: c.original_tokens,
+                        },
+                    )
+                    .with_session(session_id);
+                    let _ = session.append(ev.clone()).await;
+                    let _ = ui_tx.send(AgentUpdate::Appended(Box::new(ev))).await;
+                }
+                let _ = ui_tx.send(AgentUpdate::CompactionComplete).await;
+            });
+            Ok(false)
+        }
         Command::Unknown(_) => Ok(false),
     }
 }
@@ -4049,7 +4097,9 @@ mod tests {
     #[test]
     fn make_input_sets_word_or_glyph_wrap() {
         use ratatui::widgets::Widget;
-        let ta = make_input(TextArea::from(vec!["a very long line that exceeds twenty columns".to_string()]));
+        let ta = make_input(TextArea::from(vec![
+            "a very long line that exceeds twenty columns".to_string(),
+        ]));
         let backend = TestBackend::new(20, 5);
         let mut term = Terminal::new(backend).unwrap();
         term.draw(|f| f.render_widget(&ta, f.area())).unwrap();
@@ -4057,12 +4107,14 @@ mod tests {
         // Check that the second buffer row (y==1) has non-space content —
         // without wrap, only row 0 would carry text and rows 1+ would be blank.
         let buf = term.backend().buffer();
-        let row1_has_text = (0..buf.area().width)
-            .any(|x| {
-                let s = buf.cell((x, 1)).map(|c| c.symbol()).unwrap_or(" ");
-                !s.is_empty() && s != " "
-            });
-        assert!(row1_has_text, "wrapped line must occupy row 1 (wrap mode active)");
+        let row1_has_text = (0..buf.area().width).any(|x| {
+            let s = buf.cell((x, 1)).map(|c| c.symbol()).unwrap_or(" ");
+            !s.is_empty() && s != " "
+        });
+        assert!(
+            row1_has_text,
+            "wrapped line must occupy row 1 (wrap mode active)"
+        );
     }
 
     fn env_of<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
@@ -4300,7 +4352,8 @@ mod tests {
             index.write_tree().unwrap()
         };
         let tree = repo.find_tree(tree_id).unwrap();
-        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
         std::mem::forget(dir);
         assert_eq!(worktree_label(&repo), "(none)");
     }
@@ -4321,9 +4374,11 @@ mod tests {
             index.write_tree().unwrap()
         };
         let tree = repo.find_tree(tree_id).unwrap();
-        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
         let wt_path = dir.path().join("wt");
-        repo.worktree("feature", &wt_path, Some(&git2::WorktreeAddOptions::new())).unwrap();
+        repo.worktree("feature", &wt_path, Some(&git2::WorktreeAddOptions::new()))
+            .unwrap();
         let wt_repo = Repository::open(&wt_path).unwrap();
         assert_eq!(worktree_label(&wt_repo), "feature");
         std::mem::forget(dir);
@@ -4828,6 +4883,75 @@ mod tests {
         assert_eq!(
             app.shell.palette.selected, 0,
             "PaletteMove(Up) must move back"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compact_command_emits_compaction_events() {
+        let mut app = test_app().await;
+        // plan_compactions returns an empty plan when compact_threshold_pct
+        // is 0 (the default) OR when the current context is below the
+        // threshold. Set a tiny target + high pct so the 5000-char tool
+        // result exceeds the threshold and compaction fires.
+        app.economy.compact_threshold_pct = 50;
+        app.context_target = 100; // 50% of 100 = 50 tokens threshold
+                                  // Seed an event log with an uncompacted tool result.
+        let tc_id = Ulid::new();
+        app.record(EventKind::UserMessage {
+            text: "do something".into(),
+        })
+        .await
+        .unwrap();
+        app.record(EventKind::ToolCall {
+            id: tc_id.to_string(),
+            name: "shell".into(),
+            args: "{}".into(),
+        })
+        .await
+        .unwrap();
+        app.record(EventKind::ToolResult {
+            id: tc_id.to_string(),
+            name: "shell".into(),
+            output: (0..200)
+                .map(|i| format!("line {i} xxxxxxxxxxxxxxxxxxxxxxxx"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            is_error: false,
+        })
+        .await
+        .unwrap();
+        let session_id = app.session_id;
+        let session = app.session.clone();
+
+        let quit = exec_command(&mut app, zoid_tui::command::Command::CompactNow)
+            .await
+            .unwrap();
+        assert!(!quit);
+
+        // The spawned task appends to the session DB (not app.events). Read
+        // back from the session after giving the task time to complete.
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let events = session.snapshot_session(session_id).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::ToolResultCompacted { .. })),
+            ":compact must emit at least one ToolResultCompacted event to the session"
+        );
+    }
+
+    #[tokio::test]
+    async fn compact_command_blocked_while_already_compacting() {
+        let mut app = test_app().await;
+        app.shell.compacting = true;
+        let quit = exec_command(&mut app, zoid_tui::command::Command::CompactNow)
+            .await
+            .unwrap();
+        assert!(!quit);
+        assert_eq!(
+            app.shell.status_hint.as_deref(),
+            Some("already compacting"),
+            ":compact while compacting should surface the hint"
         );
     }
 
