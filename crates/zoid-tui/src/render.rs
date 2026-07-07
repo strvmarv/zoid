@@ -315,6 +315,17 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
         (glyph::IDLE, "idle", color::OK)
     };
     let center = format!("{icon} {label}");
+    // Pad to a fixed width so "working" (9 chars) and "idle" (6 chars) occupy
+    // the same slot — the right edge (gap to compact) never jumps.
+    const CENTER_SLOT: usize = 9; // "⠋ working"
+    let center = {
+        let cw = center.width();
+        if cw < CENTER_SLOT {
+            format!("{}{}", center, " ".repeat(CENTER_SLOT - cw))
+        } else {
+            center
+        }
+    };
 
     // Right segment: zoom hint (palette hint moved to the top-right title bar).
     let right = format!(" zoom {} ", view.zoom.label());

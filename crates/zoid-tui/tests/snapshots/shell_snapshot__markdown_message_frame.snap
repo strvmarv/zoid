@@ -28,7 +28,7 @@ Buffer {
         "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐",
         "│                                                                                                  │",
         "└──────────────────────────────────────────────────────────────────────────────────────────────────┘",
-        " CHAT                                ◐ tool    ● idle    ⊟ compact                      zoom normal ",
+        " CHAT                        ◐ tool          ● idle       ⊟ compact                     zoom normal ",
     ],
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
@@ -181,12 +181,12 @@ Buffer {
         x: 99, y: 21, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 23, fg: Rgb(88, 166, 255), bg: Rgb(13, 42, 77), underline: Reset, modifier: NONE,
         x: 6, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 37, y: 23, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 43, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 47, y: 23, fg: Rgb(63, 185, 80), bg: Reset, underline: Reset, modifier: NONE,
-        x: 53, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 57, y: 23, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 66, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 29, y: 23, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
+        x: 41, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 45, y: 23, fg: Rgb(63, 185, 80), bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 58, y: 23, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
+        x: 67, y: 23, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 87, y: 23, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
     ]
 }
