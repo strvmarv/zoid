@@ -253,6 +253,36 @@ fn render_input(frame: &mut Frame, input: &TextArea<'_>, area: Rect) {
     frame.render_widget(input, inner);
 }
 
+/// Continuous glyph rotation for the tool indicator (moon phases).
+/// Cycles `TOOL_FRAMES` at ~200ms/frame (800ms full cycle), driven by
+/// elapsed time from `started_at`. Falls back to the first frame when no
+/// timestamp is set (idle/snapshot tests).
+fn tool_frame(started_at: Option<std::time::Instant>) -> char {
+    let frames = glyph::TOOL_FRAMES;
+    match started_at {
+        Some(t) => {
+            let ms = t.elapsed().as_millis() as usize;
+            frames[(ms / 200) % frames.len()]
+        }
+        None => frames[0],
+    }
+}
+
+/// Continuous glyph rotation for the compaction indicator (box rotation).
+/// Cycles `COMPACT_FRAMES` at ~300ms/frame (1200ms full cycle — slower than
+/// tool, distinct cadence). Falls back to the first frame when no timestamp
+/// is set (idle/snapshot tests).
+fn compact_frame(started_at: Option<std::time::Instant>) -> char {
+    let frames = glyph::COMPACT_FRAMES;
+    match started_at {
+        Some(t) => {
+            let ms = t.elapsed().as_millis() as usize;
+            frames[(ms / 300) % frames.len()]
+        }
+        None => frames[0],
+    }
+}
+
 fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: Rect) {
     // Left segment: mode badge only (zoom hint moved to the right side). The chip
     // is dynamic — the active mode name, uppercased; a ⚠-prefixed variant when the
@@ -297,17 +327,23 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
     // Fixed anchors: tool at ⅓, working at ½, compaction at ⅔. Each is computed
     // independently — an absent indicator doesn't displace the others. Zero
     // jitter: "working" is always dead-center regardless of what else is present.
+    // Both tool and compaction animate continuously via glyph rotation while
+    // active (moon phases for tool, box rotation for compaction), driven by
+    // elapsed time from their `*_started_at` timestamp. The "working" indicator
+    // keeps its braille spinner (distinct shape).
     let tool_text = state.active_tool.as_deref().map(|name| {
+        let frame = tool_frame(state.tool_started_at);
         if w < 40 {
-            format!("{} {}", glyph::RUNNING, name)
+            format!("{} {}", frame, name)
         } else {
-            format!("{} {} {}", glyph::RUNNING, name, glyph::ELLIPSIS)
+            format!("{} {} {}", frame, name, glyph::ELLIPSIS)
         }
     });
     let tool_w = tool_text.as_ref().map(|t| t.width()).unwrap_or(0);
 
     let compact_text = if state.compacting {
-        Some(format!("{} compacting", glyph::COMPACT))
+        let frame = compact_frame(state.compaction_started_at);
+        Some(format!("{} compacting", frame))
     } else {
         None
     };
@@ -316,17 +352,8 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
     let center_start = w.saturating_sub(center_w) / 2;
     let right_start = w.saturating_sub(right_w);
 
-    // Pulse-on-appear: bright for 300ms after the indicator first shows,
-    // then settle to a dimmer steady-state.
-    const PULSE_MS: u128 = 600;
-    let tool_fg = match state.tool_started_at {
-        Some(start) if start.elapsed().as_millis() < PULSE_MS => color::WARN,
-        _ => color::WARN_DIM,
-    };
-    let compact_fg = match state.compaction_started_at {
-        Some(start) if start.elapsed().as_millis() < PULSE_MS => color::BRANCH,
-        _ => color::COMPACT_DIM,
-    };
+    let tool_fg = color::WARN;
+    let compact_fg = color::BRANCH;
 
     let mut spans = left;
     // Tool indicator at the ⅓ anchor (left of center, with a 4-space gap
@@ -1376,17 +1403,16 @@ mod tests {
             content.contains(glyph::COMPACT.to_string().as_str()),
             "status bar must contain the compaction glyph: got {content:?}"
         );
-        // With compaction_started_at = None (no pulse), the indicator uses the
-        // dim steady-state color.
+        // The indicator uses BRANCH (purple) continuously — no more pulse/dim.
         let has_compact_color = terminal
             .backend()
             .buffer()
             .content()
             .iter()
-            .any(|c| c.style().fg == Some(color::COMPACT_DIM));
+            .any(|c| c.style().fg == Some(color::BRANCH));
         assert!(
             has_compact_color,
-            "at least one cell must use color::COMPACT_DIM for the compaction indicator"
+            "at least one cell must use color::BRANCH (purple) for the compaction indicator"
         );
     }
 

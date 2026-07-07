@@ -6,6 +6,9 @@ pub mod glyph {
     pub const EDIT: char = '●';
     pub const PASS: char = '✓';
     pub const RUNNING: char = '◐';
+    /// Tool indicator animation frames (moon-phase rotation, continuous while
+    /// a tool is active). Spec: status-bar indicator refinement.
+    pub const TOOL_FRAMES: [char; 4] = ['◐', '◑', '◓', '◒'];
     pub const PENDING: char = '☐';
     pub const STREAM: char = '⠿';
     pub const BRANCH: char = '⎇';
@@ -40,7 +43,10 @@ pub mod glyph {
     pub const MASK: char = '•'; // config screen: masked secret edit buffer
     pub const CODE_BAR: char = '▏'; // fenced-code container left rule (§3.5)
     pub const COPY: char = '⧉'; // code-block copy affordance (§3.5)
-    pub const COMPACT: char = '⊟'; // ⑤ compacted tool-result marker (ACM-1)
+    pub const COMPACT: char = '⊟';
+    /// Compaction indicator animation frames (box rotation, continuous while
+    /// compaction is active). Spec: status-bar indicator refinement.
+    pub const COMPACT_FRAMES: [char; 4] = ['⊟', '⊠', '⊞', '⊕']; // ⑤ compacted tool-result marker (ACM-1)
     /// Compaction status spinner — a 6-frame box-shuffle ramp, animated at ~120ms
     /// (slower than the working spinner, signaling a different kind of work).
     /// Purple (color::BRANCH). Only shown while automated compaction is running.
