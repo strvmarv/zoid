@@ -1,13 +1,14 @@
 ---
-source: crates/zoid-tui/tests/shell_snapshot.rs
-expression: "draw(&s, &seeded(), 100, 24)"
+source: crates/zoid-tui/tests/session_snapshot.rs
+assertion_line: 54
+expression: "draw(&s, &[], 100, 24)"
 ---
 "                                                zoid                                      ^P palette"
-"┌ :session rename  ───────────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
-"│→ Rename session:                                    │ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
-"│ fix 500                                             │ ╰─────────────────────────────────────────╯ "
-"│ add auth                                            │                                             "
-"│↑↓ move · ⏎ select · esc close · type to filter      │ ╭ ▾ session ──────────────────────────────╮ "
+"┌ ↺ resume session ───────────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
+"│ fix 500 on GET /users  ·  12m ago  ·  58k           │ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
+"│ rail restructure       ·  3h ago   ·  120k          │ ╰─────────────────────────────────────────╯ "
+"│                                                     │                                             "
+"│                                                     │ ╭ ▾ session ──────────────────────────────╮ "
 "│                                                     │ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
 "│                                                     │ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
 "│                                                     │ │⌚ dur 0m   tok/cac 0                    │ " Hidden by multi-width symbols: [(58, " ")]

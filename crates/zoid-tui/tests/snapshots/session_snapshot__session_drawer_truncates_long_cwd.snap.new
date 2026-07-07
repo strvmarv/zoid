@@ -1,17 +1,27 @@
 ---
-source: crates/zoid-tui/tests/shell_snapshot.rs
-expression: "draw(&s, &seeded(), 100, 24)"
+source: crates/zoid-tui/tests/session_snapshot.rs
+assertion_line: 88
+expression: out
 ---
 "                                                zoid                                      ^P palette"
-"  00:00 › what's causing the 500?                     █ ╭ ▾ repo ─────────────────────────────────╮ "
+"    (no messages yet)                                 █ ╭ ▾ repo ─────────────────────────────────╮ "
 "                                                      █ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
-"  00:00 zoid an unwrapped lookup in the handler.      █ ╰─────────────────────────────────────────╯ "
+"                                                      █ │🔧 worktree (none)                       │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ │📝 changes +0 -0 · 0 files               │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
-"                                                      █ ╭ ▸ session ──────────────────────────────╮ "
+"                                                      █ ╭ ▾ session ──────────────────────────────╮ "
+"                                                      █ │🟢 fix 500 on GET /users                 │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ │🤖 glm-5.2 · ollama                      │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ │⌚ dur 12m   tok/cac 58k                 │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ │📊 ctx 58k/200k ██░░░░░░                 │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ │📁 cwd ~/develop/projects/zoid/crates/zo…│ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "                                                      █ ╭ ▾ context · tokens ─────────────────────╮ "
 "                                                      █ │churn                              cache │ "
+"                                                      █ │                                         │ "
+"                                                      █ │                                         │ "
 "                                                      █ │                                         │ "
 "                                                      █ │                                         │ "
 "                                                      █ │                                         │ "
@@ -21,6 +31,13 @@ expression: "draw(&s, &seeded(), 100, 24)"
 "                                                      █ ╭ ▾ tasks ────────────────────────────────╮ "
 "                                                      █ │no tasks                                 │ "
 "                                                      █ ╰─────────────────────────────────────────╯ "
+"                                                      █                                             "
+"                                                      █                                             "
+"                                                      █                                             "
+"                                                      █                                             "
+"                                                      █                                             "
+"                                                      █                                             "
+"                                                      █                                             "
 "                                                      █                                             "
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"
 "│                                                                                                  │"

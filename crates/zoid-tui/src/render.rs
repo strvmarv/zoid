@@ -331,64 +331,62 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
     // active (moon phases for tool, box rotation for compaction), driven by
     // elapsed time from their `*_started_at` timestamp. The "working" indicator
     // keeps its braille spinner (distinct shape).
-    let tool_text = state.active_tool.as_deref().map(|name| {
+    // Always-present indicators: dim glyph when idle, bright + label + rotation
+    // when active (mirrors the ● idle / ⠋ working pattern). Never appears or
+    // disappears — only the state (dim-static vs bright-animated) changes.
+    let (tool_text, tool_fg) = if let Some(name) = &state.active_tool {
         let frame = tool_frame(state.tool_started_at);
-        if w < 40 {
+        let text = if w < 40 {
             format!("{} {}", frame, name)
         } else {
             format!("{} {} {}", frame, name, glyph::ELLIPSIS)
-        }
-    });
-    let tool_w = tool_text.as_ref().map(|t| t.width()).unwrap_or(0);
-
-    let compact_text = if state.compacting {
-        let frame = compact_frame(state.compaction_started_at);
-        Some(format!("{} compacting", frame))
+        };
+        (text, color::WARN)
     } else {
-        None
+        (glyph::RUNNING.to_string(), color::DIM)
+    };
+    let tool_w = tool_text.width();
+
+    let (compact_text, compact_fg) = if state.compacting {
+        let frame = compact_frame(state.compaction_started_at);
+        (format!("{} compacting", frame), color::BRANCH)
+    } else {
+        (glyph::COMPACT.to_string(), color::DIM)
     };
 
     // Dead-center for "working", always.
     let center_start = w.saturating_sub(center_w) / 2;
     let right_start = w.saturating_sub(right_w);
 
-    let tool_fg = color::WARN;
-    let compact_fg = color::BRANCH;
-
     let mut spans = left;
-    // Tool indicator just left of "working" (4-space gap), so the two cluster
-    // together at center. "Working" stays dead-center regardless.
-    if let Some(text) = &tool_text {
-        let tool_right = center_start.saturating_sub(4);
-        let tool_left = tool_right.saturating_sub(tool_w);
-        let tool_pad = tool_left.saturating_sub(left_w);
-        if tool_pad > 0 {
-            spans.push(Span::styled(" ".repeat(tool_pad), Style::new()));
-        }
-        let actual_gap = center_start.saturating_sub(tool_left + tool_w).max(4);
-        if actual_gap > 0 {
-            spans.push(Span::styled(" ".repeat(actual_gap), Style::new()));
-        }
-    } else {
-        // No tool indicator — pad from left to dead-center.
-        let pad1 = center_start.saturating_sub(left_w);
-        if pad1 > 0 {
-            spans.push(Span::styled(" ".repeat(pad1), Style::new()));
-        }
+    // Tool indicator just left of "working" (4-space gap), always present.
+    // Dim glyph when idle; bright + label + rotation when active.
+    let tool_right = center_start.saturating_sub(4);
+    let tool_left = tool_right.saturating_sub(tool_w);
+    let tool_pad = tool_left.saturating_sub(left_w);
+    if tool_pad > 0 {
+        spans.push(Span::styled(" ".repeat(tool_pad), Style::new()));
+    }
+    spans.push(Span::styled(tool_text.clone(), Style::new().fg(tool_fg)));
+    let actual_gap = center_start.saturating_sub(tool_left + tool_w).max(4);
+    if actual_gap > 0 {
+        spans.push(Span::styled(" ".repeat(actual_gap), Style::new()));
     }
     // Working — dead center.
     spans.push(Span::styled(center, Style::new().fg(fg)));
-    // Compaction at the ⅔ anchor (right of center, with a 4-space gap).
-    if let Some(text) = &compact_text {
-        let compact_slot = (2 * w) / 3;
-        let actual_gap = compact_slot.saturating_sub(center_start + center_w).min(4);
-        if actual_gap > 0 {
-            spans.push(Span::styled(" ".repeat(actual_gap), Style::new()));
-        } else {
-            spans.push(Span::styled(" ", Style::new()));
-        }
-        spans.push(Span::styled(text.clone(), Style::new().fg(compact_fg)));
+    // Compaction at the 2/3 anchor (right of center, with a 4-space gap).
+    // Always present: dim glyph when idle; bright + label + rotation when active.
+    let compact_slot = (2 * w) / 3;
+    let actual_gap = compact_slot.saturating_sub(center_start + center_w).min(4);
+    if actual_gap > 0 {
+        spans.push(Span::styled(" ".repeat(actual_gap), Style::new()));
+    } else {
+        spans.push(Span::styled(" ", Style::new()));
     }
+    spans.push(Span::styled(
+        compact_text.clone(),
+        Style::new().fg(compact_fg),
+    ));
 
     // Pad to the zoom hint (right edge).
     let consumed_so_far: usize = spans.iter().map(|s| s.content.width()).sum();

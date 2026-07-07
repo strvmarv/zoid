@@ -1,21 +1,22 @@
 ---
-source: crates/zoid-tui/tests/shell_snapshot.rs
-expression: "draw(&s, &seeded(), 100, 24)"
+source: crates/zoid-tui/tests/session_snapshot.rs
+assertion_line: 65
+expression: "draw(&s, &[], 100, 24)"
 ---
 "                                                zoid                                      ^P palette"
-"  00:00 › what's causing the 500?                     █ ╭ ▾ repo ─────────────────────────────────╮ "
-"                                                      █ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
-"  00:00 zoid an unwrapped lookup in the handler.      █ ╰─────────────────────────────────────────╯ "
+"    (no messages yet)                                 █ ╭ ▾ repo ─────────────────────────────────╮ "
+"                                                      █ │📦 zoid   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
-"                                                      █ ╭ ▸ session ──────────────────────────────╮ "
+"                                                      █ ╭ ▾ session ──────────────────────────────╮ "
+"                                                      █ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ │⌚ dur 0m   tok/cac 0                    │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "                                                      █ ╭ ▾ context · tokens ─────────────────────╮ "
 "                                                      █ │churn                              cache │ "
-"                                                      █ │                                         │ "
-"                                                      █ │                                         │ "
-"                                                      █ │                                         │ "
-"                                                      █ │                                         │ "
 "                                                      █ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "                                                      █ ╭ ▾ tasks ────────────────────────────────╮ "

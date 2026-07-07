@@ -660,6 +660,7 @@ mod tests {
                 "drawer",
                 "mode",
                 "companion",
+                "compact",
                 "delegate",
                 "config",
                 "q",
