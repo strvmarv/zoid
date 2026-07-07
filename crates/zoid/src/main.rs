@@ -1761,12 +1761,6 @@ async fn main() -> Result<()> {
     // drop the kitty protocol sequence when bracketed paste is already active
     // (Ghostty exhibits this ordering sensitivity).
     let kbd_enhanced = supports_keyboard_enhancement().unwrap_or(false);
-    {
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::File::create("/tmp/zoid_kbd_debug.log") {
-            let _ = writeln!(f, "kbd_enhanced = {kbd_enhanced}");
-        }
-    }
     if kbd_enhanced {
         let _ = execute!(
             out,
