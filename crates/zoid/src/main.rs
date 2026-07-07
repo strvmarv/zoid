@@ -1028,6 +1028,12 @@ impl BodyCache {
     }
 }
 
+/// One in-flight subagent, tracked for the Subagents drawer + busy guard.
+struct SubagentInfo {
+    id: String,
+    task: String,
+}
+
 struct App {
     session: SessionHandle,
     session_id: Ulid,
@@ -1105,9 +1111,8 @@ struct App {
     /// Session ids backing the resume-session picker rows (index-aligned with
     /// `shell.sessions`), populated when `Command::ResumeSessionPicker` opens it.
     session_ids: Vec<Ulid>,
-    /// One subagent at a time (spec §6): set while a `:delegate` dispatch (or a
-    /// verb-picked task) is in flight; cleared when its `DelegationResult` lands.
-    in_flight_subagents: std::collections::HashSet<String>,
+    /// In-flight subagents, tracked for the Subagents drawer + busy guard.
+    in_flight_subagents: Vec<SubagentInfo>,
     /// The reply channel for an in-flight `ask_user` question (Task 11): `Some`
     /// while the question overlay is up. Dropping it (Esc-abort) makes the
     /// agent loop record a balanced "[user aborted]" result and end the turn.
@@ -1370,7 +1375,7 @@ async fn main() -> Result<()> {
         tz_offset_secs,
         session_started_ms,
         session_ids: Vec::new(),
-        in_flight_subagents: std::collections::HashSet::new(),
+        in_flight_subagents: Vec::new(),
         pending_answer: None,
         turn_cancel: None,
         fetched_model_info: None,
@@ -1514,6 +1519,7 @@ where
             .last_input_tokens
             .unwrap_or(app.proj.window.total_tokens);
         app.shell.tasks_len = app.proj.tasks.len() as u16;
+        app.shell.subagents_len = app.in_flight_subagents.len() as u16;
         app.shell.duration = fmt_duration(app.session_started_ms, now_ms());
         app.shell.input_rows = app.textarea.lines().len().max(1) as u16;
         // Empty-buffer flag for routing: a leading `:` in an empty box opens the
@@ -1692,6 +1698,14 @@ where
             // O(events) or re-render work on an ordinary frame.
             let economy = zoid_tui::EconomyView::build(&app.proj.window, &app.proj.churn, 0);
             let task_items = &app.proj.tasks;
+            let subagent_rows: Vec<zoid_tui::state::SubagentRow> = app
+                .in_flight_subagents
+                .iter()
+                .map(|s| zoid_tui::state::SubagentRow {
+                    id: s.id.clone(),
+                    task: s.task.clone(),
+                })
+                .collect();
             let body: &[ratatui::text::Line<'static>] = if is_overview {
                 &app.overview_body
             } else {
@@ -1729,6 +1743,7 @@ where
                 &app.proj.msgs,
                 Some(body),
                 task_items,
+                &subagent_rows,
                 &app.textarea,
                 streaming,
                 &view,
@@ -1794,7 +1809,7 @@ where
                 match update {
                     AgentUpdate::Appended(ev) => {
                         if let EventKind::DelegationResult { subagent_id, .. } = &ev.kind {
-                            app.in_flight_subagents.remove(subagent_id);
+                            app.in_flight_subagents.retain(|s| s.id != *subagent_id);
                             if app.in_flight_subagents.is_empty() {
                                 app.shell.status_hint = None;
                             }
@@ -1979,6 +1994,14 @@ where
                                 .unwrap_or_else(|| app.shell.ctx_ceiling.min(384_000));
                             app.shell.cache_supported = info.prompt_cache;
                         }
+                    }
+                    AgentUpdate::SubagentStarted { id, task } => {
+                        app.in_flight_subagents.push(SubagentInfo { id, task });
+                        app.shell.status_hint = Some(format!(
+                            "{} {} subagent running…",
+                            zoid_tui::tokens::glyph::RUNNING,
+                            app.in_flight_subagents.len()
+                        ));
                     }
                     AgentUpdate::CompactionStarted => {
                         app.shell.compacting = true;
@@ -3672,7 +3695,10 @@ fn start_delegation(app: &mut App, task: String) {
     }
     let sub_ulid = Ulid::new();
     let sub_id = format!("sub-{sub_ulid}");
-    app.in_flight_subagents.insert(sub_id.clone());
+    app.in_flight_subagents.push(SubagentInfo {
+        id: sub_id.clone(),
+        task: task.clone(),
+    });
     app.shell.status_hint = Some(format!(
         "{} {} subagent running…",
         zoid_tui::tokens::glyph::RUNNING,
@@ -4413,7 +4439,7 @@ mod tests {
             tz_offset_secs: 0,
             session_started_ms: 0,
             session_ids: Vec::new(),
-            in_flight_subagents: std::collections::HashSet::new(),
+            in_flight_subagents: Vec::new(),
             pending_answer: None,
             turn_cancel: None,
             fetched_model_info: None,
@@ -4653,7 +4679,7 @@ mod tests {
     #[tokio::test]
     async fn submit_is_noop_while_delegating() {
         let mut app = test_app().await;
-        app.in_flight_subagents.insert("sub-test".into());
+        app.in_flight_subagents.push(SubagentInfo { id: "sub-test".into(), task: "test".into() });
         app.textarea = make_input(TextArea::from(vec!["hello".to_string()]));
 
         let quit = handle_action(&mut app, zoid_tui::route::Action::Submit)
@@ -4697,7 +4723,7 @@ mod tests {
         app.session_ids = vec![other_id];
         app.shell.session_selected = 0;
 
-        app.in_flight_subagents.insert("sub-test".into());
+        app.in_flight_subagents.push(SubagentInfo { id: "sub-test".into(), task: "test".into() });
         let quit = handle_action(&mut app, zoid_tui::route::Action::SessionPick)
             .await
             .unwrap();
@@ -4728,7 +4754,7 @@ mod tests {
     async fn new_session_is_noop_while_delegating() {
         let mut app = test_app().await;
         let original_session_id = app.session_id;
-        app.in_flight_subagents.insert("sub-test".into());
+        app.in_flight_subagents.push(SubagentInfo { id: "sub-test".into(), task: "test".into() });
 
         let quit = exec_command(&mut app, zoid_tui::command::Command::NewSession)
             .await

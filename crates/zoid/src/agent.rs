@@ -116,6 +116,9 @@ pub enum AgentUpdate {
         choices: Vec<String>,
         reply: oneshot::Sender<Answer>,
     },
+    /// A subagent was dispatched (via the dispatch_subagent tool). The UI tracks
+    /// it as in-flight until its DelegationResult arrives.
+    SubagentStarted { id: String, task: String },
     /// The turn is finished (model produced no further tool calls / cap / error).
     TurnComplete,
     /// Live model list fetched for the config model picker, tagged with the
@@ -884,6 +887,14 @@ async fn run_turn_inner(
 
                     let sub_ulid = Ulid::new();
                     let sub_id = format!("sub-{sub_ulid}");
+
+                    // Notify the UI so it tracks the subagent as in-flight.
+                    let _ = ui
+                        .send(AgentUpdate::SubagentStarted {
+                            id: sub_id.clone(),
+                            task: task.clone(),
+                        })
+                        .await;
 
                     let wt = if want_worktree && std::path::Path::new(".git").exists() {
                         crate::worktree::create_worktree(
