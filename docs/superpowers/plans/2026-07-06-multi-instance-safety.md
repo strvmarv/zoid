@@ -721,18 +721,33 @@ This is the largest task. It is split into steps that each leave the workspace c
 
 - [ ] **Step 1: Add the `pid_alive` helper**
 
-In `crates/zoid/src/main.rs`, add (near `now_ms`):
+In `crates/zoid/src/main.rs`, add (near `now_ms`). Use `nix` (a thin, idiomatic wrapper over `kill(2)`) rather than raw `libc`, because `libc` does **not** export `__errno_location` on the primary `linux/gnu` target — `nix` returns a typed `Errno` instead, which is portable and testable.
+
+Add `nix` to the unix target deps in `crates/zoid/Cargo.toml`:
+
+```toml
+[target.'cfg(unix)'.dependencies]
+flate2 = "1"
+tar = "0.4"
+nix = { version = "0.29", default-features = false, features = ["process"] }
+```
+
+Then in `crates/zoid/src/main.rs`:
 
 ```rust
-/// Whether the given OS PID is currently alive. Unix: `kill(pid, 0)` succeeds
-/// (returns 0) when the process exists, fails otherwise. Injected into `is_live`
+/// Whether the given OS PID is currently alive. `kill(pid, 0)` succeeds when the
+/// process exists, returns `ESRCH` when it's dead, and `EPERM` when it exists but
+/// isn't ours (treated as alive — we can't prove it's dead, and a stale-but-alive
+/// row is reclaimable via the heartbeat window anyway). Injected into `is_live`
 /// so callers can substitute a test double. Spec §2.2.
 #[cfg(unix)]
 fn pid_alive(pid: i64) -> bool {
-    // 0 == "exists"; ESRCH == "no such process"; EPERM (running but not ours)
-    // is treated as alive — we can't prove it's dead, and a stale-but-alive
-    // row is reclaimable via the heartbeat window anyway.
-    unsafe { libc::kill(pid, 0) == 0 || *libc::__errno_location() == libc::EPERM }
+    match nix::unistd::Pid::from_raw(pid as i32).kill(None) {
+        Ok(()) => true,
+        Err(nix::errno::Errno::ESRCH) => false,
+        Err(nix::errno::Errno::EPERM) => true,
+        Err(_) => true, // unknown failure → lean on the heartbeat window
+    }
 }
 
 #[cfg(not(unix))]
@@ -741,10 +756,8 @@ fn pid_alive(_pid: i64) -> bool {
 }
 ```
 
-Add `libc` to `crates/zoid/Cargo.toml` `[dependencies]` if not already present:
-
-Run: `grep -n "^libc" crates/zoid/Cargo.toml`
-If absent, add `libc = "0.2"` to the dependencies.
+Run: `cargo build -p zoid`
+Expected: PASS — `nix` builds and `pid_alive` compiles on Unix; the non-Unix stub compiles elsewhere.
 
 - [ ] **Step 2: Add `yielded` to `App` and a `pid_alive` test double hook**
 
@@ -892,7 +905,7 @@ In `crates/zoid/src/main.rs` (the `// Auto-resume the most-recently-touched sess
         .ok();
 ```
 
-**Important:** the original code had `let first_time_user = sessions.is_empty();` and `let boot_ts = now_ms();` earlier in `main`. Remove the now-duplicate declarations (the new block declares them). The `tz_offset_secs` is already in scope. `pid_alive` is the helper from Step 1.
+**Important:** the original code had `let first_time_user = sessions.is_empty();` (line 1223) and `let boot_ts = now_ms();` (line 1203) declared **earlier** in `main`, before the auto-resume block. The new block reuses the existing `boot_ts` (do NOT re-declare it) and replaces the existing `let first_time_user = sessions.is_empty();` line. Concretely: delete the old lines 1218–1248 (the `let sessions = ...` block through the `(id, name, boot_ts)` tuple), and delete the standalone `let first_time_user = sessions.is_empty();` at 1223 — the new block below declares `first_time_user` itself. Keep `let boot_ts = now_ms();` at 1203 (it's already in scope). `tz_offset_secs` is already in scope. `pid_alive` is the helper from Step 1.
 
 - [ ] **Step 7: Start the heartbeat after `app` is constructed**
 
@@ -1144,12 +1157,15 @@ Initialize `pending_takeover: None,` in `main`.
 
 - [ ] **Step 8: Consume the takeover answer in `QuestionSelect`**
 
-In `handle_action`'s `Action::QuestionSelect` arm, before the existing match, intercept a pending takeover:
+In `handle_action`'s `Action::QuestionSelect` arm, before the existing match, intercept a pending takeover. Note: `QuestionState::resolved()` in `Pick` mode resolves the *last* choice row to `LetYouDecide` (not `Choice`), so a two-choice `["Take over", "Cancel"]` card resolves `Cancel` to `LetYouDecide`. The check below treats anything that isn't `Choice("Take over")` as a cancel — that's the intended contract; document it inline rather than relying on row indices:
 
 ```rust
         Action::QuestionSelect => {
             use zoid_tui::question::{QuestionMode, QuestionOutcome};
-            // A takeover confirm card's answer.
+            // A takeover confirm card's answer. NB: QuestionState resolves the
+            // last choice row to LetYouDecide, so `Cancel` arrives as
+            // LetYouDecide, not Choice("Cancel"). Anything that isn't
+            // Choice("Take over") is treated as a cancel — the intended contract.
             if let Some(sid) = app.pending_takeover.take() {
                 let outcome = app.shell.question.as_ref().map(|q| q.resolved());
                 let take = matches!(outcome, Some(QuestionOutcome::Choice(s)) if s == "Take over");
