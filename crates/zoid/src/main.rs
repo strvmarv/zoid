@@ -830,6 +830,22 @@ fn current_branch() -> String {
         .unwrap_or_else(|| "main".into())
 }
 
+/// The worktree label for the repo drawer: the linked-worktree name when the
+/// process cwd is a linked worktree (not the main working copy), else "(none)".
+/// git stores linked worktrees under `<common>/worktrees/<name>`, so the
+/// worktree's gitdir basename IS the worktree name.
+fn worktree_label(repo: &git2::Repository) -> String {
+    let path = repo.path();
+    let common = repo.commondir();
+    if path == common {
+        "(none)".to_string()
+    } else {
+        path.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "(linked)".into())
+    }
+}
+
 /// Whether the current working directory is inside a git work tree. Asks git
 /// directly (`rev-parse --is-inside-work-tree`) rather than probing `./.git`, so
 /// it is correct from a subdirectory of a repo and false in a bare/absent one.
@@ -1324,6 +1340,10 @@ async fn main() -> Result<()> {
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| root.clone());
+        shell.worktree = git2::Repository::open(".")
+            .ok()
+            .map(|r| worktree_label(&r))
+            .unwrap_or_else(|| "(none)".into());
         let (boot_added, boot_removed, boot_files) = git_status();
         shell.changes_added = boot_added;
         shell.changes_removed = boot_removed;
@@ -4262,6 +4282,51 @@ mod tests {
         // Empty / no message → timestamp fallback (HH:MM, deterministic at offset 0).
         assert_eq!(derive_session_name(None, 49_500_000, 0), "session 13:45");
         assert_eq!(derive_session_name(Some("   "), 0, 0), "session 00:00");
+    }
+
+    #[test]
+    fn worktree_label_none_for_main_worktree() {
+        use git2::Repository;
+        let dir = tempfile::tempdir().unwrap();
+        let repo_dir = dir.path().join("repo");
+        std::fs::create_dir_all(&repo_dir).unwrap();
+        let repo = Repository::init(&repo_dir).unwrap();
+        let sig = git2::Signature::now("t", "t@t").unwrap();
+        let tree_id = {
+            let mut index = repo.index().unwrap();
+            std::fs::write(repo_dir.join("README"), "hi").unwrap();
+            index.add_path(std::path::Path::new("README")).unwrap();
+            index.write().unwrap();
+            index.write_tree().unwrap()
+        };
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+        std::mem::forget(dir);
+        assert_eq!(worktree_label(&repo), "(none)");
+    }
+
+    #[test]
+    fn worktree_label_name_for_linked_worktree() {
+        use git2::Repository;
+        let dir = tempfile::tempdir().unwrap();
+        let repo_dir = dir.path().join("repo");
+        std::fs::create_dir_all(&repo_dir).unwrap();
+        let repo = Repository::init(&repo_dir).unwrap();
+        let sig = git2::Signature::now("t", "t@t").unwrap();
+        let tree_id = {
+            let mut index = repo.index().unwrap();
+            std::fs::write(repo_dir.join("README"), "hi").unwrap();
+            index.add_path(std::path::Path::new("README")).unwrap();
+            index.write().unwrap();
+            index.write_tree().unwrap()
+        };
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+        let wt_path = dir.path().join("wt");
+        repo.worktree("feature", &wt_path, Some(&git2::WorktreeAddOptions::new())).unwrap();
+        let wt_repo = Repository::open(&wt_path).unwrap();
+        assert_eq!(worktree_label(&wt_repo), "feature");
+        std::mem::forget(dir);
     }
 
     #[test]
