@@ -1,25 +1,21 @@
 ---
-source: crates/zoid-tui/tests/session_snapshot.rs
-expression: "draw(&s, &[], 100, 24)"
+source: crates/zoid-tui/tests/tasks_snapshot.rs
+assertion_line: 118
+expression: "draw_at(&s, &many_tasks(4), 100, 19)"
 ---
 "                                                zoid                                      ^P palette"
 "    (no messages yet)                                 █ ╭ ▾ repo ─────────────────────────────────╮ "
-"                                                      █ │📦 zoid   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "                                                      █ ╭ ▾ session ──────────────────────────────╮ "
 "                                                      █ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
-"                                                      █ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
-"                                                      █ │⌚ dur 0m   tok/cac 0                    │ " Hidden by multi-width symbols: [(58, " ")]
-"                                                      █ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "                                                      █ ╭ ▾ context · tokens ─────────────────────╮ "
-"                                                      █ │churn                              cache │ "
 "                                                      █ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "                                                      █ ╭ ▾ tasks ────────────────────────────────╮ "
-"                                                      █ │no tasks                                 │ "
+"                                                      █ │✓ task 0                                 │ "
 "                                                      █ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"

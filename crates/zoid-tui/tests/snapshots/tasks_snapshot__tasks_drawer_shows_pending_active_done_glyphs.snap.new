@@ -1,11 +1,11 @@
 ---
-source: crates/zoid-tui/tests/session_snapshot.rs
-assertion_line: 65
-expression: "draw(&s, &[], 100, 24)"
+source: crates/zoid-tui/tests/tasks_snapshot.rs
+assertion_line: 93
+expression: "draw(&s, &items)"
 ---
 "                                                zoid                                      ^P palette"
 "    (no messages yet)                                 █ ╭ ▾ repo ─────────────────────────────────╮ "
-"                                                      █ │📦 zoid   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "                                                      █ ╭ ▾ session ──────────────────────────────╮ "
@@ -13,14 +13,22 @@ expression: "draw(&s, &[], 100, 24)"
 "                                                      █ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ │⌚ dur 0m   tok/cac 0                    │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ │📁 cwd                                   │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "                                                      █ ╭ ▾ context · tokens ─────────────────────╮ "
 "                                                      █ │churn                              cache │ "
+"                                                      █ │                                         │ "
+"                                                      █ │                                         │ "
+"                                                      █ │                                         │ "
+"                                                      █ │                                         │ "
+"                                                      █ │                                         │ "
 "                                                      █ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "                                                      █ ╭ ▾ tasks ────────────────────────────────╮ "
-"                                                      █ │no tasks                                 │ "
+"                                                      █ │☐ write plan                             │ "
+"                                                      █ │◐ implement drawer                       │ "
+"                                                      █ │✓ read brief                             │ "
 "                                                      █ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"
