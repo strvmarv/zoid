@@ -402,21 +402,14 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
         spans.push(Span::styled(" ".repeat(tool_pad), Style::new()));
     }
     spans.push(Span::styled(tool_text.clone(), Style::new().fg(tool_fg)));
-    let actual_gap = center_start.saturating_sub(tool_left + tool_w).max(4);
-    if actual_gap > 0 {
-        spans.push(Span::styled(" ".repeat(actual_gap), Style::new()));
-    }
+    // Fixed 4-space gap between tool and working.
+    let actual_gap = 4;
+    spans.push(Span::styled(" ".repeat(actual_gap), Style::new()));
     // Working — dead center.
     spans.push(Span::styled(center, Style::new().fg(fg)));
-    // Compaction at the 2/3 anchor (right of center, with a 4-space gap).
-    // Always present: dim glyph when idle; bright + label + rotation when active.
-    let compact_slot = (2 * w) / 3;
-    let actual_gap = compact_slot.saturating_sub(center_start + center_w).min(4);
-    if actual_gap > 0 {
-        spans.push(Span::styled(" ".repeat(actual_gap), Style::new()));
-    } else {
-        spans.push(Span::styled(" ", Style::new()));
-    }
+    // Fixed 4-space gap between working and compact (symmetric with tool gap).
+    let actual_gap = 4;
+    spans.push(Span::styled(" ".repeat(actual_gap), Style::new()));
     spans.push(Span::styled(
         compact_text.clone(),
         Style::new().fg(compact_fg),
