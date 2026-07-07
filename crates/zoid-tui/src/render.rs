@@ -25,19 +25,6 @@ use ratatui_textarea::TextArea;
 use unicode_width::UnicodeWidthStr;
 use zoid_core::projection::ChatMsg;
 
-/// The in-flight tool indicator: a dim spinner line shown below the last
-/// message while a Local tool call runs. Shared by the cached and uncached
-/// render paths so both produce byte-identical output.
-fn tool_spinner_line(name: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(format!("{} ", glyph::RUNNING), Style::new().fg(color::WARN)),
-        Span::styled(
-            format!("running · {name} {}", glyph::ELLIPSIS),
-            Style::new().fg(color::DIM),
-        ),
-    ])
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn render_shell(
     frame: &mut Frame,
@@ -80,7 +67,6 @@ pub fn render_shell(
                 horizontal: CONV_PAD,
                 vertical: 0,
             });
-            let has_tool = state.active_tool.is_some();
             // Clamp the scroll offset to the body produced at THIS altitude. The three
             // zoom altitudes (Summary/Normal/Detail) yield very different line counts,
             // so an offset valid at one is meaningless at another; without this clamp a
@@ -104,15 +90,16 @@ pub fn render_shell(
                         Some(n) => full.len().min(n),
                         None => full.len(),
                     };
-                    let total = base_len + has_tool as usize;
+                    // The in-flight tool indicator moved to the status bar, so
+                    // the body no longer gains a trailing spinner line. `has_tool`
+                    // no longer adds a row — the body is exactly the transcript.
+                    let total = base_len;
                     let max_scroll = total
                         .saturating_sub(text.height as usize)
                         .min(u16::MAX as usize) as u16;
                     let scroll = state.conversation_scroll.min(max_scroll);
                     let content_len = total.min(u16::MAX as usize) as u16;
 
-                    let spinner = has_tool
-                        .then(|| tool_spinner_line(state.active_tool.as_deref().unwrap_or("")));
                     // Equivalence to a no-wrap Paragraph relies on every body
                     // line being LEFT-aligned (set_line always starts at text.x;
                     // Paragraph would honor per-line alignment). conversation_view
@@ -126,13 +113,6 @@ pub fn render_shell(
                         if idx < base_len {
                             buf.set_line(text.x, y, &full[idx], text.width);
                         } else {
-                            // The spinner (if any) sits at index `base_len`, just
-                            // past the last transcript line; nothing follows it.
-                            if idx == base_len {
-                                if let Some(line) = &spinner {
-                                    buf.set_line(text.x, y, line, text.width);
-                                }
-                            }
                             break;
                         }
                     }
@@ -141,18 +121,15 @@ pub fn render_shell(
                 // Uncached fallback (tests / examples): render `conversation_view`
                 // (the expensive wrap + highlight pass) and let Paragraph scroll.
                 None => {
-                    let mut body = conversation_view(
+                    let body = conversation_view(
                         msgs,
                         view,
                         streaming,
                         text.width as usize,
                         state.question.as_ref(),
                     );
-                    if has_tool {
-                        body.push(tool_spinner_line(
-                            state.active_tool.as_deref().unwrap_or(""),
-                        ));
-                    }
+                    // The in-flight tool indicator moved to the status bar; the
+                    // body is just the transcript, no trailing spinner line.
                     let max_scroll = body
                         .len()
                         .saturating_sub(text.height as usize)
@@ -317,16 +294,36 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
     let center_w = center.width();
     let right_w = right.width();
 
+    // The in-flight tool indicator (orange `◐ shell …`), shown left of the
+    // center activity indicator while a Local tool call runs. Mirrors the
+    // compaction indicator on the right of center. Replaces the old in-body
+    // spinner line (no more add/remove-line jitter in the conversation body).
+    let tool_w = if let Some(name) = &state.active_tool {
+        format!("{} {} {}", glyph::RUNNING, name, glyph::ELLIPSIS).width()
+    } else {
+        0
+    };
+
     // Center the activity indicator in the bar and pin the zoom hint to the
     // right edge. Saturating math means a narrow terminal clips the padding
-    // (segments just abut) instead of panicking.
-    let center_start = w.saturating_sub(center_w) / 2;
+    // (segments just abut) instead of panicking. The tool indicator (when
+    // present) sits just left of center, shrinking the available centering
+    // width so the layout stays balanced.
+    let avail_for_center = w.saturating_sub(tool_w);
+    let center_start = avail_for_center.saturating_sub(center_w) / 2;
     let right_start = w.saturating_sub(right_w);
 
     let mut spans = left;
     let pad1 = center_start.saturating_sub(left_w);
     if pad1 > 0 {
         spans.push(Span::styled(" ".repeat(pad1), Style::new()));
+    }
+    // Tool indicator (orange), immediately left of the center activity label.
+    if let Some(name) = &state.active_tool {
+        spans.push(Span::styled(
+            format!("{} {} {}  ", glyph::RUNNING, name, glyph::ELLIPSIS),
+            Style::new().fg(color::WARN),
+        ));
     }
     spans.push(Span::styled(center, Style::new().fg(fg)));
 

@@ -1630,9 +1630,9 @@ where
         // drawing — this is what makes the view show the latest output on startup
         // and follow new events (including live streaming) as they append. Applied
         // after the cross-zoom anchor below, so following the tail wins over the
-        // anchor. max_scroll mirrors render's clamp: body length (+ the in-flight
-        // tool line) minus the visible conversation height.
-        let active_extra = usize::from(app.shell.active_tool.is_some());
+        // anchor. max_scroll mirrors render's clamp: body length minus the
+        // visible conversation height. (The in-flight tool indicator moved to the
+        // status bar, so it no longer adds a row to the body.)
         // Scroll math reuses the active body's length (Overview dashboard or the
         // cached transcript), so the scrollbar/clamp work unchanged at every altitude.
         let body_len = if is_overview {
@@ -1640,7 +1640,7 @@ where
         } else {
             app.body_cache.body.len()
         };
-        let max_scroll = (body_len + active_extra)
+        let max_scroll = body_len
             .saturating_sub(layout.conversation.height as usize)
             .min(u16::MAX as usize) as u16;
         // Re-anchor after a zoom: map the captured message back to its line at the
@@ -3639,7 +3639,11 @@ fn start_delegation(app: &mut App, task: String) {
     let sub_ulid = Ulid::new();
     let sub_id = format!("sub-{sub_ulid}");
     app.in_flight_subagents.insert(sub_id.clone());
-    app.shell.status_hint = Some(format!("{} {} subagent running…", zoid_tui::tokens::glyph::RUNNING, app.in_flight_subagents.len()));
+    app.shell.status_hint = Some(format!(
+        "{} {} subagent running…",
+        zoid_tui::tokens::glyph::RUNNING,
+        app.in_flight_subagents.len()
+    ));
 
     // Create the isolated worktree up front so a genuine failure (a real repo
     // where worktree creation failed) can surface a hint; "not a git repo"
@@ -4708,7 +4712,10 @@ mod tests {
 
         // `:delegate` is blocked while yielded — no subagent starts.
         start_delegation(&mut app, "do something".into());
-        assert!(!!app.in_flight_subagents.is_empty(), "delegate must not start while yielded");
+        assert!(
+            !!app.in_flight_subagents.is_empty(),
+            "delegate must not start while yielded"
+        );
         assert_eq!(
             app.shell.status_hint.as_deref(),
             Some("session taken over — :new or :resume"),
