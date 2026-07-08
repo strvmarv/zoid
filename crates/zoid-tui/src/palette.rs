@@ -398,6 +398,10 @@ pub fn all_items(active_mode: &str, mode_names: &[String], companion_on: bool) -
         command: Command::OpenConfig,
     });
     items.push(PaletteItem {
+        label: "MCP servers…".to_string(),
+        command: Command::OpenMcp,
+    });
+    items.push(PaletteItem {
         label: companion_label.to_string(),
         command: companion_cmd,
     });
@@ -503,6 +507,7 @@ mod tests {
                 "Toggle session drawer",
                 "Toggle context drawer",
                 "Open settings",
+                "MCP servers…",
                 "Enable companion",
                 "Quit zoid",
             ]

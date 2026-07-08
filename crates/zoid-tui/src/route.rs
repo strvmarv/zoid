@@ -135,6 +135,7 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
         Overlay::Sessions => return route_sessions_key(state, key),
         Overlay::Config => return route_config_key(state, key),
         Overlay::ProviderSwitch => return route_provider_switch_key(state, key),
+        Overlay::Mcp => return route_mcp_key(state, key),
         Overlay::None => {}
     }
 
@@ -277,6 +278,16 @@ fn route_sessions_key(state: &ShellState, key: KeyEvent) -> Action {
         }
         KeyCode::Up | KeyCode::Char('k') => Action::SessionMove(-1),
         KeyCode::Down | KeyCode::Char('j') => Action::SessionMove(1),
+        _ => Action::Noop,
+    }
+}
+
+/// Route keys while the read-only `/mcp` server status overlay is up. The
+/// overlay has no navigation or actions, just a close: Esc or `q` closes it,
+/// everything else is a no-op.
+fn route_mcp_key(_state: &ShellState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => Action::CloseOverlay,
         _ => Action::Noop,
     }
 }
@@ -1317,5 +1328,14 @@ mod tests {
             route_mouse(&s, &l, ev(MouseEventKind::ScrollDown, KeyModifiers::NONE)),
             Action::ScrollConversation(1)
         );
+    }
+
+    #[test]
+    fn esc_closes_the_mcp_overlay() {
+        use crate::state::{Overlay, ShellState};
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Mcp;
+        let action = route_mcp_key(&s, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(action, Action::CloseOverlay));
     }
 }

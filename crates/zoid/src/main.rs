@@ -1428,6 +1428,9 @@ struct App {
     /// forcibly claim from another instance. Set by `SessionTakeoverConfirm`,
     /// consumed by the "Take over" answer in `QuestionSelect`. Spec §3.2.
     pending_takeover: Option<Ulid>,
+    /// Background MCP manager (None if no servers are configured). Its tools are
+    /// merged into the Chat tool set each turn.
+    mcp: Option<std::sync::Arc<zoid_mcp::McpManager>>,
 }
 
 impl App {
@@ -1689,6 +1692,18 @@ async fn main() -> Result<()> {
     );
     let modes = zoid::mode_import::build_mode_registry(&base_profile, &mode_dirs);
 
+    let mcp = {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let servers = zoid_mcp::config::discover(&cfg_dir, &cwd, &|k| std::env::var(k).ok());
+        if servers.is_empty() {
+            None
+        } else {
+            let m = std::sync::Arc::new(zoid_mcp::McpManager::new());
+            m.spawn_connect_all(servers);
+            Some(m)
+        }
+    };
+
     let mut app = App {
         session,
         session_id,
@@ -1734,6 +1749,7 @@ async fn main() -> Result<()> {
         yielded: false,
         pending_message: None,
         pending_takeover: None,
+        mcp,
     };
 
     // Restore the resumed session's persisted active mode (a no-op if that mode
@@ -1887,6 +1903,26 @@ where
             app.shell.changes_files = *f;
             app.shell.branch = branch.clone();
             app.shell.worktree = worktree.clone();
+        }
+        // MCP server status: an in-memory Mutex snapshot (no subprocess/IO), so
+        // it's cheap enough to refresh every frame rather than off-loading it to
+        // the background git-poll task above.
+        if let Some(m) = &app.mcp {
+            app.shell.mcp_status = m
+                .status()
+                .into_iter()
+                .map(|s| zoid_tui::state::McpStatusRow {
+                    name: s.name,
+                    state: match s.state {
+                        zoid_mcp::ServerState::Connecting => "connecting",
+                        zoid_mcp::ServerState::Ready => "ready",
+                        zoid_mcp::ServerState::Failed => "failed",
+                        zoid_mcp::ServerState::Disconnected => "disconnected",
+                    }
+                    .to_string(),
+                    tool_count: s.tool_count,
+                })
+                .collect();
         }
         // Refresh cached projections only when the event log grew (append-only),
         // so typing / scrolling / zoom reuse them instead of rebuilding O(events)
@@ -4030,6 +4066,13 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             refresh_config_sections(app);
             Ok(false)
         }
+        Command::OpenMcp => {
+            // Read-only status overlay: `app.shell.mcp_status` is kept current by
+            // the per-frame sync in the render loop, so there is nothing to
+            // populate here beyond switching the overlay.
+            app.shell.overlay = zoid_tui::Overlay::Mcp;
+            Ok(false)
+        }
         Command::CompanionEnable => {
             enable_companion(app);
             Ok(false)
@@ -4277,8 +4320,12 @@ fn spawn_turn(app: &mut App) {
         )));
         tools.push(Box::new(zoid::mode_wizard::ApplyModeMappingTool::new(wiz)));
     }
+    if let Some(m) = &app.mcp {
+        tools.extend(m.mcp_tools());
+    }
     let tools = std::sync::Arc::new(tools);
     let mut turn_config = zoid::agent::chat_turn_config_with(&profile, &menu);
+    turn_config.mcp = app.mcp.clone();
     turn_config.policy = policy_from_config(&app.economy, app.context_target);
     turn_config.eviction = zoid_core::eviction::EvictionPolicy {
         enabled: app.economy.compact_threshold_pct > 0, // master switch (back-compat)
@@ -4867,6 +4914,7 @@ mod tests {
             yielded: false,
             pending_message: None,
             pending_takeover: None,
+            mcp: None,
         }
     }
 

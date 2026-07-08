@@ -2631,6 +2631,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
@@ -3607,6 +3608,7 @@ dependencies = [
  "zip",
  "zoid-companion",
  "zoid-core",
+ "zoid-mcp",
  "zoid-provider",
  "zoid-testkit",
  "zoid-tools",
@@ -3638,6 +3640,20 @@ dependencies = [
  "tokio",
  "toml",
  "ulid",
+]
+
+[[package]]
+name = "zoid-mcp"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "zoid-provider",
+ "zoid-tools",
 ]
 
 [[package]]

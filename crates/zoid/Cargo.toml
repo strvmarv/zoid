@@ -18,6 +18,7 @@ zoid-provider = { path = "../zoid-provider" }
 zoid-tools = { path = "../zoid-tools" }
 zoid-tui = { path = "../zoid-tui" }
 zoid-companion = { path = "../zoid-companion" }
+zoid-mcp = { path = "../zoid-mcp" }
 anyhow = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }

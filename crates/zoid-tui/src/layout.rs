@@ -272,7 +272,7 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
     // stream rather than bleeding right into the rail.
     let palette = if matches!(
         state.overlay,
-        Overlay::Palette | Overlay::Objects | Overlay::Verbs | Overlay::Sessions
+        Overlay::Palette | Overlay::Objects | Overlay::Verbs | Overlay::Sessions | Overlay::Mcp
     ) {
         Some(centered(conversation, 72, 18))
     } else {
@@ -459,7 +459,16 @@ mod tests {
 
     #[test]
     fn overlay_rect_present_for_object_and_verb_pickers() {
-        for ov in [Overlay::Objects, Overlay::Verbs] {
+        // Every overlay that `render_shell` paints into `layout.palette` must get
+        // a rect here, or it renders invisibly. This guards the whole set through
+        // the real `compute` path (the per-overlay render tests call the render
+        // fn directly and cannot catch a missing rect allocation).
+        for ov in [
+            Overlay::Objects,
+            Overlay::Verbs,
+            Overlay::Sessions,
+            Overlay::Mcp,
+        ] {
             let mut s = ShellState::new();
             s.overlay = ov;
             assert!(

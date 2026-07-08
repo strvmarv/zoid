@@ -1,0 +1,24 @@
+[package]
+name = "zoid-mcp"
+version = "0.1.2"
+edition = "2021"
+
+[[bin]]
+name = "zoid_mcp_fake_server"
+path = "src/bin/zoid_mcp_fake_server.rs"
+
+[features]
+test-helpers = []
+
+[dependencies]
+zoid-tools = { path = "../zoid-tools" }
+zoid-provider = { path = "../zoid-provider" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = { workspace = true }

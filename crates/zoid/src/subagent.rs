@@ -152,6 +152,7 @@ pub async fn run_subagent(
         branch: branch.clone(),
         policy: subagent_policy(),
         eviction: zoid_core::eviction::EvictionPolicy::disabled(),
+        mcp: None,
     };
     // Subagents have no session-scoped companion (the `show` tool is chat-only
     // and is never in the subagent tool registry), so this hub is never
