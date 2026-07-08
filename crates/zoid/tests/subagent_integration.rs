@@ -101,6 +101,7 @@ async fn subagent_writes_inside_its_worktree_not_the_main_copy() {
             tx,
             || 0,
             "sub-test".into(),
+            zoid_core::config::ApprovalConfig::default(),
         )
         .await
         .unwrap();

@@ -4211,6 +4211,7 @@ fn start_delegation(app: &mut App, task: String) {
     let seed = app.events.snapshot(); // context for construction (B3)
     let model = app.model.clone();
     let ui = app.ui_tx.clone();
+    let approval_config = app.config.approval.clone();
     tokio::spawn(async move {
         let res = zoid::subagent::run_subagent(
             &task,
@@ -4224,6 +4225,7 @@ fn start_delegation(app: &mut App, task: String) {
             ui.clone(),
             now_ms,
             sub_id,
+            approval_config,
         )
         .await;
         // WorktreeGuard `wt` drops here → worktree cleaned up (isolation preserved
@@ -4433,6 +4435,7 @@ fn spawn_turn(app: &mut App) {
         .map(|info| info.thinking)
         .unwrap_or_else(|| zoid_provider::model::model_info(&app.model).thinking);
     turn_config.thinking = resolve_thinking(&app.config.thinking, model_support);
+    turn_config.approval = app.config.approval.clone();
     // Mint a fresh cancellation token for this turn and keep a clone so
     // `Action::CancelTurn` (Esc/Ctrl-C) can fire it. Cleared on `TurnComplete`.
     let cancel = tokio_util::sync::CancellationToken::new();

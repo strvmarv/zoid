@@ -113,6 +113,7 @@ pub async fn run_subagent(
     ui: mpsc::Sender<AgentUpdate>,
     now: fn() -> i64,
     id: String,
+    approval: zoid_core::config::ApprovalConfig,
 ) -> Result<SubagentResult> {
     let sub_ulid = id.strip_prefix("sub-").unwrap_or(&id).to_string();
     let branch = BranchId(format!("subagent:{sub_ulid}"));
@@ -155,16 +156,28 @@ pub async fn run_subagent(
         eviction: zoid_core::eviction::EvictionPolicy::disabled(),
         mcp: None,
         thinking: zoid_provider::ThinkingMode::Off,
+        approval: approval.clone(),
     };
     // Subagents have no session-scoped companion (the `show` tool is chat-only
     // and is never in the subagent tool registry), so this hub is never
     // published to; it only satisfies the turn-loop's signature.
     let companion_hub = zoid_companion::CompanionHub::new();
+    // Subagents are headless — they can't answer a prompt, so the blacklist
+    // gate auto-denies dangerous matches instead of prompting.
+    let gate: std::sync::Arc<dyn zoid_tools::ToolGate> = if approval.yolo {
+        std::sync::Arc::new(zoid_tools::AllowAll)
+    } else {
+        std::sync::Arc::new(zoid_tools::BlacklistGate::new(
+            approval.shell_danger.clone(),
+            approval.shell_allow.clone(),
+            false, // interactive = false → Gate::Deny, not Gate::Prompt
+        ))
+    };
     let produced = run_agent_turn(
         config,
         provider,
         tools,
-        std::sync::Arc::new(zoid_tools::AllowAll),
+        gate,
         session,
         crate::eventlog::EventLog::from_vec(vec![seed]),
         model,
@@ -362,6 +375,7 @@ mod tests {
             tx,
             || 0,
             "sub-test".into(),
+            zoid_core::config::ApprovalConfig::default(),
         )
         .await
         .unwrap();

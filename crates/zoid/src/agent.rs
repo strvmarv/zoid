@@ -63,6 +63,9 @@ pub struct TurnConfig {
     /// Thinking mode for this turn. Resolved from config + model capability
     /// in spawn_turn. Defaults to Off.
     pub thinking: ThinkingMode,
+    /// Approval config for gate selection. Subagents use the blacklist with
+    /// interactive=false (auto-deny) unless yolo.
+    pub approval: zoid_core::config::ApprovalConfig,
 }
 
 /// The orchestrator (Chat) turn config for an explicit mode profile + skill menu.
@@ -85,6 +88,7 @@ pub fn chat_turn_config_with(profile: &AgentProfile, skill_menu: &str) -> TurnCo
         eviction: zoid_core::eviction::EvictionPolicy::disabled(),
         mcp: None,
         thinking: ThinkingMode::Off,
+        approval: zoid_core::config::ApprovalConfig::default(),
     }
 }
 
@@ -1078,6 +1082,7 @@ async fn run_turn_inner(
                         now,
                         sub_id.clone(),
                         wt,
+                        config.approval.clone(),
                     );
 
                     emit(

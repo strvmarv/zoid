@@ -256,7 +256,7 @@ mod tests {
             recent_n: Source::Default,
             reduced_motion: Source::Default,
             thinking_enabled: Source::Default,
-            thinking_effort: Source::Default,
+            thinking_effort: Source::Default, approval: Source::Default,
         };
         let ks = [
             ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
@@ -323,7 +323,7 @@ mod tests {
             recent_n: Source::Default,
             reduced_motion: Source::Default,
             thinking_enabled: Source::Default,
-            thinking_effort: Source::Default,
+            thinking_effort: Source::Default, approval: Source::Default,
         };
         let sections = build_sections(&cfg, &prov, &[]);
         let pm = &sections[0];

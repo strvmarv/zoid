@@ -52,6 +52,7 @@ async fn delegated_result_folds_into_main_conversation() {
         tx,
         || 0,
         "sub-test".into(),
+        zoid_core::config::ApprovalConfig::default(),
     )
     .await
     .unwrap();
@@ -121,6 +122,7 @@ async fn delegation_spend_lands_in_the_session_ledger() {
         tx,
         || 0,
         "sub-test2".into(),
+        zoid_core::config::ApprovalConfig::default(),
     )
     .await
     .unwrap();

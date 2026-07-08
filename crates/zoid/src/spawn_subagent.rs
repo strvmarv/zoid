@@ -27,6 +27,7 @@ pub fn spawn_subagent(
     now: fn() -> i64,
     sub_id: String,
     wt: Option<crate::worktree::WorktreeGuard>,
+    approval: zoid_core::config::ApprovalConfig,
 ) {
     tokio::spawn(async move {
         let res = crate::subagent::run_subagent(
@@ -41,6 +42,7 @@ pub fn spawn_subagent(
             ui.clone(),
             now,
             sub_id,
+            approval,
         )
         .await;
         drop(wt);

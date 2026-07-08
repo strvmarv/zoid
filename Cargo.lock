@@ -3705,6 +3705,7 @@ name = "zoid-tools"
 version = "0.1.2"
 dependencies = [
  "serde_json",
+ "shlex",
  "tempfile",
  "zoid-provider",
 ]
