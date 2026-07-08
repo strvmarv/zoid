@@ -1183,11 +1183,52 @@ async fn run_turn_inner(
                         })
                         .await;
                     let out = match config.mcp.as_ref() {
-                        Some(m) => m.call_tool(&tc.name, &tc.args).await,
-                        None => zoid_tools::ToolOutput::err(format!(
+                        Some(m) => call_or_abandon(cancel, m.call_tool(&tc.name, &tc.args)).await,
+                        None => Some(zoid_tools::ToolOutput::err(format!(
                             "mcp tool '{}' requested but no MCP manager is active",
                             tc.name
-                        )),
+                        ))),
+                    };
+                    let out = match out {
+                        Some(o) => o,
+                        None => {
+                            // Graceful cancel abandoned the call: answer it + drain
+                            // the rest of the batch so no tool_use is unbalanced.
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::ToolResult {
+                                    id: tc.id,
+                                    name: tc.name,
+                                    output: "[skipped: turn aborted]".to_string(),
+                                    is_error: false,
+                                },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                            for rest in pending_iter.by_ref() {
+                                emit(
+                                    &session,
+                                    &mut events,
+                                    ui,
+                                    &config.branch,
+                                    EventKind::ToolResult {
+                                        id: rest.id,
+                                        name: rest.name,
+                                        output: "[skipped: turn aborted]".to_string(),
+                                        is_error: false,
+                                    },
+                                    session_id,
+                                    now,
+                                )
+                                .await?;
+                            }
+                            outcome = "aborted";
+                            break 'turn;
+                        }
                     };
                     let tool_ok = !out.is_error;
                     let tool_fail_msg = out.is_error.then(|| out.text.clone());
@@ -1332,6 +1373,21 @@ async fn run_turn_inner(
     );
 
     Ok(events)
+}
+
+/// Race an async tool call against a cancellation token. Returns `Some(output)`
+/// if the call finishes first, or `None` if `cancel` fires first (the caller
+/// then synthesizes a balanced `[skipped: turn aborted]` result). Used to make
+/// an in-flight MCP call abandonable on a graceful cancel (first Esc).
+async fn call_or_abandon<F>(cancel: &CancellationToken, fut: F) -> Option<zoid_tools::ToolOutput>
+where
+    F: std::future::Future<Output = zoid_tools::ToolOutput>,
+{
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => None,
+        out = fut => Some(out),
+    }
 }
 
 /// Persist one event and announce it to the UI, keeping the local log in sync.
@@ -1629,6 +1685,28 @@ mod tests {
     use super::*;
     use zoid_core::event::BranchId;
     use zoid_provider::MsgRole;
+
+    #[tokio::test]
+    async fn call_or_abandon_yields_none_when_cancel_wins() {
+        let cancel = CancellationToken::new();
+        cancel.cancel(); // already cancelled → abandon immediately
+        let out = call_or_abandon(
+            &cancel,
+            std::future::pending::<zoid_tools::ToolOutput>(),
+        )
+        .await;
+        assert!(out.is_none(), "a cancelled token must abandon the call");
+    }
+
+    #[tokio::test]
+    async fn call_or_abandon_yields_result_when_future_completes() {
+        let cancel = CancellationToken::new(); // never fired
+        let out = call_or_abandon(&cancel, async {
+            zoid_tools::ToolOutput::ok("done")
+        })
+        .await;
+        assert_eq!(out.expect("future should win").text, "done");
+    }
 
     #[test]
     fn chat_turn_config_is_main_branch_cwd_dot() {
