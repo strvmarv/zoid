@@ -4,6 +4,7 @@
 pub mod agent;
 pub mod cli;
 pub mod eventlog;
+pub mod expiry;
 pub mod github_fetch;
 pub mod invoke_skill;
 pub mod mode_import;
