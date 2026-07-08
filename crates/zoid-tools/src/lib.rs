@@ -5,6 +5,7 @@
 pub mod ask;
 pub mod approval;
 pub mod edit;
+pub mod glob;
 pub mod kill;
 pub mod read;
 pub mod recall;
@@ -79,6 +80,7 @@ pub fn registry() -> Vec<Box<dyn Tool>> {
         Box::new(write::Write),
         Box::new(edit::Edit),
         Box::new(search::Grep),
+        Box::new(glob::GlobTool),
         Box::new(shell::Shell::default()),
         Box::new(tasks::UpdateTasks),
         Box::new(ask::AskUser),
@@ -94,6 +96,7 @@ pub fn registry_with_kill(kill: KillSlot) -> Vec<Box<dyn Tool>> {
         Box::new(write::Write),
         Box::new(edit::Edit),
         Box::new(search::Grep),
+        Box::new(glob::GlobTool),
         Box::new(shell::Shell::new(kill)),
         Box::new(tasks::UpdateTasks),
         Box::new(ask::AskUser),
@@ -179,6 +182,7 @@ mod tests {
         assert!(names.contains(&"Write"));
         assert!(names.contains(&"Edit"));
         assert!(names.contains(&"Grep"));
+        assert!(names.contains(&"Glob"));
         assert!(names.contains(&"shell"));
         assert!(names.contains(&"update_tasks"));
         assert!(names.contains(&"ask_user"));

@@ -34,7 +34,7 @@ impl AgentProfile {
             description: "Complete one discrete unit of work autonomously.".into(),
             system_prompt: "You are a zoid subagent. You are given ONE discrete task and the \
                 relevant code. Complete the task end to end using the tools (Read, Write, Edit, \
-                Grep, shell). Work autonomously — do not ask questions. When done, give \
+                Grep, Glob, shell). Work autonomously — do not ask questions. When done, give \
                 a one-paragraph summary of what you changed."
                 .into(),
             tools: vec![
@@ -42,6 +42,7 @@ impl AgentProfile {
                 "Write".into(),
                 "Edit".into(),
                 "Grep".into(),
+                "Glob".into(),
                 "shell".into(),
             ],
             model: None,
