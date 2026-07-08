@@ -172,7 +172,7 @@ pub struct PartialModes {
     pub source_dirs: Option<Vec<String>>,
 }
 
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct PartialThinking {
     pub enabled: Option<bool>,
