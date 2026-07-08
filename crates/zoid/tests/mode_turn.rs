@@ -42,7 +42,10 @@ fn active_turn_snapshot_scopes_invoke_skill() {
 
     // In Chat: the scoped skill is NOT resolvable.
     let (_p, eff_chat) = active_turn(&modes, &global, &base);
-    let tools = Arc::new(zoid::invoke_skill::chat_tools(Arc::new(eff_chat)));
+    let tools = Arc::new(zoid::invoke_skill::chat_tools(
+        Arc::new(eff_chat),
+        zoid_tools::KillSlot::new(),
+    ));
     let inv = tools.iter().find(|t| t.name() == "invoke_skill").unwrap();
     let out = inv.run(&json!({"name": "brainstorming"}), Path::new("."));
     assert!(out.is_error, "brainstorming must be unresolvable in Chat");
@@ -51,7 +54,10 @@ fn active_turn_snapshot_scopes_invoke_skill() {
     modes.set_active("SP");
     let (profile, eff_sp) = active_turn(&modes, &global, &base);
     assert!(profile.system_prompt.ends_with("USE SKILLS"));
-    let tools = Arc::new(zoid::invoke_skill::chat_tools(Arc::new(eff_sp)));
+    let tools = Arc::new(zoid::invoke_skill::chat_tools(
+        Arc::new(eff_sp),
+        zoid_tools::KillSlot::new(),
+    ));
     let inv = tools.iter().find(|t| t.name() == "invoke_skill").unwrap();
     let out = inv.run(&json!({"name": "brainstorming"}), Path::new("."));
     assert!(!out.is_error && out.text.contains("BODY-brainstorming"));

@@ -383,6 +383,7 @@ async fn cancel_mid_stream_drains_pending_tool_calls_without_running_them() {
         zoid_companion::CompanionHub::new(),
         fixed_now,
         cancel,
+        tokio_util::sync::CancellationToken::new(),
     )
     .await
     .unwrap();

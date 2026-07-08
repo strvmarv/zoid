@@ -157,6 +157,7 @@ pub async fn run_subagent(
         mcp: None,
         thinking: zoid_provider::ThinkingMode::Off,
         approval: approval.clone(),
+        kill: zoid_tools::KillSlot::new(),
     };
     // Subagents have no session-scoped companion (the `show` tool is chat-only
     // and is never in the subagent tool registry), so this hub is never

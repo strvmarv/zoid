@@ -83,8 +83,8 @@ fn body_with_anchor(skill: &zoid_core::skill::Skill) -> String {
 
 /// The Chat tool set: the standard curated registry plus the `invoke_skill` tool
 /// bound to `skills`. Extracted from `App` construction so it is unit-testable.
-pub fn chat_tools(skills: Arc<SkillRegistry>) -> Vec<Box<dyn Tool>> {
-    let mut tools = zoid_tools::registry();
+pub fn chat_tools(skills: Arc<SkillRegistry>, kill: zoid_tools::KillSlot) -> Vec<Box<dyn Tool>> {
+    let mut tools = zoid_tools::registry_with_kill(kill);
     tools.push(Box::new(InvokeSkillTool::new(skills)));
     // `recall` is always offered in chat (never gated on eviction.enabled): the
     // cold tier is a standing capability, and a prior session may hold paged-out
@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn chat_tools_includes_invoke_skill_and_base_registry() {
-        let tools = chat_tools(Arc::new(SkillRegistry::builtin()));
+        let tools = chat_tools(Arc::new(SkillRegistry::builtin()), zoid_tools::KillSlot::new());
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(names.contains(&"invoke_skill"));
         assert!(names.contains(&"write_file"));
@@ -178,7 +178,10 @@ mod tests {
 
     #[test]
     fn chat_tools_excludes_dispatch_and_diff() {
-        let tools = chat_tools(std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()));
+        let tools = chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        );
         assert!(
             !tools.iter().any(|t| t.name() == "dispatch_subagent"),
             "dispatch_subagent must not be in chat_tools (disabled)"

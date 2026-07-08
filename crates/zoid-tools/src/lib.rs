@@ -5,6 +5,7 @@
 pub mod ask;
 pub mod approval;
 pub mod edit;
+pub mod kill;
 pub mod read;
 pub mod recall;
 pub mod search;
@@ -42,6 +43,8 @@ impl ToolOutput {
     }
 }
 
+pub use kill::KillSlot;
+
 /// How the agent loop must execute a tool. `Local` tools run synchronously in
 /// the working directory (the v1 default). `Emitting` tools append a domain
 /// event instead of doing I/O. `Interactive` tools suspend the loop to collect
@@ -76,7 +79,22 @@ pub fn registry() -> Vec<Box<dyn Tool>> {
         Box::new(write::WriteFile),
         Box::new(edit::EditFile),
         Box::new(search::Search),
-        Box::new(shell::Shell),
+        Box::new(shell::Shell::default()),
+        Box::new(tasks::UpdateTasks),
+        Box::new(ask::AskUser),
+    ]
+}
+
+/// Like [`registry`] but the `shell` tool carries a shared [`KillSlot`] so a
+/// hard-stop can kill its process group. Used by the chat turn; subagents and
+/// tests use the zero-arg `registry()` (their shell is not hard-killable).
+pub fn registry_with_kill(kill: KillSlot) -> Vec<Box<dyn Tool>> {
+    vec![
+        Box::new(read::ReadFile),
+        Box::new(write::WriteFile),
+        Box::new(edit::EditFile),
+        Box::new(search::Search),
+        Box::new(shell::Shell::new(kill)),
         Box::new(tasks::UpdateTasks),
         Box::new(ask::AskUser),
     ]
