@@ -13,6 +13,54 @@ use serde_json::{json, Value};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+/// Map `ThinkingMode` + `ThinkingWireShape` to the OpenAI-compat thinking
+/// params. Returns `None` for models without thinking support (defensive —
+/// the capability gate should have caught this earlier).
+fn thinking_params(req: &CompletionRequest) -> Option<Vec<(&'static str, Value)>> {
+    let info = crate::model::model_info(&req.model);
+    let wire = info.thinking_wire;
+    match wire {
+        crate::model::ThinkingWireShape::DeepSeek => {
+            // deepseek-v4-pro is thinking-only: Off silently becomes Auto.
+            let is_thinking_only = info.thinking == crate::model::ThinkingSupport::ToggleWithEffort
+                && req.model == "deepseek-v4-pro";
+            let effective = if is_thinking_only && matches!(req.thinking, crate::ThinkingMode::Off) {
+                tracing::warn!(model = %req.model, "thinking-only model: Off silently becomes Auto");
+                crate::ThinkingMode::Auto
+            } else {
+                req.thinking
+            };
+            let mut params = Vec::new();
+            let (thinking_type, has_effort) = match effective {
+                crate::ThinkingMode::Off => ("disabled", false),
+                crate::ThinkingMode::Auto => ("enabled", true),
+                crate::ThinkingMode::Effort(_) => ("enabled", true),
+            };
+            params.push(("thinking", json!({ "type": thinking_type })));
+            if has_effort {
+                let effort = match effective {
+                    crate::ThinkingMode::Effort(crate::EffortLevel::Max) => "max",
+                    _ => "high",
+                };
+                params.push(("reasoning_effort", json!(effort)));
+            }
+            Some(params)
+        }
+        crate::model::ThinkingWireShape::OpenAI => {
+            let effort = match req.thinking {
+                crate::ThinkingMode::Off => return Some(vec![("reasoning_effort", json!("none"))]),
+                crate::ThinkingMode::Auto => "medium",
+                crate::ThinkingMode::Effort(crate::EffortLevel::Low) => "low",
+                crate::ThinkingMode::Effort(crate::EffortLevel::Medium) => "medium",
+                crate::ThinkingMode::Effort(crate::EffortLevel::High) => "high",
+                crate::ThinkingMode::Effort(crate::EffortLevel::Max) => "xhigh",
+            };
+            Some(vec![("reasoning_effort", json!(effort))])
+        }
+        _ => None,
+    }
+}
+
 /// Build the OpenAI Chat Completions `/v1/chat/completions` request body.
 /// System prompt is a leading `{"role":"system"}` message. Tool-call
 /// `arguments` are serialized as a JSON-encoded **string** (OpenAI's shape,
@@ -64,6 +112,11 @@ pub fn request_body(req: &CompletionRequest) -> Value {
                 "function": { "name": t.name, "description": t.description, "parameters": t.parameters }
             })).collect(),
         );
+    }
+    if let Some(params) = thinking_params(req) {
+        for (key, val) in params {
+            body[key] = val;
+        }
     }
     body
 }
@@ -662,6 +715,159 @@ mod tests {
             second.is_empty(),
             "take() must drain — second call should be empty"
         );
+    }
+
+
+    #[test]
+    fn deepseek_body_emits_thinking_and_effort_when_auto() {
+        let req = CompletionRequest {
+            model: "deepseek-v4-pro".into(),
+            system: None,
+            messages: vec![Message::user("x")],
+            max_tokens: 4096,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Auto,
+        };
+        let body = request_body(&req);
+        assert_eq!(body["thinking"]["type"], json!("enabled"));
+        assert_eq!(body["reasoning_effort"], json!("high"));
+    }
+
+    #[test]
+    fn deepseek_body_emits_disabled_when_off() {
+        let req = CompletionRequest {
+            model: "deepseek-v4-flash".into(),
+            system: None,
+            messages: vec![Message::user("x")],
+            max_tokens: 4096,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Off,
+        };
+        let body = request_body(&req);
+        assert_eq!(body["thinking"]["type"], json!("disabled"));
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn deepseek_body_emits_max_effort() {
+        let req = CompletionRequest {
+            model: "deepseek-v4-pro".into(),
+            system: None,
+            messages: vec![Message::user("x")],
+            max_tokens: 4096,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Effort(crate::EffortLevel::Max),
+        };
+        let body = request_body(&req);
+        assert_eq!(body["thinking"]["type"], json!("enabled"));
+        assert_eq!(body["reasoning_effort"], json!("max"));
+    }
+
+    #[test]
+    fn deepseek_body_low_effort_maps_to_high() {
+        let req = CompletionRequest {
+            model: "deepseek-v4-pro".into(),
+            system: None,
+            messages: vec![Message::user("x")],
+            max_tokens: 4096,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Effort(crate::EffortLevel::Low),
+        };
+        let body = request_body(&req);
+        assert_eq!(body["reasoning_effort"], json!("high"));
+    }
+
+    #[test]
+    fn deepseek_v4_pro_off_silently_becomes_auto() {
+        let req = CompletionRequest {
+            model: "deepseek-v4-pro".into(),
+            system: None,
+            messages: vec![Message::user("x")],
+            max_tokens: 4096,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Off,
+        };
+        let body = request_body(&req);
+        // v4-pro is thinking-only: Off → Auto → enabled + high
+        assert_eq!(body["thinking"]["type"], json!("enabled"));
+        assert_eq!(body["reasoning_effort"], json!("high"));
+    }
+
+    #[test]
+    fn openai_body_emits_reasoning_effort_when_auto() {
+        let req = CompletionRequest {
+            model: "o3".into(),
+            system: None,
+            messages: vec![Message::user("x")],
+            max_tokens: 4096,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Auto,
+        };
+        let body = request_body(&req);
+        assert_eq!(body["reasoning_effort"], json!("medium"));
+        assert!(body.get("thinking").is_none(), "OpenAI shape must NOT emit a thinking key");
+    }
+
+    #[test]
+    fn openai_body_emits_xhigh_for_max() {
+        let req = CompletionRequest {
+            model: "o3".into(),
+            system: None,
+            messages: vec![Message::user("x")],
+            max_tokens: 4096,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Effort(crate::EffortLevel::Max),
+        };
+        let body = request_body(&req);
+        assert_eq!(body["reasoning_effort"], json!("xhigh"));
+    }
+
+    #[test]
+    fn non_thinking_model_emits_nothing_when_off() {
+        let req = CompletionRequest {
+            model: "glm-5.2".into(),
+            system: None,
+            messages: vec![Message::user("x")],
+            max_tokens: 4096,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Off,
+        };
+        let body = request_body(&req);
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn non_thinking_model_emits_nothing_even_when_thinking_on() {
+        let req = CompletionRequest {
+            model: "glm-5.2".into(),
+            system: None,
+            messages: vec![Message::user("x")],
+            max_tokens: 4096,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Auto,
+        };
+        let body = request_body(&req);
+        assert!(body.get("thinking").is_none());
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn parse_chunk_reasoning_content_is_discarded() {
+        let data = r#"{"choices":[{"delta":{"content":"answer","reasoning_content":"thinking..."}}]}"#;
+        let events = parse_chunk(data, &mut ToolCallAccumulator::new());
+        assert_eq!(
+            events,
+            vec![ProviderEvent::TextDelta("answer".into())],
+            "reasoning_content must be silently discarded"
+        );
+    }
+
+    #[test]
+    fn parse_chunk_reasoning_content_alone_yields_nothing() {
+        let data = r#"{"choices":[{"delta":{"reasoning_content":"deep thoughts"}}]}"#;
+        let events = parse_chunk(data, &mut ToolCallAccumulator::new());
+        assert!(events.is_empty(), "reasoning-only delta must produce nothing");
     }
 
     use std::time::Duration;

@@ -340,6 +340,18 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
             thinking_wire: ThinkingWireShape::None,
         },
     ),
+    // OpenAI o-series: used for testing OpenAI reasoning_effort wire shape.
+    (
+        "o3",
+        ModelInfo {
+            context_window: 200_000,
+            max_output: 0,
+            tools: true,
+            prompt_cache: false,
+            thinking: ThinkingSupport::ToggleWithEffort,
+            thinking_wire: ThinkingWireShape::OpenAI,
+        },
+    ),
 ];
 
 /// Conservative fallback for models not in the registry. Under-estimating the
