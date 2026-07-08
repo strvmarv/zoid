@@ -17,6 +17,8 @@
 - **Enforce before terminal setup**, printing to **stderr** and exiting status **1** — no panic/backtrace. (Spec § B.)
 - **Git commits must NOT include any `Co-Authored-By` / co-author trailer.** (User global CLAUDE.md.)
 - Module exposure follows the existing pattern in `crates/zoid/src/lib.rs`: `pub mod <name>;`. (Verified: `pub mod cli;`, `pub mod update;` present.)
+- **Escape-hatch caveat (leaned on, stated out loud):** leaving `zoid update` ungated means an expired build can be reset by self-updating. This is safe **only while release assets are non-public** — a casual leak-holder cannot fetch a fresh asset. If zoid's release assets ever become publicly downloadable, `zoid update` becomes a one-command bypass of the whole tripwire and this decision must be revisited.
+- **Shell portability:** the repo's default shell is `fish`, which lacks `$?`, `$((…))`, and inline `VAR=val cmd`. Every smoke-test block below is therefore wrapped in `bash -c '…'` so it runs identically regardless of the invoking shell. Do not strip the wrapper.
 
 ---
 
@@ -165,6 +167,12 @@ mod tests {
     fn clock_before_build_is_flagged() {
         assert_eq!(evaluate(BUILD - 1, BUILD, WINDOW_SECS), Verdict::ClockBeforeBuild);
     }
+
+    #[test]
+    fn window_is_exactly_thirty_days() {
+        // Pins the constant so a fat-fingered edit to the window can't pass silently.
+        assert_eq!(WINDOW_SECS, 2_592_000);
+    }
 }
 ```
 
@@ -190,7 +198,7 @@ Run:
 ```bash
 cargo test -p zoid --lib expiry 2>&1 | tail -20
 ```
-Expected: `test result: ok. 4 passed` (the four boundary tests).
+Expected: `test result: ok. 5 passed` (four boundary tests + the `WINDOW_SECS` constant pin).
 
 (These are written to pass immediately because `evaluate` is included in Step 1 — the "failing" phase here is conceptual: if you comment out the body of `evaluate` and return `Verdict::Ok` unconditionally, `one_second_past_window_is_expired` and `clock_before_build_is_flagged` fail. Optional: do that, run, watch them fail, then restore — to confirm the tests have teeth.)
 
@@ -231,7 +239,7 @@ Run:
 ```bash
 cargo build -p zoid 2>&1 | tail -5 && cargo test -p zoid --lib expiry 2>&1 | tail -5
 ```
-Expected: build succeeds; the 4 `expiry` tests still pass. (`enforce()` has no unit test — it calls `process::exit`; it is covered by Task 3's manual smoke test.)
+Expected: build succeeds; the 5 `expiry` tests still pass. (`enforce()` has no unit test — it calls `process::exit`; it is covered by Task 3's manual smoke test.)
 
 - [ ] **Step 6: Commit**
 
@@ -288,9 +296,10 @@ Expected: builds cleanly.
 
 - [ ] **Step 3: Smoke-test an EXPIRED build refuses the TUI but honors escape hatches**
 
-Build with a stamp 40 days in the past, then exercise all three paths:
+Build with a stamp 40 days in the past, then exercise all three paths (wrapped in `bash -c` per the shell-portability constraint):
 
 ```bash
+bash -c '
 SOURCE_DATE_EPOCH=$(( $(date +%s) - 40*24*60*60 )) cargo build -p zoid 2>&1 | tail -3
 echo "--- TUI (should refuse, exit 1) ---"
 ./target/debug/zoid < /dev/null; echo "exit=$?"
@@ -298,6 +307,7 @@ echo "--- --version (escape hatch, should print + exit 0) ---"
 ./target/debug/zoid --version; echo "exit=$?"
 echo "--- --help (escape hatch, should print + exit 0) ---"
 ./target/debug/zoid --help >/dev/null; echo "exit=$?"
+'
 ```
 Expected:
 - TUI path prints `This zoid build has expired. Grab a newer build (\`zoid update\`).` and `exit=1`.
@@ -309,8 +319,10 @@ Expected:
 - [ ] **Step 4: Smoke-test a FRESH build launches normally**
 
 ```bash
+bash -c '
 cargo build -p zoid 2>&1 | tail -3   # fresh stamp = now
 ./target/debug/zoid --version; echo "exit=$?"
+'
 ```
 Expected: `zoid <version>`, `exit=0`. (A full TUI launch needs a terminal; `--version` confirms the fresh build is not falsely blocked. To eyeball the interactive path, run `./target/debug/zoid` in a real terminal and confirm it starts.)
 
@@ -319,9 +331,11 @@ Expected: `zoid <version>`, `exit=0`. (A full TUI launch needs a terminal; `--ve
 Build with a stamp dated in the FUTURE, so the current clock reads "before build":
 
 ```bash
+bash -c '
 SOURCE_DATE_EPOCH=$(( $(date +%s) + 10*24*60*60 )) cargo build -p zoid 2>&1 | tail -3
 ./target/debug/zoid < /dev/null; echo "exit=$?"
 cargo build -p zoid 2>&1 | tail -1   # rebuild fresh to leave the tree in a good state
+'
 ```
 Expected: prints `zoid can't verify this build's age — check your system clock.` and `exit=1`. The final rebuild restores a normal stamp.
 
@@ -355,9 +369,11 @@ git commit -m "feat(expiry): enforce 30-day expiration on TUI launch"
 | §B inclusive day-30 boundary | Task 2 tests (`last_valid_second_is_ok`, `one_second_past_window_is_expired`) |
 | §C gate only `Cli::Run`; leave version/help/update | Task 3 Step 1 + Step 3 verification |
 | §C `pub mod expiry;` in lib.rs | Task 2 Step 2 |
-| §E four boundary unit tests | Task 2 Step 1 |
+| §E four boundary unit tests (+ `WINDOW_SECS` const pin) | Task 2 Step 1 |
 | §E manual smoke test (old SOURCE_DATE_EPOCH) | Task 3 Steps 3–5 |
 | §D future hidden-only gate | Out of scope by design (YAGNI); no task — correct. |
+| Escape-hatch bypass caveat named | Global Constraints |
+| Shell portability (fish default) | Global Constraints + `bash -c` on all smoke blocks |
 
 All in-scope spec elements map to a task. §D is explicitly not built.
 
