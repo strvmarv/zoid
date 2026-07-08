@@ -51,6 +51,9 @@ pub enum ToolKind {
     Local,
     Emitting,
     Interactive,
+    /// Routed to an MCP server over async I/O; intercepted by the agent loop
+    /// before the synchronous path, so `run()` is never called (like Emitting).
+    Mcp,
 }
 
 /// A callable tool. `spec()` is sent to the provider; `run()` executes it.
