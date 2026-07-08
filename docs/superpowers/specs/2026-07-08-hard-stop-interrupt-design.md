@@ -124,10 +124,11 @@ replacement for `turn_cancel.is_some()`) still drives `state.cancellable`
   `[skipped: turn aborted]`. The MCP **server is not killed** — it is persistent
   and shared across tools; only this one request is abandoned.
 
-- **MCP timeout (defense in depth)** — add a wall-clock timeout to the MCP call
-  path (currently none), so a hung server cannot wedge a turn even without
-  `Esc`. Reuse the existing MCP `REQUEST_TIMEOUT` constant if present; otherwise
-  add one. On timeout, synthesize an error `tool_result`.
+- **MCP timeout** — no new timeout needed. The call path *already* enforces a
+  30s wall-clock bound (`zoid-mcp/src/client.rs`: `REQUEST_TIMEOUT`, applied to
+  `reply_rx`), plus a 10s per-server connect budget (`manager.rs`). Graceful
+  cancel simply abandons the in-flight call *earlier* than that ceiling; the
+  existing timeout remains the backstop for a hung server when no `Esc` arrives.
 
 - **Balancing** — extend the existing drain so both the hard-killed local tool
   and the abandoned MCP call leave a synthesized result; remaining unstarted
@@ -194,8 +195,6 @@ replacement for `turn_cancel.is_some()`) still drives `state.cancellable`
 - **Graceful-cancel mid-MCP-call** — using the fake MCP server fixture, a
   graceful cancel during an in-flight `call_tool` synthesizes
   `[skipped: turn aborted]` and abandons the request.
-- **MCP timeout** — a fake server that never replies causes the call path to
-  time out with an error `tool_result` (no `Esc` needed).
 - **Balancing invariant** — an interrupted batch has exactly one
   `tool_result` for every started `tool_use`.
 
