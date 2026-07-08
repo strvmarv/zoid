@@ -251,4 +251,32 @@ mod tests {
         assert_eq!(out.text, "boom");
         server.await.unwrap();
     }
+
+    #[tokio::test]
+    async fn pending_request_fails_fast_when_server_disconnects_midcall() {
+        use std::time::Duration;
+        let (srv_out, cli_in) = mpsc::channel::<String>(16);
+        let (cli_out, mut srv_in) = mpsc::channel::<String>(16);
+        let client = McpClient::connect(TransportHandle { outbound: cli_out, inbound: cli_in, _child: None }).await;
+
+        // The server receives the request line (so it is registered as pending
+        // in the actor) then disconnects WITHOUT replying by dropping its
+        // channel ends — closing the client's inbound (EOF).
+        let server = tokio::spawn(async move {
+            let _line = srv_in.recv().await.unwrap();
+            drop(srv_out); // closes the client's inbound => actor sees EOF
+        });
+
+        // The in-flight call must resolve to an error FAST — the actor drains
+        // pending on EOF, so this cannot hang until the 30s REQUEST_TIMEOUT.
+        let out = tokio::time::timeout(Duration::from_secs(5), client.call_tool("do", &json!({})))
+            .await
+            .expect("disconnect mid-call must resolve well before the 30s request timeout");
+        assert!(out.is_error, "disconnect mid-call must surface an error, not a success");
+        server.await.unwrap();
+
+        // The actor sets alive=false before draining pending, so the client
+        // observes the connection as dead once the call has returned.
+        assert!(!client.is_alive(), "client must report not-alive after server EOF");
+    }
 }
