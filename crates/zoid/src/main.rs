@@ -1345,6 +1345,9 @@ struct App {
     /// Full resolved config + provenance, kept live so the config screen can
     /// display current values and so edits reload/re-render without a restart.
     config: zoid_core::config::Config,
+    /// Whether YOLO mode is active (no approval prompts). Resolved from
+    /// config + CLI: `config.approval.yolo || cli --yolo`.
+    yolo: bool,
     prov: zoid_core::config::Provenance,
     /// Encrypted secret store (None → unavailable this run; secret edits no-op
     /// with a stderr note). Shared with the provider credential lookup.
@@ -1455,6 +1458,7 @@ async fn main() -> Result<()> {
 
     let cli_new;
     let cli_resume: Option<String>;
+    let cli_yolo;
 
     let companion_at_boot = match zoid::cli::parse_args(std::env::args().skip(1)) {
         zoid::cli::Cli::Version => {
@@ -1475,7 +1479,7 @@ async fn main() -> Result<()> {
             );
             std::process::exit(2);
         }
-        zoid::cli::Cli::Run { companion, new, resume } => {
+        zoid::cli::Cli::Run { companion, new, resume, yolo } => {
             // Build expiration: refuse to launch a >30-day-old build (or one on
             // a clock that predates the build). Runs before any DB/terminal
             // setup so the message prints cleanly. --version/--help/update are
@@ -1483,6 +1487,7 @@ async fn main() -> Result<()> {
             zoid::expiry::enforce();
             cli_new = new;
             cli_resume = resume;
+            cli_yolo = yolo;
             companion
         }
     };
@@ -1724,6 +1729,7 @@ async fn main() -> Result<()> {
         economy: config.economy,
         context_target,
         config: config.clone(),
+        yolo: config.approval.yolo || cli_yolo,
         prov,
         secrets: secrets.clone(),
         textarea: make_input(TextArea::default()),
@@ -5048,6 +5054,7 @@ mod tests {
             economy: zoid_core::config::EconomyConfig::default(),
             context_target: 300_000,
             config: zoid_core::config::Config::default(),
+            yolo: false,
             prov: {
                 use zoid_core::config::Source;
                 zoid_core::config::Provenance {

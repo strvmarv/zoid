@@ -6,7 +6,7 @@ fn args(v: &[&str]) -> Vec<String> {
 
 #[test]
 fn no_args_launches_tui() {
-    assert_eq!(parse_args(args(&[])), Cli::Run { companion: false, new: false, resume: None });
+    assert_eq!(parse_args(args(&[])), Cli::Run { companion: false, new: false, resume: None, yolo: false });
 }
 
 #[test]

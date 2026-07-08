@@ -11,6 +11,7 @@ pub enum Cli {
         companion: bool,
         new: bool,
         resume: Option<String>,
+        yolo: bool,
     },
     /// Print version and exit.
     Version,
@@ -41,10 +42,12 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Cli {
     let mut companion = false;
     let mut new = false;
     let mut resume: Option<String> = None;
+    let mut yolo = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--companion" => companion = true,
+            "--yolo" => yolo = true,
             "--new" => new = true,
             "--resume" => {
                 // Require exactly one id argument following --resume.
@@ -68,6 +71,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Cli {
         companion,
         new,
         resume,
+        yolo,
     }
 }
 
@@ -86,6 +90,7 @@ USAGE:
     zoid --new                Start a fresh session (no picker)
     zoid --resume <id>        Resume a session by ULID (full or last-4)
     zoid --companion          Launch with the companion browser view enabled
+    zoid --yolo               Disable all approval prompts (dangerous)
     zoid update               Download and install the latest release
     zoid --version            Print version
     zoid --help               Print this help"
@@ -98,11 +103,11 @@ mod tests {
     fn parses_companion_flag() {
         assert_eq!(
             super::parse_args(vec!["--companion".to_string()]),
-            super::Cli::Run { companion: true, new: false, resume: None }
+            super::Cli::Run { companion: true, new: false, resume: None, yolo: false }
         );
         assert_eq!(
             super::parse_args(Vec::<String>::new()),
-            super::Cli::Run { companion: false, new: false, resume: None }
+            super::Cli::Run { companion: false, new: false, resume: None, yolo: false }
         );
         assert_eq!(
             super::parse_args(vec!["--version".to_string()]),
@@ -114,7 +119,7 @@ mod tests {
     fn parses_new_flag() {
         assert_eq!(
             super::parse_args(vec!["--new".to_string()]),
-            super::Cli::Run { companion: false, new: true, resume: None }
+            super::Cli::Run { companion: false, new: true, resume: None, yolo: false }
         );
     }
 
@@ -122,7 +127,7 @@ mod tests {
     fn parses_resume_with_id() {
         assert_eq!(
             super::parse_args(vec!["--resume".to_string(), "01AB".to_string()]),
-            super::Cli::Run { companion: false, new: false, resume: Some("01AB".to_string()) }
+            super::Cli::Run { companion: false, new: false, resume: Some("01AB".to_string()), yolo: false }
         );
     }
 
@@ -130,7 +135,7 @@ mod tests {
     fn parses_companion_and_new_together() {
         assert_eq!(
             super::parse_args(vec!["--companion".to_string(), "--new".to_string()]),
-            super::Cli::Run { companion: true, new: true, resume: None }
+            super::Cli::Run { companion: true, new: true, resume: None, yolo: false }
         );
     }
 
@@ -138,7 +143,7 @@ mod tests {
     fn parses_companion_and_resume_together() {
         assert_eq!(
             super::parse_args(vec!["--companion".to_string(), "--resume".to_string(), "XYZW".to_string()]),
-            super::Cli::Run { companion: true, new: false, resume: Some("XYZW".to_string()) }
+            super::Cli::Run { companion: true, new: false, resume: Some("XYZW".to_string()), yolo: false }
         );
     }
 
@@ -153,5 +158,21 @@ mod tests {
     fn resume_without_id_is_unknown() {
         let result = super::parse_args(vec!["--resume".to_string()]);
         assert!(matches!(result, super::Cli::Unknown(_)), "--resume without an id must be an error");
+    }
+
+    #[test]
+    fn parses_yolo_flag() {
+        assert_eq!(
+            super::parse_args(vec!["--yolo".to_string()]),
+            super::Cli::Run { companion: false, new: false, resume: None, yolo: true }
+        );
+    }
+
+    #[test]
+    fn yolo_combines_with_companion() {
+        assert_eq!(
+            super::parse_args(vec!["--companion".to_string(), "--yolo".to_string()]),
+            super::Cli::Run { companion: true, new: false, resume: None, yolo: true }
+        );
     }
 }
