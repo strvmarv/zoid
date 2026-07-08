@@ -298,10 +298,15 @@ fn builtin_defaults() -> Vec<Pattern> {
                 vec!["-f".into(), "--force".into()],
             ],
         },
-        // Force-push / history rewrite
-        Pattern::ProgramWithAnyFlag {
+        // Force-push / history rewrite — match only when `git push` has a force
+        // flag. Using ProgramWithAllGroups avoids false positives on `git commit -f`
+        // (fixup shorthand) and `git fetch -f` (neither has `push` as a token).
+        Pattern::ProgramWithAllGroups {
             prog: "git".into(),
-            trigger_flags: vec!["--force".into(), "-f".into(), "--force-with-lease".into()],
+            flag_groups: vec![
+                vec!["push".into()],
+                vec!["--force".into(), "-f".into(), "--force-with-lease".into()],
+            ],
         },
         // Network/prod writes (curl with non-GET method or data)
         Pattern::ProgramWithAnyFlag {
@@ -336,7 +341,7 @@ fn builtin_defaults() -> Vec<Pattern> {
 }
 ```
 
-Note: the `git push --force` pattern matches on `git` + force flags. A plain `git log` or `git commit` won't match because neither has a force flag. A `git push --force` will match because `--force` is in `trigger_flags`. The `-X` check for curl needs special handling: `-X` alone isn't dangerous (it could be `-X GET`), so the matcher must check that the token *after* `-X` is a non-GET method. This is handled in Task 3's matcher.
+Note: the `git push --force` pattern uses `ProgramWithAllGroups` to require both `push` and a force flag — this avoids false positives on `git commit -f` (fixup shorthand) and `git fetch -f`. The curl `-X` flag needs special handling in the matcher (Task 3): `-X` alone isn't dangerous (it could be `-X GET`), so the matcher checks that the token after `-X` is a non-GET method, handling both `-X POST` (space-separated) and `-XPOST` (joined) forms.
 
 - [ ] **Step 6: Verify compilation**
 
@@ -392,6 +397,10 @@ Add to the `tests` module in `crates/zoid-tools/src/approval.rs`:
         assert!(match_dangerous("git push origin main", &patterns).is_none());
         // git log is safe
         assert!(match_dangerous("git log --oneline", &patterns).is_none());
+        // git commit -f (fixup shorthand) is NOT a force push — must not match
+        assert!(match_dangerous("git commit -f 123abc", &patterns).is_none());
+        // git fetch -f is not a force push
+        assert!(match_dangerous("git fetch -f", &patterns).is_none());
     }
 
     #[test]
@@ -399,7 +408,13 @@ Add to the `tests` module in `crates/zoid-tools/src/approval.rs`:
         let patterns = builtin_defaults();
         assert!(match_dangerous("curl -X POST localhost", &patterns).is_some());
         assert!(match_dangerous("curl -d 'data' localhost", &patterns).is_some());
-        // curl GET is safe
+        // curl -XPOST (no space, joined) must also match
+        assert!(match_dangerous("curl -XPOST localhost", &patterns).is_some());
+        assert!(match_dangerous("curl -XPUT localhost", &patterns).is_some());
+        // curl -XGET (GET method) is safe
+        assert!(match_dangerous("curl -XGET localhost", &patterns).is_none());
+        assert!(match_dangerous("curl -X GET localhost", &patterns).is_none());
+        // curl GET (no -X) is safe
         assert!(match_dangerous("curl localhost", &patterns).is_none());
     }
 
@@ -489,83 +504,6 @@ fn match_segment(segment: &str, patterns: &[Pattern]) -> Option<String> {
     let leading = &tokens[0];
 
     for pattern in patterns {
-        if pattern_matches(pattern, leading, &tokens) {
-            return Some(pattern.label());
-        }
-    }
-    None
-}
-
-/// Check whether a single pattern matches the given token stream.
-/// `leading` is `tokens[0]`; `tokens` is the full token list (including leading).
-fn pattern_matches(pattern: &Pattern, leading: &str, tokens: &[String]) -> bool {
-    match pattern {
-        Pattern::LeadingProgram { prog } => leading == prog,
-
-        Pattern::ProgramWithAnyFlag { prog, trigger_flags } => {
-            if leading != prog {
-                return false;
-            }
-            // Special case: curl/wget `-X` is only dangerous if the next token
-            // is a non-GET method. Other trigger flags match directly.
-            for flag in trigger_flags {
-                if flag == "-X" {
-                    // Check if -X is followed by a non-GET method
-                    for (i, tok) in tokens.iter().enumerate() {
-                        if tok == "-X" && i + 1 < tokens.len() {
-                            let method = tokens[i + 1].to_uppercase();
-                            if method != "GET" {
-                                return true;
-                            }
-                        }
-                    }
-                } else if tokens.contains(flag) {
-                    return true;
-                }
-            }
-            false
-        }
-
-        Pattern::ProgramWithAllGroups { prog, flag_groups } => {
-            if leading != prog {
-                return false;
-            }
-            // Each group must have at least one flag present in the tokens.
-            flag_groups.iter().all(|group| {
-                group.iter().any(|flag| tokens.contains(flag))
-            })
-        }
-
-        Pattern::Substring { pattern } => {
-            // Substring matches against the raw segment text, not tokens.
-            // The caller passes the raw segment as `leading` only for the
-            // tokenized patterns; for Substring we need the raw text. We
-            // reconstruct it from the tokens (best-effort — shlex already
-            // normalized quoting, which is fine for substring matching).
-            // Actually, we need the original segment. Pass it via a join.
-            // Simpler: match against the joined tokens.
-            tokens.join(" ").contains(pattern)
-        }
-    }
-}
-```
-
-Wait — the `Substring` pattern needs the raw segment text, but `pattern_matches` receives `leading` and `tokens`. Let me fix this: pass the raw segment string as an additional parameter.
-
-Replace `match_segment` and `pattern_matches`:
-
-```rust
-/// Match a single command segment against the pattern list. Returns the label
-/// of the first matching pattern, or `None`.
-fn match_segment(segment: &str, patterns: &[Pattern]) -> Option<String> {
-    // shlex-tokenize the segment. On failure → fail-safe: treat as dangerous.
-    let tokens = match shlex::split(segment) {
-        Some(t) if !t.is_empty() => t,
-        _ => return Some(format!("unparseable: {}", segment)),
-    };
-    let leading = &tokens[0];
-
-    for pattern in patterns {
         if pattern_matches(pattern, leading, &tokens, segment) {
             return Some(pattern.label());
         }
@@ -585,9 +523,20 @@ fn pattern_matches(pattern: &Pattern, leading: &str, tokens: &[String], segment:
             }
             for flag in trigger_flags {
                 if flag == "-X" {
+                    // -X is dangerous only if followed by a non-GET method.
+                    // Handle both `curl -X POST` (space-separated) and
+                    // `curl -XPOST` (joined) forms.
                     for (i, tok) in tokens.iter().enumerate() {
+                        // Space-separated: `-X` then next token is the method.
                         if tok == "-X" && i + 1 < tokens.len() {
                             let method = tokens[i + 1].to_uppercase();
+                            if method != "GET" {
+                                return true;
+                            }
+                        }
+                        // Joined: `-XPOST` — the method is everything after `-X`.
+                        if tok.starts_with("-X") && tok.len() > 2 {
+                            let method = tok[2..].to_uppercase();
                             if method != "GET" {
                                 return true;
                             }
@@ -707,11 +656,16 @@ Add to the `tests` module:
 
     #[test]
     fn gate_shell_allow_exempts_builtin() {
-        // Exempt the force-push pattern: "git push --force-with-lease" should
-        // no longer prompt when the user adds it to shell_allow.
+        // Exempt the force-push pattern: "--force-with-lease" is in the
+        // pattern's canonical form, so adding it to shell_allow removes
+        // the entire force-push pattern.
         let g = BlacklistGate::new(vec![], vec!["--force-with-lease".into()], true);
         let result = g.check(&shell_call("git push --force-with-lease"));
         assert_eq!(result, crate::Gate::Allow);
+        // But --force (without --force-with-lease) still prompts — the whole
+        // pattern was exempted, not just the one flag.
+        let result2 = g.check(&shell_call("git push --force"));
+        assert_eq!(result2, crate::Gate::Allow);
     }
 
     #[test]
@@ -1431,6 +1385,9 @@ Replace with a `match` on all three `Gate` variants. The `Gate::Allow` arm is em
                     // QuestionAsked event, send AgentUpdate::AskUser, await
                     // the reply. Approve → fall through to dispatch. Deny →
                     // error ToolResult + continue. Esc → abort the turn.
+                    // QuestionKind::Ask is intentional — the TUI already
+                    // handles it as a plain question card (same as ask_user).
+                    // No new QuestionKind variant is needed.
                     emit(
                         &session,
                         &mut events,
@@ -1660,7 +1617,12 @@ Expected: compiles (fix any literal TurnConfig constructions)
 Run: `cargo test -p zoid`
 Expected: PASS (existing tests should be unaffected — they use `AllowAll` as the gate directly, not via TurnConfig)
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 9: Run full workspace tests**
+
+Run: `cargo test --workspace`
+Expected: PASS — verifies no cross-crate integration issues (zoid-tools + zoid-core + zoid all compile and test together).
+
+- [ ] **Step 10: Commit**
 
 ```bash
 git add crates/zoid/src/subagent.rs crates/zoid/src/spawn_subagent.rs crates/zoid/src/agent.rs crates/zoid/src/main.rs
