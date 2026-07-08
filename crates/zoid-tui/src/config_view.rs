@@ -140,6 +140,20 @@ pub fn build_sections(
                 env_shadowed: prov.model == Source::Env,
             },
             connection_row,
+            FieldRow {
+                label: "thinking",
+                value: onoff(cfg.thinking.enabled),
+                kind: FieldKind::Bool,
+                source: prov.thinking_enabled,
+                env_shadowed: prov.thinking_enabled == Source::Env,
+            },
+            FieldRow {
+                label: "effort",
+                value: cfg.thinking.effort.clone().unwrap_or_else(|| "(auto)".into()),
+                kind: FieldKind::Pick,
+                source: prov.thinking_effort,
+                env_shadowed: prov.thinking_effort == Source::Env,
+            },
         ],
     };
     let economy = Section {

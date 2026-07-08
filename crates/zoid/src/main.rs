@@ -2614,6 +2614,16 @@ fn current_write(
         ),
         "recent turns" => ("economy.recent_n", TomlValue::Int(econ.recent_n as i64)),
         "reduced motion" => ("reduced_motion", TomlValue::Bool(app.config.reduced_motion)),
+        "thinking" => ("thinking.enabled", TomlValue::Bool(app.config.thinking.enabled)),
+        "effort" => (
+            "thinking.effort",
+            app.config
+                .thinking
+                .effort
+                .clone()
+                .map(TomlValue::Str)
+                .unwrap_or(TomlValue::Unset),
+        ),
         _ => return None,
     })
 }
@@ -3315,6 +3325,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                         !app.config.economy.auto_evict_cold,
                     )),
                     "reduced motion" => Some(("reduced_motion", !app.config.reduced_motion)),
+                    "thinking" => Some(("thinking.enabled", !app.config.thinking.enabled)),
                     _ => None,
                 };
                 if let Some((key, new)) = write {
