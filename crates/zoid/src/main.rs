@@ -1213,6 +1213,55 @@ struct BodyKey {
     /// streaming, so an idle blink never invalidates the cache.
     caret: bool,
     tz: i32,
+    /// A cheap revision hash of the live `ask_user` question buffer (selected
+    /// row + free-text + mode). Excluded from `matches_structure` because the
+    /// question card is always the last message: when only this changes we
+    /// re-render just that message (the incremental path) instead of the whole
+    /// transcript. `0` when no question is open.
+    question_rev: u64,
+}
+
+impl BodyKey {
+    /// Structural equality: the inputs whose change forces a FULL transcript
+    /// rebuild. Deliberately excludes `question_rev` — a question-only change
+    /// affects nothing but the last message, so it takes the incremental path.
+    fn matches_structure(&self, other: &BodyKey) -> bool {
+        self.zoom == other.zoom
+            && self.width == other.width
+            && self.streaming == other.streaming
+            && self.caret == other.caret
+            && self.tz == other.tz
+    }
+}
+
+/// A cheap change-detection hash of the live `ask_user` question buffer. Feeds
+/// `BodyKey.question_rev` so a keystroke (or selection move, or mode switch)
+/// changes the key — routing the frame through the incremental re-render path
+/// — while an unchanged buffer keeps the same value (a cache hit). `0` when no
+/// question is open, so the common no-question case never perturbs the key.
+fn question_rev(question: Option<&zoid_tui::question::QuestionState>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let Some(q) = question else { return 0 };
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    q.selected.hash(&mut h);
+    q.free_text.hash(&mut h);
+    std::mem::discriminant(&q.mode).hash(&mut h);
+    h.finish()
+}
+
+/// Outcome of a `BodyCache::refresh`, distinguishing a pure cache hit (no
+/// render work) from the two render paths. Callers map `Hit` to the cache-ratio
+/// telemetry; tests assert `Incremental` to prove per-keystroke question edits
+/// don't trigger an O(n) full rebuild.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefreshKind {
+    /// Nothing changed — the cached body was reused verbatim.
+    Hit,
+    /// Only the last message changed (streaming text grew, or the live question
+    /// card's buffer/selection changed); just that message was re-rendered.
+    Incremental,
+    /// A structural input changed — the whole transcript was re-rendered.
+    Full,
 }
 
 /// Cached `conversation_view` output (the expensive wrap + syntax-highlight
@@ -1249,10 +1298,13 @@ impl BodyCache {
         msgs: &[zoid_core::projection::ChatMsg],
         width: usize,
         question: Option<&zoid_tui::question::QuestionState>,
-    ) -> bool {
-        // Full no-op only when not streaming and nothing changed.
+    ) -> RefreshKind {
+        // Full no-op only when not streaming and nothing changed. `self.key ==
+        // Some(&key)` is full equality (question_rev included), so a live
+        // question edit breaks the no-op and falls through to the incremental
+        // path below.
         if !key.streaming && self.key.as_ref() == Some(&key) && self.msg_count == msgs.len() {
-            return true;
+            return RefreshKind::Hit;
         }
         let view = ChatView {
             zoom: key.zoom,
@@ -1260,13 +1312,19 @@ impl BodyCache {
             reveal: None,
             tz_offset_secs: key.tz,
         };
-        // Incremental streaming: same message count, only the last message's
-        // text is growing. Re-render just the last message and splice it in.
-        if self.key.as_ref() == Some(&key)
-            && self.msg_count == msgs.len()
-            && self.msg_count > 0
-            && key.streaming
-        {
+        let streaming = key.streaming;
+        // Incremental last-message re-render: the structural inputs match and
+        // the message count is unchanged, so only the tail changed — either the
+        // streaming assistant text grew, or the live `ask_user` card's buffer /
+        // selection changed (its `question_rev` differs, but that is excluded
+        // from `matches_structure`). The question card is always the last
+        // message, so re-rendering just that message keeps typing O(1) instead
+        // of re-parsing/wrapping the whole transcript on every keystroke.
+        let structural_match = self
+            .key
+            .as_ref()
+            .is_some_and(|k| k.matches_structure(&key));
+        if structural_match && self.msg_count == msgs.len() && self.msg_count > 0 {
             let last_idx = msgs.len() - 1;
             let start = self.msg_starts[last_idx];
             // Remove the old trailing blank + old last-message lines, then
@@ -1281,23 +1339,26 @@ impl BodyCache {
             let (new_lines, _) = zoid_tui::chat::conversation_view_indexed(
                 &msgs[last_idx..],
                 &view,
-                key.streaming,
+                streaming,
                 width,
                 question,
             );
             // conversation_view_indexed appends a trailing blank; we want it.
             self.body.extend(new_lines);
-            // An incremental re-render is render work, not a pure cache hit.
-            return false;
+            // Store the new key so the next frame sees the updated question_rev /
+            // streaming flag (the last message's start line is unchanged, so
+            // msg_starts / msg_count stay valid).
+            self.key = Some(key);
+            return RefreshKind::Incremental;
         }
         // Full rebuild.
         let (body, starts) =
-            zoid_tui::chat::conversation_view_indexed(msgs, &view, key.streaming, width, question);
+            zoid_tui::chat::conversation_view_indexed(msgs, &view, streaming, width, question);
         self.body = body;
         self.msg_starts = starts;
         self.msg_count = msgs.len();
         self.key = Some(key);
-        false
+        RefreshKind::Full
     }
 }
 
@@ -2019,18 +2080,22 @@ where
             app.body_cache.msg_count = 0;
             None
         } else {
-            Some(app.body_cache.refresh(
+            let kind = app.body_cache.refresh(
                 BodyKey {
                     zoom,
                     width: body_w,
                     streaming,
                     caret: streaming && caret,
                     tz,
+                    question_rev: question_rev(app.shell.question.as_ref()),
                 },
                 &app.proj.msgs,
                 body_w,
                 app.shell.question.as_ref(),
-            ))
+            );
+            // Telemetry only distinguishes a pure hit (no render work) from a
+            // render; both incremental and full rebuilds count as a miss.
+            Some(kind == RefreshKind::Hit)
         };
 
         // Tail-follow: when engaged, pin the viewport to the latest line before
@@ -3546,22 +3611,22 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             if let Some(q) = &mut app.shell.question {
                 let len = q.rows().len();
                 q.selected = zoid_tui::palette::nav(q.selected, d, len);
-                // The live highlight is rendered into the cached body, so a
-                // cursor move must invalidate the cache or the old highlight
-                // would persist on screen until something else rebuilt it.
-                app.body_cache.key = None;
+                // No manual cache invalidation: the live highlight/selection is
+                // folded into BodyKey.question_rev, so the next frame re-renders
+                // just the question card (incremental path) rather than the
+                // whole transcript.
             }
         }
         Action::QuestionChar(c) => {
             if let Some(q) = &mut app.shell.question {
                 q.free_text.push(c);
-                app.body_cache.key = None;
+                // question_rev picks up the new buffer → incremental re-render.
             }
         }
         Action::QuestionBackspace => {
             if let Some(q) = &mut app.shell.question {
                 q.free_text.pop();
-                app.body_cache.key = None;
+                // question_rev picks up the new buffer → incremental re-render.
             }
         }
         Action::QuestionSelect => {
@@ -4658,6 +4723,108 @@ mod tests {
         // Summary body: same msgs collapse → msg 1 lives on line 0.
         let summary_starts = [0usize, 0, 1];
         assert_eq!(zoid_tui::line_of_msg(&summary_starts, anchor), 0);
+    }
+
+    #[test]
+    fn question_keystroke_takes_incremental_path_not_full_rebuild() {
+        use zoid_core::event::QuestionKind;
+        use zoid_core::projection::{ChatMsg, QuestionCardState};
+        use zoid_tui::question::QuestionState;
+        use zoid_tui::state::Zoom;
+
+        // A transcript ending in an open ask_user card — the pending question is
+        // always the last message.
+        let msgs = vec![
+            ChatMsg::User {
+                text: "hi".into(),
+                ts: 0,
+            },
+            ChatMsg::Assistant {
+                text: "hello".into(),
+                tool_calls: vec![],
+                ts: 0,
+            },
+            ChatMsg::Question {
+                id: "q1".into(),
+                kind: QuestionKind::Ask,
+                question: "why?".into(),
+                choices: vec![], // free-text mode so the buffer renders verbatim
+                state: QuestionCardState::Open {
+                    selected: 0,
+                    free_text: String::new(),
+                },
+                ts: 0,
+            },
+        ];
+
+        let mk_key = |q: Option<&QuestionState>| BodyKey {
+            zoom: Zoom::Normal,
+            width: 80,
+            streaming: false,
+            caret: false,
+            tz: 0,
+            question_rev: question_rev(q),
+        };
+
+        let mut cache = BodyCache::default();
+        let mut q = QuestionState::new("why?", vec![]); // FreeText mode
+
+        // Cold cache → full rebuild; identical inputs → pure hit.
+        assert_eq!(
+            cache.refresh(mk_key(Some(&q)), &msgs, 80, Some(&q)),
+            RefreshKind::Full
+        );
+        assert_eq!(
+            cache.refresh(mk_key(Some(&q)), &msgs, 80, Some(&q)),
+            RefreshKind::Hit
+        );
+
+        // Flatten the cached body's span text — lets us assert the card content
+        // actually tracks the buffer, not just that the fast path was taken.
+        let body_text = |c: &BodyCache| -> String {
+            c.body
+                .iter()
+                .flat_map(|l| l.spans.iter())
+                .map(|s| s.content.as_ref())
+                .collect()
+        };
+
+        // The bug: a keystroke used to force a full O(n) rebuild. It must now
+        // re-render only the last message (the card) — AND show the typed text.
+        q.free_text.push_str("zoidberg");
+        assert_eq!(
+            cache.refresh(mk_key(Some(&q)), &msgs, 80, Some(&q)),
+            RefreshKind::Incremental,
+            "a question keystroke must not rebuild the whole transcript"
+        );
+        assert!(
+            body_text(&cache).contains("zoidberg"),
+            "incremental re-render must reflect the live buffer, not stale text"
+        );
+        // Backspace is likewise incremental and updates the card.
+        for _ in 0..4 {
+            q.free_text.pop();
+        }
+        assert_eq!(
+            cache.refresh(mk_key(Some(&q)), &msgs, 80, Some(&q)),
+            RefreshKind::Incremental
+        );
+        assert!(body_text(&cache).contains("zoid"));
+        assert!(!body_text(&cache).contains("zoidberg"));
+
+        // A structural change (width) still forces a full rebuild.
+        assert_eq!(
+            cache.refresh(
+                BodyKey {
+                    width: 100,
+                    ..mk_key(Some(&q))
+                },
+                &msgs,
+                100,
+                Some(&q)
+            ),
+            RefreshKind::Full
+        );
     }
 
     #[test]
