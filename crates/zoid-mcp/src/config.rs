@@ -78,12 +78,22 @@ fn read_file(path: &Path) -> Vec<(String, McpServerConfig)> {
     match std::fs::read_to_string(path) {
         Ok(text) => match parse_mcp_json(&text) {
             Ok(servers) => servers,
-            Err(e) => {
-                tracing::warn!("zoid-mcp: ignoring {}: {e}", path.display());
+            Err(_) => {
+                // Never forward the serde error text: on a type mismatch it
+                // echoes the offending JSON scalar verbatim, which can be an
+                // `env` value (a secret). Log the path only.
+                tracing::warn!("zoid-mcp: ignoring {} (invalid config)", path.display());
                 Vec::new()
             }
         },
-        Err(_) => Vec::new(), // absent file is not an error
+        // A missing file is not an error; other IO failures (permissions,
+        // is-a-directory) are worth a breadcrumb — log the kind only, never
+        // the contents.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => {
+            tracing::debug!("zoid-mcp: cannot read {}: {}", path.display(), e.kind());
+            Vec::new()
+        }
     }
 }
 
@@ -148,6 +158,15 @@ mod tests {
         assert_eq!(expand_vars("a${NOPE}b", &get), "ab");
         // A literal with no vars is unchanged.
         assert_eq!(expand_vars("plain", &get), "plain");
+    }
+
+    #[test]
+    fn expand_vars_is_utf8_safe_and_tolerates_unterminated() {
+        // Multi-byte text on both sides of the marker, and a non-ASCII
+        // replacement value: slicing must land on char boundaries, never panic.
+        assert_eq!(expand_vars("€${X}日本", &|_| Some("→".into())), "€→日本");
+        // An unterminated `${` is emitted literally, no panic.
+        assert_eq!(expand_vars("a${unterminated", &|_| None), "a${unterminated");
     }
 
     #[test]
