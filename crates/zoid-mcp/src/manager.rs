@@ -158,6 +158,17 @@ impl McpManager {
         }
     }
 
+    /// Test-only: call an arbitrary tool name on a named server, bypassing the
+    /// discovered-route table (used to exercise the crash path).
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn call_tool_direct_for_test(&self, server: &str, tool: &str, args: &Value) -> ToolOutput {
+        let client = { self.inner.lock().unwrap().servers.get(server).and_then(|e| e.client.clone()) };
+        match client {
+            Some(c) => c.call_tool(tool, args).await,
+            None => ToolOutput::err("server not connected"),
+        }
+    }
+
     pub fn status(&self) -> Vec<ServerStatus> {
         let st = self.inner.lock().unwrap();
         st.servers
