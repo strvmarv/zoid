@@ -47,7 +47,7 @@ impl Tool for GlobTool {
             return ToolOutput::ok(format!("no files match {pattern:?}"));
         }
         // Newest first.
-        found.sort_by(|a, b| b.0.cmp(&a.0));
+        found.sort_by_key(|(mtime, _)| std::cmp::Reverse(*mtime));
         let truncated = found.len() > MAX_RESULTS;
         found.truncate(MAX_RESULTS);
         let mut text = found

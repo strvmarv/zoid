@@ -326,7 +326,7 @@ impl crate::ToolGate for BlacklistGate {
     fn check(&self, call: &zoid_provider::ToolCall) -> crate::Gate {
         // Never-prompt tier: always allow
         match call.name.as_str() {
-            "Read" | "Grep" | "recall" | "show" | "update_tasks" | "ask_user" => {
+            "Read" | "Grep" | "Glob" | "LS" | "recall" | "show" | "update_tasks" | "ask_user" => {
                 return crate::Gate::Allow;
             }
             _ => {}
@@ -545,7 +545,7 @@ mod tests {
     #[test]
     fn gate_never_prompt_tier_always_allows() {
         let g = BlacklistGate::new(vec![], vec![], true);
-        for name in ["Read", "Grep", "recall", "show", "update_tasks", "ask_user"] {
+        for name in ["Read", "Grep", "Glob", "LS", "recall", "show", "update_tasks", "ask_user"] {
             assert_eq!(g.check(&tool_call(name)), crate::Gate::Allow, "{} must allow", name);
         }
     }

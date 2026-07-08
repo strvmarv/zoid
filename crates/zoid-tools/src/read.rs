@@ -29,6 +29,7 @@ impl Tool for Read {
         const DEFAULT_LIMIT: usize = 2000;
         const MAX_LINE: usize = 2000; // per-line char cap (CC parity) — stops a
                                       // single giant line from blowing context.
+        const MAX_BYTES: usize = 256 * 1024; // hard, non-defeatable output ceiling.
         let path = match str_arg(args, "path") {
             Ok(p) => p,
             Err(e) => return e,
@@ -52,6 +53,9 @@ impl Tool for Read {
         let start = offset.saturating_sub(1).min(total);
         let end = start.saturating_add(limit).min(total);
         let mut out = String::new();
+        // 1-indexed line number of the first un-emitted line, if we stopped
+        // early because of the hard byte ceiling.
+        let mut byte_capped_at: Option<usize> = None;
         for (i, line) in lines[start..end].iter().enumerate() {
             let shown = if line.chars().count() > MAX_LINE {
                 let head: String = line.chars().take(MAX_LINE).collect();
@@ -59,9 +63,18 @@ impl Tool for Read {
             } else {
                 (*line).to_string()
             };
-            out.push_str(&format!("{}\t{}\n", offset + i, shown));
+            let formatted = format!("{}\t{}\n", offset + i, shown);
+            if out.len() + formatted.len() > MAX_BYTES {
+                byte_capped_at = Some(offset + i);
+                break;
+            }
+            out.push_str(&formatted);
         }
-        if end < total {
+        if let Some(next_line) = byte_capped_at {
+            out.push_str(&format!(
+                "… truncated; output exceeded {MAX_BYTES}-byte cap, continue with offset={next_line}\n"
+            ));
+        } else if end < total {
             out.push_str(&format!(
                 "… truncated; {} more lines, continue with offset={}\n",
                 total - end,
@@ -168,5 +181,27 @@ mod tests {
         assert!(out.text.starts_with("1\tline1\n"));
         assert!(out.text.contains("truncated"));
         assert!(out.text.contains("offset=2001"));
+    }
+
+    #[test]
+    fn byte_ceiling_caps_huge_limit() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        // ~20000 lines * ~50 bytes each ≈ 1MB — far larger than the 256KB ceiling.
+        let body: String = (1..=20000)
+            .map(|n| format!("line{n:06}-{}\n", "x".repeat(30)))
+            .collect();
+        write!(f, "{body}").unwrap();
+        let out = Read.run(
+            &json!({ "path": f.path().to_str().unwrap(), "limit": 100_000_000 }),
+            std::path::Path::new("."),
+        );
+        assert!(!out.is_error, "{}", out.text);
+        assert!(
+            out.text.len() <= 300 * 1024,
+            "output must be capped near the byte ceiling, got {} bytes",
+            out.text.len()
+        );
+        assert!(out.text.contains("truncated"));
+        assert!(out.text.contains("offset="));
     }
 }

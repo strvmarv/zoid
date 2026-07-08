@@ -87,6 +87,9 @@ impl Tool for Edit {
 /// Apply one edit to `contents`, enforcing the unambiguous-match rule unless
 /// `replace_all`. Returns the updated string or an error message.
 fn apply_one(contents: &str, old: &str, new: &str, replace_all: bool) -> Result<String, String> {
+    if old.is_empty() {
+        return Err("`old_string` must not be empty".into());
+    }
     let count = contents.matches(old).count();
     if count == 0 {
         return Err("`old_string` not found".into());
@@ -169,6 +172,17 @@ mod tests {
         );
         assert!(!out.is_error, "{}", out.text);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "A beta G");
+    }
+
+    #[test]
+    fn empty_old_string_is_rejected() {
+        let (_d, path) = seed("ab");
+        let out = Edit.run(
+            &json!({ "path": path, "old_string": "", "new_string": "X", "replace_all": true }),
+            std::path::Path::new("."),
+        );
+        assert!(out.is_error, "{}", out.text);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "ab");
     }
 
     #[test]
