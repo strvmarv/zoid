@@ -142,8 +142,9 @@ replacement for `turn_cancel.is_some()`) still drives `state.cancellable`
   `App::turn_control: Option<TurnControl>` holding `{ graceful, hard }`.
   `spawn_turn` (`main.rs:4432`) mints both tokens.
 - `Action::CancelTurn` handler (`main.rs:3053`) does the escalation described in
-  **UX** and sets the two status-hint strings. The second fire site in the
-  question-overlay path (`main.rs:2308`) is updated to the graceful token.
+  **UX** and sets the two status-hint strings. The other `turn_cancel` fire
+  site — the `AgentUpdate::SessionTakenOver` arm (`main.rs:2310`) — keeps firing
+  the graceful token and needs no change.
 
 ### 4. `zoid-tui` — status text only
 

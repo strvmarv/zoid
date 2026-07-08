@@ -48,7 +48,7 @@ All tasks run in the SDD worktree created off `main` (which already carries the 
 
 **Interfaces:**
 - Produces:
-  - `zoid_tools::KillSlot` — `#[derive(Clone, Default)]`; `KillSlot::new() -> KillSlot`, `fn register(&self, pgid: u32)`, `fn clear(&self)`, `fn pgid(&self) -> Option<u32>`, `fn kill(&self)` (unix: `killpg(pgid, SIGKILL)`, ignore errors; non-unix: no-op).
+  - `zoid_tools::KillSlot` — `#[derive(Clone, Default)]` newtype over `Arc<Mutex<Inner>>` where `Inner { pgid: Option<u32>, kill_requested: bool }`. Methods: `KillSlot::new()`, `fn register(&self, pgid: u32)` (if a kill was already requested, signal immediately instead of storing — closes the kill-before-register race), `fn clear(&self)`, `fn pgid(&self) -> Option<u32>`, `fn kill(&self)` (sets `kill_requested` and signals the registered pgid if any; unix: `killpg(-pgid, SIGKILL)` ignoring errors, non-unix: no-op). The `kill_requested` flag is **sticky for the turn** — safe because a hard-stop ends the turn and each turn mints a fresh slot.
   - `zoid_tools::shell::Shell` — now `#[derive(Default)]` struct holding a `KillSlot`; `Shell::new(kill: KillSlot) -> Shell`.
   - `zoid_tools::registry_with_kill(kill: KillSlot) -> Vec<Box<dyn Tool>>` — same set as `registry()` but the `shell` tool carries `kill`.
   - `zoid_tools::registry()` — unchanged public signature; internally builds `Shell::default()`.
@@ -64,19 +64,27 @@ nix = { version = "0.29", default-features = false, features = ["signal"] }
 
 - [ ] **Step 2: Write the failing test for `KillSlot` register/pgid/clear**
 
-Create `crates/zoid-tools/src/kill.rs` with ONLY this test module first (no type yet), so the build fails on the missing type:
+Create `crates/zoid-tools/src/kill.rs` with ONLY the types + test module first (no methods yet), so the build fails on the missing methods:
 
 ```rust
 //! `KillSlot` — a single-slot registry the `shell` tool publishes its running
 //! child's process-group id into, so the async agent loop can SIGKILL the whole
 //! group on a hard-stop. One slot suffices: Local tools in a batch run
-//! sequentially, so at most one shell child exists at a time.
+//! sequentially, so at most one shell child exists at a time. `kill()` is
+//! sticky: if it races ahead of the child's `register()`, the child is killed
+//! the instant it registers (no lost-wakeup window).
 
 use std::sync::{Arc, Mutex};
 
-/// Shared handle to the pgid of the currently-running killable child, if any.
+#[derive(Default)]
+struct Inner {
+    pgid: Option<u32>,
+    kill_requested: bool,
+}
+
+/// Shared handle to the currently-running killable child's process group.
 #[derive(Clone, Default)]
-pub struct KillSlot(Arc<Mutex<Option<u32>>>);
+pub struct KillSlot(Arc<Mutex<Inner>>);
 
 #[cfg(test)]
 mod tests {
@@ -98,6 +106,38 @@ mod tests {
         slot.kill(); // must not panic when nothing is registered
         assert_eq!(slot.pgid(), None);
     }
+
+    // The kill-before-register race: kill() arrives first, then a real child
+    // registers. It must be signalled immediately. Proven with a real process
+    // spawned in its own group that would outlive the test if not killed.
+    #[cfg(unix)]
+    #[test]
+    fn kill_before_register_still_terminates_the_child() {
+        use std::os::unix::process::CommandExt;
+        use std::process::Command;
+        use std::time::Duration;
+        let slot = KillSlot::new();
+        slot.kill(); // hard-stop raced ahead of the spawn
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        slot.register(child.id()); // must kill immediately, not store
+        // The child should die within moments (SIGKILL), well under its 30s.
+        let mut waited = 0;
+        loop {
+            match child.try_wait().unwrap() {
+                Some(_status) => break, // reaped — it was killed
+                None if waited < 2000 => {
+                    std::thread::sleep(Duration::from_millis(20));
+                    waited += 20;
+                }
+                None => panic!("child survived a pre-registered kill request"),
+            }
+        }
+    }
 }
 ```
 
@@ -108,7 +148,7 @@ Expected: FAIL — `no function or associated item named 'new'` / `no method 're
 
 - [ ] **Step 4: Implement `KillSlot`**
 
-Add these `impl` blocks to `crates/zoid-tools/src/kill.rs` (above the test module):
+Add this `impl` block to `crates/zoid-tools/src/kill.rs` (above the test module):
 
 ```rust
 impl KillSlot {
@@ -116,39 +156,60 @@ impl KillSlot {
         Self::default()
     }
 
-    /// Record the pgid of a freshly-spawned killable child.
+    /// Record the pgid of a freshly-spawned killable child. If a hard-stop was
+    /// already requested (kill() raced ahead of the spawn), signal the child
+    /// immediately instead of storing it.
     pub fn register(&self, pgid: u32) {
-        *self.0.lock().unwrap() = Some(pgid);
+        let mut g = self.0.lock().unwrap();
+        if g.kill_requested {
+            drop(g); // release the lock before the syscall
+            Self::signal(pgid);
+        } else {
+            g.pgid = Some(pgid);
+        }
     }
 
     /// Forget the child (called when it exits normally).
     pub fn clear(&self) {
-        *self.0.lock().unwrap() = None;
+        self.0.lock().unwrap().pgid = None;
     }
 
     /// The currently-registered pgid, if any (test/introspection).
     pub fn pgid(&self) -> Option<u32> {
-        *self.0.lock().unwrap()
+        self.0.lock().unwrap().pgid
     }
 
-    /// Best-effort SIGKILL of the registered process group. No-op when empty.
-    /// Ignores errors (e.g. the group already exited — `ESRCH`).
-    #[cfg(unix)]
+    /// Request a hard-stop: arm the sticky flag and SIGKILL the registered
+    /// group now (if any). A child that registers a moment later is killed by
+    /// `register()`. Best-effort; ignores errors (e.g. `ESRCH`).
     pub fn kill(&self) {
-        if let Some(pgid) = *self.0.lock().unwrap() {
-            use nix::sys::signal::{killpg, Signal};
-            use nix::unistd::Pid;
-            let _ = killpg(Pid::from_raw(pgid as i32), Signal::SIGKILL);
+        let pgid = {
+            let mut g = self.0.lock().unwrap();
+            g.kill_requested = true;
+            g.pgid
+        }; // lock dropped before the syscall
+        if let Some(pgid) = pgid {
+            Self::signal(pgid);
         }
     }
 
+    /// SIGKILL the whole process group (negative pgid). Unix-only; no-op else.
+    #[cfg(unix)]
+    fn signal(pgid: u32) {
+        use nix::sys::signal::{killpg, Signal};
+        use nix::unistd::Pid;
+        let _ = killpg(Pid::from_raw(pgid as i32), Signal::SIGKILL);
+    }
+
     #[cfg(not(unix))]
-    pub fn kill(&self) {
+    fn signal(_pgid: u32) {
         // No process-group signalling on non-unix; hard-stop degrades to
-        // abandon-wait for the shell tool.
+        // abandon (the shell command finishes on its own).
     }
 }
 ```
+
+Note: `killpg(pgid, …)` where `pgid` is the child's pid — because the child was spawned with `process_group(0)`, its pid *is* its pgid, so `killpg` signals the whole tree.
 
 - [ ] **Step 5: Wire the module into the crate and run the test**
 
@@ -303,10 +364,8 @@ impl Shell {
             .stderr(Stdio::piped())
             .process_group(0) // child's pid becomes its pgid
             .spawn()?;
-        self.kill.register(child.id());
-        // Take the pipes so wait_with_output isn't needed (it consumes child);
-        // read to end after wait via the standard helper.
-        let out = child.wait_with_output();
+        self.kill.register(child.id()); // id() read before wait_with_output moves child
+        let out = child.wait_with_output(); // reads piped stdout/stderr, then waits
         self.kill.clear();
         out
     }
@@ -366,6 +425,8 @@ git commit -m "feat(tools): KillSlot + process-group-killable shell tool"
 **Files:**
 - Modify: `crates/zoid/src/agent.rs` (`TurnConfig`, `chat_turn_config_with`, `run_agent_turn`, `run_agent_turn_cancellable`, `run_turn_inner`, Local call site ~1218-1225)
 - Modify: `crates/zoid/src/subagent.rs` (`TurnConfig` literal ~150)
+- Modify: `crates/zoid/src/main.rs:4436` — the bin's `run_agent_turn_cancellable` call (add a placeholder `hard` arg; Task 4 replaces it with the real token)
+- Modify: `crates/zoid/tests/agent_loop.rs:373` — the one integration-test caller of `run_agent_turn_cancellable` (add a never-firing `hard` arg)
 
 **Interfaces:**
 - Consumes: `zoid_tools::KillSlot` (Task 1).
@@ -373,7 +434,8 @@ git commit -m "feat(tools): KillSlot + process-group-killable shell tool"
   - `TurnConfig` gains `pub kill: zoid_tools::KillSlot` (defaults to a fresh slot; the chat turn overrides it in Task 4).
   - `run_agent_turn_cancellable(...)` gains a trailing `hard: CancellationToken` parameter (after the existing `cancel: CancellationToken`).
   - `run_agent_turn(...)` unchanged public arity; internally passes `CancellationToken::new()` for `hard`.
-  - Behavior: when `hard` fires while a Local tool is executing, the loop kills `config.kill`'s process group, records a `[killed: hard-stop]` result for that call, drains the rest of the batch with `[skipped: turn aborted]`, and ends the turn.
+  - Behavior: when `hard` fires while a Local tool is executing, the loop kills `config.kill`'s process group (sticky — see Task 1), records a `[killed: hard-stop]` result for that call **without awaiting the tool** (control returns immediately; the detached `spawn_blocking` finishes on its own), drains the rest of the batch with `[skipped: turn aborted]`, and ends the turn.
+- **Compile-safety note (gilfoyle C1/C2):** adding the `hard` param breaks the two OTHER callers of `run_agent_turn_cancellable` — the bin (`main.rs:4436`) and one integration test (`tests/agent_loop.rs:373`). Both are updated in Step 2b below so every commit in this task compiles. The ~10 `run_agent_turn(` test callers are genuinely unaffected (that wrapper's arity is unchanged).
 
 - [ ] **Step 1: Add the `kill` field to `TurnConfig` and its constructors**
 
@@ -420,6 +482,22 @@ In `run_turn_inner` (~line 400), add the parameter after `cancel: &CancellationT
     cancel: &CancellationToken,
     hard: &CancellationToken,
 ```
+
+- [ ] **Step 2b: Update the two other callers so the tree still compiles (gilfoyle C1/C2)**
+
+The `hard` param breaks the bin and one integration test. Add a never-firing placeholder to each; Task 4 Step 7 replaces the `main.rs` one with the real token.
+
+In `crates/zoid/src/main.rs`, the `run_agent_turn_cancellable(...)` call in `spawn_turn` (~line 4448) currently ends with `cancel,`. Add on the next line:
+
+```rust
+            cancel,
+            tokio_util::sync::CancellationToken::new(), // hard — real token wired in Task 4
+```
+
+In `crates/zoid/tests/agent_loop.rs` (~line 373), the `run_agent_turn_cancellable(...)` call passes a `cancel` token as its last arg. Add a trailing `tokio_util::sync::CancellationToken::new(),` as the new `hard` arg. (Match the exact variable/expression the test uses for `cancel`; the point is a second never-firing token.)
+
+Run: `cargo build -p zoid --all-targets`
+Expected: PASS — the crate and all its test/bin targets compile with the new signature.
 
 - [ ] **Step 3: Write the failing test — hard-cancel kills a running shell tool**
 
@@ -492,7 +570,7 @@ Add to the `tests` module in `crates/zoid/src/agent.rs`:
 - [ ] **Step 4: Run it to verify it fails**
 
 Run: `cargo test -p zoid hard_cancel_kills_running_local_shell -- --nocapture`
-Expected: FAIL — `run_agent_turn_cancellable` takes 12 args not 13 (or, once Step 2 compiles, the test hangs/there is no killed result because the call site doesn't select on `hard`).
+Expected: FAIL — the Local call site does not yet `select!` on `hard`, so the turn runs the real `sleep 30`; the `started.elapsed() < 10s` assertion fires (the test takes ~30s and then fails). The tree compiles (Step 2b), so this is a behavioral failure, not an arity error.
 
 - [ ] **Step 5: Make the Local call site interruptible**
 
@@ -509,12 +587,16 @@ In `crates/zoid/src/agent.rs`, replace the Local-tool branch body (the `_ =>` ar
                     let out = tokio::select! {
                         biased;
                         _ = hard.cancelled() => {
-                            // Force-kill the shell's process group; the blocking
-                            // wait returns promptly once the child dies. Non-shell
-                            // local tools have nothing registered — kill() is a
-                            // no-op and we simply stop awaiting.
+                            // Force-kill the shell's process group (sticky kill:
+                            // also reaps a child that registers a moment later).
+                            // We do NOT await `exec` — control returns immediately.
+                            // The detached spawn_blocking finishes on its own:
+                            // near-instantly for a killed shell, or in the
+                            // background for a non-killable local tool (search /
+                            // read_file / subagent_diff), which is the spec's
+                            // "abandon-wait" behavior. `exec` is dropped here,
+                            // detaching (not cancelling) the blocking task.
                             config.kill.kill();
-                            let _ = (&mut exec).await; // reclaim the blocking task
                             zoid_tools::ToolOutput::err("[killed: hard-stop]")
                         }
                         joined = &mut exec => joined?,
@@ -564,7 +646,7 @@ Expected: PASS (all existing agent tests plus the new one). The ~10 `run_agent_t
 - [ ] **Step 8: Commit**
 
 ```bash
-git add crates/zoid/src/agent.rs crates/zoid/src/subagent.rs
+git add crates/zoid/src/agent.rs crates/zoid/src/subagent.rs crates/zoid/src/main.rs crates/zoid/tests/agent_loop.rs
 git commit -m "feat(agent): hard cancel token kills running local shell tool, balanced"
 ```
 
@@ -738,7 +820,7 @@ pub fn chat_tools(skills: Arc<SkillRegistry>, kill: zoid_tools::KillSlot) -> Vec
     // … rest unchanged …
 ```
 
-Update the two `chat_tools(...)` calls in that file's own tests (~lines 143, 180) to pass `zoid_tools::KillSlot::new()` as the second arg.
+Update ALL `chat_tools(...)` call sites to pass `zoid_tools::KillSlot::new()` as the second arg — this is ~13 sites, not two (gilfoyle M1). Besides the two in this file's own tests (~lines 143, 180): the `agent.rs` test module (~lines 1958, 2031, 2113, 2223, 2303) and the integration tests `tests/mode_skill_spike.rs:67`, `tests/mode_turn.rs:45` and `:54`, `tests/mode_import_wiring.rs:96`, `tests/mode_wizard_loop.rs:91`, `tests/inline_question_card.rs:151`. The compiler will flag each; passing a fresh `KillSlot::new()` (these tests don't exercise hard-kill) is the fix. Do NOT mistake the wall of arity errors for a design problem — it's expected.
 
 - [ ] **Step 2: Add the hard token field to `App`**
 
@@ -867,7 +949,9 @@ Build and run zoid, start a turn that runs `shell` with `sleep 30`, press `Esc` 
 - [ ] **Step 10: Commit**
 
 ```bash
-git add crates/zoid/src/main.rs crates/zoid/src/invoke_skill.rs
+# Includes the chat_tools call-site updates in the agent.rs test module and the
+# integration tests (gilfoyle M1), plus the main.rs placeholder→real hard token.
+git add crates/zoid/src/main.rs crates/zoid/src/invoke_skill.rs crates/zoid/src/agent.rs crates/zoid/tests/
 git commit -m "feat(ui): escalating Esc — second press hard-stops, shares KillSlot"
 ```
 
