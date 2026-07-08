@@ -3608,6 +3608,7 @@ dependencies = [
  "zip",
  "zoid-companion",
  "zoid-core",
+ "zoid-mcp",
  "zoid-provider",
  "zoid-testkit",
  "zoid-tools",

@@ -56,6 +56,10 @@ pub struct TurnConfig {
     pub policy: zoid_core::assembler::ContextPolicy,
     /// Live eviction band parameters. `disabled()` for subagents/tests.
     pub eviction: zoid_core::eviction::EvictionPolicy,
+    /// Connected MCP servers whose tools this turn may call. `None` for
+    /// subagents and tests (no MCP). Carried here (not as a fn parameter) so
+    /// the turn-function signatures are unchanged.
+    pub mcp: Option<std::sync::Arc<zoid_mcp::McpManager>>,
 }
 
 /// The orchestrator (Chat) turn config for an explicit mode profile + skill menu.
@@ -76,6 +80,7 @@ pub fn chat_turn_config_with(profile: &AgentProfile, skill_menu: &str) -> TurnCo
         branch: BranchId::default(),
         policy: zoid_core::assembler::ContextPolicy::default(),
         eviction: zoid_core::eviction::EvictionPolicy::disabled(),
+        mcp: None,
     }
 }
 
@@ -1133,6 +1138,48 @@ async fn run_turn_inner(
                         }
                         outcome = "aborted";
                         break 'turn;
+                    }
+                }
+                Some(zoid_tools::ToolKind::Mcp) => {
+                    let _ = ui
+                        .send(AgentUpdate::ToolStarted {
+                            name: tc.name.clone(),
+                        })
+                        .await;
+                    let out = match config.mcp.as_ref() {
+                        Some(m) => m.call_tool(&tc.name, &tc.args).await,
+                        None => zoid_tools::ToolOutput::err(format!(
+                            "mcp tool '{}' requested but no MCP manager is active",
+                            tc.name
+                        )),
+                    };
+                    let tool_ok = !out.is_error;
+                    let tool_fail_msg = out.is_error.then(|| out.text.clone());
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::ToolResult {
+                            id: tc.id,
+                            name: tc.name,
+                            output: out.text,
+                            is_error: out.is_error,
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                    tracing::info!(
+                        kind = "tool",
+                        name = tool_name.as_str(),
+                        ms = tool_start.elapsed().as_millis() as u64,
+                        ok = tool_ok,
+                        "tool executed"
+                    );
+                    if let Some(msg) = tool_fail_msg {
+                        let ctx = format!("tool {tool_name}");
+                        tracing::warn!(ctx = ctx.as_str(), message = msg.as_str(), "tool failed");
                     }
                 }
                 _ => {
@@ -2260,6 +2307,86 @@ mod tests {
             .collect();
         assert_eq!(ids.len(), 2, "two dispatch tool results");
         assert_ne!(ids[0], ids[1], "distinct subagent IDs");
+    }
+
+    #[tokio::test]
+    async fn mcp_kind_tool_routes_to_manager_and_errors_cleanly() {
+        // A manager with a configured-but-unconnected server: calling its tool
+        // must surface a ToolOutput error (never panic, never hit the Local path).
+        let mgr = std::sync::Arc::new(zoid_mcp::McpManager::new());
+        // No servers connected => any mcp tool name is unknown.
+        let out = mgr.call_tool("srv__thing", &serde_json::json!({})).await;
+        assert!(out.is_error);
+        assert!(out.text.contains("unknown mcp tool"));
+    }
+
+    #[tokio::test]
+    async fn turn_loop_routes_mcp_tool_call_to_mcp_manager() {
+        use ulid::Ulid;
+        use zoid_provider::ProviderEvent;
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "call the mcp tool".into(),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(zoid_provider::FakeProvider::new(vec![
+            ProviderEvent::ToolCall(ToolCall {
+                id: "c1".into(),
+                name: "srv__missing".into(),
+                args: serde_json::json!({}),
+            }),
+            ProviderEvent::Done,
+        ]));
+
+        let tools: Vec<Box<dyn Tool>> = vec![Box::new(zoid_mcp::McpTool::new(
+            "srv__missing".into(),
+            String::new(),
+            serde_json::json!({"type": "object"}),
+        ))];
+
+        let mut cfg = chat_turn_config();
+        cfg.mcp = Some(std::sync::Arc::new(zoid_mcp::McpManager::new()));
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} }); // drain UI updates
+
+        let out = run_agent_turn(
+            cfg,
+            provider,
+            std::sync::Arc::new(tools),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::new(),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let result = out.iter().find_map(|e| match &e.kind {
+            EventKind::ToolResult {
+                name, output, is_error, ..
+            } if name == "srv__missing" => Some((output.clone(), *is_error)),
+            _ => None,
+        });
+        let (output, is_error) = result.expect("expected a ToolResult for the mcp tool call");
+        assert!(is_error, "unknown mcp tool must surface as an error");
+        assert!(
+            output.contains("unknown mcp tool"),
+            "expected 'unknown mcp tool' in output, got: {output}"
+        );
     }
 }
 
