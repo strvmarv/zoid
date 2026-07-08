@@ -262,4 +262,25 @@ mod tests {
             "subagent_diff must not be in base registry"
         );
     }
+
+    #[test]
+    fn fs_tools_advertise_valid_object_schemas() {
+        let reg = registry();
+        for want in ["Read", "Write", "Edit", "Grep", "Glob", "LS"] {
+            let t = reg
+                .iter()
+                .find(|t| t.name() == want)
+                .unwrap_or_else(|| panic!("{want} must be registered"));
+            let spec = t.spec();
+            assert_eq!(spec.name, want);
+            assert_eq!(
+                spec.parameters["type"], "object",
+                "{want} params must be a JSON object schema"
+            );
+            assert!(
+                spec.parameters["properties"].is_object(),
+                "{want} must declare properties"
+            );
+        }
+    }
 }
