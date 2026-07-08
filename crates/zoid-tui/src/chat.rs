@@ -334,6 +334,7 @@ fn render_question_card(
     let title = match kind {
         QuestionKind::Ask => " Question ",
         QuestionKind::ModeMapping { .. } => " Mode mapping — review ",
+        QuestionKind::Approval => " Approve tool ",
     };
     let border = color::BRANCH;
     let content_w = width.saturating_sub(4).max(20);
@@ -342,7 +343,7 @@ fn render_question_card(
     // ModeMapping cards — they're shown at Detail zoom (detail_lines). Ask
     // cards show the full question text at every zoom.
     let body = match kind {
-        QuestionKind::ModeMapping { .. } => {
+        QuestionKind::Approval | QuestionKind::ModeMapping { .. } => {
             if let Some(idx) = question.find("\nBundled files") {
                 let mut head = question[..idx].trim_end().to_string();
                 let bundled_count = question[idx..].matches('\n').count().max(1);

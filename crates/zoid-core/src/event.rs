@@ -49,6 +49,11 @@ pub enum QuestionKind {
     ModeMapping {
         mapping: Box<crate::wizard::ModeMapping>,
     },
+    /// A tool-approval gate prompt (dangerous shell command). The card is
+    /// UI-only — the model sees the real ToolResult (the tool's output), not
+    /// the approval string. The projection does NOT suppress the ToolResult
+    /// for this kind, unlike Ask/ModeMapping where the card IS the result.
+    Approval,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

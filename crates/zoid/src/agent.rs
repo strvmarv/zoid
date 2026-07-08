@@ -207,9 +207,23 @@ fn map_msg(m: ChatMsg) -> Message {
             // emit it as a tool-result message so the provider request carries
             // the answer. When Open (shouldn't happen in a well-formed request,
             // but defensive), emit an inert assistant message.
+            // Approval-gate questions are UI-only: the real ToolResult
+            // carries the tool's output. Map the card to an inert assistant
+            // message so the model doesn't see a spurious tool result with
+            // the approval string as its content.
+            if matches!(kind, zoid_core::event::QuestionKind::Approval) {
+                return Message {
+                    role: zoid_provider::MsgRole::Assistant,
+                    content: String::new(),
+                    tool_calls: vec![],
+                    tool_name: None,
+                    tool_call_id: None,
+                };
+            }
             let tool_name = match kind {
                 zoid_core::event::QuestionKind::Ask => "ask_user",
                 zoid_core::event::QuestionKind::ModeMapping { .. } => "apply_mode_mapping",
+                zoid_core::event::QuestionKind::Approval => "shell",
             };
             match state {
                 zoid_core::projection::QuestionCardState::Answered { answer } => {
@@ -722,9 +736,10 @@ async fn run_turn_inner(
                     // QuestionAsked event, send AgentUpdate::AskUser, await
                     // the reply. Approve → fall through to dispatch. Deny →
                     // error ToolResult + continue. Esc → abort the turn.
-                    // QuestionKind::Ask is intentional — the TUI already
-                    // handles it as a plain question card (same as ask_user).
-                    // No new QuestionKind variant is needed.
+                    // QuestionKind::Approval distinguishes this from ask_user
+                    // so the projection does NOT suppress the real ToolResult
+                    // — the model sees the tool's actual output, not the
+                    // approval string.
                     emit(
                         &session,
                         &mut events,
@@ -732,7 +747,7 @@ async fn run_turn_inner(
                         &config.branch,
                         EventKind::QuestionAsked {
                             id: tc.id.clone(),
-                            kind: zoid_core::event::QuestionKind::Ask,
+                            kind: zoid_core::event::QuestionKind::Approval,
                             question: question.clone(),
                             choices: choices.clone(),
                         },
