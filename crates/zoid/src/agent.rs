@@ -2525,6 +2525,80 @@ mod tests {
         ));
         assert!(killed, "the interrupted shell call must get a [killed] result");
     }
+
+    #[tokio::test]
+    async fn hard_cancel_mid_batch_balances_remaining_calls() {
+        use ulid::Ulid;
+        use zoid_core::event::EventKind;
+        use zoid_provider::{ProviderEvent, ToolCall};
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        // Two tool calls arrive in one batch: the shell runs first (killed by
+        // the hard-stop), the second must be drained with [skipped: turn aborted]
+        // so no tool_use is left without a tool_result (balance invariant).
+        let provider = std::sync::Arc::new(zoid_provider::FakeProvider::new(vec![
+            ProviderEvent::ToolCall(ToolCall {
+                id: "call-1".into(),
+                name: "shell".into(),
+                args: serde_json::json!({ "command": "sleep 30" }),
+            }),
+            ProviderEvent::ToolCall(ToolCall {
+                id: "call-2".into(),
+                name: "read_file".into(),
+                args: serde_json::json!({ "path": "Cargo.toml" }),
+            }),
+            ProviderEvent::Done,
+        ]));
+        let kill = zoid_tools::KillSlot::new();
+        let tools = std::sync::Arc::new(zoid_tools::registry_with_kill(kill.clone()));
+        let mut cfg = chat_turn_config();
+        cfg.kill = kill.clone();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let graceful = CancellationToken::new();
+        let hard = CancellationToken::new();
+        let hard2 = hard.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            hard2.cancel();
+        });
+        let started = std::time::Instant::now();
+        let out = run_agent_turn_cancellable(
+            cfg,
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(vec![]),
+            "m".into(),
+            tx,
+            Ulid::new(),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+            graceful,
+            hard,
+        )
+        .await
+        .unwrap();
+        // (a) The turn must not wait out the 30s sleep.
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "hard-stop must not wait for the shell command"
+        );
+        // (b) The running shell call is answered with a killed result.
+        let killed = out.iter().any(|e| matches!(
+            &e.kind,
+            EventKind::ToolResult { id, output, .. }
+                if id == "call-1" && output.contains("[killed")
+        ));
+        assert!(killed, "the interrupted shell call must get a [killed] result");
+        // (c) The un-run second call is drained (this is the mid-batch drain path).
+        let skipped = out.iter().any(|e| matches!(
+            &e.kind,
+            EventKind::ToolResult { id, output, .. }
+                if id == "call-2" && output.contains("[skipped")
+        ));
+        assert!(skipped, "the remaining batched call must get a [skipped] result");
+    }
 }
 
 #[cfg(test)]
