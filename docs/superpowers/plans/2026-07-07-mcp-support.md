@@ -18,9 +18,11 @@
 - **Config format/locations:** ecosystem `.mcp.json` = `{"mcpServers": {name: {command, args, env}}}`. Read user `~/.config/zoid/mcp.json` (via existing `resolve_config_dir`) then project `./.mcp.json`; project overrides user by server name.
 - **`${VAR}` expansion** in `args` and `env` values, resolved from zoid's environment; unset → empty string.
 - **Never log `env` values** (they carry secrets). Log server names and tool names only.
-- **Protocol version:** send `"2025-06-18"`; accept the server's negotiated version if we recognize it, else fail that server.
+- **Protocol version:** send `"2025-06-18"`; accept **any non-empty** version the server negotiates (fail only on an empty/missing one), and `tracing::warn!` on versions outside the known set `{2024-11-05, 2025-03-26, 2025-06-18}`. Do NOT hard-fail an unrecognized version — that would reject servers we can talk to.
 - **`McpManager` must implement `Debug`** (it is carried on `TurnConfig`, which `#[derive(Debug)]`) — a minimal manual impl is fine.
 - A failed/crashed server must never crash zoid: it contributes zero tools and a `Failed`/`Disconnected` status.
+- **Execution routing is carried on `TurnConfig.mcp`** (an added `Option<Arc<McpManager>>` field), NOT threaded as a separate `run_agent_turn` parameter. This intentionally supersedes spec §B's parameter-threading sketch — it is zero signature churn and `config` is already borrowed in the loop. Do NOT "correct" it back to a parameter.
+- **Namespacing edge:** `server__tool` collides only if a tool name itself contains `__` (server `a`+tool `b__c` ≡ server `a__b`+tool `c`). Vanishingly unlikely; the route table is built from discovered names so exact-match routing is unaffected. Not handled in v1.
 
 ## File Structure
 
@@ -71,7 +73,6 @@ edition = "2021"
 zoid-tools = { path = "../zoid-tools" }
 zoid-provider = { path = "../zoid-provider" }
 tokio = { workspace = true }
-async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
@@ -495,6 +496,28 @@ mod tests {
         let mut h = StdioTransport.connect(&cfg).unwrap();
         assert!(h.inbound.recv().await.is_none(), "EOF => channel closed");
     }
+
+    // A server that ignores stdin-close must still be reaped when the handle
+    // drops (regression guard for the kill_on_drop fix). `sleep` never reads
+    // stdin, so only kill_on_drop can end it.
+    #[tokio::test]
+    async fn stdin_ignoring_child_is_reaped_on_handle_drop() {
+        let cfg = McpServerConfig { command: "sleep".into(), args: vec!["30".into()], env: BTreeMap::new() };
+        let h = StdioTransport.connect(&cfg).unwrap();
+        let pid = h.child_pid().expect("a pid");
+        drop(h); // kill_on_drop should terminate the child
+        // Poll `kill -0 <pid>` until it reports the process is gone.
+        let mut gone = false;
+        for _ in 0..50 {
+            let status = std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .status()
+                .unwrap();
+            if !status.success() { gone = true; break; }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(gone, "child {pid} still alive after handle drop");
+    }
 }
 ```
 
@@ -517,6 +540,11 @@ use tokio::sync::mpsc;
 pub struct TransportHandle {
     pub outbound: mpsc::Sender<String>,
     pub inbound: mpsc::Receiver<String>,
+    /// The live child. Held here (NOT moved into a detached reaper task) so
+    /// that `kill_on_drop` actually fires when the owning client drops this
+    /// handle — a server that ignores stdin-close is still reaped. `None` in
+    /// unit tests that wire the channels by hand.
+    pub(crate) _child: Option<tokio::process::Child>,
 }
 
 /// The transport seam. v1 ships only `StdioTransport`; a future `HttpTransport`
@@ -524,6 +552,14 @@ pub struct TransportHandle {
 /// client actor never changes.
 pub trait McpTransport: Send + Sync {
     fn connect(&self, cfg: &McpServerConfig) -> anyhow::Result<TransportHandle>;
+}
+
+impl TransportHandle {
+    /// Test-only: the OS pid of the live child, for liveness probes.
+    #[cfg(test)]
+    pub(crate) fn child_pid(&self) -> Option<u32> {
+        self._child.as_ref().and_then(|c| c.id())
+    }
 }
 
 pub struct StdioTransport;
@@ -577,12 +613,10 @@ impl McpTransport for StdioTransport {
             }
         });
 
-        // Reap the child in the background when it exits.
-        tokio::spawn(async move {
-            let _ = child.wait().await;
-        });
-
-        Ok(TransportHandle { outbound: out_tx, inbound: in_rx })
+        // The child is owned by the handle so `kill_on_drop` fires when the
+        // client drops it. Do NOT move it into a `wait()` task — that would
+        // park the only owner forever and defeat kill_on_drop.
+        Ok(TransportHandle { outbound: out_tx, inbound: in_rx, _child: Some(child) })
     }
 }
 ```
@@ -632,7 +666,7 @@ mod tests {
     async fn initialize_then_list_tools_paginates() {
         let (srv_out, cli_in) = mpsc::channel::<String>(16);
         let (cli_out, mut srv_in) = mpsc::channel::<String>(16);
-        let client = McpClient::connect(TransportHandle { outbound: cli_out, inbound: cli_in }).await;
+        let client = McpClient::connect(TransportHandle { outbound: cli_out, inbound: cli_in, _child: None }).await;
 
         // Drive the server side concurrently.
         let server = tokio::spawn(async move {
@@ -664,7 +698,7 @@ mod tests {
     async fn call_tool_maps_is_error_and_tolerates_inbound_noise() {
         let (srv_out, cli_in) = mpsc::channel::<String>(16);
         let (cli_out, mut srv_in) = mpsc::channel::<String>(16);
-        let client = McpClient::connect(TransportHandle { outbound: cli_out, inbound: cli_in }).await;
+        let client = McpClient::connect(TransportHandle { outbound: cli_out, inbound: cli_in, _child: None }).await;
 
         let server = tokio::spawn(async move {
             let line = srv_in.recv().await.unwrap();
@@ -700,13 +734,17 @@ use crate::jsonrpc::{self, Inbound};
 use crate::transport::TransportHandle;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use zoid_tools::ToolOutput;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// The protocol version we advertise. We still accept a server that negotiates
+/// a different *known* version — the shapes this client uses are wire-identical.
 const PROTOCOL_VERSION: &str = "2025-06-18";
+const KNOWN_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18"];
 
 #[derive(Debug, Clone)]
 pub struct DiscoveredTool {
@@ -723,14 +761,23 @@ enum Cmd {
 pub struct McpClient {
     cmd_tx: mpsc::Sender<Cmd>,
     next_id: AtomicU64,
+    /// Cleared by the actor when the connection ends (EOF / crash / client
+    /// dropped). Lets the manager lazily detect a disconnected server.
+    alive: Arc<AtomicBool>,
 }
 
 impl McpClient {
     /// Spawn the connection actor over `handle` and return a usable client.
     pub async fn connect(handle: TransportHandle) -> McpClient {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>(64);
-        tokio::spawn(actor(handle, cmd_rx));
-        McpClient { cmd_tx, next_id: AtomicU64::new(1) }
+        let alive = Arc::new(AtomicBool::new(true));
+        tokio::spawn(actor(handle, cmd_rx, alive.clone()));
+        McpClient { cmd_tx, next_id: AtomicU64::new(1), alive }
+    }
+
+    /// False once the connection has ended (EOF / crash / drop).
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::Relaxed)
     }
 
     async fn request(&self, method: &str, params: Option<Value>) -> anyhow::Result<Value> {
@@ -766,10 +813,14 @@ impl McpClient {
         });
         let result = self.request("initialize", Some(params)).await?;
         let negotiated = result.get("protocolVersion").and_then(|v| v.as_str()).unwrap_or("");
-        // v1 recognizes exactly the version we requested; anything else is a
-        // server we can't speak to.
-        if negotiated != PROTOCOL_VERSION {
-            anyhow::bail!("unsupported MCP protocol version from server: {negotiated:?}");
+        // Accept any non-empty version the server negotiates; only warn on ones
+        // we haven't explicitly validated. Real servers commonly reply
+        // 2024-11-05 / 2025-03-26 — refusing them would defeat the whole point.
+        if negotiated.is_empty() {
+            anyhow::bail!("server did not return a protocolVersion");
+        }
+        if !KNOWN_VERSIONS.contains(&negotiated) {
+            tracing::warn!("zoid-mcp: server negotiated unrecognized protocol version {negotiated:?}; proceeding");
         }
         self.notify("notifications/initialized", None).await?;
         Ok(())
@@ -825,7 +876,7 @@ impl McpClient {
 }
 
 /// The connection actor: owns the transport halves and the pending-request map.
-async fn actor(mut handle: TransportHandle, mut cmd_rx: mpsc::Receiver<Cmd>) {
+async fn actor(mut handle: TransportHandle, mut cmd_rx: mpsc::Receiver<Cmd>, alive: Arc<AtomicBool>) {
     let mut pending: HashMap<u64, oneshot::Sender<Result<Value, jsonrpc::RpcError>>> = HashMap::new();
     loop {
         tokio::select! {
@@ -857,7 +908,9 @@ async fn actor(mut handle: TransportHandle, mut cmd_rx: mpsc::Receiver<Cmd>) {
             },
         }
     }
-    // Fail every in-flight request so awaiters don't hang forever.
+    // Connection ended: mark dead, then fail every in-flight request so
+    // awaiters don't hang forever.
+    alive.store(false, Ordering::Relaxed);
     for (_, tx) in pending.drain() {
         let _ = tx.send(Err(jsonrpc::RpcError { code: 0, message: "mcp server disconnected".into() }));
     }
@@ -1016,6 +1069,15 @@ fn namespaced(server: &str, tool: &str) -> String {
     format!("{server}__{tool}")
 }
 
+/// A Ready server whose client has died reads as Disconnected. Test entries
+/// (client == None) keep their stored state.
+fn effective_state(entry: &ServerEntry) -> ServerState {
+    match (entry.state, &entry.client) {
+        (ServerState::Ready, Some(c)) if !c.is_alive() => ServerState::Disconnected,
+        (s, _) => s,
+    }
+}
+
 impl McpManager {
     pub fn new() -> McpManager {
         McpManager { inner: Mutex::new(ManagerState::default()) }
@@ -1044,7 +1106,15 @@ impl McpManager {
             }
             let this = Arc::clone(self);
             tokio::spawn(async move {
-                match Self::connect_one(&cfg).await {
+                // Per-server connect budget (spec §D default 10s), so a wedged
+                // `initialize` can't sit in `Connecting` for the 30s request TTL.
+                let result = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    Self::connect_one(&cfg),
+                )
+                .await
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("connect timed out")));
+                match result {
                     Ok((client, tools)) => {
                         let mut st = this.inner.lock().unwrap();
                         for t in &tools {
@@ -1081,7 +1151,7 @@ impl McpManager {
         let st = self.inner.lock().unwrap();
         let mut out: Vec<Box<dyn Tool>> = Vec::new();
         for (name, entry) in &st.servers {
-            if entry.state != ServerState::Ready { continue; }
+            if effective_state(entry) != ServerState::Ready { continue; }
             for t in &entry.tools {
                 out.push(Box::new(McpTool {
                     namespaced: namespaced(name, &t.name),
@@ -1116,7 +1186,7 @@ impl McpManager {
         let st = self.inner.lock().unwrap();
         st.servers
             .iter()
-            .map(|(name, e)| ServerStatus { name: name.clone(), state: e.state, tool_count: e.tools.len() })
+            .map(|(name, e)| ServerStatus { name: name.clone(), state: effective_state(e), tool_count: e.tools.len() })
             .collect()
     }
 }
@@ -1128,6 +1198,14 @@ pub struct McpTool {
     namespaced: String,
     description: String,
     parameters: Value,
+}
+
+impl McpTool {
+    /// Construct a spec-carrier for a discovered tool. Public so the agent-loop
+    /// test (Task 6) can build one without a live server.
+    pub fn new(namespaced: String, description: String, parameters: Value) -> McpTool {
+        McpTool { namespaced, description, parameters }
+    }
 }
 
 impl Tool for McpTool {
@@ -1204,7 +1282,7 @@ async fn mcp_kind_tool_routes_to_manager_and_errors_cleanly() {
 }
 ```
 
-This asserts the routing contract the dispatch arm relies on. **Additionally**, add a turn-loop test that genuinely exercises the new arm: model the harness on the existing `run_agent_turn` tests in `crates/zoid/src/agent.rs` (near line 1712) that drive a fake `Provider`. Build a fake provider that emits one `ProviderEvent::ToolCall { name: "srv__missing", .. }` then `Done`; construct a `TurnConfig` with `mcp: Some(Arc::new(McpManager::new()))` and a `tools` vec containing an `McpTool`-kind entry named `srv__missing` (so the `kind` lookup returns `Mcp`); run the turn; assert the produced events contain a `ToolResult` with `is_error == true` and text mentioning `unknown mcp tool`. This proves the `Some(ToolKind::Mcp)` arm is taken (not the `_` Local path) and never panics.
+This asserts the routing contract the dispatch arm relies on. **Additionally**, add a turn-loop test that genuinely exercises the new arm: model the harness on the existing `run_agent_turn` tests in `crates/zoid/src/agent.rs` (near line 1712) that drive a fake `Provider`. Build a fake provider that emits one `ProviderEvent::ToolCall { name: "srv__missing", .. }` then `Done`; construct a `TurnConfig` with `mcp: Some(std::sync::Arc::new(zoid_mcp::McpManager::new()))` and a `tools` vec containing `Box::new(zoid_mcp::McpTool::new("srv__missing".into(), String::new(), serde_json::json!({"type":"object"})))` (its `kind()` returns `Mcp`, so the `kind` lookup routes to the new arm); run the turn; assert the produced events contain a `ToolResult` with `is_error == true` and text mentioning `unknown mcp tool`. This proves the `Some(ToolKind::Mcp)` arm is taken (not the `_` Local path) and never panics.
 
 - [ ] **Step 3: Run to confirm it compiles/fails appropriately**
 
@@ -1271,7 +1349,7 @@ In `crates/zoid/src/agent.rs`, in the `match kind { .. }` block, add this arm im
 
 - [ ] **Step 6: Wire the binary startup + per-turn merge in `crates/zoid/src/main.rs`**
 
-(a) Add an app-state field (find the app/`App` struct that owns `companion_hub`, `skills`, etc.) — add:
+(a) Add a field to the `App` struct (definition at `crates/zoid/src/main.rs:1306`):
 
 ```rust
     /// Background MCP manager (None if no servers are configured). Its tools are
@@ -1279,7 +1357,7 @@ In `crates/zoid/src/agent.rs`, in the `match kind { .. }` block, add this arm im
     mcp: Option<std::sync::Arc<zoid_mcp::McpManager>>,
 ```
 
-(b) During startup (near where `load_config()` / `resolve_config_dir` run and the app is assembled), construct the manager and start background connects:
+(b) Where `App` is constructed (`crates/zoid/src/main.rs:1692`, which is inside `#[tokio::main]` — an active runtime, so `spawn_connect_all`'s `tokio::spawn` is safe here), build the manager and start background connects, then assign the field:
 
 ```rust
     let mcp = {
@@ -1452,6 +1530,18 @@ async fn crash_mid_call_is_a_clean_error() {
     // Route a call to the crash tool by name through the same server.
     let crash = m.call_tool_direct_for_test("fake", "crash", &json!({})).await;
     assert!(crash.is_error);
+
+    // After the crash, the server's client actor sees EOF and the manager must
+    // surface `Disconnected` (spec §D/§E). Poll briefly for the flag to settle.
+    let mut disconnected = false;
+    for _ in 0..50 {
+        if m.status().iter().any(|s| s.name == "fake" && s.state == ServerState::Disconnected) {
+            disconnected = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(disconnected, "crashed server must read Disconnected: {:?}", m.status());
 }
 ```
 
@@ -1512,17 +1602,18 @@ git commit -m "test(mcp): hermetic end-to-end against an in-repo fixture server"
 
 - [ ] **Step 1: Write the failing route test in `crates/zoid-tui/src/route.rs`** (in the existing tests module)
 
+The route layer is **pure**: `route_key`/`route_mcp_key` take `&ShellState` and RETURN an `Action` (the bin applies it) — they do NOT mutate the overlay. So assert the returned action, mirroring how `route_sessions_key` returns `Action::CloseOverlay` on Esc (`route.rs:263`):
+
 ```rust
 #[test]
 fn esc_closes_the_mcp_overlay() {
-    let mut s = crate::state::State::default();
+    use crate::state::{Overlay, ShellState};
+    let mut s = ShellState::new();
     s.overlay = Overlay::Mcp;
-    let _ = route_key(&mut s, key(KeyCode::Esc));
-    assert_eq!(s.overlay, Overlay::None);
+    let action = route_mcp_key(&s, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(matches!(action, Action::CloseOverlay));
 }
 ```
-
-(Match the crate's existing test helpers `route_key` / `key(..)` — see the neighboring `cancel_does_not_pre_empt_an_open_overlay` test for the exact constructors.)
 
 - [ ] **Step 2: Run to confirm failure**
 
@@ -1546,7 +1637,7 @@ pub enum Overlay {
 }
 ```
 
-Add the row type and a `State` field (place the field next to the other overlay-backing collections; initialize to empty in `Default`):
+Add the row type and a field on `ShellState` (the real struct name; `struct ShellState` @ `state.rs:118`). Initialize it to empty in **both** `ShellState::new()` and `impl Default for ShellState` (`state.rs:520`) — the crate has both:
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1564,60 +1655,66 @@ pub struct McpStatusRow {
 
 - [ ] **Step 4: Route the overlay in `crates/zoid-tui/src/route.rs`**
 
-Add to the overlay dispatch (next to `Overlay::Sessions => ...`):
+Add to the overlay dispatch in `route_key` (next to `Overlay::Sessions => ...` at `route.rs:135`):
 
 ```rust
         Overlay::Mcp => return route_mcp_key(state, key),
 ```
 
-And the handler (Esc/`q` close; it's read-only so nothing else mutates):
+And the handler — pure, takes `&ShellState`, returns an `Action`. It's read-only, so Esc/`q` close (return `Action::CloseOverlay`, which the bin applies at `main.rs:2808`) and everything else is `Action::Noop`:
 
 ```rust
-fn route_mcp_key(state: &mut crate::state::State, key: KeyEvent) -> Action {
+fn route_mcp_key(_state: &ShellState, key: KeyEvent) -> Action {
     match key.code {
-        KeyCode::Esc | KeyCode::Char('q') => {
-            state.overlay = crate::state::Overlay::None;
-            Action::Redraw
-        }
-        _ => Action::None,
+        KeyCode::Esc | KeyCode::Char('q') => Action::CloseOverlay,
+        _ => Action::Noop,
     }
 }
 ```
 
-(Use the crate's actual `Action` variants — mirror what `route_sessions_key` returns for close/redraw/no-op.)
-
 - [ ] **Step 5: Render it in `crates/zoid-tui/src/render.rs`**
 
-Add a branch where the other overlays render (near the `Overlay::Config` render call), drawing a titled list. Each row: `name  state  (N tools)`. Provide a helper and a render test:
+Add a dispatch branch next to the Sessions one (`render.rs:190`), mirroring its exact shape:
 
 ```rust
-#[cfg(test)]
+    } else if state.overlay == Overlay::Mcp {
+        if let Some(p) = layout.palette {
+            render_mcp_overlay(frame, state, p);
+        }
+    }
+```
+
+Write `render_mcp_overlay(frame: &mut Frame, state: &ShellState, area: Rect)` modeled on `render_sessions_overlay` (`render.rs:1012`): a titled list, each row `name   state   (N tools)` read from `state.mcp_status`. Then a render test modeled on the existing `sessions_overlay_marks_live_rows` test (`render.rs:1628`), which uses `TestBackend` + `Terminal`:
+
+```rust
 #[test]
 fn mcp_overlay_lists_servers() {
-    let mut state = crate::state::State::default();
-    state.overlay = crate::state::Overlay::Mcp;
-    state.mcp_status = vec![
-        crate::state::McpStatusRow { name: "filesystem".into(), state: "ready".into(), tool_count: 3 },
-        crate::state::McpStatusRow { name: "git".into(), state: "failed".into(), tool_count: 0 },
+    use crate::state::{McpStatusRow, Overlay, ShellState};
+    let mut s = ShellState::new();
+    s.overlay = Overlay::Mcp;
+    s.mcp_status = vec![
+        McpStatusRow { name: "filesystem".into(), state: "ready".into(), tool_count: 3 },
+        McpStatusRow { name: "git".into(), state: "failed".into(), tool_count: 0 },
     ];
-    let buf = render_to_test_buffer(&state); // use the crate's existing test render helper
-    let text = buffer_text(&buf);            // ditto
-    assert!(text.contains("filesystem"));
-    assert!(text.contains("ready"));
-    assert!(text.contains("git"));
-    assert!(text.contains("failed"));
+    let backend = TestBackend::new(60, 8);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| render_mcp_overlay(f, &s, f.area())).unwrap();
+    let content: String = terminal.backend().buffer().content()
+        .iter().map(|c| c.symbol().to_string()).collect();
+    assert!(content.contains("filesystem"));
+    assert!(content.contains("ready"));
+    assert!(content.contains("git"));
+    assert!(content.contains("failed"));
 }
 ```
 
-(Wire `render_to_test_buffer` / `buffer_text` to whatever the crate already uses for render tests — grep for an existing `render` unit test in `render.rs` and reuse its buffer harness.)
-
 - [ ] **Step 6: Sync status + open from the palette in `crates/zoid/src/main.rs`**
 
-Where the bin already refreshes live TUI state each tick (the branch/worktree poll added in recent commits), map the manager status in:
+Where the bin refreshes live TUI state each tick (the branch/worktree poll added in recent commits), map the manager status into `app.shell.mcp_status` (the bin's TUI state is `app.shell: zoid_tui::ShellState`, `main.rs:1349`):
 
 ```rust
     if let Some(m) = &app.mcp {
-        app.tui.mcp_status = m
+        app.shell.mcp_status = m
             .status()
             .into_iter()
             .map(|s| zoid_tui::state::McpStatusRow {
@@ -1635,7 +1732,7 @@ Where the bin already refreshes live TUI state each tick (the branch/worktree po
     }
 ```
 
-Add a command-palette entry "MCP servers" that sets `state.overlay = Overlay::Mcp` (mirror how the palette opens `Overlay::Sessions`/`Overlay::Config` — see `route.rs:472`).
+Add an "MCP servers" entry to the command palette alongside the existing "Sessions"/"Config" entries (grep for where those palette commands are registered), and in the `Action::PaletteRun` handler (`main.rs:2852`) add an arm that sets `app.shell.overlay = zoid_tui::Overlay::Mcp` — mirroring the Sessions open at `main.rs:4018` and the Config open at `main.rs:4026`.
 
 - [ ] **Step 7: Run the TUI tests**
 
