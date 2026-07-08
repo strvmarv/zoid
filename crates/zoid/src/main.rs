@@ -3348,6 +3348,46 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                         &app.config.provider,
                         &app.config.model,
                     ),
+                    "effort" => {
+                        let cur = app.config.thinking.effort.clone().unwrap_or_default();
+                        vec![
+                            zoid_tui::config_view::PickOption {
+                                id: "".into(),
+                                label: "(auto)".into(),
+                                detail: String::new(),
+                                selectable: true,
+                                is_current: cur.is_empty(),
+                            },
+                            zoid_tui::config_view::PickOption {
+                                id: "low".into(),
+                                label: "low".into(),
+                                detail: String::new(),
+                                selectable: true,
+                                is_current: cur == "low",
+                            },
+                            zoid_tui::config_view::PickOption {
+                                id: "medium".into(),
+                                label: "medium".into(),
+                                detail: String::new(),
+                                selectable: true,
+                                is_current: cur == "medium",
+                            },
+                            zoid_tui::config_view::PickOption {
+                                id: "high".into(),
+                                label: "high".into(),
+                                detail: String::new(),
+                                selectable: true,
+                                is_current: cur == "high",
+                            },
+                            zoid_tui::config_view::PickOption {
+                                id: "max".into(),
+                                label: "max".into(),
+                                detail: String::new(),
+                                selectable: true,
+                                is_current: cur == "max",
+                            },
+                        ]
+                    }
                     _ => Vec::new(),
                 };
                 if !app.shell.config_picker.is_empty() {
@@ -3451,6 +3491,14 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                             app.ui_tx.clone(),
                         );
                     }
+                } else if label == "effort" {
+                    if id.is_empty() {
+                        apply_config_write(app, "thinking.effort", TomlValue::Unset, false);
+                    } else {
+                        apply_config_write(app, "thinking.effort", TomlValue::Str(id), false);
+                    }
+                    app.shell.config_picker.clear();
+                    app.shell.config_col = ConfigCol::Fields;
                 } else if label == "model" {
                     apply_config_write(app, "model", TomlValue::Str(id), false);
                     app.shell.config_picker.clear();
