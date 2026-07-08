@@ -145,10 +145,10 @@ impl SessionHandle {
                     Cmd::ListSessions { root_filter, reply } => {
                         let out = (|| {
                             let rows = store.list_session_rows()?;
-                            let events = store.load_all()?;
+                            let totals = store.session_token_totals()?;
                             anyhow::Ok(crate::sessions::session_list(
                                 &rows,
-                                &events,
+                                &totals,
                                 root_filter.as_deref(),
                             ))
                         })();

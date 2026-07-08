@@ -394,6 +394,37 @@ impl EventStore {
         }
         Ok(out)
     }
+
+    /// Per-session net token totals, computed via SQL from the `tokens` JSON
+    /// column. The net total is `(input - cached) + output` per event, summed
+    /// per session — exactly what `session_list` used to compute by loading
+    /// ALL events into memory. This SQL path avoids deserializing the entire
+    /// event log (which can be 100K+ events) just to sum token counts, and is
+    /// robust against individual event deserialize failures (a corrupt `kind`
+    /// no longer kills the session list, since we never parse `kind` here).
+    ///
+    /// Events with NULL `tokens` contribute zero. SQLite's `json_extract`
+    /// returns NULL for missing keys, and `max(x, 0)` guards against a
+    /// negative `input - cached` (shouldn't happen, but defends the sum).
+    pub fn session_token_totals(&self) -> Result<std::collections::HashMap<Ulid, u64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT session_id, \
+             sum(max(json_extract(tokens, '$.input') - json_extract(tokens, '$.cached'), 0) \
+                 + json_extract(tokens, '$.output')) \
+             FROM events WHERE tokens IS NOT NULL \
+             GROUP BY session_id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+        })?;
+        let mut out = std::collections::HashMap::new();
+        for r in rows {
+            let (sid, total) = r?;
+            let total = total.unwrap_or(0).max(0) as u64;
+            out.insert(sid.parse()?, total);
+        }
+        Ok(out)
+    }
 }
 
 /// Read events from a PRE-session_id legacy DB (6-column `events` schema, no
@@ -983,5 +1014,69 @@ mod tests {
     fn heartbeat_returns_false_for_unknown_session() {
         let s = EventStore::open(":memory:").unwrap();
         assert!(!s.heartbeat(Ulid::new(), 1234, 1000).unwrap());
+    }
+
+    #[test]
+    fn session_token_totals_sums_net_per_session() {
+        use crate::event::TokenStat;
+        let s = EventStore::open(":memory:").unwrap();
+        let sa = Ulid::from(10u128);
+        let sb = Ulid::from(20u128);
+        s.insert_session(sa, "a", "/r", 1, 1).unwrap();
+        s.insert_session(sb, "b", "/r", 1, 1).unwrap();
+        // sa: two usage events → net = (100-0+40) + (200-150+10) = 140 + 60 = 200
+        s.append(
+            &Event::new(Ulid::from(1u128), None, 1, EventKind::Usage)
+                .with_session(sa)
+                .with_tokens(TokenStat {
+                    thinking: 0,
+                    input: 100,
+                    output: 40,
+                    cached: 0,
+                }),
+        )
+        .unwrap();
+        s.append(
+            &Event::new(Ulid::from(2u128), None, 2, EventKind::Usage)
+                .with_session(sa)
+                .with_tokens(TokenStat {
+                    thinking: 0,
+                    input: 200,
+                    output: 10,
+                    cached: 150,
+                }),
+        )
+        .unwrap();
+        // sb: one usage event → net = (50-0+5) = 55
+        s.append(
+            &Event::new(Ulid::from(3u128), None, 3, EventKind::Usage)
+                .with_session(sb)
+                .with_tokens(TokenStat {
+                    thinking: 0,
+                    input: 50,
+                    output: 5,
+                    cached: 0,
+                }),
+        )
+        .unwrap();
+        // An event with no tokens → contributes zero.
+        s.append(
+            &Event::new(Ulid::from(4u128), None, 4, EventKind::UserMessage {
+                text: "hi".into(),
+            })
+            .with_session(sa),
+        )
+        .unwrap();
+
+        let totals = s.session_token_totals().unwrap();
+        assert_eq!(totals.get(&sa).copied(), Some(200));
+        assert_eq!(totals.get(&sb).copied(), Some(55));
+    }
+
+    #[test]
+    fn session_token_totals_empty_when_no_events() {
+        let s = EventStore::open(":memory:").unwrap();
+        let totals = s.session_token_totals().unwrap();
+        assert!(totals.is_empty());
     }
 }

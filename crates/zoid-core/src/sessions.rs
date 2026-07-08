@@ -1,7 +1,6 @@
 //! Sessions: raw `sessions`-table rows (`SessionRow`) and the folded
 //! `SessionInfo` projection (see `session_list`). Pure; the store owns SQL.
 
-use crate::event::Event;
 use std::collections::HashMap;
 use ulid::Ulid;
 
@@ -41,23 +40,18 @@ pub struct SessionInfo {
 }
 
 /// Fold session rows into `SessionInfo`, most-recent-first by `last_touched_ts`
-/// (ties broken by `id` desc for determinism). `token_total` sums each session's
-/// events' `(input - cached) + output` — cache-read tokens are excluded so the
-/// total reflects net new tokens, not re-sent cached content. When
-/// `root_filter` is `Some`, only sessions whose `root_path` matches are
-/// returned. Pure.
+/// (ties broken by `id` desc for determinism). `token_total` comes from a
+/// pre-computed `HashMap<Ulid, u64>` (produced by `EventStore::session_token_totals`
+/// via SQL) rather than iterating the full event log — the old signature took
+/// `&[Event]` and loaded the entire log into memory just to sum token counts,
+/// which was slow (100K+ events) and fragile (one corrupt event killed the
+/// whole list). When `root_filter` is `Some`, only sessions whose `root_path`
+/// matches are returned. Pure.
 pub fn session_list(
     rows: &[SessionRow],
-    events: &[Event],
+    token_totals: &HashMap<Ulid, u64>,
     root_filter: Option<&str>,
 ) -> Vec<SessionInfo> {
-    let mut totals: HashMap<Ulid, u64> = HashMap::new();
-    for e in events {
-        if let Some(t) = e.tokens {
-            let net = t.input.saturating_sub(t.cached) + t.output;
-            *totals.entry(e.session_id).or_default() += net;
-        }
-    }
     let mut out: Vec<SessionInfo> = rows
         .iter()
         .filter(|r| root_filter.is_none_or(|f| r.root_path == f))
@@ -67,7 +61,7 @@ pub fn session_list(
             root_path: r.root_path.clone(),
             created_ts: r.created_ts,
             last_touched_ts: r.last_touched_ts,
-            token_total: totals.get(&r.id).copied().unwrap_or(0),
+            token_total: token_totals.get(&r.id).copied().unwrap_or(0),
             active: r.active,
             active_pid: r.active_pid,
             active_heartbeat: r.active_heartbeat,
@@ -84,7 +78,7 @@ pub fn session_list(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{EventKind, TokenStat};
+    use crate::event::{Event, EventKind, TokenStat};
 
     fn row(id: u128, name: &str, root: &str, touched: i64) -> SessionRow {
         SessionRow {
@@ -98,6 +92,20 @@ mod tests {
             active_heartbeat: None,
         }
     }
+
+    /// Build a token-totals map mirroring the old event-iteration logic:
+    /// `(input - cached) + output` summed per session.
+    fn totals_from(events: &[Event]) -> HashMap<Ulid, u64> {
+        let mut totals: HashMap<Ulid, u64> = HashMap::new();
+        for e in events {
+            if let Some(t) = e.tokens {
+                let net = t.input.saturating_sub(t.cached) + t.output;
+                *totals.entry(e.session_id).or_default() += net;
+            }
+        }
+        totals
+    }
+
     fn usage(session: u128, input: u64, output: u64) -> Event {
         Event::new(Ulid::new(), None, 0, EventKind::Usage)
             .with_session(Ulid::from(session))
@@ -127,8 +135,9 @@ mod tests {
             row(3, "other", "/repo/b", 200),
         ];
         let events = vec![usage(1, 10, 5), usage(2, 100, 0), usage(2, 0, 40)];
+        let totals = totals_from(&events);
         // No filter: most-recent-first across all repos, token totals folded.
-        let all = session_list(&rows, &events, None);
+        let all = session_list(&rows, &totals, None);
         assert_eq!(
             all.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
             vec!["new", "other", "old"]
@@ -136,7 +145,7 @@ mod tests {
         assert_eq!(all[0].token_total, 140); // session 2: 100 + 40
         assert_eq!(all[2].token_total, 15); // session 1: 10 + 5
                                             // Filtered to /repo/a: drops "other".
-        let a = session_list(&rows, &events, Some("/repo/a"));
+        let a = session_list(&rows, &totals, Some("/repo/a"));
         assert_eq!(
             a.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
             vec!["new", "old"]
@@ -148,7 +157,8 @@ mod tests {
         // input=200, cached=150, output=50 → net = (200-150)+50 = 100
         let rows = vec![row(1, "cached", "/repo", 100)];
         let events = vec![usage_cached(1, 200, 150, 50)];
-        let all = session_list(&rows, &events, None);
+        let totals = totals_from(&events);
+        let all = session_list(&rows, &totals, None);
         assert_eq!(all[0].token_total, 100); // net, not 250
     }
 
@@ -159,7 +169,7 @@ mod tests {
         r.active_pid = Some(42);
         r.active_heartbeat = Some(1000);
         let rows = vec![r];
-        let list = session_list(&rows, &[], None);
+        let list = session_list(&rows, &HashMap::new(), None);
         assert!(list[0].active);
         assert_eq!(list[0].active_pid, Some(42));
         assert_eq!(list[0].active_heartbeat, Some(1000));
