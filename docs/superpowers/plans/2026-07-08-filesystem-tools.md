@@ -13,7 +13,7 @@
 - **Design spec:** `docs/superpowers/specs/2026-07-08-filesystem-tools-design.md` — follow it; update it if reality diverges.
 - **No path jailing.** Preserve `resolve(cwd, path)` semantics (`lib.rs:156`) and the documented "no path-jailing" stance (`lib.rs:2-3`). Do not add sandboxing.
 - **UTF-8 text only.** Non-UTF-8 reads fail with a clear error. No binary/image support.
-- **Hard rename, no aliases.** Old names (`read_file`/`write_file`/`edit_file`/`search`) are fully removed from **functional** sites (tool `name()`, registry, approval tiers, `AgentProfile` allowlist). Incidental test fixtures in `zoid-provider`, `zoid-core` (`context.rs`/`compaction.rs`/`projection.rs`/`zoom.rs`/`economy.rs`/`event.rs`), `zoid-tui`, and `obs.rs` use arbitrary tool-name strings to exercise serialization/projection and are **intentionally left unchanged** — they do not reference the tool registry.
+- **Hard rename, no aliases.** A site is **functional** (must be renamed) if its string flows through the **registry**, the **approval tiers**, the **`AgentProfile` allowlist**, or a **model-facing prompt** — regardless of which crate it lives in. The functional sites are: the four tool `name()`s; `lib.rs` registries + tests (incl. the `read_tool_resolves_relative_to_cwd` test at `lib.rs:212`); `approval.rs` tiers + tests; `agent_profile.rs` allowlist + prompt + tests; `crates/zoid/tests/agent_loop.rs` and `crates/zoid/tests/subagent_integration.rs` (they dispatch scripted `write_file` calls through the **real** registry and assert the file was written); and the built-in skill prompt in `crates/zoid-core/src/skill.rs` (production model-facing text + its `contains` assertion). A site is **incidental** (intentionally left unchanged) if the string is an arbitrary sample name in a serialization/projection fixture that never reaches the registry: `zoid-provider` parse/request tests, `zoid-core` `context.rs`/`compaction.rs`/`projection.rs`/`zoom.rs`/`economy.rs`/`event.rs` fixtures, `zoid-tui` `overview.rs::sample()` + snapshot fixtures, `obs.rs`, `zoid-testkit`. Verified-safe-to-leave: `agent.rs:1936` (default profile has an empty allowlist → allow-all), `ask_user.rs` (the `read_file` call is drained on abort, never dispatched), and TUI tool-call rendering (name-agnostic: renders generic name+args).
 - **Context safety.** Every read/search/list tool has a hard output ceiling and, on hitting it, appends a truncation notice telling the model how to get the rest.
 - **Every tool is `ToolKind::Local`** (default `kind()`), dispatched via `run_tool` → `t.run()`.
 - **Verify command (whole crate):** `cargo test -p zoid-tools` and, after cross-crate tasks, `cargo build --workspace && cargo test -p zoid-core -p zoid`.
@@ -67,10 +67,13 @@ Pure rename of the four existing tools and every **functional** reference, keepi
 - Modify: `crates/zoid-tools/src/write.rs` (`WriteFile`→`Write`, `"write_file"`→`"Write"`)
 - Modify: `crates/zoid-tools/src/edit.rs` (`EditFile`→`Edit`, `"edit_file"`→`"Edit"`)
 - Modify: `crates/zoid-tools/src/search.rs` (`Search`→`Grep`, `"search"`→`"Grep"`)
-- Modify: `crates/zoid-tools/src/lib.rs` (registry fns + registry test)
+- Modify: `crates/zoid-tools/src/lib.rs` (registry fns + registry test + `read_tool_resolves_relative_to_cwd` at `:212`)
 - Modify: `crates/zoid-tools/src/approval.rs` (tiers at `:329`,`:336` + tests at `:548`,`:556-557`)
 - Modify: `crates/zoid-core/src/agent_profile.rs` (allowlist `:40-46`, prompt `:35-39`, tests `:63-64`)
+- Modify: `crates/zoid-core/src/skill.rs` (skill prompt body `:130`, `contains` assertion `:181`)
 - Modify: `crates/zoid/src/invoke_skill.rs` (name-assertion test `:147-148`)
+- Modify: `crates/zoid/tests/agent_loop.rs` (scripted calls + coupled event-name assertions: `:69`,`:132`,`:170`,`:338`)
+- Modify: `crates/zoid/tests/subagent_integration.rs` (scripted call `:71`)
 
 **Interfaces:**
 - Produces: struct names `read::Read`, `write::Write`, `edit::Edit`, `search::Grep`; model-visible names `"Read"`, `"Write"`, `"Edit"`, `"Grep"`.
@@ -138,7 +141,7 @@ In `crates/zoid-core/src/agent_profile.rs`, `builtin()`:
 ```rust
             system_prompt: "You are a zoid subagent. You are given ONE discrete task and the \
                 relevant code. Complete the task end to end using the tools (Read, Write, Edit, \
-                Grep, Glob, LS, shell). Work autonomously — do not ask questions. When done, give \
+                Grep, shell). Work autonomously — do not ask questions. When done, give \
                 a one-paragraph summary of what you changed."
                 .into(),
             tools: vec![
@@ -150,7 +153,7 @@ In `crates/zoid-core/src/agent_profile.rs`, `builtin()`:
             ],
 ```
 
-(`Glob`/`LS` are appended to this list in Tasks 5 and 6.) Update tests (`:63-64`):
+(`Glob`/`LS` are added to both the tool list **and** the prompt in Tasks 5 and 6, so the prompt never advertises a tool the allowlist would deny.) Update tests (`:63-64`):
 
 ```rust
         assert!(p.allows("Write"));
@@ -166,12 +169,47 @@ In `crates/zoid/src/invoke_skill.rs` (`:147-148`):
         assert!(names.contains(&"Read"));
 ```
 
-- [ ] **Step 6: Verify the workspace builds and tests pass**
+- [ ] **Step 6: Fix the `lib.rs` cwd-resolve test (compile break)**
+
+`crates/zoid-tools/src/lib.rs:212` calls the renamed struct; after `ReadFile → Read` the old symbol is gone. Update line 212:
+
+```rust
+        let out = crate::read::Read.run(&serde_json::json!({ "path": "note.txt" }), dir.path());
+```
+
+Leave its `assert_eq!(out.text, "in cwd")` **as-is for now** — Task 3 changes `Read`'s output format and updates this assertion in the same task. (Between Task 2 and Task 3 this test still passes because Task 2 keeps `Read`'s body unchanged.)
+
+- [ ] **Step 7: Update the built-in skill prompt (production model-facing text)**
+
+`crates/zoid-core/src/skill.rs:130` instructs the model to "Use the write_file tool." Rename it, and flip the assertion at `:181` that currently hides the change:
+
+```rust
+                    Use the Write tool. Then confirm in one sentence that you wrote it."
+```
+```rust
+        assert!(imp.body.contains("Write"));
+```
+
+- [ ] **Step 8: Rename the scripted tool calls in the agent-loop tests**
+
+These dispatch through the real registry. In `crates/zoid/tests/agent_loop.rs`, change `"write_file"` → `"Write"` at the scripted calls **and** the coupled event-name assertion:
+- `:69` `zoid_testkit::tool_call("Write", …)`
+- `:132` `… if name == "Write"` (the recorded event name mirrors the call name — this assertion breaks if left)
+- `:170` `name: "Write".into(),`
+- `:338` `zoid_testkit::tool_call("Write", …)`
+
+(Only the `:69` test hard-fails after rename — it runs under `AllowAll` and asserts the write happened. The `:170` `DenyAll` and `:338` cancellation tests would pass vacuously, but rename them to preserve intent.)
+
+- [ ] **Step 9: Rename the scripted call in the subagent integration test**
+
+`crates/zoid/tests/subagent_integration.rs:71` — `name: "Write".into(),`. (This one breaks doubly: after Task 2 the built-in profile allowlist contains `"Write"`, not `"write_file"`, so the old name is now denied *and* unknown.)
+
+- [ ] **Step 10: Verify the workspace builds and tests pass**
 
 Run: `cargo build --workspace && cargo test -p zoid-tools -p zoid-core -p zoid`
 Expected: PASS. (Incidental fixtures using `"read_file"`/`"search"` in provider/projection tests are untouched and still pass — they test serialization, not the registry.)
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add -A
@@ -213,7 +251,34 @@ Add to `read.rs`'s `#[cfg(test)] mod tests`:
             &json!({ "path": f.path().to_str().unwrap(), "offset": 2, "limit": 2 }),
             std::path::Path::new("."),
         );
-        assert_eq!(out.text, "2\tl2\n3\tl3\n");
+        // `end (3) < total (5)`, so a "there's more" notice follows the two
+        // requested lines — assert the prefix, not exact equality.
+        assert!(out.text.starts_with("2\tl2\n3\tl3\n"), "got: {}", out.text);
+        assert!(out.text.contains("offset=4"));
+    }
+
+    #[test]
+    fn over_long_line_is_truncated() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(f, "{}", "x".repeat(5000)).unwrap();
+        let out = Read.run(
+            &json!({ "path": f.path().to_str().unwrap() }),
+            std::path::Path::new("."),
+        );
+        assert!(out.text.contains("(line truncated)"));
+        assert!(out.text.len() < 4000, "a 5000-char line must not pass through whole");
+    }
+
+    #[test]
+    fn non_utf8_is_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("bin");
+        std::fs::write(&p, [0xff, 0xfe, 0x00]).unwrap();
+        let out = Read.run(
+            &json!({ "path": p.to_str().unwrap() }),
+            std::path::Path::new("."),
+        );
+        assert!(out.is_error);
     }
 
     #[test]
@@ -258,6 +323,8 @@ Replace `read.rs`'s `spec()` params and `run()`:
     }
     fn run(&self, args: &Value, cwd: &Path) -> ToolOutput {
         const DEFAULT_LIMIT: usize = 2000;
+        const MAX_LINE: usize = 2000; // per-line char cap (CC parity) — stops a
+                                      // single giant line from blowing context.
         let path = match str_arg(args, "path") {
             Ok(p) => p,
             Err(e) => return e,
@@ -282,7 +349,13 @@ Replace `read.rs`'s `spec()` params and `run()`:
         let end = start.saturating_add(limit).min(total);
         let mut out = String::new();
         for (i, line) in lines[start..end].iter().enumerate() {
-            out.push_str(&format!("{}\t{}\n", offset + i, line));
+            let shown = if line.chars().count() > MAX_LINE {
+                let head: String = line.chars().take(MAX_LINE).collect();
+                format!("{head}… (line truncated)")
+            } else {
+                (*line).to_string()
+            };
+            out.push_str(&format!("{}\t{}\n", offset + i, shown));
         }
         if end < total {
             out.push_str(&format!(
@@ -295,16 +368,32 @@ Replace `read.rs`'s `spec()` params and `run()`:
     }
 ```
 
-- [ ] **Step 4: Run tests**
+- [ ] **Step 4: Update the two assertions that the new output format breaks**
 
-Run: `cargo test -p zoid-tools read::tests`
-Expected: PASS (new tests + the existing `reads_existing_file` still green since it reads a single line → `"1\thello tools\n"`; update that assertion to `assert_eq!(out.text, "1\thello tools\n");`).
+The line-numbered output changes two existing exact-match assertions:
 
-- [ ] **Step 5: Commit**
+In `read.rs`'s `reads_existing_file`:
+
+```rust
+        assert_eq!(out.text, "1\thello tools\n");
+```
+
+In `crates/zoid-tools/src/lib.rs`'s `read_tool_resolves_relative_to_cwd` (`:214`, whose call site was renamed to `crate::read::Read` in Task 2 Step 6):
+
+```rust
+        assert_eq!(out.text, "1\tin cwd\n");
+```
+
+- [ ] **Step 5: Run tests**
+
+Run: `cargo test -p zoid-tools read:: && cargo test -p zoid-tools read_tool_resolves_relative_to_cwd`
+Expected: PASS (all new Read tests + both updated assertions).
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add crates/zoid-tools/src/read.rs
-git commit -m "feat(tools): Read gains offset/limit paging + line numbers + cap"
+git add crates/zoid-tools/src/read.rs crates/zoid-tools/src/lib.rs
+git commit -m "feat(tools): Read gains offset/limit paging + line numbers + per-line cap"
 ```
 
 ---
@@ -420,7 +509,7 @@ Expected: FAIL — `Grep` still does literal `query` matching and ignores `patte
 
 - [ ] **Step 3: Implement the regex Grep**
 
-Replace the top of `search.rs` (imports, struct, `impl`, and helpers) with:
+Replace **everything above the `#[cfg(test)]` module** in `search.rs` — the imports, the old `const MAX_RESULTS`, the `Grep` impl, **and delete the existing module-level `skip`/`walk` functions** (the block below re-declares both; leaving the originals is a duplicate-definition compile error). The new file content above the test module is:
 
 ```rust
 use crate::{str_arg, Tool, ToolOutput};
@@ -761,9 +850,9 @@ mod tests {
 
 In `crates/zoid-tools/src/lib.rs`: add `pub mod glob;` (keep the module list alphabetical-ish, next to `edit`). Add `Box::new(glob::GlobTool),` to both `registry()` and `registry_with_kill()` (after the `search::Grep` line). Add `assert!(names.contains(&"Glob"));` to `registry_has_unique_named_tools`.
 
-- [ ] **Step 3: Add `Glob` to the subagent allowlist**
+- [ ] **Step 3: Add `Glob` to the subagent allowlist + prompt**
 
-In `crates/zoid-core/src/agent_profile.rs` `builtin()` `tools` vec, add `"Glob".into(),` after `"Grep".into(),`.
+In `crates/zoid-core/src/agent_profile.rs` `builtin()`: add `"Glob".into(),` to the `tools` vec after `"Grep".into(),`, and update the `system_prompt` tool list to `(Read, Write, Edit, Grep, Glob, shell)` so the prompt and allowlist stay in sync.
 
 - [ ] **Step 4: Run tests**
 
@@ -920,9 +1009,9 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Register + allowlist**
+- [ ] **Step 2: Register + allowlist + prompt**
 
-In `crates/zoid-tools/src/lib.rs`: add `pub mod ls;`, add `Box::new(ls::Ls),` to both registries, add `assert!(names.contains(&"LS"));` to the registry test. In `agent_profile.rs`, append `"LS".into(),` after `"Glob".into(),`.
+In `crates/zoid-tools/src/lib.rs`: add `pub mod ls;`, add `Box::new(ls::Ls),` to both registries, add `assert!(names.contains(&"LS"));` to the registry test. In `agent_profile.rs`: append `"LS".into(),` after `"Glob".into(),`, and update the `system_prompt` tool list to its final form `(Read, Write, Edit, Grep, Glob, LS, shell)`.
 
 - [ ] **Step 3: Run tests**
 
@@ -1149,17 +1238,26 @@ Add to `lib.rs`'s `#[cfg(test)] mod tests`:
 Run: `cargo test -p zoid-tools fs_tools_advertise_valid_object_schemas`
 Expected: PASS.
 
-- [ ] **Step 3: Sweep for stale functional references**
+- [ ] **Step 3: Sweep for stale references — struct symbols (workspace-wide)**
 
-Run: `rg -n '"read_file"|"write_file"|"edit_file"|"Search"|search::Search|ReadFile|WriteFile|EditFile' crates/zoid-tools/src crates/zoid-core/src/agent_profile.rs`
-Expected: **no hits.** (Hits in provider/projection/compaction/context/zoom/TUI **tests** are incidental fixtures and out of scope — do not touch them.)
+The renamed struct symbols must not survive anywhere:
 
-- [ ] **Step 4: Full workspace verification**
+Run: `rg -n 'ReadFile|WriteFile|EditFile|search::Search|\bstruct Search\b' crates/`
+Expected: **no hits.**
+
+- [ ] **Step 4: Sweep the functional string surfaces**
+
+Old tool-name strings must be gone from every functional surface (registry, approval tiers, profile, model-facing prompts, and the tests that dispatch through the real registry). Do **not** touch incidental serialization/projection fixtures (see Global Constraints):
+
+Run: `rg -n '"read_file"|"write_file"|"edit_file"|"search"' crates/zoid-tools/src crates/zoid-core/src/agent_profile.rs crates/zoid-core/src/skill.rs crates/zoid/src/invoke_skill.rs crates/zoid/tests/agent_loop.rs crates/zoid/tests/subagent_integration.rs`
+Expected: **no hits.** (Any remaining hits elsewhere — `zoid-provider`, `context.rs`/`compaction.rs`/`projection.rs`/`zoom.rs`/`economy.rs`/`event.rs`, `zoid-tui`, `obs.rs`, `zoid-testkit`, `agent.rs:1936`, `ask_user.rs` — are the verified-incidental fixtures and stay.)
+
+- [ ] **Step 5: Full workspace verification**
 
 Run: `cargo build --workspace && cargo test --workspace && cargo clippy --workspace`
 Expected: PASS, no new clippy warnings in touched files.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add crates/zoid-tools/src/lib.rs
@@ -1187,3 +1285,14 @@ git commit -m "test(tools): assert the six FS tools advertise valid schemas"
 **2. Placeholder scan.** No TBD/TODO; every code step shows complete code. ✓
 
 **3. Type consistency.** Struct names (`Read`, `Write`, `Edit`, `Grep`, `glob::GlobTool`, `ls::Ls`), model names (`"Read"`/`"Write"`/`"Edit"`/`"Grep"`/`"Glob"`/`"LS"`), and `apply_one` helper are used consistently across tasks. Edit param names (`old_string`/`new_string`) are introduced in Task 7 and the existing tests updated in the same task. ✓
+
+## Revisions from technical review (2026-07-08)
+
+Incorporated after a blocking-level review:
+
+- **Migration completeness (was the root defect):** reclassified functional-vs-incidental by **data-flow** (registry / approval / allowlist / model-prompt), not by crate. Added the four missed functional sites to Task 2 — `lib.rs:212` (compile break), `crates/zoid/tests/agent_loop.rs` + `subagent_integration.rs` (scripted `write_file` calls dispatched through the real registry), and `crates/zoid-core/src/skill.rs` (production skill prompt whose `contains` assertion was *hiding* the break). Widened Task 8's sweep to the workspace with an explicit incidental allow-list.
+- **Task 3 test bug:** the `offset/limit` test used `assert_eq!` but the implementation appends a truncation notice when more lines remain → switched to `starts_with`.
+- **Read byte ceiling (spec §Read) was silently dropped:** added a per-line `MAX_LINE` char cap (CC parity) + a truncation test, so a single giant line can't blow context.
+- **Task 4 ambiguity:** made the `search.rs` replacement explicit about deleting the old module-level `skip`/`walk` (would otherwise be a duplicate-definition compile error).
+- **Prompt/allowlist ordering:** Task 2's subagent prompt no longer advertises `Glob`/`LS`; Tasks 5/6 add them to prompt **and** allowlist together.
+- **Confirmed non-issue:** globset's default (`literal_separator=false`) makes `*.rs` match `sub/b.rs` and `**/*.rs` match top-level `a.rs`, so the Grep/Glob/LS glob tests pass as written; `Glob::compile_matcher()`/`GlobMatcher::is_match(&str)` is the correct API.
