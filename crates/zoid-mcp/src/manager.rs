@@ -41,8 +41,30 @@ impl std::fmt::Debug for McpManager {
     }
 }
 
+/// Replace any character a provider tool name may not contain with `_`.
+/// Provider tool names must match `^[A-Za-z0-9_-]{1,64}$`; a server named with
+/// a space/dot in `.mcp.json` (or an over-long `server__tool`) would otherwise
+/// produce a spec the provider API rejects — and since all tool specs travel in
+/// one request, that would fail the *whole turn's* tool calling, not just the
+/// one MCP tool.
+fn sanitize_segment(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 fn namespaced(server: &str, tool: &str) -> String {
-    format!("{server}__{tool}")
+    let mut raw = format!("{}__{}", sanitize_segment(server), sanitize_segment(tool));
+    // Clamp to the provider's 64-char cap. `sanitize_segment` emits only ASCII,
+    // so byte index 64 is always a char boundary and `truncate` cannot panic.
+    raw.truncate(64);
+    raw
 }
 
 /// A Ready server whose client has died reads as Disconnected. Test entries
@@ -240,6 +262,26 @@ mod tests {
         let names: Vec<String> = m.mcp_tools().iter().map(|t| t.name().to_string()).collect();
         assert!(names.contains(&"a__search".to_string()));
         assert!(names.contains(&"b__search".to_string()));
+    }
+
+    #[test]
+    fn namespaced_names_are_always_provider_valid() {
+        fn provider_valid(s: &str) -> bool {
+            !s.is_empty()
+                && s.len() <= 64
+                && s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        }
+        // Ordinary names pass through unchanged.
+        assert_eq!(namespaced("git", "status"), "git__status");
+        // Characters the provider forbids (space, dot, slash) become '_'.
+        let n = namespaced("my server.v2", "read/file");
+        assert_eq!(n, "my_server_v2__read_file");
+        assert!(provider_valid(&n));
+        // Over-long names are clamped to the 64-char cap.
+        let long = namespaced(&"s".repeat(60), &"t".repeat(60));
+        assert_eq!(long.len(), 64);
+        assert!(provider_valid(&long));
     }
 
     #[test]
