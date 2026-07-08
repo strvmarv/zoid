@@ -107,12 +107,19 @@ h2 em{color:var(--acc2);font-style:normal;}
 .led-name{display:flex;align-items:center;gap:6px;min-width:0;}
 .led-name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .heat{width:7px;height:7px;border-radius:2px;flex:0 0 auto;background:var(--dim);}
-.heat.hot{background:var(--err);} .heat.warm{background:var(--warn);} .heat.cold{background:var(--acc);}
+.heat.hot{background:var(--ok);} .heat.warm{background:var(--warn);} .heat.cold{background:var(--dim);}
 .led-tok{color:var(--dim);font-size:.9em;white-space:nowrap;}
 .bar{grid-column:1 / -1;height:3px;border-radius:2px;background:var(--line2);overflow:hidden;}
 .bar > i{display:block;height:100%;background:var(--acc);border-radius:2px;}
-.bar > i.hot{background:var(--err);} .bar > i.warm{background:var(--warn);} .bar > i.cold{background:var(--acc);}
+.bar > i.hot{background:var(--ok);} .bar > i.warm{background:var(--warn);} .bar > i.cold{background:var(--dim);}
 .pin{color:var(--acc2);}
+/* bold tool names + drawer mini-ledger (context · tokens), matching the live app */
+.tn{color:var(--txt);font-weight:600;}
+.dled{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;}
+.dled > span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;}
+.hbar{width:26px;height:6px;border-radius:2px;background:var(--dim);}
+.hbar.hot{background:var(--ok);} .hbar.warm{background:var(--warn);}
+.hcold{color:var(--dim);font-size:.85em;}
 
 /* sparkline row */
 .spark{display:flex;justify-content:space-between;gap:10px;align-items:center;}
@@ -157,7 +164,7 @@ h2 em{color:var(--acc2);font-style:normal;}
 /* semantic zoom pair */
 .zoom{padding:80px 0;border-top:1px solid var(--line2);}
 .zoom-head{max-width:600px;}
-.zoom-grid{display:grid;gap:22px;grid-template-columns:1fr 1fr;margin-top:38px;align-items:start;}
+.zoom-grid{display:grid;gap:18px;grid-template-columns:1fr 1fr 1fr;margin-top:38px;align-items:start;}
 .zoom-grid > div{min-width:0;}
 .zoom-cap{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.14em;
   margin:0 0 11px;}
@@ -236,31 +243,34 @@ footer .wordmark{color:var(--txt);font-size:22px;letter-spacing:-.04em;}
     <div class="term-bar">
       <span class="term-dot"></span>
       <span class="term-title">zoid</span>
-      <span class="term-hint">Esc interrupt · : command · ^P palette</span>
+      <span class="term-hint">^P palette</span>
     </div>
     <div class="term-body">
       <div class="term-log">
         <div class="ln"><span class="ts">00:00 </span><span class="pr">› </span><span class="tx">what's causing the 500?</span></div>
         <div class="ln"><span class="ts">00:00 </span><span class="who">zoid </span><span class="tx">searching for the failing lookup</span></div>
-        <div class="ln ind"><span class="tool">● </span><span class="tx">search</span><span class="args">(query: lookup) ⏎ peek</span></div>
+        <div class="ln ind"><span class="tool">● </span><span class="tn">search</span><span class="args">(query: lookup) ⏎ peek</span></div>
         <div class="ln ind"><span class="ok">✓ </span><span class="cmp">⊟ compacted search → row 0</span></div>
-        <div class="ln ind"><span class="tool">● </span><span class="tx">read_file</span><span class="args">(src/handler.rs:42) ⏎ peek</span></div>
+        <div class="ln ind"><span class="tool">● </span><span class="tn">read_file</span><span class="args">(src/handler.rs:42) ⏎ peek</span></div>
         <div class="ln"><span class="ts">00:04 </span><span class="who">zoid </span><span class="tx">line 42 unwraps the lookup — wrap it in </span><span class="kw">?</span><span class="tx"> or return a 404.</span></div>
       </div>
       <aside class="term-drawers" aria-hidden="true">
         <div class="drawer"><h4>repo</h4><div class="dc">
-          <div class="kv"><span>📦 repo</span><span class="lbr">⎇ fix/lookup</span></div>
-          <div class="kv"><span class="dim">🔧 worktree</span><span class="dim">primary</span></div>
-          <div class="kv"><span class="dim">📝 changes</span><span><span class="add">+48</span> <span class="rem">−12</span> <span class="dim">· 5</span></span></div>
+          <div class="kv"><span>📦 api</span><span class="lbr">⎇ fix/lookup</span></div>
+          <div class="kv"><span class="dim">🔧 worktree</span><span class="dim">(none)</span></div>
+          <div class="kv"><span class="dim">📝 changes</span><span><span class="add">+12</span> <span class="rem">−3</span> <span class="dim">· 2 files</span></span></div>
         </div></div>
         <div class="drawer"><h4>session</h4><div class="dc">
           <div><span class="ok">🟢</span> diagnosing-500</div>
-          <div><span class="kw">🤖 glm-5.2:cloud</span> <span class="dim">· ollama</span></div>
-          <div class="kv"><span class="dim">⌚ dur 4m</span><span class="dim">tok 72k · cac 40k</span></div>
-          <div class="ctx"><span class="dim">📊 ctx 72k/300k</span><span class="gauge"><i style="width:24%"></i></span></div>
+          <div><span class="kw">🤖 glm-5.2</span> <span class="dim">· ollama</span></div>
+          <div class="kv"><span class="dim">⌚ dur 8m</span><span class="dim">tok 210k · cac 640k</span></div>
+          <div class="ctx"><span class="dim">📊 ctx 210k/1.0M</span><span class="gauge"><i style="width:21%"></i></span></div>
           <div class="dim">📁 cwd ~/src/api</div>
         </div></div>
         <div class="drawer"><h4>context · tokens</h4><div class="dc">
+          <div class="dled"><span class="tx">invoke_skill</span><span class="led-tok">3k</span><span class="hcold">cold</span></div>
+          <div class="dled"><span class="tx">search</span><span class="led-tok">2k</span><span class="hbar hot"></span></div>
+          <div class="dled"><span class="tx">read_file</span><span class="led-tok">1k</span><span class="hbar warm"></span></div>
           <div class="spark"><span class="dim">churn</span><span class="churn s">▂▅▂█▂▃▆</span></div>
           <div class="spark"><span class="dim">cache</span><span class="cache s">▁▂▄█▃▅▇</span></div>
           <div class="kv"><span class="dim">reclaimed</span><span class="ok">−1.2k tok</span></div>
@@ -294,8 +304,8 @@ footer .wordmark{color:var(--txt);font-size:22px;letter-spacing:-.04em;}
     <div class="figure">
     <div class="term" role="img" tabindex="0" aria-label="zoid context economy: a token ledger showing four working-set items with per-item heat and token weight, plus churn and cache sparklines. Total 18,000 tokens.">
       <div class="term-bar">
-        <span class="term-dot"></span><span class="term-title">zoid · context</span>
-        <span class="term-hint">18,000 tok</span>
+        <span class="term-dot"></span><span class="term-title">zoid</span>
+        <span class="term-hint">^P palette</span>
       </div>
       <div class="term-body">
         <div class="term-log">
@@ -332,9 +342,9 @@ footer .wordmark{color:var(--txt);font-size:22px;letter-spacing:-.04em;}
           </div></div>
           <div class="drawer"><h4>session</h4><div class="dc">
             <div><span class="ok">🟢</span> diagnosing-500</div>
-            <div><span class="kw">🤖 glm-5.2:cloud</span> <span class="dim">· ollama</span></div>
+            <div><span class="kw">🤖 glm-5.2</span> <span class="dim">· ollama</span></div>
             <div class="kv"><span class="dim">⌚ dur 2m</span><span class="dim">tok 18k · cac 40</span></div>
-            <div class="ctx"><span class="dim">📊 ctx 18k/300k</span><span class="gauge"><i style="width:6%"></i></span></div>
+            <div class="ctx"><span class="dim">📊 ctx 18k/1.0M</span><span class="gauge"><i style="width:3%"></i></span></div>
           </div></div>
         </aside>
       </div>
@@ -366,29 +376,29 @@ footer .wordmark{color:var(--txt);font-size:22px;letter-spacing:-.04em;}
           <div class="palette">
             <div class="q"><span class="pr">› </span><span class="tx">mode</span><span class="icaret blink">▌</span></div>
             <ul>
-              <li class="sel"><span>chat</span><span class="tag">converse · edit · run</span></li>
+              <li><span>chat</span><span class="tag">converse · edit · run</span></li>
               <li><span>plan</span><span class="tag">decompose · sequence</span></li>
               <li><span>review</span><span class="tag">critique · verify</span></li>
-              <li><span>security-audit <span class="new">＋ imported</span></span><span class="tag">./skills/audit</span></li>
+              <li class="sel"><span>security-audit <span class="new">＋ imported</span></span><span class="tag">./skills/audit</span></li>
             </ul>
           </div>
           <div class="ln dim">Shift+Tab cycles · Enter switches mode</div>
         </div>
         <aside class="term-drawers" aria-hidden="true">
           <div class="drawer"><h4>repo</h4><div class="dc">
-            <div class="kv"><span>📦 repo</span><span class="lbr">⎇ main</span></div>
-            <div class="kv"><span class="dim">🔧 worktree</span><span class="dim">primary</span></div>
-            <div class="kv"><span class="dim">📝 changes</span><span><span class="add">+0</span> <span class="rem">−0</span> <span class="dim">· clean</span></span></div>
+            <div class="kv"><span>📦 api</span><span class="lbr">⎇ main</span></div>
+            <div class="kv"><span class="dim">🔧 worktree</span><span class="dim">(none)</span></div>
+            <div class="kv"><span class="dim">📝 changes</span><span><span class="add">+0</span> <span class="rem">−0</span> <span class="dim">· 0 files</span></span></div>
           </div></div>
           <div class="drawer"><h4>modes</h4><div class="dc">
-            <div class="kv"><span class="kw">▸ chat</span><span class="dim">active</span></div>
-            <div class="dim">plan · review</div>
-            <div><span class="ok">＋</span> security-audit <span class="dim">· imported</span></div>
+            <div class="kv"><span class="kw">▸ security-audit</span><span class="dim">active</span></div>
+            <div class="dim">chat · plan · review</div>
+            <div><span class="ok">＋</span> imported · ./skills</div>
           </div></div>
         </aside>
       </div>
       <div class="term-status">
-        <span class="mode">CHAT</span>
+        <span class="mode">SECURITY-AUDIT</span>
         <span class="st-mid"><span class="dim">^P palette</span><span class="live">● idle</span></span>
         <span class="st-zoom">zoom normal</span>
       </div>
@@ -396,7 +406,7 @@ footer .wordmark{color:var(--txt);font-size:22px;letter-spacing:-.04em;}
     </div>
   </section>
 
-  <!-- §3 Semantic zoom — same session, two altitudes -->
+  <!-- §3 Semantic zoom — same session, three altitudes (summary · normal · detail) -->
   <section class="zoom">
     <div class="zoom-head">
       <p class="eyebrow c2">the conversation is a database</p>
@@ -407,7 +417,7 @@ footer .wordmark{color:var(--txt);font-size:22px;letter-spacing:-.04em;}
       <div>
         <p class="zoom-cap">zoom out · <b>summary</b></p>
         <div class="term mini" role="img" tabindex="0" aria-label="zoid zoomed out: the whole exchange compacted to a single scannable line — the question and a one-token summary.">
-          <div class="term-bar"><span class="term-dot"></span><span class="term-title">zoid</span><span class="term-hint">1 turn</span></div>
+          <div class="term-bar"><span class="term-dot"></span><span class="term-title">zoid</span><span class="term-hint">^P palette</span></div>
           <div class="term-body">
             <div class="term-log">
               <div class="ln"><span class="pr">› </span><span class="tx">what's causing the 500?</span> <span class="dim">→ unwrapped lookup</span> <span class="dim">~1t</span></div>
@@ -417,9 +427,24 @@ footer .wordmark{color:var(--txt);font-size:22px;letter-spacing:-.04em;}
         </div>
       </div>
       <div>
+        <p class="zoom-cap">zoom · <b>normal</b></p>
+        <div class="term mini" role="img" tabindex="0" aria-label="zoid at the normal altitude: the standard transcript — each turn and tool call on a compact line, with compaction collapsed to one row.">
+          <div class="term-bar"><span class="term-dot"></span><span class="term-title">zoid</span><span class="term-hint">^P palette</span></div>
+          <div class="term-body">
+            <div class="term-log">
+              <div class="ln"><span class="ts">00:00 </span><span class="pr">› </span><span class="tx">what's causing the 500?</span></div>
+              <div class="ln"><span class="ts">00:00 </span><span class="who">zoid </span><span class="tx">searching for the failing lookup</span></div>
+              <div class="ln ind"><span class="ok">✓ </span><span class="cmp">⊟ search → row 0</span></div>
+              <div class="ln"><span class="ts">00:04 </span><span class="who">zoid </span><span class="tx">an unwrapped lookup in the handler.</span></div>
+            </div>
+          </div>
+          <div class="term-status"><span class="mode">CHAT</span><span class="st-mid"><span class="live">● idle</span></span><span class="st-zoom">zoom normal</span></div>
+        </div>
+      </div>
+      <div>
         <p class="zoom-cap">zoom in · <b>detail</b></p>
         <div class="term mini" role="img" tabindex="0" aria-label="zoid zoomed in: the same exchange expanded to every event and token, with the compacted tool result elided inline — 199 more lines, roughly 700 tokens.">
-          <div class="term-bar"><span class="term-dot"></span><span class="term-title">zoid</span><span class="term-hint">full detail</span></div>
+          <div class="term-bar"><span class="term-dot"></span><span class="term-title">zoid</span><span class="term-hint">^P palette</span></div>
           <div class="term-body">
             <div class="term-log">
               <div class="ln"><span class="ts">00:00 </span><span class="pr">› </span><span class="tx">what's causing the 500?</span></div>
@@ -457,7 +482,7 @@ footer .wordmark{color:var(--txt);font-size:22px;letter-spacing:-.04em;}
     <span class="g" aria-hidden="true">⎇</span> event-sourced spine (the conversation is a database) &nbsp;·&nbsp;
     modal (vim-like) interaction &nbsp;·&nbsp;
     multi-provider (Ollama local &amp; cloud, Anthropic) &nbsp;·&nbsp;
-    orchestrated subagents
+    importable skill-set modes
   </p>
 </section>
 
