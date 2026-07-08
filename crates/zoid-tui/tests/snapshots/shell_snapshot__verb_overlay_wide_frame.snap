@@ -5,7 +5,7 @@ expression: "draw_overlay(Overlay::Verbs, 140, 24)"
 Buffer {
     area: Rect { x: 0, y: 0, width: 140, height: 24 },
     content: [
-        "                                                                    zoid                              Esc interrupt · : command · ^P palette",
+        "v0.1.2                                                              zoid                              Esc interrupt · : command · ^P palette",
         "    ● read_┌ ▷ verbs · src/ast.rs ────────────────────────────────────────────────┐           █ ╭ ▾ repo ─────────────────────────────────╮ ",
         "    ✓ read_│ explain                                                              │           █ │📦 repo   ⎇ main                         │ ", // hidden by multi-width symbols: [(98, " ")]
         "    ⚠ shell│ summarize                                                            │           █ ╰─────────────────────────────────────────╯ ",
@@ -31,7 +31,8 @@ Buffer {
         " CHAT                                               ⊟ compact     ● idle      ◐ tool                                            zoom normal ",
     ],
     styles: [
-        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 0, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
+        x: 6, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 68, y: 0, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 72, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 102, y: 0, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,

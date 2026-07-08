@@ -5,7 +5,7 @@ expression: "draw_zoom(Zoom::Detail, 100, 24)"
 Buffer {
     area: Rect { x: 0, y: 0, width: 100, height: 24 },
     content: [
-        "                                                zoid          Esc interrupt · : command · ^P palette",
+        "v0.1.2                                          zoid          Esc interrupt · : command · ^P palette",
         "  00:00 › show me parse                               █ ╭ ▾ repo ─────────────────────────────────╮ ",
         "  00:00 zoid reading it                               █ │📦 repo   ⎇ main                         │ ", // hidden by multi-width symbols: [(58, " ")]
         "    ● read_file(path: src/parser.rs) ⏎ peek           █ ╰─────────────────────────────────────────╯ ",
@@ -31,7 +31,8 @@ Buffer {
         " CHAT                           ⊟ compact     ● idle      ◐ tool                        zoom detail ",
     ],
     styles: [
-        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 0, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
+        x: 6, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 48, y: 0, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 52, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 62, y: 0, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,

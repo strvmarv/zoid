@@ -217,17 +217,36 @@ fn render_mode_error(frame: &mut Frame, state: &ShellState, area: Rect) {
     frame.render_widget(p, area);
 }
 
-fn render_title(frame: &mut Frame, _state: &ShellState, area: Rect) {
+/// The running crate version, e.g. `v0.1.2`. Resolved at compile time from the
+/// workspace `version` (`zoid-tui` inherits `version.workspace = true`), so it
+/// always matches `zoid --version`.
+const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
+
+/// Build the one-row top status bar for inner width `w`.
+///
+/// Three zones on a single line: the crate `VERSION` flush-left, the `zoid`
+/// wordmark centered, and the palette hint flush-right. The wordmark-centering
+/// and hint-right-alignment math is identical to the pre-version bar — the
+/// version merely overlays the left padding that used to be blank spaces. When
+/// the left pad cannot hold the version plus a one-column gap (`pad < ver_w + 1`,
+/// i.e. a very narrow terminal) the version is dropped and the original
+/// two-element bar renders unchanged.
+fn title_line(w: usize) -> Line<'static> {
     let wordmark = "zoid";
     let palette_hint = "Esc interrupt · : command · ^P palette";
-    let w = area.width as usize;
     let wm_w = wordmark.width();
     let pad = w.saturating_sub(wm_w) / 2;
-    let mut spans = vec![Span::styled(" ".repeat(pad), Style::new())];
-    spans.push(Span::styled(
-        wordmark.to_string(),
-        Style::new().fg(color::DIM),
-    ));
+    let ver_w = VERSION.width();
+
+    let mut spans = Vec::new();
+    if pad >= ver_w + 1 {
+        spans.push(Span::styled(VERSION, Style::new().fg(color::DIM)));
+        spans.push(Span::styled(" ".repeat(pad - ver_w), Style::new()));
+    } else {
+        spans.push(Span::styled(" ".repeat(pad), Style::new()));
+    }
+    spans.push(Span::styled(wordmark.to_string(), Style::new().fg(color::DIM)));
+
     let used = pad + wm_w;
     let right_pad = w.saturating_sub(used).saturating_sub(palette_hint.width());
     if right_pad > 0 {
@@ -237,7 +256,11 @@ fn render_title(frame: &mut Frame, _state: &ShellState, area: Rect) {
         palette_hint.to_string(),
         Style::new().fg(color::DIM),
     ));
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    Line::from(spans)
+}
+
+fn render_title(frame: &mut Frame, _state: &ShellState, area: Rect) {
+    frame.render_widget(Paragraph::new(title_line(area.width as usize)), area);
 }
 
 fn render_input(frame: &mut Frame, input: &TextArea<'_>, area: Rect) {
@@ -1620,6 +1643,51 @@ mod tests {
         assert!(
             content.contains("in use"),
             "live row must carry the 'in use' marker: {content:?}"
+        );
+    }
+
+    /// Flatten a `Line`'s spans back into the visible string.
+    fn line_text(line: &Line) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn title_shows_version_flush_left_and_keeps_wordmark_centered() {
+        let line = title_line(100);
+        let text = line_text(&line);
+        // Version is the leftmost visible content.
+        assert!(
+            text.starts_with(VERSION),
+            "version should be flush-left: {text:?}"
+        );
+        assert!(text.contains("zoid"), "wordmark present: {text:?}");
+        assert!(
+            text.trim_end().ends_with("palette"),
+            "hint stays flush-right: {text:?}"
+        );
+        // Wordmark start column is unchanged by the version: still (w - 4) / 2.
+        assert_eq!(
+            text.find("zoid").unwrap(),
+            (100 - 4) / 2,
+            "wordmark must remain centered: {text:?}"
+        );
+    }
+
+    #[test]
+    fn title_drops_version_when_left_pad_too_narrow() {
+        // width 16 -> pad = (16 - 4) / 2 = 6, which is < ver_w(6) + 1, so the
+        // version is dropped and the wordmark stays centered.
+        let line = title_line(16);
+        let text = line_text(&line);
+        assert!(
+            !text.contains(VERSION),
+            "version dropped when it cannot fit the left pad: {text:?}"
+        );
+        assert!(text.contains("zoid"), "wordmark still present: {text:?}");
+        assert_eq!(
+            text.find("zoid").unwrap(),
+            (16 - 4) / 2,
+            "wordmark still centered in the fallback: {text:?}"
         );
     }
 }
