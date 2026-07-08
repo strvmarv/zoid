@@ -62,6 +62,7 @@ pub fn event(frame: StreamEvent, acc: &mut ToolUseAccumulator) -> Vec<ProviderEv
                 input_tokens: input,
                 output_tokens: 0,
                 cached: u.cache_read_input_tokens,
+                thinking_tokens: 0,
             })]
         }
         StreamEvent::ContentBlockStart {
@@ -92,6 +93,7 @@ pub fn event(frame: StreamEvent, acc: &mut ToolUseAccumulator) -> Vec<ProviderEv
                 input_tokens: 0,
                 output_tokens: usage.output_tokens,
                 cached: 0,
+                thinking_tokens: 0,
             })];
             if delta.stop_reason.as_deref() == Some("max_tokens") {
                 out.push(ProviderEvent::Truncated);
@@ -129,6 +131,7 @@ mod tests {
                 input_tokens: 50,
                 output_tokens: 0,
                 cached: 40,
+                thinking_tokens: 0,
             })]
         );
     }
@@ -153,6 +156,7 @@ mod tests {
                 input_tokens: 7,
                 output_tokens: 0,
                 cached: 0,
+                thinking_tokens: 0,
             })]
         );
     }
@@ -198,6 +202,7 @@ mod tests {
                 input_tokens: 0,
                 output_tokens: 12,
                 cached: 0,
+                thinking_tokens: 0,
             })]
         );
     }
@@ -224,6 +229,7 @@ mod tests {
                     input_tokens: 0,
                     output_tokens: 4096,
                     cached: 0,
+                    thinking_tokens: 0,
                 }),
                 ProviderEvent::Truncated
             ]

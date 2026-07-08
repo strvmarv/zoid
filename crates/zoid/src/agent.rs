@@ -585,6 +585,8 @@ async fn run_turn_inner(
                     .await?;
                 }
                 ProviderEvent::Done => break,
+                ProviderEvent::ThinkingDelta(_) => {}
+                ProviderEvent::ThinkingSignature(_) => {}
             }
         }
         if aborted {

@@ -357,6 +357,7 @@ mod tests {
                 input_tokens: 200,
                 output_tokens: 30,
                 cached: 0,
+                thinking_tokens: 0,
             }),
             ProviderEvent::Done,
         ]));

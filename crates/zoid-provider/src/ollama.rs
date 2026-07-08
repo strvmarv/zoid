@@ -159,6 +159,7 @@ pub fn parse_line(
                 input_tokens: curr,
                 output_tokens: output.unwrap_or(0),
                 cached: cached_approx,
+                thinking_tokens: 0,
             }));
         }
         // `done_reason:"length"` = the model hit the output cap; its reply is
@@ -687,7 +688,8 @@ mod tests {
                 ProviderEvent::Usage(Usage {
                     input_tokens: 124,
                     output_tokens: 58,
-                    cached: 0
+                    cached: 0,
+                    thinking_tokens: 0,
                 }),
                 ProviderEvent::Done
             ]
@@ -704,7 +706,8 @@ mod tests {
                 ProviderEvent::Usage(Usage {
                     input_tokens: 0,
                     output_tokens: 58,
-                    cached: 0
+                    cached: 0,
+                    thinking_tokens: 0,
                 }),
                 ProviderEvent::Done
             ]
@@ -730,7 +733,8 @@ mod tests {
                 ProviderEvent::Usage(Usage {
                     input_tokens: 124,
                     output_tokens: 4096,
-                    cached: 0
+                    cached: 0,
+                    thinking_tokens: 0,
                 }),
                 ProviderEvent::Truncated,
                 ProviderEvent::Done
@@ -993,7 +997,8 @@ mod tests {
                 ProviderEvent::Usage(Usage {
                     input_tokens: 12000,
                     output_tokens: 40,
-                    cached: 0
+                    cached: 0,
+                    thinking_tokens: 0,
                 }),
                 ProviderEvent::Done
             ]
@@ -1013,6 +1018,7 @@ mod tests {
             out[0][0],
             ProviderEvent::Usage(Usage {
                 cached: 0,
+                thinking_tokens: 0,
                 input_tokens: 12000,
                 output_tokens: 40
             })
@@ -1022,6 +1028,7 @@ mod tests {
             out[1][0],
             ProviderEvent::Usage(Usage {
                 cached: 12000,
+                thinking_tokens: 0,
                 input_tokens: 13000,
                 output_tokens: 10
             })
@@ -1040,6 +1047,7 @@ mod tests {
             out[1][0],
             ProviderEvent::Usage(Usage {
                 cached: 30000,
+                thinking_tokens: 0,
                 input_tokens: 30000,
                 output_tokens: 10
             })

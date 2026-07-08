@@ -254,6 +254,7 @@ pub fn parse_chunk(data: &str, acc: &mut ToolCallAccumulator) -> Vec<ProviderEve
             input_tokens: input,
             output_tokens: output,
             cached,
+            thinking_tokens: 0,
         }));
     }
     out
@@ -611,7 +612,8 @@ mod tests {
             vec![ProviderEvent::Usage(Usage {
                 input_tokens: 120,
                 output_tokens: 40,
-                cached: 30
+                cached: 30,
+                thinking_tokens: 0,
             })]
         );
     }
@@ -624,7 +626,8 @@ mod tests {
             vec![ProviderEvent::Usage(Usage {
                 input_tokens: 120,
                 output_tokens: 40,
-                cached: 0
+                cached: 0,
+                thinking_tokens: 0,
             })]
         );
     }
