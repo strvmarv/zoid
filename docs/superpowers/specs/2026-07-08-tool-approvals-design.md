@@ -205,12 +205,13 @@ Patterns are structured, not raw substrings:
 enum Pattern {
     /// Leading program must be exactly `prog` (e.g. "sudo", "systemctl").
     LeadingProgram { prog: String },
-    /// Leading program `prog` with at least one of `required_flags` present
-    /// (e.g. rm with -r/-f/--recursive/--force; git push with --force/-f/--force-with-lease).
-    ProgramWithFlags { prog: String, required_flags: Vec<String> },
     /// Leading program `prog` with any of `trigger_flags` present
-    /// (e.g. curl/wget with -X POST/-d/--data/-X PUT/-X DELETE).
+    /// (e.g. curl/wget with -X POST/-d/--data/-X PUT/-X DELETE; git with push+force).
     ProgramWithAnyFlag { prog: String, trigger_flags: Vec<String> },
+    /// Leading program `prog` with at least one flag from each of `flag_groups`
+    /// present. Used when two independent flag dimensions must both be
+    /// satisfied (e.g. rm needs recursive AND force — one alone isn't dangerous).
+    ProgramWithAllGroups { prog: String, flag_groups: Vec<Vec<String>> },
     /// Free-form substring match for compound patterns that don't fit the
     /// token model (e.g. "terraform apply", "kubectl delete").
     Substring { pattern: String },
@@ -218,28 +219,37 @@ enum Pattern {
 ```
 
 Matching: for each segment, check the leading token (first token after
-tokenization) against `LeadingProgram`/`ProgramWithFlags`/`ProgramWithAnyFlag`.
-For `Substring`, check against the whole segment's raw text. A segment matches
+tokenization) against the leading-program patterns. `ProgramWithAnyFlag`
+matches if any of its trigger flags appear anywhere in the token stream.
+`ProgramWithAllGroups` matches if at least one flag from *each* group appears
+(e.g. rm matches when a recursive flag and a force flag are both present —
+`rm -r` alone is safe, `rm -f` alone is safe, `rm -rf` is dangerous). For
+`Substring`, check against the whole segment's raw text. A segment matches
 if *any* pattern matches it.
 
 ### Builtin default patterns (all 6 categories)
 
-- **Destructive `rm`** — `ProgramWithFlags { prog: "rm", required_flags:
-  ["-r", "-f", "--recursive", "--force"] }` — match if *both* recursive and force
-  flags present (any combination of short/long forms).
-- **Force-push / history rewrite** — `ProgramWithFlags { prog: "git",
-  required_flags: ["push", "--force", "-f", "--force-with-lease"] }` — match if
-  `push` + a force flag present. `--force-with-lease` is included because it
-  still rewrites public history (irreversible from zoid's view).
+- **Destructive `rm`** — `ProgramWithAllGroups { prog: "rm", flag_groups:
+  [["-r", "--recursive"], ["-f", "--force"]] }` — match if *both* a recursive
+  flag and a force flag are present. `rm -r` alone is safe; `rm -f` alone is
+  safe; `rm -rf`, `rm -r -f`, `rm --recursive --force` all match.
+- **Force-push / history rewrite** — `ProgramWithAnyFlag { prog: "git",
+  trigger_flags: ["push --force", "push -f", "push --force-with-lease"] }` —
+  match if the git subcommand is a push with a force flag. These are tokenized
+  as multi-word patterns matched against consecutive tokens. `--force-with-lease`
+  is included because it still rewrites public history (irreversible from
+  zoid's view).
 - **Network/prod writes** — `ProgramWithAnyFlag { prog: "curl", trigger_flags:
-  ["-X POST", "-X PUT", "-X DELETE", "-X PATCH", "-d", "--data"] }`; same for
-  `wget` with `--post-data`/`--post-file`. Method-aware: GETs are common and
-  read-only, so they don't prompt.
+  ["-X", "--data", "-d"] }` with an additional check that if `-X` is present, the
+  following token is a non-GET method (POST/PUT/DELETE/PATCH); same for `wget`
+  with `--post-data`/`--post-file`. Method-aware: GETs are common and read-only,
+  so they don't prompt. The `-X` flag + method is checked as two consecutive
+  tokens.
 - **Privilege escalation** — `LeadingProgram { prog: "sudo" }`,
   `LeadingProgram { prog: "su" }`, `LeadingProgram { prog: "doas" }`.
 - **System mutation** — `LeadingProgram { prog: "systemctl" }`,
   `LeadingProgram { prog: "apt" }`, `LeadingProgram { prog: "brew" }`,
-  `ProgramWithFlags { prog: "pip", required_flags: ["install", "--user"] }`,
+  `ProgramWithAllGroups { prog: "pip", flag_groups: [["install"], ["--user"]] }`,
   `Substring { pattern: "chmod -R" }`, `Substring { pattern: "/etc/" }`.
 - **Deploy / irrecoverable** — `Substring { pattern: "terraform apply" }`,
   `Substring { pattern: "kubectl delete" }`, `Substring { pattern: "fly deploy" }`,
@@ -583,7 +593,8 @@ with a `PromptGate` test double:
    is the deliberate escape valve).
 5. **shlex-based tokenizer** — split on chain operators (`&&`, `;`, `|`, `||`)
    first, then shlex-tokenize each segment, then match the leading program +
-   flags against structured patterns. Fail-safe toward prompting.
+   flags against structured patterns (`LeadingProgram`, `ProgramWithAnyFlag`,
+   `ProgramWithAllGroups`, `Substring`). Fail-safe toward prompting.
 6. **YOLO mode** — `AllowAll` selectable via config or `--yolo`; never the
    default; `ask_user` unaffected. Subagents flow uniformly under YOLO.
 7. **All five pieces in one pass** — the pieces are coupled through the
