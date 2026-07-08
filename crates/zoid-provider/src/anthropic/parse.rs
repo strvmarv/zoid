@@ -82,7 +82,12 @@ pub fn event(frame: StreamEvent, acc: &mut ToolUseAccumulator) -> Vec<ProviderEv
                 acc.append(index, &partial_json);
                 vec![]
             }
-            Delta::ThinkingDelta { .. } | Delta::SignatureDelta { .. } => vec![],
+            Delta::ThinkingDelta { thinking } => {
+                vec![ProviderEvent::ThinkingDelta(thinking)]
+            }
+            Delta::SignatureDelta { signature } => {
+                vec![ProviderEvent::ThinkingSignature(signature)]
+            }
         },
         StreamEvent::ContentBlockStop { index } => match acc.finalize(index) {
             Some(tc) => vec![ProviderEvent::ToolCall(tc)],
@@ -256,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn thinking_delta_emits_nothing() {
+    fn thinking_delta_emits_thinking_delta() {
         let frame = StreamEvent::ContentBlockDelta {
             index: 0,
             delta: Delta::ThinkingDelta {
@@ -264,7 +269,11 @@ mod tests {
             },
         };
         let mut acc = ToolUseAccumulator::default();
-        assert!(event(frame, &mut acc).is_empty());
+        let events = event(frame, &mut acc);
+        assert_eq!(
+            events,
+            vec![ProviderEvent::ThinkingDelta("reasoning".into())]
+        );
     }
 
     #[test]
@@ -496,11 +505,7 @@ mod tests {
     }
 
     #[test]
-    fn signature_delta_emits_nothing() {
-        // Spec §7.2: thinking blocks are parsed but discarded. The signature
-        // delta is part of a thinking block's lifecycle; dropped from the
-        // event stream. Pin this so a future split of the `|` arm doesn't
-        // silently regress signature handling.
+    fn signature_delta_emits_thinking_signature() {
         let frame = StreamEvent::ContentBlockDelta {
             index: 0,
             delta: Delta::SignatureDelta {
@@ -508,7 +513,11 @@ mod tests {
             },
         };
         let mut acc = ToolUseAccumulator::default();
-        assert!(event(frame, &mut acc).is_empty());
+        let events = event(frame, &mut acc);
+        assert_eq!(
+            events,
+            vec![ProviderEvent::ThinkingSignature("sig".into())]
+        );
     }
 
     #[test]

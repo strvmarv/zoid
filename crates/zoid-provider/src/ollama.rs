@@ -107,6 +107,15 @@ pub fn parse_line(
             out.push(ProviderEvent::TextDelta(text.to_string()));
         }
     }
+    if let Some(thinking) = v
+        .get("message")
+        .and_then(|m| m.get("thinking"))
+        .and_then(|t| t.as_str())
+    {
+        if !thinking.is_empty() {
+            out.push(ProviderEvent::ThinkingDelta(thinking.to_string()));
+        }
+    }
     if let Some(calls) = v
         .get("message")
         .and_then(|m| m.get("tool_calls"))
@@ -662,6 +671,17 @@ mod tests {
     }
 
     #[test]
+    fn parse_line_thinking_field_emits_thinking_delta() {
+        let line = r#"{"message":{"role":"assistant","content":"answer","thinking":"reasoning"},"done":false}"#;
+        let atomic = std::sync::atomic::AtomicU64::new(0);
+        let events = parse_line(line, &atomic);
+        assert!(events.contains(&ProviderEvent::ThinkingDelta("reasoning".into())),
+            "thinking field must emit ThinkingDelta, got: {:?}", events);
+        assert!(events.contains(&ProviderEvent::TextDelta("answer".into())),
+            "content must still emit TextDelta, got: {:?}", events);
+    }
+
+    #[test]
     fn parses_content_delta_line() {
         let line = r#"{"model":"glm-5.2:cloud","message":{"role":"assistant","content":"Hel"},"done":false}"#;
         assert_eq!(
@@ -671,10 +691,13 @@ mod tests {
     }
 
     #[test]
-    fn thinking_only_line_yields_none() {
+    fn thinking_only_line_yields_thinking_delta() {
         let line =
             r#"{"message":{"role":"assistant","content":"","thinking":"reasoning"},"done":false}"#;
-        assert!(parse_first(line).is_empty());
+        assert_eq!(
+            parse_first(line),
+            vec![ProviderEvent::ThinkingDelta("reasoning".into())]
+        );
     }
 
     #[test]
