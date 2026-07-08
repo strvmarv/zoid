@@ -34,6 +34,8 @@ pub enum Command {
     Delegate(String),
     /// Open the full-screen config overlay (provider/model/economy/secrets).
     OpenConfig,
+    /// Open the read-only MCP server status overlay (palette-only; no `:` form).
+    OpenMcp,
     /// Enable the companion server (start it if needed, open the browser).
     CompanionEnable,
     /// Disable (stop) the companion server.

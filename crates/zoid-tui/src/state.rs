@@ -52,6 +52,18 @@ pub enum Overlay {
     Sessions,
     Config,
     ProviderSwitch,
+    Mcp,
+}
+
+/// Read-only snapshot row for one MCP server, refreshed by the bin each tick
+/// from `zoid_mcp::ServerStatus` (zoid-tui does not depend on zoid-mcp, so the
+/// bin maps the enum to a plain string here).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpStatusRow {
+    pub name: String,
+    /// "connecting" | "ready" | "failed" | "disconnected"
+    pub state: String,
+    pub tool_count: usize,
 }
 
 /// Which pane has focus inside the quick-switch (`Alt+P`) overlay: the
@@ -293,6 +305,8 @@ pub struct ShellState {
     /// Model options shown in the quick-switch overlay's right pane, tracking
     /// the highlighted provider (Task 11).
     pub switch_models: Vec<crate::config_view::PickOption>,
+    /// Read-only snapshot of MCP servers, refreshed by the bin each tick.
+    pub mcp_status: Vec<McpStatusRow>,
 }
 
 impl ShellState {
@@ -385,6 +399,7 @@ impl ShellState {
             switch_pane: SwitchPane::Provider,
             switch_providers: Vec::new(),
             switch_models: Vec::new(),
+            mcp_status: Vec::new(),
         }
     }
 

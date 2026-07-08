@@ -191,6 +191,10 @@ pub fn render_shell(
         if let Some(p) = layout.palette {
             render_sessions_overlay(frame, state, p);
         }
+    } else if state.overlay == Overlay::Mcp {
+        if let Some(p) = layout.palette {
+            render_mcp_overlay(frame, state, p);
+        }
     } else if state.overlay == Overlay::Config {
         // render_config draws a full-frame three-column card (sections | fields | picker).
         render_config(frame, state, &state.config_sections, frame.area());
@@ -874,6 +878,7 @@ fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
                     Command::NewSession => "→ New session".to_string(),
                     Command::ResumeSessionPicker => "→ Resume session…".to_string(),
                     Command::OpenConfig => "→ Open settings".to_string(),
+                    Command::OpenMcp => "→ MCP servers…".to_string(),
                     Command::CompanionEnable => "→ Enable companion".to_string(),
                     Command::CompanionDisable => "→ Disable companion".to_string(),
                     Command::CompactNow => "→ Compact context now".to_string(),
@@ -1035,6 +1040,25 @@ fn render_sessions_overlay(frame: &mut Frame, state: &ShellState, area: Rect) {
         &rows,
         sel,
     );
+}
+
+/// The read-only `/mcp` server status overlay: one row per configured MCP
+/// server, showing its connection state and tool count. No navigation or
+/// actions — Esc/`q` close it (see `route::route_mcp_key`).
+fn render_mcp_overlay(frame: &mut Frame, state: &ShellState, area: Rect) {
+    let rows: Vec<String> = if state.mcp_status.is_empty() {
+        vec!["(no MCP servers configured)".to_string()]
+    } else {
+        state
+            .mcp_status
+            .iter()
+            .map(|r| format!("{}   {}   ({} tools)", r.name, r.state, r.tool_count))
+            .collect()
+    };
+    // No row is ever "selected" (the overlay has no navigation): pass an
+    // out-of-range index so `list_overlay`'s highlight loop never matches,
+    // while its scroll-offset math (based on `rows.len()`) stays sane.
+    list_overlay(frame, area, " mcp servers ".to_string(), &rows, rows.len());
 }
 
 /// The config overlay (Task 8): a full-frame "zoid · settings" three-column
@@ -1644,6 +1668,41 @@ mod tests {
             content.contains("in use"),
             "live row must carry the 'in use' marker: {content:?}"
         );
+    }
+
+    #[test]
+    fn mcp_overlay_lists_servers() {
+        use crate::state::{McpStatusRow, Overlay, ShellState};
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Mcp;
+        s.mcp_status = vec![
+            McpStatusRow {
+                name: "filesystem".into(),
+                state: "ready".into(),
+                tool_count: 3,
+            },
+            McpStatusRow {
+                name: "git".into(),
+                state: "failed".into(),
+                tool_count: 0,
+            },
+        ];
+        let backend = TestBackend::new(60, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| render_mcp_overlay(f, &s, f.area()))
+            .unwrap();
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
+        assert!(content.contains("filesystem"));
+        assert!(content.contains("ready"));
+        assert!(content.contains("git"));
+        assert!(content.contains("failed"));
     }
 
     /// Flatten a `Line`'s spans back into the visible string.

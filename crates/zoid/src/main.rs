@@ -1904,6 +1904,26 @@ where
             app.shell.branch = branch.clone();
             app.shell.worktree = worktree.clone();
         }
+        // MCP server status: an in-memory Mutex snapshot (no subprocess/IO), so
+        // it's cheap enough to refresh every frame rather than off-loading it to
+        // the background git-poll task above.
+        if let Some(m) = &app.mcp {
+            app.shell.mcp_status = m
+                .status()
+                .into_iter()
+                .map(|s| zoid_tui::state::McpStatusRow {
+                    name: s.name,
+                    state: match s.state {
+                        zoid_mcp::ServerState::Connecting => "connecting",
+                        zoid_mcp::ServerState::Ready => "ready",
+                        zoid_mcp::ServerState::Failed => "failed",
+                        zoid_mcp::ServerState::Disconnected => "disconnected",
+                    }
+                    .to_string(),
+                    tool_count: s.tool_count,
+                })
+                .collect();
+        }
         // Refresh cached projections only when the event log grew (append-only),
         // so typing / scrolling / zoom reuse them instead of rebuilding O(events)
         // projections every frame.
@@ -4044,6 +4064,13 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             app.shell.config_field = 0;
             app.shell.config_edit = None;
             refresh_config_sections(app);
+            Ok(false)
+        }
+        Command::OpenMcp => {
+            // Read-only status overlay: `app.shell.mcp_status` is kept current by
+            // the per-frame sync in the render loop, so there is nothing to
+            // populate here beyond switching the overlay.
+            app.shell.overlay = zoid_tui::Overlay::Mcp;
             Ok(false)
         }
         Command::CompanionEnable => {
