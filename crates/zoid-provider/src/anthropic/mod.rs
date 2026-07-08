@@ -111,6 +111,26 @@ impl AnthropicProvider {
         }
         headers
     }
+
+    /// Build request headers, merging per-request thinking betas with the
+    /// provider's static betas. Used when thinking is enabled on Budget or
+    /// Adaptive models that need the `extended-thinking` beta header.
+    fn request_headers_with_thinking(&self, req: &CompletionRequest) -> reqwest::header::HeaderMap {
+        let mut headers = self.request_headers();
+        let thinking_betas = request::thinking_betas(req);
+        if !thinking_betas.is_empty() {
+            let mut all_betas = self.betas.clone();
+            for b in &thinking_betas {
+                if !all_betas.contains(b) {
+                    all_betas.push(b.clone());
+                }
+            }
+            if let Ok(v) = all_betas.join(",").parse() {
+                headers.insert("anthropic-beta", v);
+            }
+        }
+        headers
+    }
 }
 
 #[async_trait]
@@ -158,7 +178,7 @@ impl AnthropicProvider {
         let send = self
             .client
             .post(&url)
-            .headers(self.request_headers())
+            .headers(self.request_headers_with_thinking(req))
             .json(&body)
             .send();
         let resp = match tokio::time::timeout(self.idle_timeout, send).await {
