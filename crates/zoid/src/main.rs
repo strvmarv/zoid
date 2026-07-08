@@ -1468,6 +1468,11 @@ async fn main() -> Result<()> {
             std::process::exit(2);
         }
         zoid::cli::Cli::Run { companion, new, resume } => {
+            // Build expiration: refuse to launch a >30-day-old build (or one on
+            // a clock that predates the build). Runs before any DB/terminal
+            // setup so the message prints cleanly. --version/--help/update are
+            // deliberately NOT gated (escape hatches). See src/expiry.rs.
+            zoid::expiry::enforce();
             cli_new = new;
             cli_resume = resume;
             companion
