@@ -882,10 +882,8 @@ fn detail_lines(
                 );
             }
             ChatMsg::Assistant {
-                text,
-                tool_calls,
-                ts,
                 thinking,
+                ..
             } => {
                 // Thinking section (full text at Detail zoom).
                 if let Some(thinking_text) = thinking {

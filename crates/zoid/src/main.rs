@@ -2038,11 +2038,9 @@ where
             .ok()
             .map(|s| s.provider_total.avg())
             .unwrap_or(0);
-        app.shell.tps = if stream_ms > 0 {
-            app.proj.last_output_tokens.unwrap_or(0) * 1000 / stream_ms
-        } else {
-            0
-        };
+        app.shell.tps = (app.proj.last_output_tokens.unwrap_or(0) * 1000)
+            .checked_div(stream_ms)
+            .unwrap_or(0);
         app.shell.input_rows = app.textarea.lines().len().max(1) as u16;
         // Empty-buffer flag for routing: a leading `:` in an empty box opens the
         // palette (direct mode) instead of inserting a literal colon. The textarea
