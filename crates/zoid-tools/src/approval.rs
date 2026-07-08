@@ -89,30 +89,73 @@ fn builtin_defaults() -> Vec<Pattern> {
 /// Split a command string on shell chain operators (`&&`, `||`, `;`, `|`) into
 /// independent command segments. `||` is handled before `|` (logical-OR vs
 /// pipe). Each segment is checked independently by the matcher.
+///
+/// The scan is quote-aware: operators inside single or double quotes — and
+/// backslash-escaped operators outside quotes — are literal text, not
+/// separators. This prevents a quoted regex alternation like
+/// `grep -E "error|warn"` from being shredded into fragments with dangling
+/// quotes, which the shlex fail-safe would otherwise flag as dangerous.
 fn split_segments(cmd: &str) -> Vec<String> {
     let mut segments = Vec::new();
     let mut current = String::new();
     let chars: Vec<char> = cmd.chars().collect();
     let mut i = 0;
+    let mut in_single = false;
+    let mut in_double = false;
     while i < chars.len() {
-        if i + 1 < chars.len() && chars[i] == '&' && chars[i + 1] == '&' {
-            segments.push(current.clone());
-            current.clear();
-            i += 2;
-        } else if i + 1 < chars.len() && chars[i] == '|' && chars[i + 1] == '|' {
-            segments.push(current.clone());
-            current.clear();
-            i += 2;
-        } else if chars[i] == ';' {
-            segments.push(current.clone());
-            current.clear();
+        let c = chars[i];
+        // Single quotes: everything is literal until the closing quote.
+        if in_single {
+            current.push(c);
+            if c == '\'' {
+                in_single = false;
+            }
             i += 1;
-        } else if chars[i] == '|' {
+            continue;
+        }
+        // Double quotes: backslash escapes the next char; `"` closes.
+        if in_double {
+            if c == '\\' && i + 1 < chars.len() {
+                current.push(c);
+                current.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
+            current.push(c);
+            if c == '"' {
+                in_double = false;
+            }
+            i += 1;
+            continue;
+        }
+        // Outside quotes: recognize quote openers, escapes, then operators.
+        if c == '\'' {
+            in_single = true;
+            current.push(c);
+            i += 1;
+        } else if c == '"' {
+            in_double = true;
+            current.push(c);
+            i += 1;
+        } else if c == '\\' && i + 1 < chars.len() {
+            // Escaped operator (e.g. `\|`) is literal — keep both chars.
+            current.push(c);
+            current.push(chars[i + 1]);
+            i += 2;
+        } else if i + 1 < chars.len()
+            && ((c == '&' && chars[i + 1] == '&') || (c == '|' && chars[i + 1] == '|'))
+        {
+            // Two-char chain operators: `&&`, `||`.
+            segments.push(current.clone());
+            current.clear();
+            i += 2;
+        } else if c == ';' || c == '|' {
+            // One-char separators: `;`, single pipe `|`.
             segments.push(current.clone());
             current.clear();
             i += 1;
         } else {
-            current.push(chars[i]);
+            current.push(c);
             i += 1;
         }
     }
@@ -343,6 +386,43 @@ mod tests {
         assert_eq!(segs.len(), 2);
         assert_eq!(segs[0], "git log ".to_string());
         assert_eq!(segs[1], " grep foo".to_string());
+    }
+
+    #[test]
+    fn split_segments_ignores_operators_inside_quotes() {
+        // Regex alternation inside a quoted grep pattern must NOT split.
+        assert_eq!(
+            split_segments("grep -E \"error|warn\" log"),
+            vec!["grep -E \"error|warn\" log".to_string()]
+        );
+        assert_eq!(
+            split_segments("rg 'foo|bar' ."),
+            vec!["rg 'foo|bar' .".to_string()]
+        );
+        // Semicolons and && inside quotes are literal, not separators.
+        assert_eq!(
+            split_segments("grep 'a;b' f"),
+            vec!["grep 'a;b' f".to_string()]
+        );
+        assert_eq!(
+            split_segments("echo \"x && y\""),
+            vec!["echo \"x && y\"".to_string()]
+        );
+        // A real pipe outside quotes still splits, even alongside a quoted one.
+        let segs = split_segments("grep 'a|b' f | head");
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0], "grep 'a|b' f ".to_string());
+        assert_eq!(segs[1], " head".to_string());
+    }
+
+    #[test]
+    fn match_dangerous_quoted_pipe_grep_is_safe() {
+        let patterns = builtin_defaults();
+        // The bug report: grep with a quoted alternation was flagged dangerous
+        // via the unparseable-segment fail-safe.
+        assert!(match_dangerous("grep -E \"error|warn\" log", &patterns).is_none());
+        assert!(match_dangerous("rg 'foo|bar' .", &patterns).is_none());
+        assert!(match_dangerous("cat x | grep 'a|b'", &patterns).is_none());
     }
 
     #[test]
