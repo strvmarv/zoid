@@ -442,6 +442,8 @@ impl Provider for OllamaProvider {
             // prompt cache. The provider doesn't report cache-read tokens
             // separately, so we approximate them via prefix overlap in `parse_line`.
             prompt_cache: true,
+            thinking: crate::model::ThinkingSupport::None,
+            thinking_wire: crate::model::ThinkingWireShape::None,
         }))
     }
 }
