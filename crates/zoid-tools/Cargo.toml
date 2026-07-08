@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+shlex = "2.0"
 zoid-provider = { path = "../zoid-provider" }
 serde_json = { workspace = true }
 

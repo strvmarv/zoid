@@ -3,6 +3,7 @@
 //! spec §9); no path-jailing here.
 
 pub mod ask;
+pub mod approval;
 pub mod edit;
 pub mod read;
 pub mod recall;
@@ -87,6 +88,14 @@ pub enum Gate {
     Allow,
     /// Block the call; the string is fed back to the model as the tool result.
     Deny(String),
+    /// Request an interactive approval from the user. The agent loop reuses
+    /// the existing `ask_user` oneshot + `AgentUpdate::AskUser` park-and-await
+    /// path to suspend and resume on the user's answer. `question` is shown in
+    /// the question overlay; `choices` are the selectable options.
+    Prompt {
+        question: String,
+        choices: Vec<String>,
+    },
 }
 
 /// Consulted once per pending tool call, immediately before dispatch. v1 ships
@@ -103,6 +112,8 @@ impl ToolGate for AllowAll {
         Gate::Allow
     }
 }
+
+pub use approval::BlacklistGate;
 
 /// Dispatch a tool call by name. Unknown tools return an error `ToolOutput`
 /// (the model sees it and can recover) rather than panicking.
