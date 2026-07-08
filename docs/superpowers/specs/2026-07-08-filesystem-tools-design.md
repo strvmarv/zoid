@@ -119,6 +119,9 @@ context-bombs.
   (line-numbered hits, honoring `-A/-B/-C` context) | `count`.
 - `-i` case-insensitive; `multiline` allows `.`/patterns to span lines.
 - Retains the 200-match ceiling with a truncation notice.
+- **v1 cut (fast-follow):** `-A/-B/-C` context lines, `multiline`, and the
+  `type` filter are deferred; v1 ships `pattern`/`path`/`glob`/`-i`/`output_mode`.
+  `glob` covers the common file-filtering need. See the implementation plan.
 
 ### `Glob` — `{ pattern, path? }`
 
