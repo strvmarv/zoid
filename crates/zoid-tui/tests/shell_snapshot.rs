@@ -912,6 +912,8 @@ fn config_overlay_frame() {
         band_headroom_pct: Source::Default,
         recent_n: Source::Default,
         reduced_motion: Source::Default,
+            thinking_enabled: Source::Default,
+            thinking_effort: Source::Default,
     };
     let ks = [
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
@@ -946,6 +948,8 @@ fn config_key_prompt_masks_entry() {
         band_headroom_pct: Source::Default,
         recent_n: Source::Default,
         reduced_motion: Source::Default,
+            thinking_enabled: Source::Default,
+            thinking_effort: Source::Default,
     };
     let ks = [
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
@@ -986,6 +990,8 @@ fn config_overlay_provider_picker() {
         band_headroom_pct: Source::Default,
         recent_n: Source::Default,
         reduced_motion: Source::Default,
+            thinking_enabled: Source::Default,
+            thinking_effort: Source::Default,
     };
     let ks = [
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
@@ -1038,6 +1044,8 @@ fn config_overlay_provider_picker_selection_styles() {
         band_headroom_pct: Source::Default,
         recent_n: Source::Default,
         reduced_motion: Source::Default,
+            thinking_enabled: Source::Default,
+            thinking_effort: Source::Default,
     };
     let ks = [
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
@@ -1109,6 +1117,8 @@ fn config_overlay_narrow_degrades() {
         band_headroom_pct: Source::Default,
         recent_n: Source::Default,
         reduced_motion: Source::Default,
+            thinking_enabled: Source::Default,
+            thinking_effort: Source::Default,
     };
     let ks = [
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
@@ -1150,6 +1160,8 @@ fn config_overlay_narrow_degrades_respects_focus() {
         band_headroom_pct: Source::Default,
         recent_n: Source::Default,
         reduced_motion: Source::Default,
+            thinking_enabled: Source::Default,
+            thinking_effort: Source::Default,
     };
     let ks = [
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),

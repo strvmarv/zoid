@@ -4883,6 +4883,8 @@ mod tests {
                     band_headroom_pct: Source::Default,
                     recent_n: Source::Default,
                     reduced_motion: Source::Default,
+                    thinking_enabled: Source::Default,
+                    thinking_effort: Source::Default,
                 }
             },
             secrets: None,

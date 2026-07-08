@@ -12,6 +12,12 @@ pub struct SkillsConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ThinkingConfig {
+    pub enabled: bool,
+    pub effort: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ModesConfig {
     /// Extra directories to scan for `<mode>/mode.md` folders (beyond the two
     /// convention dirs the bin adds). Unioned across config layers.
@@ -28,6 +34,7 @@ pub struct Config {
     pub skills: SkillsConfig,
     pub modes: ModesConfig,
     pub companion: CompanionConfig,
+    pub thinking: ThinkingConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +91,7 @@ impl Default for Config {
             skills: SkillsConfig::default(),
             modes: ModesConfig::default(),
             companion: CompanionConfig::default(),
+            thinking: ThinkingConfig::default(),
         }
     }
 }
@@ -138,6 +146,8 @@ pub struct Provenance {
     pub band_headroom_pct: Source,
     pub recent_n: Source,
     pub reduced_motion: Source,
+    pub thinking_enabled: Source,
+    pub thinking_effort: Source,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -164,6 +174,13 @@ pub struct PartialModes {
 
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default)]
+pub struct PartialThinking {
+    pub enabled: Option<bool>,
+    pub effort: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(default)]
 pub struct PartialCompanion {
     pub port: Option<u16>,
     pub open: Option<bool>,
@@ -180,6 +197,7 @@ pub struct PartialConfig {
     pub skills: PartialSkills,
     pub modes: PartialModes,
     pub companion: PartialCompanion,
+    pub thinking: PartialThinking,
 }
 
 /// Parse one TOML layer. Known keys deserialize normally; unknown keys are NOT
@@ -208,6 +226,8 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         band_headroom_pct: Source::Default,
         recent_n: Source::Default,
         reduced_motion: Source::Default,
+        thinking_enabled: Source::Default,
+        thinking_effort: Source::Default,
     };
     for (src, p) in layers {
         if let Some(v) = &p.provider {
@@ -266,8 +286,50 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         if let Some(v) = p.companion.open {
             cfg.companion.open = v;
         }
+        if let Some(v) = p.thinking.enabled {
+            cfg.thinking.enabled = v;
+            prov.thinking_enabled = *src;
+        }
+        if let Some(v) = &p.thinking.effort {
+            cfg.thinking.effort = Some(v.clone());
+            prov.thinking_effort = *src;
+        }
     }
     (cfg, prov)
+}
+
+#[cfg(test)]
+mod thinking_config_tests {
+    use super::*;
+
+    #[test]
+    fn thinking_section_parses_and_merges() {
+        let (p, _) = parse_toml("[thinking]\nenabled = true\neffort = \"high\"").unwrap();
+        assert!(p.thinking.enabled.unwrap());
+        assert_eq!(p.thinking.effort.as_deref(), Some("high"));
+        let (cfg, prov) = merge(&[(Source::UserGlobal, p)]);
+        assert!(cfg.thinking.enabled);
+        assert_eq!(cfg.thinking.effort, Some("high".to_string()));
+        assert_eq!(prov.thinking_enabled, Source::UserGlobal);
+        assert_eq!(prov.thinking_effort, Source::UserGlobal);
+    }
+
+    #[test]
+    fn thinking_defaults_to_disabled() {
+        let (cfg, prov) = merge(&[]);
+        assert!(!cfg.thinking.enabled);
+        assert!(cfg.thinking.effort.is_none());
+        assert_eq!(prov.thinking_enabled, Source::Default);
+        assert_eq!(prov.thinking_effort, Source::Default);
+    }
+
+    #[test]
+    fn thinking_enabled_without_effort_is_auto() {
+        let (p, _) = parse_toml("[thinking]\nenabled = true").unwrap();
+        let (cfg, _) = merge(&[(Source::UserGlobal, p)]);
+        assert!(cfg.thinking.enabled);
+        assert!(cfg.thinking.effort.is_none());
+    }
 }
 
 #[cfg(test)]
