@@ -42,6 +42,16 @@ pub fn request_body(req: &CompletionRequest) -> Value {
             })),
         }
     }
+    // Only emit `think` for models that support thinking. The capability gate
+    // in resolve_thinking should have caught unsupported models, but this is
+    // defensive — never send `think: true` to a model that might not handle it.
+    let info = crate::model::model_info(&req.model);
+    let think = match req.thinking {
+        crate::ThinkingMode::Off => false,
+        crate::ThinkingMode::Auto | crate::ThinkingMode::Effort(_) => {
+            info.thinking != crate::model::ThinkingSupport::None
+        }
+    };
     let mut body = json!({
         "model": req.model,
         "stream": true,
@@ -51,6 +61,7 @@ pub fn request_body(req: &CompletionRequest) -> Value {
         // follow-up turns skip the cold reload. The native API has no token-level
         // prompt cache, so `cached` stays 0 for this provider.
         "keep_alive": "30m",
+        "think": think,
     });
     if !req.tools.is_empty() {
         body["tools"] = Value::Array(
@@ -442,6 +453,8 @@ impl Provider for OllamaProvider {
             // prompt cache. The provider doesn't report cache-read tokens
             // separately, so we approximate them via prefix overlap in `parse_line`.
             prompt_cache: true,
+            thinking: crate::model::ThinkingSupport::None,
+            thinking_wire: crate::model::ThinkingWireShape::None,
         }))
     }
 }
@@ -503,6 +516,7 @@ mod tests {
             messages: vec![Message::user("hi"), Message::assistant("hello")],
             max_tokens: 1024,
             tools: vec![],
+            thinking: crate::ThinkingMode::Off,
         };
         let body = request_body(&req);
         assert_eq!(
@@ -516,9 +530,10 @@ mod tests {
                     { "role": "assistant", "content": "hello" },
                 ],
                 "keep_alive": "30m",
+                "think": false,
             })
         );
-        // native body must NOT carry OpenAI-only fields
+    // native body must NOT carry OpenAI-only fields
         assert!(body.get("max_tokens").is_none());
         assert!(body.get("stream_options").is_none());
         // keeps the model warm between turns (Ollama's caching analog)
@@ -533,6 +548,7 @@ mod tests {
             messages: vec![Message::user("x")],
             max_tokens: 8,
             tools: vec![],
+            thinking: crate::ThinkingMode::Off,
         };
         assert_eq!(
             request_body(&req)["messages"],
@@ -566,6 +582,7 @@ mod tests {
                 description: "read a file".into(),
                 parameters: json!({"type": "object"}),
             }],
+            thinking: crate::ThinkingMode::Off,
         };
         let body = request_body(&req);
         assert_eq!(
@@ -593,8 +610,54 @@ mod tests {
             messages: vec![Message::user("x")],
             max_tokens: 8,
             tools: vec![],
+            thinking: crate::ThinkingMode::Off,
         };
         assert!(request_body(&req).get("tools").is_none());
+    }
+
+
+    #[test]
+    fn body_emits_think_false_when_thinking_auto_for_unknown_model() {
+        // "m" is an unknown model → ThinkingSupport::None → think=false (defensive)
+        let req = CompletionRequest {
+            model: "m".into(),
+            system: None,
+            messages: vec![Message::user("x")],
+            max_tokens: 8,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Auto,
+        };
+        let body = request_body(&req);
+        assert_eq!(body["think"], json!(false), "unknown model with ThinkingSupport::None must get think=false");
+    }
+
+    #[test]
+    fn body_emits_think_false_when_thinking_off() {
+        let req = CompletionRequest {
+            model: "m".into(),
+            system: None,
+            messages: vec![Message::user("x")],
+            max_tokens: 8,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Off,
+        };
+        let body = request_body(&req);
+        assert_eq!(body["think"], json!(false));
+    }
+
+    #[test]
+    fn body_emits_think_false_for_non_thinking_model_even_when_auto() {
+        // glm-5.2:cloud has ThinkingSupport::None — think must be false
+        let req = CompletionRequest {
+            model: "glm-5.2:cloud".into(),
+            system: None,
+            messages: vec![Message::user("x")],
+            max_tokens: 8,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Auto,
+        };
+        let body = request_body(&req);
+        assert_eq!(body["think"], json!(false), "non-thinking model must get think=false even when ThinkingMode::Auto");
     }
 
     #[test]
@@ -840,6 +903,7 @@ mod tests {
             messages: vec![Message::user("hi")],
             max_tokens: 8,
             tools: vec![],
+            thinking: crate::ThinkingMode::Off,
         }
     }
 

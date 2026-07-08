@@ -145,6 +145,11 @@ fn load_config() -> (
             envp.model = Some(m);
         }
     }
+    if let Ok(v) = std::env::var("ZOID_THINKING") {
+        if let Some(pt) = parse_thinking_env(&v) {
+            envp.thinking = pt;
+        }
+    }
     if let Ok(v) = std::env::var("ZOID_CONTEXT_CEILING") {
         if let Ok(n) = v.trim().parse::<u64>() {
             if n > 0 {
@@ -2609,6 +2614,16 @@ fn current_write(
         ),
         "recent turns" => ("economy.recent_n", TomlValue::Int(econ.recent_n as i64)),
         "reduced motion" => ("reduced_motion", TomlValue::Bool(app.config.reduced_motion)),
+        "thinking" => ("thinking.enabled", TomlValue::Bool(app.config.thinking.enabled)),
+        "effort" => (
+            "thinking.effort",
+            app.config
+                .thinking
+                .effort
+                .clone()
+                .map(TomlValue::Str)
+                .unwrap_or(TomlValue::Unset),
+        ),
         _ => return None,
     })
 }
@@ -3310,6 +3325,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                         !app.config.economy.auto_evict_cold,
                     )),
                     "reduced motion" => Some(("reduced_motion", !app.config.reduced_motion)),
+                    "thinking" => Some(("thinking.enabled", !app.config.thinking.enabled)),
                     _ => None,
                 };
                 if let Some((key, new)) = write {
@@ -4299,6 +4315,76 @@ fn spawn_heartbeat(app: &App) {
     });
 }
 
+/// Resolve the final `ThinkingMode` from config + model capability.
+/// Pure — takes explicit args so it's unit-testable. If the model's
+/// `ThinkingSupport` is `None`, thinking is forced off even if config
+/// says enabled (safety guard).
+fn resolve_thinking(
+    config_thinking: &zoid_core::config::ThinkingConfig,
+    model_support: zoid_provider::model::ThinkingSupport,
+) -> zoid_provider::ThinkingMode {
+    use zoid_provider::ThinkingMode;
+    match model_support {
+        zoid_provider::model::ThinkingSupport::None => ThinkingMode::Off,
+        _ => {
+            if !config_thinking.enabled {
+                ThinkingMode::Off
+            } else {
+                match &config_thinking.effort {
+                    None => ThinkingMode::Auto,
+                    Some(e) => {
+                        use zoid_provider::EffortLevel;
+                        let level = match e.as_str() {
+                            "low" => EffortLevel::Low,
+                            "medium" => EffortLevel::Medium,
+                            "high" => EffortLevel::High,
+                            "max" => EffortLevel::Max,
+                            _ => EffortLevel::High,
+                        };
+                        ThinkingMode::Effort(level)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Parse a `ZOID_THINKING` env value into a `PartialThinking` override.
+/// Pure — no env access. Returns `None` for empty/unparseable values.
+fn parse_thinking_env(val: &str) -> Option<zoid_core::config::PartialThinking> {
+    let val = val.trim();
+    if val.is_empty() {
+        return None;
+    }
+    let mut pt = zoid_core::config::PartialThinking::default();
+    match val.to_ascii_lowercase().as_str() {
+        "off" | "disabled" | "false" | "0" => {
+            pt.enabled = Some(false);
+        }
+        "auto" | "on" | "true" | "1" => {
+            pt.enabled = Some(true);
+        }
+        "low" => {
+            pt.enabled = Some(true);
+            pt.effort = Some("low".into());
+        }
+        "medium" => {
+            pt.enabled = Some(true);
+            pt.effort = Some("medium".into());
+        }
+        "high" => {
+            pt.enabled = Some(true);
+            pt.effort = Some("high".into());
+        }
+        "max" => {
+            pt.enabled = Some(true);
+            pt.effort = Some("max".into());
+        }
+        _ => return None,
+    }
+    Some(pt)
+}
+
 fn spawn_turn(app: &mut App) {
     let provider = app.provider.clone();
     let session = app.session.clone();
@@ -4335,6 +4421,12 @@ fn spawn_turn(app: &mut App) {
         recent_n: app.economy.recent_n,
         max_output: None, // Slice-4 catalog supplies this; None → derived reserve
     };
+    // Resolve thinking mode from config + model capability.
+    let model_support = app
+        .fetched_model_info
+        .map(|info| info.thinking)
+        .unwrap_or_else(|| zoid_provider::model::model_info(&app.model).thinking);
+    turn_config.thinking = resolve_thinking(&app.config.thinking, model_support);
     // Mint a fresh cancellation token for this turn and keep a clone so
     // `Action::CancelTurn` (Esc/Ctrl-C) can fire it. Cleared on `TurnComplete`.
     let cancel = tokio_util::sync::CancellationToken::new();
@@ -4358,6 +4450,91 @@ fn spawn_turn(app: &mut App) {
         .await;
     });
 }
+
+#[cfg(test)]
+mod thinking_tests {
+    use super::*;
+
+    #[test]
+    fn resolve_thinking_forces_off_when_unsupported() {
+        let cfg = zoid_core::config::ThinkingConfig {
+            enabled: true,
+            effort: Some("high".into()),
+        };
+        let mode = resolve_thinking(&cfg, zoid_provider::model::ThinkingSupport::None);
+        assert_eq!(mode, zoid_provider::ThinkingMode::Off);
+    }
+
+    #[test]
+    fn resolve_thinking_off_when_config_disabled() {
+        let cfg = zoid_core::config::ThinkingConfig {
+            enabled: false,
+            effort: None,
+        };
+        let mode = resolve_thinking(&cfg, zoid_provider::model::ThinkingSupport::Budget);
+        assert_eq!(mode, zoid_provider::ThinkingMode::Off);
+    }
+
+    #[test]
+    fn resolve_thinking_auto_when_enabled_no_effort() {
+        let cfg = zoid_core::config::ThinkingConfig {
+            enabled: true,
+            effort: None,
+        };
+        let mode = resolve_thinking(&cfg, zoid_provider::model::ThinkingSupport::Budget);
+        assert_eq!(mode, zoid_provider::ThinkingMode::Auto);
+    }
+
+    #[test]
+    fn resolve_thinking_effort_when_enabled_with_effort() {
+        let cfg = zoid_core::config::ThinkingConfig {
+            enabled: true,
+            effort: Some("max".into()),
+        };
+        let mode = resolve_thinking(&cfg, zoid_provider::model::ThinkingSupport::Adaptive);
+        assert_eq!(mode, zoid_provider::ThinkingMode::Effort(zoid_provider::EffortLevel::Max));
+    }
+
+    #[test]
+    fn model_switch_from_thinking_to_non_thinking_forces_off() {
+        let cfg = zoid_core::config::ThinkingConfig {
+            enabled: true,
+            effort: Some("high".into()),
+        };
+        let mode = resolve_thinking(&cfg, zoid_provider::model::ThinkingSupport::Budget);
+        assert_eq!(mode, zoid_provider::ThinkingMode::Effort(zoid_provider::EffortLevel::High));
+        let mode = resolve_thinking(&cfg, zoid_provider::model::ThinkingSupport::None);
+        assert_eq!(mode, zoid_provider::ThinkingMode::Off);
+    }
+
+    #[test]
+    fn parse_thinking_env_maps_values() {
+        use zoid_core::config::PartialThinking;
+        assert_eq!(
+            parse_thinking_env("off"),
+            Some(PartialThinking { enabled: Some(false), effort: None })
+        );
+        assert_eq!(
+            parse_thinking_env("auto"),
+            Some(PartialThinking { enabled: Some(true), effort: None })
+        );
+        assert_eq!(
+            parse_thinking_env("high"),
+            Some(PartialThinking { enabled: Some(true), effort: Some("high".into()) })
+        );
+        assert_eq!(
+            parse_thinking_env("max"),
+            Some(PartialThinking { enabled: Some(true), effort: Some("max".into()) })
+        );
+        assert!(parse_thinking_env("").is_none());
+        assert!(parse_thinking_env("garbage").is_none());
+        assert_eq!(
+            parse_thinking_env("HIGH"),
+            Some(PartialThinking { enabled: Some(true), effort: Some("high".into()) })
+        );
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -4883,6 +5060,8 @@ mod tests {
                     band_headroom_pct: Source::Default,
                     recent_n: Source::Default,
                     reduced_motion: Source::Default,
+                    thinking_enabled: Source::Default,
+                    thinking_effort: Source::Default,
                 }
             },
             secrets: None,

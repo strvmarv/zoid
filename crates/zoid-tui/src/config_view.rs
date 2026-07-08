@@ -140,6 +140,20 @@ pub fn build_sections(
                 env_shadowed: prov.model == Source::Env,
             },
             connection_row,
+            FieldRow {
+                label: "thinking",
+                value: onoff(cfg.thinking.enabled),
+                kind: FieldKind::Bool,
+                source: prov.thinking_enabled,
+                env_shadowed: prov.thinking_enabled == Source::Env,
+            },
+            FieldRow {
+                label: "effort",
+                value: cfg.thinking.effort.clone().unwrap_or_else(|| "(auto)".into()),
+                kind: FieldKind::Pick,
+                source: prov.thinking_effort,
+                env_shadowed: prov.thinking_effort == Source::Env,
+            },
         ],
     };
     let economy = Section {
@@ -241,6 +255,8 @@ mod tests {
             band_headroom_pct: Source::Default,
             recent_n: Source::Default,
             reduced_motion: Source::Default,
+            thinking_enabled: Source::Default,
+            thinking_effort: Source::Default,
         };
         let ks = [
             ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
@@ -306,6 +322,8 @@ mod tests {
             band_headroom_pct: Source::Default,
             recent_n: Source::Default,
             reduced_motion: Source::Default,
+            thinking_enabled: Source::Default,
+            thinking_effort: Source::Default,
         };
         let sections = build_sections(&cfg, &prov, &[]);
         let pm = &sections[0];

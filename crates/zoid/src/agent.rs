@@ -15,7 +15,7 @@ use zoid_core::agent_profile::AgentProfile;
 use zoid_core::event::{BranchId, Event, EventKind};
 use zoid_core::projection::{conversation, ChatMsg};
 use zoid_core::session::SessionHandle;
-use zoid_provider::{CompletionRequest, Message, Provider, ProviderEvent, ToolCall, ToolSpec};
+use zoid_provider::{CompletionRequest, Message, Provider, ProviderEvent, ThinkingMode, ToolCall, ToolSpec};
 use zoid_tools::{Gate, Tool, ToolGate};
 
 /// Warning glyph used in agent-generated error messages; avoids a TUI-layer dep.
@@ -60,6 +60,9 @@ pub struct TurnConfig {
     /// subagents and tests (no MCP). Carried here (not as a fn parameter) so
     /// the turn-function signatures are unchanged.
     pub mcp: Option<std::sync::Arc<zoid_mcp::McpManager>>,
+    /// Thinking mode for this turn. Resolved from config + model capability
+    /// in spawn_turn. Defaults to Off.
+    pub thinking: ThinkingMode,
 }
 
 /// The orchestrator (Chat) turn config for an explicit mode profile + skill menu.
@@ -81,6 +84,7 @@ pub fn chat_turn_config_with(profile: &AgentProfile, skill_menu: &str) -> TurnCo
         policy: zoid_core::assembler::ContextPolicy::default(),
         eviction: zoid_core::eviction::EvictionPolicy::disabled(),
         mcp: None,
+        thinking: ThinkingMode::Off,
     }
 }
 
@@ -226,9 +230,30 @@ pub fn build_request(
     tools: &[Box<dyn Tool>],
     system: &str,
 ) -> CompletionRequest {
+    build_request_with_thinking(events, model, tools, system, ThinkingMode::Off)
+}
+
+pub fn build_request_with_thinking(
+    events: &crate::eventlog::EventLog,
+    model: &str,
+    tools: &[Box<dyn Tool>],
+    system: &str,
+    thinking: ThinkingMode,
+) -> CompletionRequest {
     let system = match zoid_core::eviction::eviction_breadcrumb(events.iter()) {
         Some(bc) => format!("{system}\n\n{bc}"),
         None => system.to_string(),
+    };
+    let max_tokens = match thinking {
+        ThinkingMode::Off => 4096,
+        ThinkingMode::Auto | ThinkingMode::Effort(_) => {
+            let info = zoid_provider::model::model_info(model);
+            if info.max_output > 0 {
+                (info.max_output as u32).min(16384)
+            } else {
+                16384
+            }
+        }
     };
     CompletionRequest {
         model: model.to_string(),
@@ -237,8 +262,9 @@ pub fn build_request(
             .into_iter()
             .map(map_msg)
             .collect(),
-        max_tokens: 4096,
+        max_tokens,
         tools: tool_specs(tools),
+        thinking,
     }
 }
 
@@ -410,7 +436,7 @@ async fn run_turn_inner(
             overhead,
         )
         .await?;
-        let req = build_request(&events, &model, &tools, &config.system);
+        let req = build_request_with_thinking(&events, &model, &tools, &config.system, config.thinking);
 
         // Stream one model turn. Spawn the provider so a missing terminal Done
         // (truncated stream) can't hang us — we send our own Done after it ends.

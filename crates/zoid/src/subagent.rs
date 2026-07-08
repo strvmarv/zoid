@@ -76,6 +76,7 @@ pub fn build_subagent_request(
         messages: vec![Message::user(user)],
         max_tokens: SUBAGENT_MAX_TOKENS,
         tools: tool_specs(tools),
+        thinking: zoid_provider::ThinkingMode::Off,
     }
 }
 
@@ -153,6 +154,7 @@ pub async fn run_subagent(
         policy: subagent_policy(),
         eviction: zoid_core::eviction::EvictionPolicy::disabled(),
         mcp: None,
+        thinking: zoid_provider::ThinkingMode::Off,
     };
     // Subagents have no session-scoped companion (the `show` tool is chat-only
     // and is never in the subagent tool registry), so this hub is never

@@ -19,7 +19,41 @@ pub struct ModelInfo {
     /// drawer shows "n/a" for the `cac` line and the context drawer dims its
     /// cache sparkline.
     pub prompt_cache: bool,
+    pub thinking: ThinkingSupport,
+    pub thinking_wire: ThinkingWireShape,
 }
+
+/// Whether and how a model supports reasoning/thinking modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThinkingSupport {
+    /// Model doesn't support thinking.
+    None,
+    /// On/off only (Ollama).
+    Toggle,
+    /// On/off + effort levels (DeepSeek, OpenAI).
+    ToggleWithEffort,
+    /// On/off + token budget (Anthropic older models — 4.5, earlier).
+    Budget,
+    /// Always-on adaptive; effort controls depth (Anthropic newest).
+    Adaptive,
+}
+
+/// Which native param shape the provider emits for thinking.
+/// Drives the OpenAI-compat builder to distinguish DeepSeek from OpenAI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThinkingWireShape {
+    /// No thinking params on the wire.
+    None,
+    /// Anthropic: thinking: {type, budget_tokens?, effort?}
+    Anthropic,
+    /// DeepSeek: thinking: {type} + reasoning_effort
+    DeepSeek,
+    /// OpenAI: reasoning_effort
+    OpenAI,
+    /// Ollama: think: bool
+    Ollama,
+}
+
 
 /// How a provider entry is reached. Http/Cli carry their default connection
 /// value; Sdk has none (ambient auth). This is the growth seam for new
@@ -119,6 +153,8 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
             // Tool-use wired via the typed anthropic submodule (P1b.1).
             tools: true,
             prompt_cache: true,
+            thinking: ThinkingSupport::Budget,
+            thinking_wire: ThinkingWireShape::Anthropic,
         },
     ),
     (
@@ -129,6 +165,8 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
             // Tool-use wired via the typed anthropic submodule (P1b.1).
             tools: true,
             prompt_cache: true,
+            thinking: ThinkingSupport::Adaptive,
+            thinking_wire: ThinkingWireShape::Anthropic,
         },
     ),
     (
@@ -141,6 +179,8 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
             // Cache-read tokens are approximated via prefix overlap in the
             // ollama provider's `parse_line`, not reported natively by the API.
             prompt_cache: true,
+            thinking: ThinkingSupport::None,
+            thinking_wire: ThinkingWireShape::None,
         },
     ),
     // deepseek-v4-pro: corrected via api-docs.deepseek.com (was 128_000/0/false).
@@ -153,6 +193,8 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
             max_output: 384_000,
             tools: true,
             prompt_cache: true,
+            thinking: ThinkingSupport::ToggleWithEffort,
+            thinking_wire: ThinkingWireShape::DeepSeek,
         },
     ),
     // --- OpenCode Go models (12 new entries; deepseek-v4-pro corrected above) ---
@@ -164,6 +206,8 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
             max_output: 0,
             tools: true,
             prompt_cache: true,
+            thinking: ThinkingSupport::None,
+            thinking_wire: ThinkingWireShape::None,
         },
     ),
     // glm-5.1: inferred from glm-5.2:cloud sibling (same GLM-5.x family, 1M window).
@@ -174,6 +218,8 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
             max_output: 0,
             tools: true,
             prompt_cache: true,
+            thinking: ThinkingSupport::None,
+            thinking_wire: ThinkingWireShape::None,
         },
     ),
     // Kimi: confirmed via platform.kimi.ai (262,144-token window).
@@ -184,6 +230,8 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
             max_output: 0,
             tools: true,
             prompt_cache: true,
+            thinking: ThinkingSupport::None,
+            thinking_wire: ThinkingWireShape::None,
         },
     ),
     (
@@ -193,6 +241,8 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
             max_output: 0,
             tools: true,
             prompt_cache: true,
+            thinking: ThinkingSupport::None,
+            thinking_wire: ThinkingWireShape::None,
         },
     ),
     // deepseek-v4-flash: confirmed via api-docs.deepseek.com (1M window, 384K max output).
@@ -203,6 +253,8 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
             max_output: 384_000,
             tools: true,
             prompt_cache: true,
+            thinking: ThinkingSupport::ToggleWithEffort,
+            thinking_wire: ThinkingWireShape::DeepSeek,
         },
     ),
     // MiMo: unconfirmed — approx from public claims; override via ZOID_CONTEXT_CEILING.
@@ -213,6 +265,8 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
             max_output: 0,
             tools: true,
             prompt_cache: true,
+            thinking: ThinkingSupport::None,
+            thinking_wire: ThinkingWireShape::None,
         },
     ),
     (
@@ -222,6 +276,8 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
             max_output: 0,
             tools: true,
             prompt_cache: true,
+            thinking: ThinkingSupport::None,
+            thinking_wire: ThinkingWireShape::None,
         },
     ),
     // Anthropic-shape Go models: tools=false on day one (existing AnthropicProvider
@@ -236,6 +292,8 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
             max_output: 0,
             tools: false,
             prompt_cache: true,
+            thinking: ThinkingSupport::None,
+            thinking_wire: ThinkingWireShape::None,
         },
     ),
     (
@@ -245,6 +303,8 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
             max_output: 0,
             tools: false,
             prompt_cache: true,
+            thinking: ThinkingSupport::None,
+            thinking_wire: ThinkingWireShape::None,
         },
     ),
     (
@@ -254,6 +314,8 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
             max_output: 0,
             tools: false,
             prompt_cache: true,
+            thinking: ThinkingSupport::None,
+            thinking_wire: ThinkingWireShape::None,
         },
     ),
     (
@@ -263,6 +325,8 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
             max_output: 0,
             tools: false,
             prompt_cache: true,
+            thinking: ThinkingSupport::None,
+            thinking_wire: ThinkingWireShape::None,
         },
     ),
     (
@@ -272,6 +336,20 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
             max_output: 0,
             tools: false,
             prompt_cache: true,
+            thinking: ThinkingSupport::None,
+            thinking_wire: ThinkingWireShape::None,
+        },
+    ),
+    // OpenAI o-series: used for testing OpenAI reasoning_effort wire shape.
+    (
+        "o3",
+        ModelInfo {
+            context_window: 200_000,
+            max_output: 0,
+            tools: true,
+            prompt_cache: false,
+            thinking: ThinkingSupport::ToggleWithEffort,
+            thinking_wire: ThinkingWireShape::OpenAI,
         },
     ),
 ];
@@ -284,6 +362,8 @@ const DEFAULT_MODEL_INFO: ModelInfo = ModelInfo {
     max_output: 0,
     tools: true,
     prompt_cache: false,
+    thinking: ThinkingSupport::None,
+    thinking_wire: ThinkingWireShape::None,
 };
 
 /// Resolve a stored/legacy provider id to its canonical registry id.
@@ -429,6 +509,48 @@ mod tests {
         assert!(model_info("claude-opus-4-8").prompt_cache);
     }
 }
+
+#[cfg(test)]
+mod thinking_tests {
+    use super::*;
+
+    #[test]
+    fn claude_models_have_thinking_support() {
+        let sonnet = model_info("claude-sonnet-4-6");
+        assert_eq!(sonnet.thinking, ThinkingSupport::Budget);
+        assert_eq!(sonnet.thinking_wire, ThinkingWireShape::Anthropic);
+
+        let opus = model_info("claude-opus-4-8");
+        assert_eq!(opus.thinking, ThinkingSupport::Adaptive);
+        assert_eq!(opus.thinking_wire, ThinkingWireShape::Anthropic);
+    }
+
+    #[test]
+    fn deepseek_models_have_thinking_support() {
+        let pro = model_info("deepseek-v4-pro");
+        assert_eq!(pro.thinking, ThinkingSupport::ToggleWithEffort);
+        assert_eq!(pro.thinking_wire, ThinkingWireShape::DeepSeek);
+
+        let flash = model_info("deepseek-v4-flash");
+        assert_eq!(flash.thinking, ThinkingSupport::ToggleWithEffort);
+        assert_eq!(flash.thinking_wire, ThinkingWireShape::DeepSeek);
+    }
+
+    #[test]
+    fn glm_models_have_no_thinking() {
+        let glm = model_info("glm-5.2");
+        assert_eq!(glm.thinking, ThinkingSupport::None);
+        assert_eq!(glm.thinking_wire, ThinkingWireShape::None);
+    }
+
+    #[test]
+    fn unknown_model_defaults_to_no_thinking() {
+        let info = model_info("some-unknown-model");
+        assert_eq!(info.thinking, ThinkingSupport::None);
+        assert_eq!(info.thinking_wire, ThinkingWireShape::None);
+    }
+}
+
 
 #[cfg(test)]
 mod opencode_go_tests {

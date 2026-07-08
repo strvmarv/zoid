@@ -93,16 +93,21 @@ pub enum SystemBlockKind {
     Text,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ThinkingConfig {
     pub r#type: ThinkingType,
-    pub budget_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ThinkingType {
     Enabled,
+    Disabled,
+    Adaptive,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
