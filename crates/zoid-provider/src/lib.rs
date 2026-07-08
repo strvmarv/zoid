@@ -187,20 +187,15 @@ pub enum EffortLevel {
 /// Controls whether and how the model reasons (thinks) before answering.
 /// Phase 1: reasoning content is consumed and discarded by each provider's
 /// parse layer — never surfaced to the agent loop or UI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThinkingMode {
     /// Thinking disabled (today's behavior — the default).
+    #[default]
     Off,
     /// Thinking enabled; derive budget/effort from model capabilities + context.
     Auto,
     /// Thinking enabled at a specific effort level.
     Effort(EffortLevel),
-}
-
-impl Default for ThinkingMode {
-    fn default() -> Self {
-        ThinkingMode::Off
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
