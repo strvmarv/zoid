@@ -211,7 +211,7 @@ mod tests {
         std::fs::write(dir.path().join("note.txt"), "in cwd").unwrap();
         let out = crate::read::Read.run(&serde_json::json!({ "path": "note.txt" }), dir.path());
         assert!(!out.is_error, "{}", out.text);
-        assert_eq!(out.text, "in cwd");
+        assert_eq!(out.text, "1\tin cwd\n");
     }
 
     #[test]
