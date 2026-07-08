@@ -371,22 +371,23 @@ pub fn parse_mcp_json(text: &str) -> anyhow::Result<Vec<(String, McpServerConfig
 }
 
 /// Expand `${VAR}` occurrences using `get`. Unset variables expand to "".
+/// UTF-8-safe: slices only on `find`-returned char boundaries.
 pub fn expand_vars(s: &str, get: &dyn Fn(&str) -> Option<String>) -> String {
     let mut out = String::with_capacity(s.len());
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-            if let Some(end) = s[i + 2..].find('}') {
-                let name = &s[i + 2..i + 2 + end];
-                out.push_str(&get(name).unwrap_or_default());
-                i = i + 2 + end + 1;
-                continue;
-            }
+    let mut rest = s;
+    while let Some(pos) = rest.find("${") {
+        out.push_str(&rest[..pos]);
+        let after = &rest[pos + 2..];
+        if let Some(end) = after.find('}') {
+            out.push_str(&get(&after[..end]).unwrap_or_default());
+            rest = &after[end + 1..];
+        } else {
+            // Unterminated `${` — emit it literally and continue past it.
+            out.push_str("${");
+            rest = after;
         }
-        out.push(bytes[i] as char);
-        i += 1;
     }
+    out.push_str(rest);
     out
 }
 
