@@ -1235,9 +1235,32 @@ git commit -m "feat: add tps + thinking_label to ShellState"
 - Consumes: `ShellState.tps` + `ShellState.thinking_label` from Task 11
 - Produces: new session drawer layout
 
-- [ ] **Step 1: Compute tps + thinking_label per-frame in main.rs**
+- [ ] **Step 1: Add last_output_tokens to ProjectionCache**
 
-In `crates/zoid/src/main.rs`, find the per-frame sync block (around line 2008). After the existing `duration` assignment, add:
+`ProjectionCache` (defined in `crates/zoid/src/main.rs` around line 1050) tracks `last_input_tokens` but not `last_output_tokens`. We need the output token count from the most recent `Usage` event for TPS.
+
+Add the field to the `ProjectionCache` struct:
+
+```rust
+    /// The real output token count from the most recent Usage event.
+    /// Used for TPS (tokens per second) in the session drawer.
+    /// `None` until the first turn's Usage event arrives.
+    last_output_tokens: Option<u64>,
+```
+
+In `refresh()`, populate it by scanning for the last `Usage` event's `output` field (mirror the existing `last_input_tokens` logic — place it right after the `last_input_tokens` assignment):
+
+```rust
+    self.last_output_tokens = events
+        .iter()
+        .rev()
+        .find_map(|e| e.tokens.map(|t| t.output))
+        .filter(|&t| t > 0);
+```
+
+- [ ] **Step 2: Compute tps + thinking_label per-frame in run()**
+
+In `crates/zoid/src/main.rs`, inside the `run()` function's main loop body, find the per-frame sync block (around line 2008, after `app.shell.duration = ...`). The `obs_state` parameter is in scope here (it's a parameter of `run()`). Add after the `duration` assignment:
 
 ```rust
     app.shell.duration = fmt_duration(app.session_started_ms, now_ms());
@@ -1250,31 +1273,6 @@ In `crates/zoid/src/main.rs`, find the per-frame sync block (around line 2008). 
     } else {
         None
     };
-    // TPS: output tokens from the last Usage event / stream duration.
-    // Both are already tracked; compute from the latest projection data.
-    let last_output = app.proj.last_input_tokens; // placeholder — see below
-    // Actually we need the last output_tokens, not input. Check ProjectionCache.
-```
-
-Wait — `ProjectionCache` tracks `last_input_tokens` but not `last_output_tokens`. We need the output token count from the most recent `Usage` event. Add `last_output_tokens: Option<u64>` to `ProjectionCache` (in `crates/zoid/src/main.rs`), populated in `refresh()` by scanning for the last `Usage` event's `output` field (mirror the existing `last_input_tokens` logic):
-
-In `ProjectionCache`:
-```rust
-    last_output_tokens: Option<u64>,
-```
-
-In `refresh()`:
-```rust
-    self.last_output_tokens = events
-        .iter()
-        .rev()
-        .find_map(|e| e.tokens.map(|t| t.output))
-        .filter(|&t| t > 0);
-```
-
-Then compute TPS per-frame:
-
-```rust
     // TPS from the last turn's output tokens and the obs stream duration.
     // provider_total is a rolling average of stream_ms; we use it as the
     // denominator. 0 when no data is available.
@@ -1290,9 +1288,9 @@ Then compute TPS per-frame:
     };
 ```
 
-Note: `obs_state` is available in the `run()` function scope. The exact placement may need adjustment — find where `obs_state` is accessible and compute TPS there. The `build_overview_data` function already reads from `obs_state`, so the pattern exists.
+Note: `obs_state` is the `&std::sync::Arc<std::sync::Mutex<obs::ObsState>>` parameter of `run()`. It's already used elsewhere in the loop body by `build_overview_data`, so the pattern is established. Place this code in the same per-frame sync block where `session_tokens`, `cached_tokens`, `duration`, etc. are set — NOT inside `build_overview_data` or the draw closure.
 
-- [ ] **Step 2: Update session drawer rendering in render.rs**
+- [ ] **Step 3: Update session drawer rendering in render.rs**
 
 In `crates/zoid-tui/src/render.rs`, find the session drawer's dur/tok/cac line (around line 688). The current single line renders `dur tok cac`. Split it into two lines:
 
@@ -1362,17 +1360,17 @@ In `crates/zoid-tui/src/render.rs`, find the session drawer's dur/tok/cac line (
         ]),
 ```
 
-- [ ] **Step 3: Fix all ShellState construction sites with new fields**
+- [ ] **Step 4: Fix all ShellState construction sites with new fields**
 
 Run: `grep -rn "ShellState {" crates/ --include="*.rs"`
 Ensure every construction site includes `thinking_label: None,` and `tps: 0,`.
 
-- [ ] **Step 4: Build and test**
+- [ ] **Step 5: Build and test**
 
 Run: `cargo test --workspace`
 Expected: Some snapshot tests may fail due to the new session drawer layout. Run `cargo insta accept` to update them.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add -A
