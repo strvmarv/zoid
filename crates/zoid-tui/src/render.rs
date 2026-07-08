@@ -1439,7 +1439,7 @@ mod tests {
 
     /// Render a status bar with `compacting: true` and verify the compaction
     /// segment appears in `color::BRANCH` (purple). The compaction spinner
-    /// glyph and "compacting" label must both be present.
+    /// glyph and "compact" label must both be present.
     #[test]
     fn compaction_segment_visible_when_compacting() {
         let mut state = ShellState::new();
@@ -1463,8 +1463,8 @@ mod tests {
             .map(|c| c.symbol().to_string())
             .collect();
         assert!(
-            content.contains("compacting"),
-            "status bar must contain 'compacting' when state.compacting is true: got {content:?}"
+            content.contains("compact"),
+            "status bar must contain 'compact' when state.compacting is true: got {content:?}"
         );
         assert!(
             content.contains(glyph::COMPACT.to_string().as_str()),

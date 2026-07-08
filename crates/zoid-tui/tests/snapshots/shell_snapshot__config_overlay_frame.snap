@@ -3,7 +3,7 @@ source: crates/zoid-tui/tests/shell_snapshot.rs
 expression: "draw_config(&s, &sections, 100, 24)"
 ---
 "╭ zoid · settings ─────────────────────────────────────────────────────────────────────────────────╮"
-"│ ▸ Provider & Model    ▸ provider    ollama                                              [default]│"
+"│ ▸ Provider & Model    ▸ provider      ollama                                            [default]│"
 "│   Economy               model                                                             [env] ⚠│"
 "│   Interface             base_url                                                        [default]│"
 "│   Secrets                                                                                        │"
