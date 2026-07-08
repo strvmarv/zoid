@@ -103,8 +103,13 @@ pub fn conversation<'a>(events: impl IntoIterator<Item = &'a Event>) -> Vec<Chat
     let mut question_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for e in visible {
         match &e.kind {
-            EventKind::QuestionAsked { id, .. } => {
-                question_ids.insert(id.as_str());
+            EventKind::QuestionAsked { id, kind, .. } => {
+                // Approval-gate questions do NOT suppress the real ToolResult
+                // -- the model needs the tool actual output, not the approval
+                // string. Only Ask/ModeMapping suppress it.
+                if !matches!(kind, crate::event::QuestionKind::Approval) {
+                    question_ids.insert(id.as_str());
+                }
             }
             EventKind::QuestionAnswered { id, answer } => {
                 answered.insert(id.as_str(), answer.as_str());
