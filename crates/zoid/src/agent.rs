@@ -679,37 +679,165 @@ async fn run_turn_inner(
             let tool_start = std::time::Instant::now();
             let tool_name = tc.name.clone();
 
-            if let Gate::Deny(reason) = gate.check(&tc) {
-                let reason_msg = reason.clone();
-                emit(
-                    &session,
-                    &mut events,
-                    ui,
-                    &config.branch,
-                    EventKind::ToolResult {
-                        id: tc.id,
-                        name: tc.name,
-                        output: reason,
-                        is_error: true,
-                    },
-                    session_id,
-                    now,
-                )
-                .await?;
-                tracing::info!(
-                    kind = "tool",
-                    name = tool_name.as_str(),
-                    ms = tool_start.elapsed().as_millis() as u64,
-                    ok = false,
-                    "tool executed"
-                );
-                let ctx = format!("tool {tool_name}");
-                tracing::warn!(
-                    ctx = ctx.as_str(),
-                    message = reason_msg.as_str(),
-                    "tool failed"
-                );
-                continue;
+            match gate.check(&tc) {
+                Gate::Allow => { /* fall through to dispatch below */ }
+                Gate::Deny(reason) => {
+                    let reason_msg = reason.clone();
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::ToolResult {
+                            id: tc.id,
+                            name: tc.name,
+                            output: reason,
+                            is_error: true,
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                    tracing::info!(
+                        kind = "tool",
+                        name = tool_name.as_str(),
+                        ms = tool_start.elapsed().as_millis() as u64,
+                        ok = false,
+                        "tool executed"
+                    );
+                    let ctx = format!("tool {tool_name}");
+                    tracing::warn!(
+                        ctx = ctx.as_str(),
+                        message = reason_msg.as_str(),
+                        "tool failed"
+                    );
+                    continue;
+                }
+                Gate::Prompt { question, choices } => {
+                    // Reuse the ask_user park-and-await path: emit a
+                    // QuestionAsked event, send AgentUpdate::AskUser, await
+                    // the reply. Approve → fall through to dispatch. Deny →
+                    // error ToolResult + continue. Esc → abort the turn.
+                    // QuestionKind::Ask is intentional — the TUI already
+                    // handles it as a plain question card (same as ask_user).
+                    // No new QuestionKind variant is needed.
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::QuestionAsked {
+                            id: tc.id.clone(),
+                            kind: zoid_core::event::QuestionKind::Ask,
+                            question: question.clone(),
+                            choices: choices.clone(),
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                    let (rtx, rrx) = oneshot::channel::<Answer>();
+                    let sent = ui
+                        .send(AgentUpdate::AskUser {
+                            question,
+                            choices,
+                            reply: rtx,
+                        })
+                        .await;
+                    if sent.is_err() {
+                        emit(
+                            &session,
+                            &mut events,
+                            ui,
+                            &config.branch,
+                            EventKind::ToolResult {
+                                id: tc.id,
+                                name: tc.name,
+                                output: "[user aborted]".to_string(),
+                                is_error: true,
+                            },
+                            session_id,
+                            now,
+                        )
+                        .await?;
+                        outcome = "aborted";
+                        break 'turn;
+                    }
+                    let ans = rrx.await;
+                    let (output, is_error, approved) = match ans {
+                        Ok(Answer::Choice(s)) => {
+                            let approved = s == "approve once";
+                            if approved {
+                                (s, false, true)
+                            } else {
+                                (s, true, false)
+                            }
+                        }
+                        Ok(Answer::FreeText(s)) => (s, false, true),
+                        Ok(Answer::LetYouDecide) => ("[let you decide]".to_string(), false, true),
+                        Err(_) => ("[user aborted]".to_string(), true, false),
+                    };
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::QuestionAnswered {
+                            id: tc.id.clone(),
+                            answer: output.clone(),
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                    if !approved {
+                        let is_aborted = is_error && output == "[user aborted]";
+                        emit(
+                            &session,
+                            &mut events,
+                            ui,
+                            &config.branch,
+                            EventKind::ToolResult {
+                                id: tc.id,
+                                name: tc.name,
+                                output,
+                                is_error,
+                            },
+                            session_id,
+                            now,
+                        )
+                        .await?;
+                        if is_aborted {
+                            for rest in pending_iter.by_ref() {
+                                emit(
+                                    &session,
+                                    &mut events,
+                                    ui,
+                                    &config.branch,
+                                    EventKind::ToolResult {
+                                        id: rest.id,
+                                        name: rest.name,
+                                        output: "[skipped: turn aborted]".to_string(),
+                                        is_error: false,
+                                    },
+                                    session_id,
+                                    now,
+                                )
+                                .await?;
+                            }
+                            outcome = "aborted";
+                            break 'turn;
+                        }
+                        continue;
+                    }
+                    tracing::info!(
+                        kind = "tool",
+                        name = tool_name.as_str(),
+                        ms = tool_start.elapsed().as_millis() as u64,
+                        ok = true,
+                        "tool approved"
+                    );
+                }
             }
 
             let kind = tools.iter().find(|t| t.name() == tc.name).map(|t| t.kind());

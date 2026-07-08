@@ -486,3 +486,161 @@ async fn truncated_event_surfaces_a_warning_and_still_completes() {
         "the truncation warning must come after the partial reply, not before"
     );
 }
+
+// --- Gate::Prompt integration tests ---
+
+/// A gate that returns Gate::Prompt for shell calls with a dangerous command,
+/// Allow otherwise.
+struct PromptGate;
+impl zoid_tools::ToolGate for PromptGate {
+    fn check(&self, c: &zoid_provider::ToolCall) -> zoid_tools::Gate {
+        if c.name == "shell" {
+            let cmd = c.args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            if cmd.contains("rm -rf") {
+                return zoid_tools::Gate::Prompt {
+                    question: format!("approve? {}", cmd),
+                    choices: vec!["approve once".into(), "deny".into()],
+                };
+            }
+        }
+        zoid_tools::Gate::Allow
+    }
+}
+
+#[tokio::test]
+async fn gate_prompt_approve_runs_tool() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("proof.txt");
+    let path_str = path.to_str().unwrap().to_string();
+    let cmd = format!("rm -rf /tmp/nonexistent && echo hi > {}", path_str);
+
+    let provider = Arc::new(ScriptedProvider {
+        turns: Mutex::new(std::collections::VecDeque::from(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "".into(),
+                    name: "shell".into(),
+                    args: json!({ "command": cmd }),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("done".into()), ProviderEvent::Done],
+        ])),
+        requests: Mutex::new(Vec::new()),
+    });
+
+    let tools = Arc::new(zoid_tools::registry());
+    let session = SessionHandle::spawn(":memory:").unwrap();
+    let seed = vec![Event::new(
+        ulid::Ulid::from(1u128),
+        None,
+        0,
+        EventKind::UserMessage { text: "go".into() },
+    )];
+    session.append(seed[0].clone()).await.unwrap();
+
+    let (tx, mut rx) = mpsc::channel(64);
+    let drain = tokio::spawn(async move {
+        let mut complete = false;
+        while let Some(u) = rx.recv().await {
+            match u {
+                AgentUpdate::AskUser { reply, .. } => {
+                    let _ = reply.send(zoid::agent::Answer::Choice("approve once".into()));
+                }
+                AgentUpdate::TurnComplete => complete = true,
+                _ => {}
+            }
+        }
+        complete
+    });
+
+    run_agent_turn(
+        zoid::agent::chat_turn_config(),
+        provider,
+        tools,
+        Arc::new(PromptGate),
+        session.clone(),
+        zoid::eventlog::EventLog::from_vec(seed),
+        "fake".into(),
+        tx,
+        ulid::Ulid::new(),
+        zoid_companion::CompanionHub::new(),
+        fixed_now,
+    )
+    .await
+    .unwrap();
+
+    let complete = drain.await.unwrap();
+    assert!(complete, "loop must emit TurnComplete");
+    assert!(path.exists(), "approved command must have executed");
+}
+
+#[tokio::test]
+async fn gate_prompt_deny_blocks_tool() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("must_not_exist.txt");
+    let path_str = path.to_str().unwrap().to_string();
+    let cmd = format!("rm -rf /tmp/nonexistent && echo hi > {}", path_str);
+
+    let provider = Arc::new(ScriptedProvider {
+        turns: Mutex::new(std::collections::VecDeque::from(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "".into(),
+                    name: "shell".into(),
+                    args: json!({ "command": cmd }),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
+        ])),
+        requests: Mutex::new(Vec::new()),
+    });
+
+    let tools = Arc::new(zoid_tools::registry());
+    let session = SessionHandle::spawn(":memory:").unwrap();
+    let seed = vec![Event::new(
+        ulid::Ulid::from(1u128),
+        None,
+        0,
+        EventKind::UserMessage { text: "go".into() },
+    )];
+    session.append(seed[0].clone()).await.unwrap();
+
+    let (tx, mut rx) = mpsc::channel(64);
+    let drain = tokio::spawn(async move {
+        let mut complete = false;
+        while let Some(u) = rx.recv().await {
+            match u {
+                AgentUpdate::AskUser { reply, .. } => {
+                    let _ = reply.send(zoid::agent::Answer::Choice("deny".into()));
+                }
+                AgentUpdate::TurnComplete => complete = true,
+                _ => {}
+            }
+        }
+        complete
+    });
+
+    let events = run_agent_turn(
+        zoid::agent::chat_turn_config(),
+        provider,
+        tools,
+        Arc::new(PromptGate),
+        session.clone(),
+        zoid::eventlog::EventLog::from_vec(seed),
+        "fake".into(),
+        tx,
+        ulid::Ulid::new(),
+        zoid_companion::CompanionHub::new(),
+        fixed_now,
+    )
+    .await
+    .unwrap();
+
+    let _ = drain.await;
+    assert!(!path.exists(), "denied command must not execute");
+    assert!(events.iter().any(|e| {
+        matches!(&e.kind, EventKind::ToolResult { is_error, .. } if *is_error)
+    }), "denied prompt must produce an error ToolResult");
+}
