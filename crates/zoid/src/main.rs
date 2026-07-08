@@ -5062,6 +5062,7 @@ mod tests {
                     reduced_motion: Source::Default,
                     thinking_enabled: Source::Default,
                     thinking_effort: Source::Default,
+                    approval: Source::Default,
                 }
             },
             secrets: None,

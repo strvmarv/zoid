@@ -35,6 +35,24 @@ pub struct Config {
     pub modes: ModesConfig,
     pub companion: CompanionConfig,
     pub thinking: ThinkingConfig,
+    pub approval: ApprovalConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalConfig {
+    pub yolo: bool,
+    pub shell_danger: Vec<String>,
+    pub shell_allow: Vec<String>,
+}
+
+impl Default for ApprovalConfig {
+    fn default() -> Self {
+        Self {
+            yolo: false,
+            shell_danger: vec![],
+            shell_allow: vec![],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +110,7 @@ impl Default for Config {
             modes: ModesConfig::default(),
             companion: CompanionConfig::default(),
             thinking: ThinkingConfig::default(),
+            approval: ApprovalConfig::default(),
         }
     }
 }
@@ -148,6 +167,7 @@ pub struct Provenance {
     pub reduced_motion: Source,
     pub thinking_enabled: Source,
     pub thinking_effort: Source,
+    pub approval: Source,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -188,6 +208,14 @@ pub struct PartialCompanion {
 
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default)]
+pub struct PartialApproval {
+    pub yolo: Option<bool>,
+    pub shell_danger: Option<Vec<String>>,
+    pub shell_allow: Option<Vec<String>>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(default)]
 pub struct PartialConfig {
     pub provider: Option<String>,
     pub base_url: Option<String>,
@@ -198,6 +226,7 @@ pub struct PartialConfig {
     pub modes: PartialModes,
     pub companion: PartialCompanion,
     pub thinking: PartialThinking,
+    pub approval: PartialApproval,
 }
 
 /// Parse one TOML layer. Known keys deserialize normally; unknown keys are NOT
@@ -228,6 +257,7 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         reduced_motion: Source::Default,
         thinking_enabled: Source::Default,
         thinking_effort: Source::Default,
+        approval: Source::Default,
     };
     for (src, p) in layers {
         if let Some(v) = &p.provider {
@@ -293,6 +323,24 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         if let Some(v) = &p.thinking.effort {
             cfg.thinking.effort = Some(v.clone());
             prov.thinking_effort = *src;
+        }
+        if let Some(v) = p.approval.yolo {
+            cfg.approval.yolo = v;
+            prov.approval = *src;
+        }
+        if let Some(dirs) = &p.approval.shell_danger {
+            for d in dirs {
+                if !cfg.approval.shell_danger.contains(d) {
+                    cfg.approval.shell_danger.push(d.clone());
+                }
+            }
+        }
+        if let Some(dirs) = &p.approval.shell_allow {
+            for d in dirs {
+                if !cfg.approval.shell_allow.contains(d) {
+                    cfg.approval.shell_allow.push(d.clone());
+                }
+            }
         }
     }
     (cfg, prov)
@@ -521,5 +569,56 @@ mod write_tests {
     fn writes_into_empty_document() {
         let out = set_in_toml("", "reduced_motion", TomlValue::Bool(true)).unwrap();
         assert_eq!(parse_toml(&out).unwrap().0.reduced_motion, Some(true));
+    }
+}
+
+#[cfg(test)]
+mod approval_config_tests {
+    use super::*;
+
+    #[test]
+    fn approval_section_parses_and_merges() {
+        let (p, _) = parse_toml(
+            "[approval]\nyolo = true\nshell_danger = [\"make deploy\"]\nshell_allow = [\"git push --force-with-lease\"]"
+        ).unwrap();
+        assert_eq!(p.approval.yolo, Some(true));
+        assert_eq!(p.approval.shell_danger, Some(vec!["make deploy".to_string()]));
+        assert_eq!(p.approval.shell_allow, Some(vec!["git push --force-with-lease".to_string()]));
+        let (cfg, _) = merge(&[(Source::UserGlobal, p)]);
+        assert!(cfg.approval.yolo);
+        assert_eq!(cfg.approval.shell_danger, vec!["make deploy".to_string()]);
+        assert_eq!(cfg.approval.shell_allow, vec!["git push --force-with-lease".to_string()]);
+    }
+
+    #[test]
+    fn approval_defaults_to_safe() {
+        let (cfg, _) = merge(&[]);
+        assert!(!cfg.approval.yolo);
+        assert!(cfg.approval.shell_danger.is_empty());
+        assert!(cfg.approval.shell_allow.is_empty());
+    }
+
+    #[test]
+    fn approval_shell_danger_unions_across_layers() {
+        let (user, _) = parse_toml("[approval]\nshell_danger = [\"a\", \"b\"]").unwrap();
+        let (proj, _) = parse_toml("[approval]\nshell_danger = [\"b\", \"c\"]").unwrap();
+        let (cfg, _) = merge(&[(Source::UserGlobal, user), (Source::Project, proj)]);
+        assert_eq!(cfg.approval.shell_danger, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+    }
+
+    #[test]
+    fn approval_shell_allow_unions_across_layers() {
+        let (user, _) = parse_toml("[approval]\nshell_allow = [\"x\"]").unwrap();
+        let (proj, _) = parse_toml("[approval]\nshell_allow = [\"y\"]").unwrap();
+        let (cfg, _) = merge(&[(Source::UserGlobal, user), (Source::Project, proj)]);
+        assert_eq!(cfg.approval.shell_allow, vec!["x".to_string(), "y".to_string()]);
+    }
+
+    #[test]
+    fn approval_yolo_last_write_wins() {
+        let (user, _) = parse_toml("[approval]\nyolo = true").unwrap();
+        let (proj, _) = parse_toml("[approval]\nyolo = false").unwrap();
+        let (cfg, _) = merge(&[(Source::UserGlobal, user), (Source::Project, proj)]);
+        assert!(!cfg.approval.yolo, "project layer overrides user-global");
     }
 }
