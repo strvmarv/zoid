@@ -961,7 +961,15 @@ fn list_overlay(frame: &mut Frame, area: Rect, title: String, rows: &[String], s
     });
     frame.render_widget(block, area);
     let vh = inner.height as usize;
-    let off = selected.saturating_sub(vh.saturating_sub(1));
+    // Scroll to keep `selected` in view — but only when it names a real row.
+    // A read-only list (e.g. the /mcp status overlay) passes an out-of-range
+    // index to mean "no selection"; that must anchor to the top, not scroll
+    // toward the tail and hide the first rows.
+    let off = if selected < rows.len() {
+        selected.saturating_sub(vh.saturating_sub(1))
+    } else {
+        0
+    };
     let lines: Vec<Line> = rows
         .iter()
         .enumerate()
@@ -1056,8 +1064,8 @@ fn render_mcp_overlay(frame: &mut Frame, state: &ShellState, area: Rect) {
             .collect()
     };
     // No row is ever "selected" (the overlay has no navigation): pass an
-    // out-of-range index so `list_overlay`'s highlight loop never matches,
-    // while its scroll-offset math (based on `rows.len()`) stays sane.
+    // out-of-range index so `list_overlay` neither highlights a row nor scrolls
+    // away from the top (it treats an out-of-range index as "no selection").
     list_overlay(frame, area, " mcp servers ".to_string(), &rows, rows.len());
 }
 
@@ -1703,6 +1711,40 @@ mod tests {
         assert!(content.contains("ready"));
         assert!(content.contains("git"));
         assert!(content.contains("failed"));
+    }
+
+    #[test]
+    fn mcp_overlay_anchors_to_top_when_servers_overflow() {
+        use crate::state::{McpStatusRow, Overlay, ShellState};
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Mcp;
+        // Far more servers than the overlay's visible height (height 8 → ~6
+        // inner rows). The read-only list must show from the TOP: the first
+        // server has to be visible, not scrolled off toward the tail.
+        s.mcp_status = (0..20)
+            .map(|i| McpStatusRow {
+                name: format!("srv{i:02}"),
+                state: "ready".into(),
+                tool_count: 1,
+            })
+            .collect();
+        let backend = TestBackend::new(60, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| render_mcp_overlay(f, &s, f.area()))
+            .unwrap();
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
+        assert!(content.contains("srv00"), "first server must stay visible");
+        assert!(
+            !content.contains("srv19"),
+            "tail server must be scrolled off, not shown from the bottom"
+        );
     }
 
     /// Flatten a `Line`'s spans back into the visible string.
