@@ -16,6 +16,9 @@
 - `budget_tokens` must be `< max_tokens` for Anthropic budget models.
 - Phase 1 does NOT add any new `ProviderEvent` variant — reasoning is consumed and discarded by the parse layer.
 - The `EffortLevel` type is defined in `zoid-provider` (on the provider seam) and re-used by `zoid-core`'s config via a re-export. This avoids a circular dependency (zoid-core already depends on zoid-provider).
+- `max_tokens` when thinking is on is capped at `min(model.max_output, 16384)` — 16384 is enough for reasoning + answer in coding tasks, and avoids exceeding DeepSeek's 64K thinking-mode limit.
+- **Verify-during-implementation:** Whether `anthropic-beta: extended-thinking-2025-05-14` header is needed for each Claude model. The plan adds it for Budget models; if newer models don't need it, the verify step confirms and the code can skip it for Adaptive models.
+- **Note on `ThinkingConfig` name collision:** `zoid-provider/src/anthropic/types.rs` defines `ThinkingConfig` (the wire struct: `{type, budget_tokens, effort}`) and `zoid-core/src/config.rs` defines `ThinkingConfig` (the config struct: `{enabled, effort}`). These are different types in different crates. The config one could be renamed `ThinkingSettings` but that would break the `EconomyConfig` naming convention. Leave both as `ThinkingConfig` — they're disambiguated by their crate path.
 
 ---
 
@@ -402,12 +405,18 @@ Expected: FAIL — `think` key not present in the body
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `request_body()` in `crates/zoid-provider/src/ollama.rs`, add the `think` field to the body JSON. After the `keep_alive` line and before the tools check, add:
+In `request_body()` in `crates/zoid-provider/src/ollama.rs`, add the `think` field to the body JSON. The provider is defensive: it only emits `think` when the model supports it (checked via `ThinkingSupport`), even though the capability gate in `resolve_thinking` should have already caught unsupported models:
 
 ```rust
+    // Only emit `think` for models that support thinking. The capability gate
+    // in resolve_thinking should have caught unsupported models, but this is
+    // defensive — never send `think: true` to a model that might not handle it.
+    let info = crate::model::model_info(&req.model);
     let think = match req.thinking {
         crate::ThinkingMode::Off => false,
-        crate::ThinkingMode::Auto | crate::ThinkingMode::Effort(_) => true,
+        crate::ThinkingMode::Auto | crate::ThinkingMode::Effort(_) => {
+            info.thinking != crate::model::ThinkingSupport::None
+        }
     };
     let mut body = json!({
         "model": req.model,
@@ -428,7 +437,27 @@ Expected: PASS
 - [ ] **Step 5: Run full ollama test suite**
 
 Run: `cargo test -p zoid-provider ollama`
-Expected: All pass (existing `native_body_has_stream_and_system_leading_message_no_openai_fields` test will need updating — it asserts exact JSON equality and now includes `think: false`. Update the expected JSON in that test to include `"think": false`.)
+Expected: All pass (existing `native_body_has_stream_and_system_leading_message_no_openai_fields` test will need updating — it asserts exact JSON equality and now includes `think: false`. Update the expected JSON in that test to include `"think": false`:
+
+```rust
+    let body = request_body(&req);
+    assert_eq!(
+        body,
+        json!({
+            "model": "glm-5.2:cloud",
+            "stream": true,
+            "messages": [
+                { "role": "system", "content": "be terse" },
+                { "role": "user", "content": "hi" },
+                { "role": "assistant", "content": "hello" },
+            ],
+            "keep_alive": "30m",
+            "think": false,
+        })
+    );
+```
+
+)
 
 - [ ] **Step 6: Commit**
 
@@ -595,8 +624,20 @@ fn thinking_params(req: &CompletionRequest) -> Option<Vec<(&'static str, Value)>
     let wire = crate::model::model_info(&req.model).thinking_wire;
     match wire {
         crate::model::ThinkingWireShape::DeepSeek => {
+            // deepseek-v4-pro is thinking-only: Off silently becomes Auto.
+            // The docs say it ignores the toggle; we map Off → enabled to
+            // avoid sending a "disabled" that might 400.
+            let model_info = crate::model::model_info(&req.model);
+            let is_thinking_only = model_info.thinking == crate::model::ThinkingSupport::ToggleWithEffort
+                && req.model == "deepseek-v4-pro";
+            let effective_thinking = if is_thinking_only && matches!(req.thinking, crate::ThinkingMode::Off) {
+                tracing::warn!(model = %req.model, "thinking-only model: Off silently becomes Auto");
+                crate::ThinkingMode::Auto
+            } else {
+                req.thinking
+            };
             let mut params = Vec::new();
-            let (thinking_type, has_effort) = match req.thinking {
+            let (thinking_type, has_effort) = match effective_thinking {
                 crate::ThinkingMode::Off => ("disabled", false),
                 crate::ThinkingMode::Auto => ("enabled", true),
                 crate::ThinkingMode::Effort(_) => ("enabled", true),
@@ -606,7 +647,7 @@ fn thinking_params(req: &CompletionRequest) -> Option<Vec<(&'static str, Value)>
                 json!({ "type": thinking_type }),
             ));
             if has_effort {
-                let effort = match req.thinking {
+                let effort = match effective_thinking {
                     crate::ThinkingMode::Effort(crate::EffortLevel::Max) => "max",
                     _ => "high", // Auto, Low, Medium, High all map to "high"
                 };
@@ -719,12 +760,16 @@ change can't accidentally surface reasoning content as a ProviderEvent."
 
 ---
 
-### Task 6: Anthropic thinking request params
+### Task 6: Anthropic thinking request params + beta header
 
 **Files:**
 - Modify: `crates/zoid-provider/src/anthropic/types.rs`
 - Modify: `crates/zoid-provider/src/anthropic/request.rs`
 - Modify: `crates/zoid-provider/src/anthropic/mod.rs`
+
+**Interfaces:**
+- Consumes: `ThinkingMode` from Task 1, `ThinkingSupport` from Task 2
+- Produces: `request::build()` maps `ThinkingMode` → `ThinkingConfig` on the wire; `mod.rs` dynamically adds the `extended-thinking` beta header when thinking is enabled on Budget models
 
 **Interfaces:**
 - Consumes: `ThinkingMode` from Task 1, `ThinkingSupport` from Task 2
@@ -957,6 +1002,101 @@ ThinkingConfig {
 
 Run: `cargo test -p zoid-provider anthropic`
 Expected: All pass
+
+- [ ] **Step 4b: Add dynamic beta header for thinking**
+
+The `AnthropicProvider` holds a static `betas: Vec<String>` set at construction time. We need to dynamically add the `extended-thinking-2025-05-14` beta when thinking is enabled on Budget models. The provider's `stream_with_retries` method calls `request::build(req)` for the body and `self.request_headers()` for the headers. We need to merge per-request betas with the provider's static betas.
+
+Add a helper in `crates/zoid-provider/src/anthropic/request.rs`:
+
+```rust
+/// The beta flags needed for thinking on this model, if any.
+/// Budget models need `extended-thinking-2025-05-14`; Adaptive models
+/// may not need it (verify per model — the header is harmless if sent
+/// unnecessarily, so we include it for all thinking-enabled Anthropic requests).
+pub fn thinking_betas(req: &CompletionRequest) -> Vec<String> {
+    let info = crate::model::model_info(&req.model);
+    match req.thinking {
+        crate::ThinkingMode::Off => Vec::new(),
+        crate::ThinkingMode::Auto | crate::ThinkingMode::Effort(_) => {
+            match info.thinking {
+                crate::model::ThinkingSupport::Budget
+                | crate::model::ThinkingSupport::Adaptive => {
+                    vec!["extended-thinking-2025-05-14".into()]
+                }
+                _ => Vec::new(),
+            }
+        }
+    }
+}
+```
+
+In `crates/zoid-provider/src/anthropic/mod.rs`, update `stream_with_retries` to merge per-request betas with the provider's static betas. In the `request_headers()` method (or inline in `stream_with_retries`), compute the combined beta list:
+
+```rust
+    fn request_headers_with_thinking(&self, req: &CompletionRequest) -> reqwest::header::HeaderMap {
+        let mut headers = self.request_headers();
+        // Merge per-request thinking betas with the provider's static betas.
+        let thinking_betas = request::thinking_betas(req);
+        if !thinking_betas.is_empty() {
+            let mut all_betas = self.betas.clone();
+            for b in &thinking_betas {
+                if !all_betas.contains(b) {
+                    all_betas.push(b.clone());
+                }
+            }
+            if let Ok(v) = all_betas.join(",").parse() {
+                headers.insert("anthropic-beta", v);
+            }
+        }
+        headers
+    }
+```
+
+Then in `stream_with_retries`, replace `self.request_headers()` with `self.request_headers_with_thinking(req)`:
+
+```rust
+        let send = self
+            .client
+            .post(&url)
+            .headers(self.request_headers_with_thinking(req))
+            .json(&body)
+            .send();
+```
+
+Add a test:
+
+```rust
+    #[test]
+    fn thinking_betas_returns_extended_thinking_for_budget_models() {
+        let req = CompletionRequest {
+            model: "claude-sonnet-4-6".into(),
+            system: None,
+            messages: vec![Message::user("x")],
+            max_tokens: 16000,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Auto,
+        };
+        let betas = request::thinking_betas(&req);
+        assert_eq!(betas, vec!["extended-thinking-2025-05-14".to_string()]);
+    }
+
+    #[test]
+    fn thinking_betas_empty_when_off() {
+        let req = CompletionRequest {
+            model: "claude-sonnet-4-6".into(),
+            system: None,
+            messages: vec![Message::user("x")],
+            max_tokens: 16000,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Off,
+        };
+        assert!(request::thinking_betas(&req).is_empty());
+    }
+```
+
+Run: `cargo test -p zoid-provider anthropic::tests::thinking_betas`
+Expected: PASS
 
 - [ ] **Step 5: Run full workspace test suite**
 
@@ -1353,8 +1493,11 @@ pub fn build_request_with_thinking(
         ThinkingMode::Off => 4096,
         ThinkingMode::Auto | ThinkingMode::Effort(_) => {
             let info = zoid_provider::model::model_info(model);
+            // Cap at 16384: enough for reasoning + answer in coding tasks,
+            // and avoids exceeding DeepSeek's 64K thinking-mode limit when
+            // max_output is 384K.
             if info.max_output > 0 {
-                info.max_output as u32
+                (info.max_output as u32).min(16384)
             } else {
                 16384
             }
@@ -1610,16 +1753,7 @@ In `build_sections()` in `crates/zoid-tui/src/config_view.rs`, add thinking rows
     };
 ```
 
-In `crates/zoid/src/main.rs`, update `field_target()`:
-
-```rust
-        "thinking" => FieldTarget::Toml {
-            key: "thinking.enabled",
-            ty: TomlTy::Bool,
-        },
-```
-
-Wait — `TomlTy` doesn't have a `Bool` variant and bools persist via `ConfigToggle`. So thinking should persist via the `ConfigToggle` action, not `field_target`. Add it to the `ConfigToggle` handler:
+In `crates/zoid/src/main.rs`, the `thinking` bool persists via the `ConfigToggle` action (same pattern as `auto-evict cold` and `reduced motion`). Do NOT add a `field_target` entry for `thinking` — `field_target` is only for text-edit fields, and `TomlTy` has no `Bool` variant. Add it to the `ConfigToggle` handler instead:
 
 ```rust
         Action::ConfigToggle => {
