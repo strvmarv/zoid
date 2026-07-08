@@ -4438,12 +4438,21 @@ fn spawn_turn(app: &mut App) {
     let cancel = tokio_util::sync::CancellationToken::new();
     app.turn_cancel = Some(cancel.clone());
     let companion_hub = app.companion_hub.clone();
+    let gate: std::sync::Arc<dyn zoid_tools::ToolGate> = if app.yolo {
+        std::sync::Arc::new(zoid_tools::AllowAll)
+    } else {
+        std::sync::Arc::new(zoid_tools::BlacklistGate::new(
+            app.config.approval.shell_danger.clone(),
+            app.config.approval.shell_allow.clone(),
+            true, // interactive — Chat prompts
+        ))
+    };
     tokio::spawn(async move {
         let _ = run_agent_turn_cancellable(
             turn_config,
             provider,
             tools,
-            std::sync::Arc::new(zoid_tools::AllowAll),
+            gate,
             session,
             seed,
             model,
