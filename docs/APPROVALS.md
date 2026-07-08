@@ -1,8 +1,8 @@
 # Tool-call approvals — design
 
-> **Status:** design (discussed, not yet implemented). This document captures
-> the agreed approach so it can be picked up when ready. It is the source of
-> truth for the design; implementation should follow it and update it.
+> **Status:** implemented. See `docs/superpowers/specs/2026-07-08-tool-approvals-design.md`
+> for the full spec and `docs/superpowers/plans/2026-07-08-tool-approvals.md` for the
+> implementation plan. This document is retained as the original design sketch.
 
 ## Goal
 
