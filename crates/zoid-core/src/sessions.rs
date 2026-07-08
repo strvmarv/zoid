@@ -102,6 +102,7 @@ mod tests {
         Event::new(Ulid::new(), None, 0, EventKind::Usage)
             .with_session(Ulid::from(session))
             .with_tokens(TokenStat {
+                thinking: 0,
                 input,
                 output,
                 cached: 0,
@@ -111,6 +112,7 @@ mod tests {
         Event::new(Ulid::new(), None, 0, EventKind::Usage)
             .with_session(Ulid::from(session))
             .with_tokens(TokenStat {
+                thinking: 0,
                 input,
                 output,
                 cached,

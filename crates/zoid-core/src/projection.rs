@@ -240,8 +240,10 @@ pub fn conversation<'a>(events: impl IntoIterator<Item = &'a Event>) -> Vec<Chat
             }
             EventKind::Usage
             | EventKind::ContextMutation { .. }
-            | EventKind::ToolResultCompacted { .. } => {
-                // Economy bookkeeping; folded elsewhere, not a raw conversation item.
+            | EventKind::ToolResultCompacted { .. }
+            | EventKind::ModelThinking { .. } => {
+                // Economy bookkeeping / ephemeral reasoning; folded elsewhere,
+                // not a raw conversation item (Task 6 will handle ModelThinking).
             }
             EventKind::Tasks { .. } => {
                 // Rail-only snapshot; never inlined into the conversation transcript.
