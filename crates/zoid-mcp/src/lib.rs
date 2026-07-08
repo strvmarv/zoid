@@ -3,3 +3,4 @@
 pub mod jsonrpc;
 pub mod config;
 pub mod transport;
+pub mod client;
