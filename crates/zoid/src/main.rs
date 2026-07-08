@@ -1133,6 +1133,10 @@ struct ProjectionCache {
     /// when available — far more accurate than `estimate_tokens` (chars/4).
     /// `None` until the first turn's Usage event arrives.
     last_input_tokens: Option<u64>,
+    /// The real output token count from the most recent Usage event.
+    /// Used for TPS (tokens per second) in the session drawer.
+    /// `None` until the first turn's Usage event arrives.
+    last_output_tokens: Option<u64>,
 }
 
 impl ProjectionCache {
@@ -1156,6 +1160,11 @@ impl ProjectionCache {
             .iter()
             .rev()
             .find_map(|e| e.tokens.map(|t| t.input))
+            .filter(|&t| t > 0);
+        self.last_output_tokens = events
+            .iter()
+            .rev()
+            .find_map(|e| e.tokens.map(|t| t.output))
             .filter(|&t| t > 0);
         self.events_len = Some(events.len());
         true
@@ -2014,6 +2023,26 @@ where
             .unwrap_or(app.proj.window.total_tokens);
         app.shell.tasks_len = app.proj.tasks.len() as u16;
         app.shell.duration = fmt_duration(app.session_started_ms, now_ms());
+        // Thinking mode label for the session drawer.
+        app.shell.thinking_label = if app.config.thinking.enabled {
+            match &app.config.thinking.effort {
+                None => Some("thinking".to_string()),
+                Some(e) => Some(format!("thinking {e}")),
+            }
+        } else {
+            None
+        };
+        // TPS from the last turn's output tokens and the obs stream duration.
+        let stream_ms = obs_state
+            .lock()
+            .ok()
+            .map(|s| s.provider_total.avg())
+            .unwrap_or(0);
+        app.shell.tps = if stream_ms > 0 {
+            app.proj.last_output_tokens.unwrap_or(0) * 1000 / stream_ms
+        } else {
+            0
+        };
         app.shell.input_rows = app.textarea.lines().len().max(1) as u16;
         // Empty-buffer flag for routing: a leading `:` in an empty box opens the
         // palette (direct mode) instead of inserting a literal colon. The textarea

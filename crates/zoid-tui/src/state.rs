@@ -231,6 +231,12 @@ pub struct ShellState {
     pub config_key_prompt: Option<&'static str>,
     /// Compact elapsed-time-in-session label (e.g. "12m", "1h3m").
     pub duration: String,
+    /// Thinking mode label for the session drawer (e.g. "thinking high").
+    /// `None` when thinking is off.
+    pub thinking_label: Option<String>,
+    /// Tokens per second (output_tokens / stream_seconds) from the last turn.
+    /// 0 when no turn has completed or stream duration is 0.
+    pub tps: u64,
     /// Total tokens spent in the active session (session drawer "tok" line).
     /// Excludes cache-read tokens (those are tracked separately in
     /// `cached_tokens`).
@@ -375,6 +381,8 @@ impl ShellState {
             provider: String::new(),
             config_key_prompt: None,
             duration: "0m".into(),
+            thinking_label: None,
+            tps: 0,
             session_tokens: 0,
             cached_tokens: 0,
             cache_supported: false,

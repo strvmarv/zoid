@@ -172,6 +172,19 @@ fn build_conversation(
                 ts,
                 thinking,
             } => {
+                // Thinking marker (collapsed at Normal zoom).
+                if let Some(thinking_text) = thinking {
+                    if !thinking_text.is_empty() {
+                        blank_between_turns(&mut lines);
+                        lines.push(Line::from(vec![
+                            Span::styled(
+                                format!("{} ", glyph::EXPANDED),
+                                Style::new().fg(color::DIM),
+                            ),
+                            Span::styled("Thinking…", Style::new().fg(color::DIM)),
+                        ]));
+                    }
+                }
                 let mut shown = text.clone();
                 if streaming && caret_on && i == last && tool_calls.is_empty() {
                     shown.push(glyph::CARET);
@@ -867,6 +880,40 @@ fn detail_lines(
                     &free_text,
                     width,
                 );
+            }
+            ChatMsg::Assistant {
+                text,
+                tool_calls,
+                ts,
+                thinking,
+            } => {
+                // Thinking section (full text at Detail zoom).
+                if let Some(thinking_text) = thinking {
+                    if !thinking_text.is_empty() {
+                        blank_between_turns(&mut out);
+                        out.push(Line::from(vec![
+                            Span::styled(
+                                "─ Thinking ─────────────────────",
+                                Style::new().fg(color::DIM),
+                            ),
+                        ]));
+                        for line in crate::markdown::render_markdown(thinking_text) {
+                            let mut spans = vec![Span::styled("    ", Style::new())];
+                            spans.extend(line.spans);
+                            out.push(Line::from(spans));
+                        }
+                        out.push(Line::from(""));
+                    }
+                }
+                // Answer text (reuse the existing conversation_lines path)
+                out.extend(conversation_lines(
+                    std::slice::from_ref(m),
+                    false,
+                    true,
+                    tz_offset_secs,
+                    width,
+                    question,
+                ));
             }
             other => out.extend(conversation_lines(
                 std::slice::from_ref(other),

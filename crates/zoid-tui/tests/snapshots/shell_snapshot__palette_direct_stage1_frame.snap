@@ -10,8 +10,8 @@ expression: "draw(&s, &seeded(), 100, 24)"
 "│ companion                                           │ ╭ ▾ session ──────────────────────────────╮ "
 "│ compact                                             │ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
 "│ delegate                                            │ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
-"│ config                                              │ │⌚ dur 0m   tok/cac 0                    │ " Hidden by multi-width symbols: [(58, " ")]
-"│ q                                                   │ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
+"│ config                                              │ │⌚ dur 0m                                │ " Hidden by multi-width symbols: [(58, " ")]
+"│ q                                                   │ │tok/cac 0   tps 0                        │ "
 "│ quit                                                │ ╰─────────────────────────────────────────╯ "
 "│↑↓ move · ⏎ select · esc close · type to filter      │                                             "
 "│                                                     │ ╭ ▾ context · tokens ─────────────────────╮ "

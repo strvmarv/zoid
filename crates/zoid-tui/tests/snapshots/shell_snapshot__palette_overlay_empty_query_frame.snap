@@ -10,8 +10,8 @@ expression: "draw(&s, &seeded(), 100, 24)"
 "│ Delegate task…                                      │ ╭ ▾ session ──────────────────────────────╮ "
 "│ Import mode from URL…                               │ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
 "│ Update mode…                                        │ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
-"│ Switch to Build                                     │ │⌚ dur 0m   tok/cac 0                    │ " Hidden by multi-width symbols: [(58, " ")]
-"│ Reload modes                                        │ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
+"│ Switch to Build                                     │ │⌚ dur 0m                                │ " Hidden by multi-width symbols: [(58, " ")]
+"│ Reload modes                                        │ │tok/cac 0   tps 0                        │ "
 "│ Toggle repo drawer                                  │ ╰─────────────────────────────────────────╯ "
 "│ Toggle session drawer                               │                                             "
 "│ Toggle context drawer                               │ ╭ ▾ context · tokens ─────────────────────╮ "
