@@ -4446,6 +4446,7 @@ fn spawn_turn(app: &mut App) {
             companion_hub,
             now_ms,
             cancel,
+            tokio_util::sync::CancellationToken::new(), // hard — real token wired in Task 4
         )
         .await;
     });

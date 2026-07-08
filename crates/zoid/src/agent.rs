@@ -63,6 +63,11 @@ pub struct TurnConfig {
     /// Thinking mode for this turn. Resolved from config + model capability
     /// in spawn_turn. Defaults to Off.
     pub thinking: ThinkingMode,
+    /// Shared kill slot for the `shell` tool's process group. A hard-stop
+    /// SIGKILLs whatever pgid the running shell published here. Defaults to a
+    /// fresh (unshared) slot for subagents/tests; the chat turn shares the same
+    /// slot given to the chat tool list (see spawn_turn).
+    pub kill: zoid_tools::KillSlot,
 }
 
 /// The orchestrator (Chat) turn config for an explicit mode profile + skill menu.
@@ -85,6 +90,7 @@ pub fn chat_turn_config_with(profile: &AgentProfile, skill_menu: &str) -> TurnCo
         eviction: zoid_core::eviction::EvictionPolicy::disabled(),
         mcp: None,
         thinking: ThinkingMode::Off,
+        kill: zoid_tools::KillSlot::new(),
     }
 }
 
@@ -311,7 +317,8 @@ pub async fn run_agent_turn(
         session_id,
         companion_hub,
         now,
-        CancellationToken::new(),
+        CancellationToken::new(), // graceful (never fires here)
+        CancellationToken::new(), // hard (never fires here)
     )
     .await
 }
@@ -335,6 +342,7 @@ pub async fn run_agent_turn_cancellable(
     companion_hub: std::sync::Arc<zoid_companion::CompanionHub>,
     now: fn() -> i64,
     cancel: CancellationToken,
+    hard: CancellationToken,
 ) -> Result<crate::eventlog::EventLog> {
     // Calibration ratio: real_input_tokens / context_window.total_tokens from
     // the last non-cached sub-turn. The chars/4 estimate undercounts 5-7x for
@@ -385,6 +393,7 @@ pub async fn run_agent_turn_cancellable(
         &mut calibration_ratio,
         &overhead,
         &cancel,
+        &hard,
     )
     .await;
     // Best-effort: if the receiver is already gone we still return the inner result.
@@ -412,6 +421,7 @@ async fn run_turn_inner(
     calibration_ratio: &mut Option<f64>,
     overhead: &zoid_core::context::ContextOverhead,
     cancel: &CancellationToken,
+    hard: &CancellationToken,
 ) -> Result<crate::eventlog::EventLog> {
     let turn_start = std::time::Instant::now();
     let mut iterations: u32 = 0;
@@ -1219,10 +1229,26 @@ async fn run_turn_inner(
                     let name = tc.name.clone();
                     let args = tc.args.clone();
                     let cwd = cwd_for_exec.clone();
-                    let out = tokio::task::spawn_blocking(move || {
+                    let mut exec = tokio::task::spawn_blocking(move || {
                         zoid_tools::run_tool(&tools_for_exec, &name, &args, &cwd)
-                    })
-                    .await?;
+                    });
+                    let out = tokio::select! {
+                        biased;
+                        _ = hard.cancelled() => {
+                            // Force-kill the shell's process group (sticky kill:
+                            // also reaps a child that registers a moment later).
+                            // We do NOT await `exec` — control returns immediately.
+                            // The detached spawn_blocking finishes on its own:
+                            // near-instantly for a killed shell, or in the
+                            // background for a non-killable local tool (search /
+                            // read_file / subagent_diff), which is the spec's
+                            // "abandon-wait" behavior. `exec` is dropped here,
+                            // detaching (not cancelling) the blocking task.
+                            config.kill.kill();
+                            zoid_tools::ToolOutput::err("[killed: hard-stop]")
+                        }
+                        joined = &mut exec => joined?,
+                    };
                     let tool_ok = !out.is_error;
                     let tool_fail_msg = out.is_error.then(|| out.text.clone());
                     emit(
@@ -1240,6 +1266,29 @@ async fn run_turn_inner(
                         now,
                     )
                     .await?;
+                    if hard.is_cancelled() {
+                        // Hard-stop mid-batch: answer every remaining call so no
+                        // tool_use is left without a tool_result, then end.
+                        for rest in pending_iter.by_ref() {
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::ToolResult {
+                                    id: rest.id,
+                                    name: rest.name,
+                                    output: "[skipped: turn aborted]".to_string(),
+                                    is_error: false,
+                                },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                        }
+                        outcome = "aborted";
+                        break 'turn;
+                    }
                     tracing::info!(
                         kind = "tool",
                         name = tool_name.as_str(),
@@ -2413,6 +2462,68 @@ mod tests {
             output.contains("unknown mcp tool"),
             "expected 'unknown mcp tool' in output, got: {output}"
         );
+    }
+
+    #[tokio::test]
+    async fn hard_cancel_kills_running_local_shell_and_balances() {
+        use ulid::Ulid;
+        use zoid_core::event::EventKind;
+        use zoid_provider::{ProviderEvent, ToolCall};
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        // The model asks to run a long shell command, then would continue.
+        let provider = std::sync::Arc::new(zoid_provider::FakeProvider::new(vec![
+            ProviderEvent::ToolCall(ToolCall {
+                id: "call-1".into(),
+                name: "shell".into(),
+                args: serde_json::json!({ "command": "sleep 30" }),
+            }),
+            ProviderEvent::Done,
+        ]));
+        // Shared kill slot wired into both the tool list and the config.
+        let kill = zoid_tools::KillSlot::new();
+        let tools = std::sync::Arc::new(zoid_tools::registry_with_kill(kill.clone()));
+        let mut cfg = chat_turn_config();
+        cfg.kill = kill.clone();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let graceful = CancellationToken::new();
+        let hard = CancellationToken::new();
+        // Fire hard shortly after the turn starts running the tool.
+        let hard2 = hard.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            hard2.cancel();
+        });
+        let started = std::time::Instant::now();
+        let out = run_agent_turn_cancellable(
+            cfg,
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(vec![]),
+            "m".into(),
+            tx,
+            Ulid::new(),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+            graceful,
+            hard,
+        )
+        .await
+        .unwrap();
+        // The turn must end well before the 30s sleep would finish.
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "hard-stop must not wait for the shell command"
+        );
+        // The tool call is answered with a killed result (balance preserved).
+        let killed = out.iter().any(|e| matches!(
+            &e.kind,
+            EventKind::ToolResult { id, output, .. }
+                if id == "call-1" && output.contains("[killed")
+        ));
+        assert!(killed, "the interrupted shell call must get a [killed] result");
     }
 }
 

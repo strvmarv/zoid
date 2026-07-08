@@ -7,14 +7,14 @@
 
 use std::sync::{Arc, Mutex};
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Inner {
     pgid: Option<u32>,
     kill_requested: bool,
 }
 
 /// Shared handle to the currently-running killable child's process group.
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct KillSlot(Arc<Mutex<Inner>>);
 
 impl KillSlot {
