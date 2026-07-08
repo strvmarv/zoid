@@ -27,6 +27,7 @@ fn seeded_transcript_frame() {
             ts: 0,
         },
         ChatMsg::Assistant {
+            thinking: None,
             text: "an unwrapped lookup in the handler.".into(),
             tool_calls: vec![],
             ts: 0,
@@ -43,6 +44,7 @@ fn streaming_caret_frame() {
             ts: 0,
         },
         ChatMsg::Assistant {
+            thinking: None,
             text: "thinking".into(),
             tool_calls: vec![],
             ts: 0,
@@ -59,6 +61,7 @@ fn tool_call_and_result_frame() {
             ts: 0,
         },
         ChatMsg::Assistant {
+                thinking: None,
             text: "reading it".into(),
             tool_calls: vec![ToolCallRef {
                 id: "".into(),
@@ -76,6 +79,7 @@ fn tool_call_and_result_frame() {
             ts: 0,
         },
         ChatMsg::Assistant {
+            thinking: None,
             text: "it contains the config.".into(),
             tool_calls: vec![],
             ts: 0,
@@ -92,6 +96,7 @@ fn tool_error_result_frame() {
             ts: 0,
         },
         ChatMsg::Assistant {
+                thinking: None,
             text: "".into(),
             tool_calls: vec![ToolCallRef {
                 id: "".into(),
@@ -109,6 +114,7 @@ fn tool_error_result_frame() {
             ts: 0,
         },
         ChatMsg::Assistant {
+            thinking: None,
             text: "the command failed.".into(),
             tool_calls: vec![],
             ts: 0,
@@ -127,6 +133,7 @@ fn compacted_msgs() -> Vec<ChatMsg> {
             ts: 0,
         },
         ChatMsg::Assistant {
+                thinking: None,
             text: "searching".into(),
             tool_calls: vec![ToolCallRef {
                 id: "c1".into(),
@@ -144,6 +151,7 @@ fn compacted_msgs() -> Vec<ChatMsg> {
             ts: 0,
         },
         ChatMsg::Assistant {
+            thinking: None,
             text: "found a handful of TODOs.".into(),
             tool_calls: vec![],
             ts: 0,

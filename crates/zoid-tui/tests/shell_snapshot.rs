@@ -126,6 +126,7 @@ fn cached_body_window_matches_uncached_paragraph() {
                     ts: 0,
                 },
                 ChatMsg::Assistant {
+                    thinking: None,
                     text: format!("answer {i}: it is the unwrapped lookup in the handler again"),
                     tool_calls: vec![],
                     ts: 0,
@@ -187,6 +188,7 @@ fn seeded() -> Vec<ChatMsg> {
             ts: 0,
         },
         ChatMsg::Assistant {
+            thinking: None,
             text: "an unwrapped lookup in the handler.".into(),
             tool_calls: vec![],
             ts: 0,
@@ -350,6 +352,7 @@ fn long_turn_wraps_instead_of_clipping() {
 
     let long = format!("HEADSENTINEL {} TAILSENTINEL", "wrap ".repeat(40));
     let msgs = vec![ChatMsg::Assistant {
+        thinking: None,
         text: long,
         tool_calls: vec![],
         ts: 0,
@@ -595,6 +598,7 @@ fn seeded_detail() -> Vec<ChatMsg> {
             ts: 0,
         },
         ChatMsg::Assistant {
+                thinking: None,
             text: "reading it".into(),
             tool_calls: vec![ToolCallRef {
                 id: "c1".into(),
@@ -672,6 +676,7 @@ fn zoom_detail_wide_frame() {
 fn seeded_objects() -> Vec<ChatMsg> {
     vec![
         ChatMsg::Assistant {
+                thinking: None,
             text: String::new(),
             tool_calls: vec![ToolCallRef {
                 id: "c1".into(),
@@ -783,6 +788,7 @@ fn seeded_markdown() -> Vec<ChatMsg> {
     vec![
         ChatMsg::User { text: "how do I read a file?".into(), ts: 0 },
         ChatMsg::Assistant {
+            thinking: None,
             text: "Use **read_file**. Steps:\n\n- open the path\n- return `String`\n\n```rust\nfn read(p: &str) -> String { String::new() }\n```".into(),
             tool_calls: vec![],
             ts: 0,

@@ -138,6 +138,7 @@ mod tests {
                 ts: 0,
             },
             ChatMsg::Assistant {
+                thinking: None,
                 text: String::new(),
                 tool_calls: vec![call("c1", r#"{"path":"src/ast.rs"}"#)],
                 ts: 0,
@@ -151,6 +152,7 @@ mod tests {
                 ts: 0,
             },
             ChatMsg::Assistant {
+                    thinking: None,
                 text: String::new(),
                 tool_calls: vec![ToolCallRef {
                     id: "c2".into(),
@@ -197,6 +199,7 @@ mod tests {
     fn non_file_tool_results_make_no_file_object() {
         let msgs = vec![
             ChatMsg::Assistant {
+                    thinking: None,
                 text: String::new(),
                 tool_calls: vec![ToolCallRef {
                     id: "c1".into(),
@@ -260,6 +263,7 @@ mod tests {
         // come once from the LATEST content (not first+latest stacked).
         let msgs = vec![
             ChatMsg::Assistant {
+                thinking: None,
                 text: String::new(),
                 tool_calls: vec![call("c1", r#"{"path":"src/ast.rs"}"#)],
                 ts: 0,
@@ -273,6 +277,7 @@ mod tests {
                 ts: 0,
             },
             ChatMsg::Assistant {
+                thinking: None,
                 text: String::new(),
                 tool_calls: vec![call("c2", r#"{"path":"src/ast.rs"}"#)],
                 ts: 0,

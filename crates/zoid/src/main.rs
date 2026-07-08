@@ -1175,6 +1175,7 @@ impl ProjectionCache {
                     t.push_str(text);
                 } else {
                     self.msgs.push(ChatMsg::Assistant {
+                        thinking: None,
                         text: text.clone(),
                         tool_calls: Vec::new(),
                         ts: ev.ts,
@@ -4740,6 +4741,7 @@ mod tests {
                 ts: 0,
             },
             ChatMsg::Assistant {
+                thinking: None,
                 text: "hello".into(),
                 tool_calls: vec![],
                 ts: 0,

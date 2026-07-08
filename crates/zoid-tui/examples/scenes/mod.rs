@@ -17,6 +17,7 @@ pub fn seeded() -> Vec<ChatMsg> {
             ts: 0,
         },
         ChatMsg::Assistant {
+                thinking: None,
             text: "searching for the failing lookup".into(),
             tool_calls: vec![ToolCallRef {
                 id: "c1".into(),
@@ -36,6 +37,7 @@ pub fn seeded() -> Vec<ChatMsg> {
             ts: 0,
         },
         ChatMsg::Assistant {
+            thinking: None,
             text: "an unwrapped lookup in the handler.".into(),
             tool_calls: vec![],
             ts: 0,
@@ -48,6 +50,7 @@ pub fn seeded() -> Vec<ChatMsg> {
 fn seeded_objects() -> Vec<ChatMsg> {
     vec![
         ChatMsg::Assistant {
+                thinking: None,
             text: String::new(),
             tool_calls: vec![ToolCallRef {
                 id: "c1".into(),

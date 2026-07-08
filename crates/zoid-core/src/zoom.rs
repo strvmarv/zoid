@@ -133,6 +133,7 @@ mod tests {
                 ts: 0,
             },
             ChatMsg::Assistant {
+                thinking: None,
                 text: "looking".into(),
                 tool_calls: vec![
                     call("read_file", r#"{"path":"src/ast.rs"}"#), // file
@@ -205,6 +206,7 @@ mod tests {
     #[test]
     fn assistant_led_log_starts_a_turn() {
         let msgs = vec![ChatMsg::Assistant {
+            thinking: None,
             text: "hello there".into(),
             tool_calls: vec![],
             ts: 0,
