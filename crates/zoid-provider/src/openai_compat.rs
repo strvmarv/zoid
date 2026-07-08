@@ -402,6 +402,7 @@ mod tests {
             messages: vec![Message::user("hi")],
             max_tokens: 1024,
             tools: vec![],
+            thinking: crate::ThinkingMode::Off,
         };
         let body = request_body(&req);
         assert_eq!(body["model"], "glm-5.2");
@@ -425,6 +426,7 @@ mod tests {
             messages: vec![Message::user("x")],
             max_tokens: 8,
             tools: vec![],
+            thinking: crate::ThinkingMode::Off,
         };
         assert_eq!(
             request_body(&req)["messages"],
@@ -450,6 +452,7 @@ mod tests {
             }],
             max_tokens: 8,
             tools: vec![],
+            thinking: crate::ThinkingMode::Off,
         };
         let body = request_body(&req);
         let tc = &body["messages"][0]["tool_calls"][0];
@@ -471,6 +474,7 @@ mod tests {
             messages: vec![Message::tool_with_call_id("read_file", "call-1", "body")],
             max_tokens: 8,
             tools: vec![],
+            thinking: crate::ThinkingMode::Off,
         };
         let body = request_body(&req);
         assert_eq!(
@@ -491,6 +495,7 @@ mod tests {
                 description: "read a file".into(),
                 parameters: json!({"type": "object"}),
             }],
+            thinking: crate::ThinkingMode::Off,
         };
         let body = request_body(&req);
         assert_eq!(
@@ -510,6 +515,7 @@ mod tests {
             messages: vec![Message::user("x")],
             max_tokens: 8,
             tools: vec![],
+            thinking: crate::ThinkingMode::Off,
         };
         assert!(request_body(&req).get("tools").is_none());
     }
@@ -690,6 +696,7 @@ mod tests {
             messages: vec![Message::user("hi")],
             max_tokens: 8,
             tools: vec![],
+            thinking: crate::ThinkingMode::Off,
         }
     }
 

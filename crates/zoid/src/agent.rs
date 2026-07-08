@@ -239,6 +239,7 @@ pub fn build_request(
             .collect(),
         max_tokens: 4096,
         tools: tool_specs(tools),
+        thinking: zoid_provider::ThinkingMode::Off,
     }
 }
 

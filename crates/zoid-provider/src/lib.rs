@@ -175,6 +175,34 @@ pub enum ProviderEvent {
     Error(String),
 }
 
+/// Reasoning effort level for models that support granularity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffortLevel {
+    Low,
+    Medium,
+    High,
+    Max,
+}
+
+/// Controls whether and how the model reasons (thinks) before answering.
+/// Phase 1: reasoning content is consumed and discarded by each provider's
+/// parse layer — never surfaced to the agent loop or UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThinkingMode {
+    /// Thinking disabled (today's behavior — the default).
+    Off,
+    /// Thinking enabled; derive budget/effort from model capabilities + context.
+    Auto,
+    /// Thinking enabled at a specific effort level.
+    Effort(EffortLevel),
+}
+
+impl Default for ThinkingMode {
+    fn default() -> Self {
+        ThinkingMode::Off
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompletionRequest {
     pub model: String,
@@ -182,6 +210,7 @@ pub struct CompletionRequest {
     pub messages: Vec<Message>,
     pub max_tokens: u32,
     pub tools: Vec<ToolSpec>,
+    pub thinking: ThinkingMode,
 }
 
 #[async_trait]
@@ -361,6 +390,7 @@ mod tests {
             messages: vec![Message::user("hi")],
             max_tokens: 64,
             tools: vec![],
+            thinking: crate::ThinkingMode::Off,
         };
         let (tx, mut rx) = mpsc::channel(16);
         provider.stream(&req, tx).await.unwrap();
@@ -420,6 +450,7 @@ mod tool_types_tests {
             messages: vec![Message::user("x")],
             max_tokens: 8,
             tools: vec![spec.clone()],
+            thinking: crate::ThinkingMode::Off,
         };
         assert_eq!(req.tools, vec![spec]);
 
@@ -475,5 +506,29 @@ mod parse_data_id_models_tests {
         assert!(parse_data_id_models("{}").is_empty());
         assert!(parse_data_id_models("not json").is_empty());
         assert!(parse_data_id_models(r#"{"data":[]}"#).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod thinking_mode_tests {
+    use super::*;
+
+    #[test]
+    fn thinking_mode_off_is_default() {
+        let req = CompletionRequest {
+            model: "m".into(),
+            system: None,
+            messages: vec![Message::user("hi")],
+            max_tokens: 8,
+            tools: vec![],
+            thinking: ThinkingMode::Off,
+        };
+        assert_eq!(req.thinking, ThinkingMode::Off);
+    }
+
+    #[test]
+    fn effort_level_variants_exist() {
+        assert_ne!(EffortLevel::Low, EffortLevel::High);
+        assert_ne!(EffortLevel::Medium, EffortLevel::Max);
     }
 }

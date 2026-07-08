@@ -111,6 +111,7 @@ mod tests {
             messages,
             max_tokens: 1024,
             tools,
+            thinking: crate::ThinkingMode::Off,
         }
     }
 

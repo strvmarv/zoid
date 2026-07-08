@@ -503,6 +503,7 @@ mod tests {
             messages: vec![Message::user("hi"), Message::assistant("hello")],
             max_tokens: 1024,
             tools: vec![],
+            thinking: crate::ThinkingMode::Off,
         };
         let body = request_body(&req);
         assert_eq!(
@@ -533,6 +534,7 @@ mod tests {
             messages: vec![Message::user("x")],
             max_tokens: 8,
             tools: vec![],
+            thinking: crate::ThinkingMode::Off,
         };
         assert_eq!(
             request_body(&req)["messages"],
@@ -566,6 +568,7 @@ mod tests {
                 description: "read a file".into(),
                 parameters: json!({"type": "object"}),
             }],
+            thinking: crate::ThinkingMode::Off,
         };
         let body = request_body(&req);
         assert_eq!(
@@ -593,6 +596,7 @@ mod tests {
             messages: vec![Message::user("x")],
             max_tokens: 8,
             tools: vec![],
+            thinking: crate::ThinkingMode::Off,
         };
         assert!(request_body(&req).get("tools").is_none());
     }
@@ -840,6 +844,7 @@ mod tests {
             messages: vec![Message::user("hi")],
             max_tokens: 8,
             tools: vec![],
+            thinking: crate::ThinkingMode::Off,
         }
     }
 

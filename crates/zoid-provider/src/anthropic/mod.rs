@@ -413,6 +413,7 @@ mod tests {
             messages: vec![Message::user("hi")],
             max_tokens: 8,
             tools: vec![],
+            thinking: crate::ThinkingMode::Off,
         }
     }
 

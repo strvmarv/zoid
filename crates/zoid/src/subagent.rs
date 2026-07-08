@@ -76,6 +76,7 @@ pub fn build_subagent_request(
         messages: vec![Message::user(user)],
         max_tokens: SUBAGENT_MAX_TOKENS,
         tools: tool_specs(tools),
+        thinking: zoid_provider::ThinkingMode::Off,
     }
 }
 
