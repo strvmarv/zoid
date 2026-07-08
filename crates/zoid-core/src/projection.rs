@@ -26,6 +26,9 @@ pub enum ChatMsg {
         text: String,
         tool_calls: Vec<ToolCallRef>,
         ts: i64,
+        /// Reasoning/thinking text from the final sub-turn (from a preceding
+        /// `ModelThinking` event). `None` when the model didn't reason.
+        thinking: Option<String>,
     },
     ToolResult {
         id: String,
@@ -123,18 +126,21 @@ pub fn conversation<'a>(events: impl IntoIterator<Item = &'a Event>) -> Vec<Chat
     let mut calls: Vec<ToolCallRef> = Vec::new();
     // ts of the first event that contributed to the in-progress assistant turn.
     let mut turn_ts: Option<i64> = None;
+    let mut pending_thinking: Option<String> = None;
 
     fn flush(
         text: &mut Option<String>,
         calls: &mut Vec<ToolCallRef>,
         turn_ts: &mut Option<i64>,
         out: &mut Vec<ChatMsg>,
+        thinking: Option<String>,
     ) {
         if text.is_some() || !calls.is_empty() {
             out.push(ChatMsg::Assistant {
                 text: text.take().unwrap_or_default(),
                 tool_calls: std::mem::take(calls),
                 ts: turn_ts.take().unwrap_or(0),
+                thinking,
             });
         }
         *turn_ts = None;
@@ -149,19 +155,24 @@ pub fn conversation<'a>(events: impl IntoIterator<Item = &'a Event>) -> Vec<Chat
         }
         match &e.kind {
             EventKind::UserMessage { text: t } => {
-                flush(&mut text, &mut calls, &mut turn_ts, &mut out);
+                flush(&mut text, &mut calls, &mut turn_ts, &mut out, pending_thinking.take());
                 out.push(ChatMsg::User {
                     text: t.clone(),
                     ts: e.ts,
                 });
             }
             EventKind::AssistantMessage { text: t } => {
-                flush(&mut text, &mut calls, &mut turn_ts, &mut out);
+                flush(&mut text, &mut calls, &mut turn_ts, &mut out, pending_thinking.take());
                 out.push(ChatMsg::Assistant {
+                    thinking: None,
                     text: t.clone(),
                     tool_calls: Vec::new(),
                     ts: e.ts,
                 });
+            }
+            EventKind::ModelThinking { text: t } => {
+                flush(&mut text, &mut calls, &mut turn_ts, &mut out, pending_thinking.take());
+                pending_thinking = Some(t.clone());
             }
             EventKind::ModelDelta { text: t } => {
                 turn_ts.get_or_insert(e.ts);
@@ -185,10 +196,10 @@ pub fn conversation<'a>(events: impl IntoIterator<Item = &'a Event>) -> Vec<Chat
                 // id — the card is the human-facing record.
                 if question_ids.contains(id.as_str()) {
                     // The assistant turn that made the call(s) still ends here.
-                    flush(&mut text, &mut calls, &mut turn_ts, &mut out);
+                    flush(&mut text, &mut calls, &mut turn_ts, &mut out, pending_thinking.take());
                     continue;
                 }
-                flush(&mut text, &mut calls, &mut turn_ts, &mut out);
+                flush(&mut text, &mut calls, &mut turn_ts, &mut out, pending_thinking.take());
                 let (output, was_compacted) = match compacted.get(id.as_str()) {
                     Some(sum) => ((*sum).to_string(), true),
                     None => (output.clone(), false),
@@ -208,7 +219,7 @@ pub fn conversation<'a>(events: impl IntoIterator<Item = &'a Event>) -> Vec<Chat
                 question,
                 choices,
             } => {
-                flush(&mut text, &mut calls, &mut turn_ts, &mut out);
+                flush(&mut text, &mut calls, &mut turn_ts, &mut out, pending_thinking.take());
                 let state = match answered.get(id.as_str()) {
                     Some(ans) => QuestionCardState::Answered {
                         answer: (*ans).to_string(),
@@ -232,7 +243,7 @@ pub fn conversation<'a>(events: impl IntoIterator<Item = &'a Event>) -> Vec<Chat
                 // standalone conversation item.
             }
             EventKind::DelegationResult { summary, ok, .. } => {
-                flush(&mut text, &mut calls, &mut turn_ts, &mut out);
+                flush(&mut text, &mut calls, &mut turn_ts, &mut out, pending_thinking.take());
                 out.push(ChatMsg::Delegated {
                     summary: summary.clone(),
                     ok: *ok,
@@ -255,7 +266,19 @@ pub fn conversation<'a>(events: impl IntoIterator<Item = &'a Event>) -> Vec<Chat
             }
         }
     }
-    flush(&mut text, &mut calls, &mut turn_ts, &mut out);
+    flush(&mut text, &mut calls, &mut turn_ts, &mut out, pending_thinking.take());
+    // If thinking was the last event with no following assistant message,
+    // emit a standalone assistant message with empty text + the thinking.
+    if let Some(thinking) = pending_thinking.take() {
+        if text.is_none() && calls.is_empty() {
+            out.push(ChatMsg::Assistant {
+                text: String::new(),
+                tool_calls: Vec::new(),
+                ts: turn_ts.unwrap_or(0),
+                thinking: Some(thinking),
+            });
+        }
+    }
     out
 }
 
@@ -327,6 +350,7 @@ mod tests {
                     ts: 0
                 },
                 ChatMsg::Assistant {
+                        thinking: None,
                     text: "let me look".into(),
                     tool_calls: vec![ToolCallRef {
                         id: "".into(),
@@ -344,6 +368,7 @@ mod tests {
                     ts: 0
                 },
                 ChatMsg::Assistant {
+                    thinking: None,
                     text: "it says data".into(),
                     tool_calls: vec![],
                     ts: 0
@@ -363,6 +388,7 @@ mod tests {
         assert_eq!(
             conv[1],
             ChatMsg::Assistant {
+                    thinking: None,
                 text: "".into(),
                 tool_calls: vec![ToolCallRef {
                     id: "".into(),
@@ -406,6 +432,7 @@ mod tests {
         assert_eq!(
             conv[1],
             ChatMsg::Assistant {
+                    thinking: None,
                 text: "".into(),
                 tool_calls: vec![ToolCallRef {
                     id: "call_1".into(),
@@ -453,6 +480,7 @@ mod tests {
                     ts: 0
                 },
                 ChatMsg::Assistant {
+                    thinking: None,
                     text: "yo".into(),
                     tool_calls: vec![],
                     ts: 0

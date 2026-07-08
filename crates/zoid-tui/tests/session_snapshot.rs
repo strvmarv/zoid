@@ -79,7 +79,7 @@ fn session_drawer_truncates_long_cwd() {
     // Tall enough that the Session drawer opens fully and renders its cwd row
     // (the fit allocator squeezes lower-priority drawers on a short rail); the
     // narrow 100-col width is what forces the horizontal cwd truncation tested.
-    let out = draw(&s, &[], 100, 40);
+    let out = draw(&s, &[], 100, 52);
     // The cwd never wraps — it is truncated with the §16 ellipsis.
     assert!(
         out.contains('\u{2026}'),

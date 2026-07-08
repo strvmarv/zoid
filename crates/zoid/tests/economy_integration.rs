@@ -21,6 +21,7 @@ async fn turn_usage_lands_in_ledger() {
             input_tokens: 120,
             output_tokens: 18,
             cached: 0,
+            thinking_tokens: 0,
         }),
         ProviderEvent::Done,
     ]));

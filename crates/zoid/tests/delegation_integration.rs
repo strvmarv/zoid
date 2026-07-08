@@ -102,6 +102,7 @@ async fn delegation_spend_lands_in_the_session_ledger() {
             input_tokens: 320,
             output_tokens: 45,
             cached: 0,
+            thinking_tokens: 0,
         }),
         ProviderEvent::Done,
     ]));

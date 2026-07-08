@@ -47,6 +47,7 @@ fn session_persists_and_replays_across_reopen() {
                 ts: 10
             },
             ChatMsg::Assistant {
+                thinking: None,
                 text: "hi there".into(),
                 tool_calls: vec![],
                 ts: 20

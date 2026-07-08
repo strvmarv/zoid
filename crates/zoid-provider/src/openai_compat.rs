@@ -215,6 +215,17 @@ pub fn parse_chunk(data: &str, acc: &mut ToolCallAccumulator) -> Vec<ProviderEve
             out.push(ProviderEvent::TextDelta(content.to_string()));
         }
     }
+    if let Some(reasoning) = v
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("delta"))
+        .and_then(|d| d.get("reasoning_content"))
+        .and_then(|c| c.as_str())
+    {
+        if !reasoning.is_empty() {
+            out.push(ProviderEvent::ThinkingDelta(reasoning.to_string()));
+        }
+    }
     if let Some(calls) = v
         .get("choices")
         .and_then(|c| c.get(0))
@@ -254,6 +265,7 @@ pub fn parse_chunk(data: &str, acc: &mut ToolCallAccumulator) -> Vec<ProviderEve
             input_tokens: input,
             output_tokens: output,
             cached,
+            thinking_tokens: 0,
         }));
     }
     out
@@ -611,7 +623,8 @@ mod tests {
             vec![ProviderEvent::Usage(Usage {
                 input_tokens: 120,
                 output_tokens: 40,
-                cached: 30
+                cached: 30,
+                thinking_tokens: 0,
             })]
         );
     }
@@ -624,7 +637,8 @@ mod tests {
             vec![ProviderEvent::Usage(Usage {
                 input_tokens: 120,
                 output_tokens: 40,
-                cached: 0
+                cached: 0,
+                thinking_tokens: 0,
             })]
         );
     }
@@ -853,21 +867,24 @@ mod tests {
     }
 
     #[test]
-    fn parse_chunk_reasoning_content_is_discarded() {
+    fn parse_chunk_reasoning_content_emits_thinking_delta() {
         let data = r#"{"choices":[{"delta":{"content":"answer","reasoning_content":"thinking..."}}]}"#;
         let events = parse_chunk(data, &mut ToolCallAccumulator::new());
-        assert_eq!(
-            events,
-            vec![ProviderEvent::TextDelta("answer".into())],
-            "reasoning_content must be silently discarded"
-        );
+        assert!(events.contains(&ProviderEvent::ThinkingDelta("thinking...".into())),
+            "reasoning_content must emit ThinkingDelta, got: {:?}", events);
+        assert!(events.contains(&ProviderEvent::TextDelta("answer".into())),
+            "content must still emit TextDelta, got: {:?}", events);
     }
 
     #[test]
-    fn parse_chunk_reasoning_content_alone_yields_nothing() {
+    fn parse_chunk_reasoning_content_alone_emits_thinking_delta_only() {
         let data = r#"{"choices":[{"delta":{"reasoning_content":"deep thoughts"}}]}"#;
         let events = parse_chunk(data, &mut ToolCallAccumulator::new());
-        assert!(events.is_empty(), "reasoning-only delta must produce nothing");
+        assert_eq!(
+            events,
+            vec![ProviderEvent::ThinkingDelta("deep thoughts".into())],
+            "reasoning-only delta must produce only ThinkingDelta"
+        );
     }
 
     use std::time::Duration;

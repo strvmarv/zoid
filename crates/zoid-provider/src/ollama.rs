@@ -107,6 +107,15 @@ pub fn parse_line(
             out.push(ProviderEvent::TextDelta(text.to_string()));
         }
     }
+    if let Some(thinking) = v
+        .get("message")
+        .and_then(|m| m.get("thinking"))
+        .and_then(|t| t.as_str())
+    {
+        if !thinking.is_empty() {
+            out.push(ProviderEvent::ThinkingDelta(thinking.to_string()));
+        }
+    }
     if let Some(calls) = v
         .get("message")
         .and_then(|m| m.get("tool_calls"))
@@ -159,6 +168,7 @@ pub fn parse_line(
                 input_tokens: curr,
                 output_tokens: output.unwrap_or(0),
                 cached: cached_approx,
+                thinking_tokens: 0,
             }));
         }
         // `done_reason:"length"` = the model hit the output cap; its reply is
@@ -661,6 +671,17 @@ mod tests {
     }
 
     #[test]
+    fn parse_line_thinking_field_emits_thinking_delta() {
+        let line = r#"{"message":{"role":"assistant","content":"answer","thinking":"reasoning"},"done":false}"#;
+        let atomic = std::sync::atomic::AtomicU64::new(0);
+        let events = parse_line(line, &atomic);
+        assert!(events.contains(&ProviderEvent::ThinkingDelta("reasoning".into())),
+            "thinking field must emit ThinkingDelta, got: {:?}", events);
+        assert!(events.contains(&ProviderEvent::TextDelta("answer".into())),
+            "content must still emit TextDelta, got: {:?}", events);
+    }
+
+    #[test]
     fn parses_content_delta_line() {
         let line = r#"{"model":"glm-5.2:cloud","message":{"role":"assistant","content":"Hel"},"done":false}"#;
         assert_eq!(
@@ -670,10 +691,13 @@ mod tests {
     }
 
     #[test]
-    fn thinking_only_line_yields_none() {
+    fn thinking_only_line_yields_thinking_delta() {
         let line =
             r#"{"message":{"role":"assistant","content":"","thinking":"reasoning"},"done":false}"#;
-        assert!(parse_first(line).is_empty());
+        assert_eq!(
+            parse_first(line),
+            vec![ProviderEvent::ThinkingDelta("reasoning".into())]
+        );
     }
 
     #[test]
@@ -687,7 +711,8 @@ mod tests {
                 ProviderEvent::Usage(Usage {
                     input_tokens: 124,
                     output_tokens: 58,
-                    cached: 0
+                    cached: 0,
+                    thinking_tokens: 0,
                 }),
                 ProviderEvent::Done
             ]
@@ -704,7 +729,8 @@ mod tests {
                 ProviderEvent::Usage(Usage {
                     input_tokens: 0,
                     output_tokens: 58,
-                    cached: 0
+                    cached: 0,
+                    thinking_tokens: 0,
                 }),
                 ProviderEvent::Done
             ]
@@ -730,7 +756,8 @@ mod tests {
                 ProviderEvent::Usage(Usage {
                     input_tokens: 124,
                     output_tokens: 4096,
-                    cached: 0
+                    cached: 0,
+                    thinking_tokens: 0,
                 }),
                 ProviderEvent::Truncated,
                 ProviderEvent::Done
@@ -993,7 +1020,8 @@ mod tests {
                 ProviderEvent::Usage(Usage {
                     input_tokens: 12000,
                     output_tokens: 40,
-                    cached: 0
+                    cached: 0,
+                    thinking_tokens: 0,
                 }),
                 ProviderEvent::Done
             ]
@@ -1013,6 +1041,7 @@ mod tests {
             out[0][0],
             ProviderEvent::Usage(Usage {
                 cached: 0,
+                thinking_tokens: 0,
                 input_tokens: 12000,
                 output_tokens: 40
             })
@@ -1022,6 +1051,7 @@ mod tests {
             out[1][0],
             ProviderEvent::Usage(Usage {
                 cached: 12000,
+                thinking_tokens: 0,
                 input_tokens: 13000,
                 output_tokens: 10
             })
@@ -1040,6 +1070,7 @@ mod tests {
             out[1][0],
             ProviderEvent::Usage(Usage {
                 cached: 30000,
+                thinking_tokens: 0,
                 input_tokens: 30000,
                 output_tokens: 10
             })

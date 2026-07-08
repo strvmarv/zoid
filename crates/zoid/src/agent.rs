@@ -477,6 +477,7 @@ async fn run_turn_inner(
 
         let mut turn_usage = zoid_core::event::TokenStat::default();
         let mut pending: Vec<ToolCall> = Vec::new();
+        let mut thinking_buf: String = String::new();
         let mut aborted = false;
         loop {
             let pe = tokio::select! {
@@ -524,6 +525,7 @@ async fn run_turn_inner(
                     turn_usage.input += u.input_tokens;
                     turn_usage.output += u.output_tokens;
                     turn_usage.cached += u.cached;
+                    turn_usage.thinking += u.thinking_tokens;
                 }
                 ProviderEvent::Error(msg) => {
                     let _ = stream_task.await;
@@ -585,6 +587,12 @@ async fn run_turn_inner(
                     .await?;
                 }
                 ProviderEvent::Done => break,
+                ProviderEvent::ThinkingDelta(s) => {
+                    thinking_buf.push_str(&s);
+                }
+                ProviderEvent::ThinkingSignature(_) => {
+                    // Accumulated for future Phase 3 replay; not rendered or persisted.
+                }
             }
         }
         if aborted {
@@ -594,6 +602,7 @@ async fn run_turn_inner(
             // before the next request).
             stream_task.abort();
             let _ = stream_task.await;
+            thinking_buf.clear();
             for tc in pending.drain(..) {
                 emit(
                     &session,
@@ -654,8 +663,25 @@ async fn run_turn_inner(
         .await?;
 
         if pending.is_empty() {
+            // Final answer: flush reasoning as ephemeral ModelThinking.
+            if !thinking_buf.is_empty() {
+                emit_ephemeral(
+                    &mut events,
+                    ui,
+                    &config.branch,
+                    EventKind::ModelThinking { text: std::mem::take(&mut thinking_buf) },
+                    session_id,
+                    now,
+                )
+                .await?;
+            }
             break 'turn; // model answered without tools — turn complete
         }
+
+        // Intermediate sub-turn (tool calls): discard reasoning — it helped
+        // the model select tools but isn't useful to the user and would
+        // clutter the history + context.
+        thinking_buf.clear();
 
         iterations += 1;
         if iterations > MAX_TOOL_ITERATIONS {
@@ -1539,6 +1565,24 @@ where
 }
 
 /// Persist one event and announce it to the UI, keeping the local log in sync.
+/// Push an ephemeral event to the in-memory log + UI, skipping SQLite.
+/// Used for `ModelThinking` — reasoning text that survives only for the
+/// current process lifetime, not persisted across restarts.
+async fn emit_ephemeral(
+    events: &mut crate::eventlog::EventLog,
+    ui: &mpsc::Sender<AgentUpdate>,
+    branch: &BranchId,
+    kind: EventKind,
+    session_id: Ulid,
+    now: fn() -> i64,
+) -> Result<()> {
+    let mut ev = Event::new(Ulid::new(), None, now(), kind).with_session(session_id);
+    ev.branch = branch.clone();
+    events.push(ev.clone());
+    let _ = ui.send(AgentUpdate::Appended(Box::new(ev))).await;
+    Ok(())
+}
+
 async fn emit(
     session: &SessionHandle,
     events: &mut crate::eventlog::EventLog,

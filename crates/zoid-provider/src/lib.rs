@@ -135,6 +135,10 @@ pub struct Usage {
     /// providers without a token-level prompt cache (e.g. Ollama). Powers the
     /// context drawer's per-turn cache sparkline.
     pub cached: u64,
+    /// Reasoning/thinking token count (Anthropic only, if reported separately).
+    /// 0 for providers that don't break out thinking tokens (DeepSeek bundles
+    /// them into `output_tokens`; Ollama has no token-level breakdown).
+    pub thinking_tokens: u64,
 }
 
 /// A tool the model may call (OpenAI/Ollama function shape). `parameters` is a
@@ -158,6 +162,13 @@ pub struct ToolCall {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProviderEvent {
     TextDelta(String),
+    /// Reasoning/thinking text from the model (Anthropic thinking blocks,
+    /// DeepSeek `reasoning_content`, Ollama `message.thinking`). Accumulated
+    /// by the agent loop and rendered as a collapsible "▶ Thinking…" marker.
+    ThinkingDelta(String),
+    /// Anthropic thinking-block signature (for future replay). Emitted at the
+    /// end of each thinking block. Other providers never emit this.
+    ThinkingSignature(String),
     ToolCall(ToolCall),
     /// An **additive** usage delta. The agent loop sums every `Usage` event in a
     /// sub-turn, so a provider must emit each token dimension exactly once, or as
@@ -375,6 +386,7 @@ mod tests {
                 input_tokens: 3,
                 output_tokens: 2,
                 cached: 0,
+                thinking_tokens: 0,
             }),
             ProviderEvent::Done,
         ];

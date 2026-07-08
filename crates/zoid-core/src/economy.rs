@@ -13,6 +13,8 @@ pub struct TokenLedger {
     pub output: u64,
     pub cached: u64,
     pub total: u64,
+    /// Cumulative thinking/reasoning tokens across all turns.
+    pub thinking: u64,
 }
 
 /// Fold the log into a `TokenLedger` by summing every event's `tokens`.
@@ -23,6 +25,7 @@ pub fn token_ledger<'a>(events: impl IntoIterator<Item = &'a Event>) -> TokenLed
             l.input += t.input;
             l.output += t.output;
             l.cached += t.cached;
+            l.thinking += t.thinking;
         }
     }
     l.total = l.input + l.output;
@@ -151,6 +154,7 @@ mod tests {
             ts: 0,
             kind: EventKind::Usage,
             tokens: Some(TokenStat {
+                thinking: 0,
                 input,
                 output,
                 cached,

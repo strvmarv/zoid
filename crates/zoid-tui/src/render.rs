@@ -690,9 +690,19 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
             ),
             Span::styled("dur ", Style::new().fg(color::DIM)),
             Span::styled(
-                format!("{}   ", state.duration),
+                format!("{}  ", state.duration),
                 Style::new().fg(color::TXT),
             ),
+            if let Some(label) = &state.thinking_label {
+                Span::styled(
+                    format!("◆ {}", label),
+                    Style::new().fg(color::CHAT_ACCENT),
+                )
+            } else {
+                Span::styled("", Style::new())
+            },
+        ]),
+        Line::from(vec![
             Span::styled(
                 if state.cache_supported {
                     "tok "
@@ -719,12 +729,17 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
             },
             if state.cache_supported {
                 Span::styled(
-                    human_tokens(state.cached_tokens),
+                    format!("{}   ", human_tokens(state.cached_tokens)),
                     Style::new().fg(color::TXT),
                 )
             } else {
                 Span::styled("", Style::new())
             },
+            Span::styled("tps ", Style::new().fg(color::DIM)),
+            Span::styled(
+                format!("{}", state.tps),
+                Style::new().fg(color::TXT),
+            ),
         ]),
         {
             let mut spans = vec![

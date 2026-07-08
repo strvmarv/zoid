@@ -12,7 +12,8 @@ expression: "draw_at(&s, &many_tasks(8), 160, 40)"
 "                                                                                                                  █ ╭ ▾ session ──────────────────────────────╮ "
 "                                                                                                                  █ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(118, " ")]
 "                                                                                                                  █ │🤖  ·                                    │ " Hidden by multi-width symbols: [(118, " ")]
-"                                                                                                                  █ │⌚ dur 0m   tok/cac 0                    │ " Hidden by multi-width symbols: [(118, " ")]
+"                                                                                                                  █ │⌚ dur 0m                                │ " Hidden by multi-width symbols: [(118, " ")]
+"                                                                                                                  █ │tok/cac 0   tps 0                        │ "
 "                                                                                                                  █ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(118, " ")]
 "                                                                                                                  █ │📁 cwd                                   │ " Hidden by multi-width symbols: [(118, " ")]
 "                                                                                                                  █ ╰─────────────────────────────────────────╯ "
@@ -35,7 +36,6 @@ expression: "draw_at(&s, &many_tasks(8), 160, 40)"
 "                                                                                                                  █ │◐ task 4                                 │ "
 "                                                                                                                  █ │☐ task 5                                 │ "
 "                                                                                                                  █ │✓ task 6                                 │ "
-"                                                                                                                  █ │◐ task 7                                 │ "
 "                                                                                                                  █ ╰─────────────────────────────────────────╯ "
 "                                                                                                                  █                                             "
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"

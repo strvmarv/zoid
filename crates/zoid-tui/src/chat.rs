@@ -170,7 +170,21 @@ fn build_conversation(
                 text,
                 tool_calls,
                 ts,
+                thinking,
             } => {
+                // Thinking marker (collapsed at Normal zoom).
+                if let Some(thinking_text) = thinking {
+                    if !thinking_text.is_empty() {
+                        blank_between_turns(&mut lines);
+                        lines.push(Line::from(vec![
+                            Span::styled(
+                                format!("{} ", glyph::EXPANDED),
+                                Style::new().fg(color::DIM),
+                            ),
+                            Span::styled("Thinking…", Style::new().fg(color::DIM)),
+                        ]));
+                    }
+                }
                 let mut shown = text.clone();
                 if streaming && caret_on && i == last && tool_calls.is_empty() {
                     shown.push(glyph::CARET);
@@ -867,6 +881,38 @@ fn detail_lines(
                     width,
                 );
             }
+            ChatMsg::Assistant {
+                thinking,
+                ..
+            } => {
+                // Thinking section (full text at Detail zoom).
+                if let Some(thinking_text) = thinking {
+                    if !thinking_text.is_empty() {
+                        blank_between_turns(&mut out);
+                        out.push(Line::from(vec![
+                            Span::styled(
+                                "─ Thinking ─────────────────────",
+                                Style::new().fg(color::DIM),
+                            ),
+                        ]));
+                        for line in crate::markdown::render_markdown(thinking_text) {
+                            let mut spans = vec![Span::styled("    ", Style::new())];
+                            spans.extend(line.spans);
+                            out.push(Line::from(spans));
+                        }
+                        out.push(Line::from(""));
+                    }
+                }
+                // Answer text (reuse the existing conversation_lines path)
+                out.extend(conversation_lines(
+                    std::slice::from_ref(m),
+                    false,
+                    true,
+                    tz_offset_secs,
+                    width,
+                    question,
+                ));
+            }
             other => out.extend(conversation_lines(
                 std::slice::from_ref(other),
                 false,
@@ -1021,6 +1067,7 @@ mod tests {
     fn caret_shows_only_when_streaming_and_caret_on() {
         use crate::tokens::glyph;
         let msgs = vec![ChatMsg::Assistant {
+            thinking: None,
             text: "hi".into(),
             tool_calls: vec![],
             ts: 0,
@@ -1053,6 +1100,7 @@ mod tests {
                 ts: 0,
             },
             ChatMsg::Assistant {
+                    thinking: None,
                 text: "on it".into(),
                 tool_calls: vec![ToolCallRef {
                     id: "c1".into(),
@@ -1093,6 +1141,7 @@ mod tests {
                 ts: 0,
             },
             ChatMsg::Assistant {
+                thinking: None,
                 text: "an answer".into(),
                 tool_calls: vec![],
                 ts: 0,
@@ -1102,6 +1151,7 @@ mod tests {
                 ts: 0,
             },
             ChatMsg::Assistant {
+                thinking: None,
                 text: "another answer".into(),
                 tool_calls: vec![],
                 ts: 0,
@@ -1204,6 +1254,7 @@ mod tests {
     fn assistant_body_renders_markdown() {
         use crate::tokens::color;
         let msgs = vec![ChatMsg::Assistant {
+            thinking: None,
             text: "run **now**\n\n```rust\nfn x() {}\n```".into(),
             tool_calls: vec![],
             ts: 0,
@@ -1231,11 +1282,13 @@ mod tests {
     fn code_hits_pair_each_block_with_its_own_source() {
         let msgs = vec![
             ChatMsg::Assistant {
+                thinking: None,
                 text: "first\n\n```rust\nlet a = 1;\n```".into(),
                 tool_calls: vec![],
                 ts: 0,
             },
             ChatMsg::Assistant {
+                thinking: None,
                 text: "second\n\n```rust\nlet b = 2;\n```".into(),
                 tool_calls: vec![],
                 ts: 0,
@@ -1266,11 +1319,13 @@ mod tests {
         );
         let msgs = vec![
             ChatMsg::Assistant {
+                thinking: None,
                 text: bailing.into(),
                 tool_calls: vec![],
                 ts: 0,
             },
             ChatMsg::Assistant {
+                thinking: None,
                 text: "```rust\nlet real = 42;\n```".into(),
                 tool_calls: vec![],
                 ts: 0,

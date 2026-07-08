@@ -15,6 +15,8 @@ pub struct TokenStat {
     pub input: u64,
     pub output: u64,
     pub cached: u64,
+    /// Reasoning/thinking token count (from `Usage.thinking_tokens`).
+    pub thinking: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -65,6 +67,14 @@ pub enum EventKind {
         text: String,
     },
     ModelDelta {
+        text: String,
+    },
+    /// Reasoning/thinking text from the model. Ephemeral — pushed to the
+    /// in-memory `EventLog` but NOT persisted to SQLite (skipped by
+    /// `emit_ephemeral`). Only the final sub-turn's reasoning is kept;
+    /// intermediate reasoning from tool-selection sub-turns is discarded.
+    /// The projection attaches this to the next `ChatMsg::Assistant`.
+    ModelThinking {
         text: String,
     },
     /// A tool the model asked to call. `args` is the raw JSON arguments (stored
@@ -208,6 +218,7 @@ mod tests {
                 text: "hello".into(),
             },
             tokens: Some(TokenStat {
+                thinking: 0,
                 input: 1,
                 output: 2,
                 cached: 3,
@@ -220,6 +231,7 @@ mod tests {
         assert_eq!(
             back.tokens,
             Some(TokenStat {
+                thinking: 0,
                 input: 1,
                 output: 2,
                 cached: 3
@@ -293,6 +305,7 @@ mod tests {
             ts: 5,
             kind: EventKind::Usage,
             tokens: Some(TokenStat {
+                thinking: 0,
                 input: 100,
                 output: 40,
                 cached: 10,

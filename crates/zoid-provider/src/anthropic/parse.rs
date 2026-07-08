@@ -62,6 +62,7 @@ pub fn event(frame: StreamEvent, acc: &mut ToolUseAccumulator) -> Vec<ProviderEv
                 input_tokens: input,
                 output_tokens: 0,
                 cached: u.cache_read_input_tokens,
+                thinking_tokens: 0,
             })]
         }
         StreamEvent::ContentBlockStart {
@@ -81,7 +82,12 @@ pub fn event(frame: StreamEvent, acc: &mut ToolUseAccumulator) -> Vec<ProviderEv
                 acc.append(index, &partial_json);
                 vec![]
             }
-            Delta::ThinkingDelta { .. } | Delta::SignatureDelta { .. } => vec![],
+            Delta::ThinkingDelta { thinking } => {
+                vec![ProviderEvent::ThinkingDelta(thinking)]
+            }
+            Delta::SignatureDelta { signature } => {
+                vec![ProviderEvent::ThinkingSignature(signature)]
+            }
         },
         StreamEvent::ContentBlockStop { index } => match acc.finalize(index) {
             Some(tc) => vec![ProviderEvent::ToolCall(tc)],
@@ -92,6 +98,7 @@ pub fn event(frame: StreamEvent, acc: &mut ToolUseAccumulator) -> Vec<ProviderEv
                 input_tokens: 0,
                 output_tokens: usage.output_tokens,
                 cached: 0,
+                thinking_tokens: 0,
             })];
             if delta.stop_reason.as_deref() == Some("max_tokens") {
                 out.push(ProviderEvent::Truncated);
@@ -129,6 +136,7 @@ mod tests {
                 input_tokens: 50,
                 output_tokens: 0,
                 cached: 40,
+                thinking_tokens: 0,
             })]
         );
     }
@@ -153,6 +161,7 @@ mod tests {
                 input_tokens: 7,
                 output_tokens: 0,
                 cached: 0,
+                thinking_tokens: 0,
             })]
         );
     }
@@ -198,6 +207,7 @@ mod tests {
                 input_tokens: 0,
                 output_tokens: 12,
                 cached: 0,
+                thinking_tokens: 0,
             })]
         );
     }
@@ -224,6 +234,7 @@ mod tests {
                     input_tokens: 0,
                     output_tokens: 4096,
                     cached: 0,
+                    thinking_tokens: 0,
                 }),
                 ProviderEvent::Truncated
             ]
@@ -250,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn thinking_delta_emits_nothing() {
+    fn thinking_delta_emits_thinking_delta() {
         let frame = StreamEvent::ContentBlockDelta {
             index: 0,
             delta: Delta::ThinkingDelta {
@@ -258,7 +269,11 @@ mod tests {
             },
         };
         let mut acc = ToolUseAccumulator::default();
-        assert!(event(frame, &mut acc).is_empty());
+        let events = event(frame, &mut acc);
+        assert_eq!(
+            events,
+            vec![ProviderEvent::ThinkingDelta("reasoning".into())]
+        );
     }
 
     #[test]
@@ -490,11 +505,7 @@ mod tests {
     }
 
     #[test]
-    fn signature_delta_emits_nothing() {
-        // Spec §7.2: thinking blocks are parsed but discarded. The signature
-        // delta is part of a thinking block's lifecycle; dropped from the
-        // event stream. Pin this so a future split of the `|` arm doesn't
-        // silently regress signature handling.
+    fn signature_delta_emits_thinking_signature() {
         let frame = StreamEvent::ContentBlockDelta {
             index: 0,
             delta: Delta::SignatureDelta {
@@ -502,7 +513,11 @@ mod tests {
             },
         };
         let mut acc = ToolUseAccumulator::default();
-        assert!(event(frame, &mut acc).is_empty());
+        let events = event(frame, &mut acc);
+        assert_eq!(
+            events,
+            vec![ProviderEvent::ThinkingSignature("sig".into())]
+        );
     }
 
     #[test]
