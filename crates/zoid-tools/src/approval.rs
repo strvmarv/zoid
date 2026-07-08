@@ -326,14 +326,14 @@ impl crate::ToolGate for BlacklistGate {
     fn check(&self, call: &zoid_provider::ToolCall) -> crate::Gate {
         // Never-prompt tier: always allow
         match call.name.as_str() {
-            "read_file" | "search" | "recall" | "show" | "update_tasks" | "ask_user" => {
+            "Read" | "Grep" | "recall" | "show" | "update_tasks" | "ask_user" => {
                 return crate::Gate::Allow;
             }
             _ => {}
         }
-        // Allow-by-default tier: write_file, edit_file
+        // Allow-by-default tier: Write, Edit
         match call.name.as_str() {
-            "write_file" | "edit_file" => return crate::Gate::Allow,
+            "Write" | "Edit" => return crate::Gate::Allow,
             _ => {}
         }
         // Blacklist-gated tier: shell
@@ -545,7 +545,7 @@ mod tests {
     #[test]
     fn gate_never_prompt_tier_always_allows() {
         let g = BlacklistGate::new(vec![], vec![], true);
-        for name in ["read_file", "search", "recall", "show", "update_tasks", "ask_user"] {
+        for name in ["Read", "Grep", "recall", "show", "update_tasks", "ask_user"] {
             assert_eq!(g.check(&tool_call(name)), crate::Gate::Allow, "{} must allow", name);
         }
     }
@@ -553,8 +553,8 @@ mod tests {
     #[test]
     fn gate_file_writes_allow_by_default() {
         let g = BlacklistGate::new(vec![], vec![], true);
-        assert_eq!(g.check(&tool_call("write_file")), crate::Gate::Allow);
-        assert_eq!(g.check(&tool_call("edit_file")), crate::Gate::Allow);
+        assert_eq!(g.check(&tool_call("Write")), crate::Gate::Allow);
+        assert_eq!(g.check(&tool_call("Edit")), crate::Gate::Allow);
     }
 
     #[test]

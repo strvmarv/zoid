@@ -75,10 +75,10 @@ pub trait Tool: Send + Sync {
 /// The compiled-in tool set (spec §9: fixed curated set in v1).
 pub fn registry() -> Vec<Box<dyn Tool>> {
     vec![
-        Box::new(read::ReadFile),
-        Box::new(write::WriteFile),
-        Box::new(edit::EditFile),
-        Box::new(search::Search),
+        Box::new(read::Read),
+        Box::new(write::Write),
+        Box::new(edit::Edit),
+        Box::new(search::Grep),
         Box::new(shell::Shell::default()),
         Box::new(tasks::UpdateTasks),
         Box::new(ask::AskUser),
@@ -90,10 +90,10 @@ pub fn registry() -> Vec<Box<dyn Tool>> {
 /// tests use the zero-arg `registry()` (their shell is not hard-killable).
 pub fn registry_with_kill(kill: KillSlot) -> Vec<Box<dyn Tool>> {
     vec![
-        Box::new(read::ReadFile),
-        Box::new(write::WriteFile),
-        Box::new(edit::EditFile),
-        Box::new(search::Search),
+        Box::new(read::Read),
+        Box::new(write::Write),
+        Box::new(edit::Edit),
+        Box::new(search::Grep),
         Box::new(shell::Shell::new(kill)),
         Box::new(tasks::UpdateTasks),
         Box::new(ask::AskUser),
@@ -175,10 +175,10 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), count, "tool names must be unique");
-        assert!(names.contains(&"read_file"));
-        assert!(names.contains(&"write_file"));
-        assert!(names.contains(&"edit_file"));
-        assert!(names.contains(&"search"));
+        assert!(names.contains(&"Read"));
+        assert!(names.contains(&"Write"));
+        assert!(names.contains(&"Edit"));
+        assert!(names.contains(&"Grep"));
         assert!(names.contains(&"shell"));
         assert!(names.contains(&"update_tasks"));
         assert!(names.contains(&"ask_user"));
@@ -209,7 +209,7 @@ mod tests {
     fn read_tool_resolves_relative_to_cwd() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("note.txt"), "in cwd").unwrap();
-        let out = crate::read::ReadFile.run(&serde_json::json!({ "path": "note.txt" }), dir.path());
+        let out = crate::read::Read.run(&serde_json::json!({ "path": "note.txt" }), dir.path());
         assert!(!out.is_error, "{}", out.text);
         assert_eq!(out.text, "in cwd");
     }

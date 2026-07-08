@@ -4,11 +4,11 @@ use std::path::Path;
 use zoid_provider::ToolSpec;
 
 /// Read a UTF-8 text file relative to the working directory.
-pub struct ReadFile;
+pub struct Read;
 
-impl Tool for ReadFile {
+impl Tool for Read {
     fn name(&self) -> &str {
-        "read_file"
+        "Read"
     }
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -28,7 +28,7 @@ impl Tool for ReadFile {
         };
         match std::fs::read_to_string(crate::resolve(cwd, &path)) {
             Ok(contents) => ToolOutput::ok(contents),
-            Err(e) => ToolOutput::err(format!("read_file({path}): {e}")),
+            Err(e) => ToolOutput::err(format!("Read({path}): {e}")),
         }
     }
 }
@@ -43,7 +43,7 @@ mod tests {
     fn reads_existing_file() {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         write!(f, "hello tools").unwrap();
-        let out = ReadFile.run(
+        let out = Read.run(
             &json!({ "path": f.path().to_str().unwrap() }),
             std::path::Path::new("."),
         );
@@ -53,7 +53,7 @@ mod tests {
 
     #[test]
     fn missing_file_is_error() {
-        let out = ReadFile.run(
+        let out = Read.run(
             &json!({ "path": "/no/such/zoid/file" }),
             std::path::Path::new("."),
         );
@@ -62,7 +62,7 @@ mod tests {
 
     #[test]
     fn missing_arg_is_error() {
-        let out = ReadFile.run(&json!({}), std::path::Path::new("."));
+        let out = Read.run(&json!({}), std::path::Path::new("."));
         assert!(out.is_error);
         assert!(out.text.contains("path"));
     }

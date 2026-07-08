@@ -68,7 +68,7 @@ impl Tool for InvokeSkillTool {
 
 /// The skill body, plus a resolved anchor line pointing at the skill's source
 /// directory when it was imported from disk — so the model can read bundled
-/// sibling files by absolute path via `read_file`. Built-ins (no `base_dir`)
+/// sibling files by absolute path via `Read`. Built-ins (no `base_dir`)
 /// are returned unchanged.
 fn body_with_anchor(skill: &zoid_core::skill::Skill) -> String {
     match &skill.base_dir {
@@ -144,8 +144,8 @@ mod tests {
         let tools = chat_tools(Arc::new(SkillRegistry::builtin()), zoid_tools::KillSlot::new());
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(names.contains(&"invoke_skill"));
-        assert!(names.contains(&"write_file"));
-        assert!(names.contains(&"read_file"));
+        assert!(names.contains(&"Write"));
+        assert!(names.contains(&"Read"));
         // recall is a chat-only tool; it must be registered here (and never in the
         // subagent registry — see chat_tools).
         assert!(names.contains(&"recall"));

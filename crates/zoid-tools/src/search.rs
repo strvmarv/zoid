@@ -8,11 +8,11 @@ const MAX_RESULTS: usize = 200;
 /// Recursive literal (substring) search over text files under a root directory
 /// (default `.`). Skips hidden entries and common build dirs. Returns up to
 /// `MAX_RESULTS` `relpath:line: text` matches.
-pub struct Search;
+pub struct Grep;
 
-impl Tool for Search {
+impl Tool for Grep {
     fn name(&self) -> &str {
-        "search"
+        "Grep"
     }
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -115,7 +115,7 @@ mod tests {
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         std::fs::write(dir.path().join("sub/b.txt"), "nothing\nalso NEEDLE").unwrap();
 
-        let out = Search.run(
+        let out = Grep.run(
             &json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }),
             std::path::Path::new("."),
         );
@@ -129,7 +129,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("target")).unwrap();
         std::fs::write(dir.path().join("target/x.txt"), "NEEDLE").unwrap();
-        let out = Search.run(
+        let out = Grep.run(
             &json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }),
             std::path::Path::new("."),
         );
@@ -146,7 +146,7 @@ mod tests {
         let sub = dir.path().join("sub");
         std::fs::create_dir(&sub).unwrap();
         std::os::unix::fs::symlink(dir.path(), sub.join("loop")).unwrap();
-        let out = Search.run(
+        let out = Grep.run(
             &json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }),
             std::path::Path::new("."),
         );
@@ -158,7 +158,7 @@ mod tests {
     fn no_match_reports_cleanly() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.txt"), "abc").unwrap();
-        let out = Search.run(
+        let out = Grep.run(
             &json!({ "query": "zzz", "path": dir.path().to_str().unwrap() }),
             std::path::Path::new("."),
         );

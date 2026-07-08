@@ -68,7 +68,7 @@ async fn subagent_writes_inside_its_worktree_not_the_main_copy() {
     let turn1 = vec![
         ProviderEvent::ToolCall(ToolCall {
             id: "w1".into(),
-            name: "write_file".into(),
+            name: "Write".into(),
             args: serde_json::json!({ "path": "out.txt", "content": "made by subagent" }),
         }),
         ProviderEvent::Done,
