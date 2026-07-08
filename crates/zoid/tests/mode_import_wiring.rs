@@ -92,8 +92,10 @@ async fn import_wizard_approve_materializes_and_loads() {
     });
 
     let wiz = Arc::new(ModeImportWizard::new_import(scan()));
-    let mut tools =
-        zoid::invoke_skill::chat_tools(Arc::new(zoid_core::skill::SkillRegistry::builtin()));
+    let mut tools = zoid::invoke_skill::chat_tools(
+        Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+        zoid_tools::KillSlot::new(),
+    );
     tools.push(Box::new(ProposeModeMappingTool::new(wiz.clone())));
     tools.push(Box::new(ApplyModeMappingTool::new(wiz.clone())));
     let tools = Arc::new(tools);

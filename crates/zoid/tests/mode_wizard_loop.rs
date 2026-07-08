@@ -87,8 +87,10 @@ async fn apply_mode_mapping_raises_approval_and_approve_emits_tool_result() {
     });
 
     let wiz = Arc::new(ModeImportWizard::new_import(scan()));
-    let mut tools =
-        zoid::invoke_skill::chat_tools(Arc::new(zoid_core::skill::SkillRegistry::builtin()));
+    let mut tools = zoid::invoke_skill::chat_tools(
+        Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+        zoid_tools::KillSlot::new(),
+    );
     tools.push(Box::new(ProposeModeMappingTool::new(wiz.clone())));
     tools.push(Box::new(ApplyModeMappingTool::new(wiz.clone())));
     let tools = Arc::new(tools);

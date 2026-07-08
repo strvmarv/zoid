@@ -1396,6 +1396,10 @@ struct App {
     /// drain any pending tool calls and end the turn cleanly; cleared on
     /// `TurnComplete`.
     turn_cancel: Option<tokio_util::sync::CancellationToken>,
+    /// The hard-stop token: fired by a SECOND Esc/Ctrl-C while `turn_cancel` is
+    /// already cancelled. Force-kills a running local tool. Cleared with
+    /// `turn_cancel` on `TurnComplete`.
+    turn_hard: Option<tokio_util::sync::CancellationToken>,
     /// Dynamically-fetched model capabilities (from Ollama `/api/show` etc.),
     /// overriding the static MODEL_CAPS table. `None` until the first fetch
     /// lands (or when the provider doesn't support capability introspection).
@@ -1744,6 +1748,7 @@ async fn main() -> Result<()> {
         in_flight_subagents: Vec::new(),
         pending_answer: None,
         turn_cancel: None,
+        turn_hard: None,
         fetched_model_info: None,
         companion: None,
         companion_hub: zoid_companion::CompanionHub::new(),
@@ -2274,6 +2279,7 @@ where
                         app.tool_complete = true;
                         app.pending_answer = None;
                         app.turn_cancel = None;
+                        app.turn_hard = None;
                         // Clear any lingering "cancelling…" hint now the turn ended.
                         app.shell.status_hint = None;
                         // Consume a queued message if the agent is now fully idle.
@@ -3051,12 +3057,11 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             spawn_turn(app);
         }
         Action::CancelTurn => {
-            // Esc/Ctrl-C while a chat turn is streaming: fire the token. The
-            // agent loop drains any pending tool calls and ends the turn
-            // cleanly; the resulting TurnComplete clears streaming + the token.
-            if let Some(cancel) = &app.turn_cancel {
-                cancel.cancel();
-                app.shell.status_hint = Some("cancelling…".into());
+            // First Esc: graceful (finish current step, drain, end). Second Esc
+            // while already cancelling: hard-stop — force-kill the running tool.
+            // The resulting TurnComplete clears both tokens.
+            if let (Some(g), Some(h)) = (&app.turn_cancel, &app.turn_hard) {
+                app.shell.status_hint = Some(escalate_cancel(g, h).into());
             }
         }
         // Object-first picker (P4d ④): pick an object, then a verb scoped to
@@ -3701,6 +3706,22 @@ fn latest_open_question(
         }
     }
     asked
+}
+
+/// Decide the interrupt tier for a `CancelTurn`. First call fires `graceful`;
+/// a second call (graceful already fired) fires `hard`. Returns the status-hint
+/// text to show. Kept as a free fn so the escalation contract is unit-tested.
+fn escalate_cancel(
+    graceful: &tokio_util::sync::CancellationToken,
+    hard: &tokio_util::sync::CancellationToken,
+) -> &'static str {
+    if graceful.is_cancelled() {
+        hard.cancel();
+        "force-stopping…"
+    } else {
+        graceful.cancel();
+        "cancelling… (Esc again to force)"
+    }
 }
 
 /// Send the user's answer down the `ask_user` reply channel and close the
@@ -4398,7 +4419,8 @@ fn spawn_turn(app: &mut App) {
     let (profile, effective) =
         zoid_core::mode::active_turn(&app.modes, &app.skills, &app.base_profile);
     let menu = effective.menu();
-    let mut tools = zoid::invoke_skill::chat_tools(std::sync::Arc::new(effective));
+    let kill = zoid_tools::KillSlot::new();
+    let mut tools = zoid::invoke_skill::chat_tools(std::sync::Arc::new(effective), kill.clone());
     if let Some(wiz) = &app.wizard {
         let wiz = std::sync::Arc::new(wiz.clone());
         tools.push(Box::new(zoid::mode_wizard::ProposeModeMappingTool::new(
@@ -4427,10 +4449,13 @@ fn spawn_turn(app: &mut App) {
         .map(|info| info.thinking)
         .unwrap_or_else(|| zoid_provider::model::model_info(&app.model).thinking);
     turn_config.thinking = resolve_thinking(&app.config.thinking, model_support);
-    // Mint a fresh cancellation token for this turn and keep a clone so
-    // `Action::CancelTurn` (Esc/Ctrl-C) can fire it. Cleared on `TurnComplete`.
+    turn_config.kill = kill.clone();
+    // Mint fresh cancellation tokens for this turn and keep clones so
+    // `Action::CancelTurn` (Esc/Ctrl-C) can fire them. Cleared on `TurnComplete`.
     let cancel = tokio_util::sync::CancellationToken::new();
+    let hard = tokio_util::sync::CancellationToken::new();
     app.turn_cancel = Some(cancel.clone());
+    app.turn_hard = Some(hard.clone());
     let companion_hub = app.companion_hub.clone();
     tokio::spawn(async move {
         let _ = run_agent_turn_cancellable(
@@ -4446,7 +4471,7 @@ fn spawn_turn(app: &mut App) {
             companion_hub,
             now_ms,
             cancel,
-            tokio_util::sync::CancellationToken::new(), // hard — real token wired in Task 4
+            hard,
         )
         .await;
     });
@@ -4542,6 +4567,21 @@ mod tests {
     use super::*;
     use ratatui::{backend::TestBackend, style::Modifier, Terminal};
     use ratatui_textarea::TextArea;
+
+    #[test]
+    fn second_cancel_escalates_to_hard() {
+        let graceful = tokio_util::sync::CancellationToken::new();
+        let hard = tokio_util::sync::CancellationToken::new();
+        // First Esc: graceful only.
+        assert_eq!(
+            escalate_cancel(&graceful, &hard),
+            "cancelling… (Esc again to force)"
+        );
+        assert!(graceful.is_cancelled() && !hard.is_cancelled());
+        // Second Esc: escalate to hard.
+        assert_eq!(escalate_cancel(&graceful, &hard), "force-stopping…");
+        assert!(hard.is_cancelled());
+    }
 
     #[test]
     fn zoom_anchor_maps_top_message_across_altitudes() {
@@ -5085,6 +5125,7 @@ mod tests {
             in_flight_subagents: Vec::new(),
             pending_answer: None,
             turn_cancel: None,
+            turn_hard: None,
             fetched_model_info: None,
             companion: None,
             companion_hub: zoid_companion::CompanionHub::new(),

@@ -64,7 +64,10 @@ async fn invoke_skill_body_flows_back_into_the_loop() {
     });
 
     let skills = Arc::new(SkillRegistry::builtin());
-    let tools = Arc::new(zoid::invoke_skill::chat_tools(skills.clone()));
+    let tools = Arc::new(zoid::invoke_skill::chat_tools(
+        skills.clone(),
+        zoid_tools::KillSlot::new(),
+    ));
 
     let session = SessionHandle::spawn(":memory:").unwrap();
     let seed = vec![Event::new(

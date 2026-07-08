@@ -2082,9 +2082,10 @@ mod tests {
                 ProviderEvent::Done,
             ],
         ]));
-        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(std::sync::Arc::new(
-            zoid_core::skill::SkillRegistry::builtin(),
-        )));
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
         let out = run_agent_turn(
@@ -2155,9 +2156,10 @@ mod tests {
                 ProviderEvent::Done,
             ],
         ]));
-        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(std::sync::Arc::new(
-            zoid_core::skill::SkillRegistry::builtin(),
-        )));
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
         let out = run_agent_turn(
@@ -2237,9 +2239,10 @@ mod tests {
             recent_n: 2,
             max_output: None,
         };
-        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(std::sync::Arc::new(
-            zoid_core::skill::SkillRegistry::builtin(),
-        )));
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
 
         // TURN 1 — the pre-flight gate evicts the oldest turns.
         let mut cfg1 = chat_turn_config();
@@ -2347,9 +2350,10 @@ mod tests {
             ],
         ]));
 
-        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(std::sync::Arc::new(
-            zoid_core::skill::SkillRegistry::builtin(),
-        )));
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
@@ -2427,9 +2431,10 @@ mod tests {
             ],
         ]));
 
-        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(std::sync::Arc::new(
-            zoid_core::skill::SkillRegistry::builtin(),
-        )));
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
