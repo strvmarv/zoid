@@ -40,6 +40,10 @@ async fn discovers_and_calls_a_real_stdio_server() {
     assert!(out.text.contains("there"));
 }
 
+// Uses `call_tool_direct_for_test`, which is only compiled under the
+// `test-helpers` feature — gate the test to match so a plain
+// `cargo test --workspace` (feature off) still compiles this integration crate.
+#[cfg(feature = "test-helpers")]
 #[tokio::test]
 async fn crash_mid_call_is_a_clean_error() {
     let m = Arc::new(McpManager::new());
