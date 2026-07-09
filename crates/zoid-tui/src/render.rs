@@ -690,7 +690,7 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
             ),
             if let Some(label) = &state.thinking_label {
                 Span::styled(
-                    format!(" · ◆ {}", label),
+                    format!(" · {}", label),
                     Style::new().fg(color::CHAT_ACCENT),
                 )
             } else {

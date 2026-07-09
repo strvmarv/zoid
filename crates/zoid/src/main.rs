@@ -2031,8 +2031,8 @@ where
         // Thinking mode label for the session drawer.
         app.shell.thinking_label = if app.config.thinking.enabled {
             match &app.config.thinking.effort {
-                None => Some("thinking".to_string()),
-                Some(e) => Some(format!("thinking {e}")),
+                None => Some("◆".to_string()),
+                Some(e) => Some(format!("◆ {e}")),
             }
         } else {
             None
