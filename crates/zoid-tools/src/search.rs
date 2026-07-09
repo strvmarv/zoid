@@ -56,6 +56,11 @@ impl Tool for Grep {
             .get("output_mode")
             .and_then(|v| v.as_str())
             .unwrap_or("files_with_matches");
+        if !matches!(mode, "files_with_matches" | "content" | "count") {
+            return ToolOutput::err(format!(
+                "Grep: invalid output_mode {mode:?}; valid: files_with_matches, content, count"
+            ));
+        }
         let path_arg = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
         let root = crate::resolve(cwd, path_arg);
         if !root.is_dir() {
@@ -351,5 +356,16 @@ mod tests {
         );
         assert!(out.is_error, "expected error for file path, got: {}", out.text);
         assert!(out.text.contains("not a directory"), "{}", out.text);
+    }
+
+    #[test]
+    fn unknown_output_mode_is_error() {
+        let dir = seed();
+        let out = Grep.run(
+            &json!({ "pattern": "fn", "path": dir.path().to_str().unwrap(), "output_mode": "lines" }),
+            std::path::Path::new("."),
+        );
+        assert!(out.is_error, "{}", out.text);
+        assert!(out.text.contains("output_mode"), "{}", out.text);
     }
 }
