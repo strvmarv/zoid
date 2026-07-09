@@ -119,6 +119,10 @@ pub enum Answer {
     FreeText(String),
     /// The user chose to let the agent decide (a positive choice, not a cancel).
     LetYouDecide,
+    /// The `submit_feedback` tool's confirmed report (built by the bin from
+    /// the edited `FeedbackState` + diagnostics). Carries the report back to
+    /// the loop so it can submit without shared state.
+    Feedback(zoid_core::feedback::FeedbackReport),
 }
 
 /// UI-facing updates emitted as the turn progresses.
@@ -163,6 +167,8 @@ pub enum AgentUpdate {
     /// turn, sets `yielded`, and surfaces a hint. Spec §2.4. Bin-only — subagents
     /// never heartbeat and never emit this.
     SessionTakenOver,
+    /// A feedback submit finished; the bin updates the overlay's status line.
+    FeedbackOutcome(anyhow::Result<zoid_core::feedback::SubmitOutcome>),
 }
 
 /// The tool specs to advertise to the provider.
@@ -831,6 +837,7 @@ async fn run_turn_inner(
                         }
                         Ok(Answer::FreeText(s)) => (s, false, true),
                         Ok(Answer::LetYouDecide) => ("[let you decide]".to_string(), false, true),
+                        Ok(Answer::Feedback(_)) => (String::new(), true, false), // unreachable for approvals
                         Err(_) => ("[user aborted]".to_string(), true, false),
                     };
                     emit(
@@ -1161,8 +1168,117 @@ async fn run_turn_inner(
                     );
                 }
                 Some(zoid_tools::ToolKind::Interactive)
-                    if tc.name == "ask_user" || tc.name == "apply_mode_mapping" =>
+                    if tc.name == "ask_user"
+                        || tc.name == "apply_mode_mapping"
+                        || tc.name == "submit_feedback" =>
                 {
+                    // submit_feedback: parse + validate, emit QuestionAsked, park,
+                    // submit the confirmed report. Separate from ask_user/
+                    // apply_mode_mapping because the reply carries a FeedbackReport.
+                    if tc.name == "submit_feedback" {
+                        let (kind, title, body) = match parse_feedback_args(&tc.args) {
+                            Some(v) => v,
+                            None => {
+                                emit(
+                                    &session,
+                                    &mut events,
+                                    ui,
+                                    &config.branch,
+                                    EventKind::ToolResult {
+                                        id: tc.id.clone(),
+                                        name: tc.name.clone(),
+                                        output: "submit_feedback: invalid args. kind must be \
+                                            bug|feature|general; title and body must be non-empty."
+                                            .into(),
+                                        is_error: true,
+                                    },
+                                    session_id,
+                                    now,
+                                )
+                                .await?;
+                                continue;
+                            }
+                        };
+                        let question = format!("Submit {} feedback?", kind.display());
+                        let choices = vec!["Submit".into(), "Cancel".into()];
+                        emit(
+                            &session,
+                            &mut events,
+                            ui,
+                            &config.branch,
+                            EventKind::QuestionAsked {
+                                id: tc.id.clone(),
+                                kind: zoid_core::event::QuestionKind::Feedback {
+                                    kind: kind_str(kind).to_string(),
+                                    title: title.clone(),
+                                    body: body.clone(),
+                                },
+                                question: question.clone(),
+                                choices: choices.clone(),
+                            },
+                            session_id,
+                            now,
+                        )
+                        .await?;
+                        let (rtx, rrx) = oneshot::channel::<Answer>();
+                        let _ = ui
+                            .send(AgentUpdate::AskUser {
+                                question,
+                                choices,
+                                reply: rtx,
+                            })
+                            .await;
+                        let ans = rrx.await;
+                        let output = match ans {
+                            Ok(Answer::Feedback(report)) => {
+                                let api = zoid_core::feedback::HttpFeedbackApi::new();
+                                match report.submit_via(&api).await {
+                                    Ok(zoid_core::feedback::SubmitOutcome::Created {
+                                        url,
+                                        number,
+                                    }) => format!("Created issue #{}: {}", number, url),
+                                    Ok(zoid_core::feedback::SubmitOutcome::BrowserFallback {
+                                        url,
+                                    }) => format!(
+                                        "No GitHub token available — opened your browser at {}. \
+                                        The user must finish submitting there.",
+                                        url
+                                    ),
+                                    Err(e) => format!("Failed to submit feedback: {e}"),
+                                }
+                            }
+                            _ => "User declined to submit feedback.".to_string(),
+                        };
+                        emit(
+                            &session,
+                            &mut events,
+                            ui,
+                            &config.branch,
+                            EventKind::QuestionAnswered {
+                                id: tc.id.clone(),
+                                answer: output.clone(),
+                            },
+                            session_id,
+                            now,
+                        )
+                        .await?;
+                        emit(
+                            &session,
+                            &mut events,
+                            ui,
+                            &config.branch,
+                            EventKind::ToolResult {
+                                id: tc.id.clone(),
+                                name: tc.name.clone(),
+                                output,
+                                is_error: false,
+                            },
+                            session_id,
+                            now,
+                        )
+                        .await?;
+                        continue;
+                    }
                     let (question, choices) = if tc.name == "ask_user" {
                         let question = tc
                             .args
@@ -1266,6 +1382,7 @@ async fn run_turn_inner(
                     let output = match ans {
                         Ok(Answer::Choice(s) | Answer::FreeText(s)) => s,
                         Ok(Answer::LetYouDecide) => "[let you decide]".to_string(),
+                        Ok(Answer::Feedback(_)) => String::new(), // unreachable for ask_user/apply_mode_mapping
                         Err(_) => "[user aborted]".to_string(),
                     };
                     emit(
@@ -1873,11 +1990,51 @@ async fn emit_with_tokens(
     Ok(())
 }
 
+/// Parse + validate the `submit_feedback` tool-call args.
+/// Returns `(kind, title, body)` on success, or `None` on any validation failure.
+fn parse_feedback_args(
+    args: &serde_json::Value,
+) -> Option<(zoid_core::feedback::FeedbackKind, String, String)> {
+    let kind = args
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .and_then(zoid_core::feedback::FeedbackKind::parse)?;
+    let title = args.get("title").and_then(|v| v.as_str())?;
+    let body = args.get("body").and_then(|v| v.as_str())?;
+    if title.trim().is_empty() || body.trim().is_empty() {
+        return None;
+    }
+    Some((kind, title.to_string(), body.to_string()))
+}
+
+fn kind_str(k: zoid_core::feedback::FeedbackKind) -> &'static str {
+    match k {
+        zoid_core::feedback::FeedbackKind::Bug => "bug",
+        zoid_core::feedback::FeedbackKind::FeatureRequest => "feature",
+        zoid_core::feedback::FeedbackKind::General => "general",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use zoid_core::event::BranchId;
     use zoid_provider::MsgRole;
+
+    #[test]
+    fn submit_feedback_parse_validates_kind_title_body() {
+        let ok = parse_feedback_args(&serde_json::json!({"kind":"bug","title":"t","body":"b"}));
+        assert!(ok.is_some());
+        let bad_kind =
+            parse_feedback_args(&serde_json::json!({"kind":"x","title":"t","body":"b"}));
+        assert!(bad_kind.is_none());
+        let empty_title =
+            parse_feedback_args(&serde_json::json!({"kind":"bug","title":"","body":"b"}));
+        assert!(empty_title.is_none());
+        let empty_body =
+            parse_feedback_args(&serde_json::json!({"kind":"bug","title":"t","body":""}));
+        assert!(empty_body.is_none());
+    }
 
     #[tokio::test]
     async fn call_or_abandon_yields_none_when_cancel_wins() {
