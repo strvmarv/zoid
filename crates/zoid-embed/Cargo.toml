@@ -8,7 +8,13 @@ zoid-core = { path = "../zoid-core" }
 candle-core = "0.8"
 candle-nn = "0.8"
 candle-transformers = "0.8"
-tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
+# Pure-Rust `fancy-regex` backend instead of the default `onig` (oniguruma, a C
+# library). bge-small uses BertPreTokenizer + WordPiece, so no regex
+# pre-tokenizer runs anyway — but dropping onig keeps the whole dep tree
+# pure-Rust, which matters for the static-musl release target. In tokenizers
+# 0.23 `fancy-regex` is a standalone feature (0.20 coupled it to wasm/getrandom,
+# so it was unusable natively); hence the version bump.
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
 # workspace reqwest lacks `blocking`; fetch.rs uses reqwest::blocking::get
