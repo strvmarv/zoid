@@ -284,7 +284,7 @@ Status rendering:
   - `mode` = active mode name
   - `provider` / `model` = active provider key / model id
   - `cwd` = working directory display path
-  - `recent_error` = scan recent events for the last error event, cap at ~500 chars
+  - `recent_error` = scan recent events for the last `ToolResult { is_error: true, .. }` and extract its `output`, capped at ~500 chars (truncated with an ellipsis if longer)
 - On submit (Ctrl+Enter): build `FeedbackReport { kind, title, body, diagnostics }`, call `report.submit().await` on the bin's existing async event path (like the updater). Set `FeedbackStatus` to the outcome. On `Done`, surface the URL in the overlay and as a transcript line.
 
 ### 5.6 Palette integration
@@ -347,19 +347,38 @@ Extend the `ToolKind::Interactive` match arm (currently `tc.name == "ask_user" |
 1. **Parse** `kind`/`title`/`body` from the tool call args. Validate:
    - `kind` must parse via `FeedbackKind::parse` ("bug"|"feature"|"general"). Invalid → emit a `ToolResult` error (`"submit_feedback: invalid kind '...'. Must be bug|feature|general."`) and `continue` (mirrors `apply_mode_mapping`'s error path).
    - `title` and `body` must be non-empty strings. Empty → same error-path `ToolResult` and `continue`.
-2. **Emit** a new `EventKind::FeedbackProposed { id, kind, title, body }` — a new event variant that renders an inline card (like `QuestionAsked`) pre-filled with the agent's proposal. `id` = the tool call id (for reply correlation, like `QuestionAsked`).
+2. **Emit** a `QuestionAsked` event with a new `QuestionKind::Feedback { kind, title, body }` variant (see §6.4). `id` = the tool call id (for reply correlation, same as `ask_user`/`apply_mode_mapping`). The inline card renders pre-filled with the agent's proposal.
 3. **Park** on the same oneshot reply path as `ask_user`. The TUI opens the `Feedback` overlay (the same one the command uses), seeded with the agent's proposed values — the user can edit everything and hit Ctrl+Enter, or hit Esc to decline.
-4. **Reply handling** — the user's reply carries either the edited report fields or a "declined" signal:
-   - **Confirmed** → the loop builds a `FeedbackReport` from the edited fields + a `Diagnostics` snapshot (captured the same way the command captures it), calls `report.submit().await`, and feeds the `SubmitOutcome` back to the model as the tool result:
+4. **Reply handling** — the user's reply lands as a `QuestionAnswered { id, answer }` event (the existing pairing mechanism). The `answer` string encodes either the edited report or a decline:
+   - **Confirmed** → `answer` is a JSON-encoded `{ "kind", "title", "body" }` of the edited form. The loop builds a `FeedbackReport` from those fields + a `Diagnostics` snapshot (captured the same way the command captures it), calls `report.submit().await`, and feeds the `SubmitOutcome` back to the model as the tool result:
      - `Created { url, number }` → `"Created issue #N: <url>"`
      - `BrowserFallback { url }` → `"No GitHub token available — opened your browser at <url>. The user must finish submitting there."`
-   - **Declined** → `"User declined to submit feedback."` (so the model knows not to retry).
+   - **Declined** → `answer` = `"declined"`; the tool result is `"User declined to submit feedback."` (so the model knows not to retry).
 
-### 6.4 Event variant
+   Reusing the existing `QuestionAsked`/`QuestionAnswered` pair means the projection's id-pairing and card-collapse machinery (already built for `ask_user`/`apply_mode_mapping`) handles the feedback card with no new projection code — only a new `QuestionKind` arm in the card renderer.
+
+### 6.4 QuestionKind variant (reused, not a new event)
 
 **File:** `crates/zoid-core/src/event.rs`
 
-Add `FeedbackProposed { id: String, kind: String, title: String, body: String }` alongside `QuestionAsked`. The card renders inline like a question card; focusing it opens the `Feedback` overlay seeded with the proposed values (the same overlay the command uses). `kind` is stored as the string form ("bug"|"feature"|"general") to avoid coupling the event type to `FeedbackKind`; the TUI parses it on render.
+`QuestionKind` is the existing extension point for "a question the model asks the user via a tool" (it already carries `Ask`, `ModeMapping { mapping }`, and `Approval`). Add a `Feedback` variant that carries the agent's proposed report so the bin can seed the overlay without re-parsing the tool-call args:
+
+```rust
+pub enum QuestionKind {
+    Ask,
+    ModeMapping { mapping: Box<crate::wizard::ModeMapping> },
+    Approval,
+    Feedback {              // NEW
+        kind: String,        // "bug" | "feature" | "general"
+        title: String,
+        body: String,
+    },
+}
+```
+
+`kind` is stored as the string form (not `FeedbackKind`) to avoid coupling the event type to `zoid-core::feedback`; the TUI/loop parses it via `FeedbackKind::parse` on use.
+
+**Projection behavior:** `Feedback` suppresses the real `ToolResult` from the conversation view (the card is the human-facing record; the model-facing outcome string is the tool result, which stays in the log for the model/compaction but is hidden from the transcript) — same as `Ask`/`ModeMapping`. So the existing projection filter (`!matches!(kind, QuestionKind::Approval)`) keeps working unchanged: `Feedback` is not `Approval`, so its id is inserted into `question_ids` and the ToolResult is suppressed. No projection change needed.
 
 ### 6.5 Why reuse the same overlay
 
@@ -486,7 +505,7 @@ The existing `builtin_has_both_spike_skills_that_chain`, `menu_renders_one_line_
   - Token present + 201 response → `Created { url, number }` parsed from the JSON response.
   - Token absent → `BrowserFallback { url }` (no HTTP call made).
   - Token present + error status → `Err`.
-- `recent_error` capping: a >500-char error is truncated to ~500 chars.
+- `recent_error` capture: scans the event log for the most recent `ToolResult { is_error: true, .. }` and extracts its `output`, capped at ~500 chars.
 
 ### 9.2 Unit tests (`zoid-tools::feedback`)
 
@@ -510,7 +529,7 @@ The existing `builtin_has_both_spike_skills_that_chain`, `menu_renders_one_line_
 ### 9.5 Integration tests (`zoid` bin)
 
 - `:feedback` command opens the `Feedback` overlay (smoke test of the command dispatch).
-- Tool interception: a `submit_feedback` tool call with valid args emits `FeedbackProposed`, parks, and on a "confirm" reply produces a `ToolResult` referencing the outcome. (Uses a mocked/no-network `submit`.)
+- Tool interception: a `submit_feedback` tool call with valid args emits `QuestionAsked` with `QuestionKind::Feedback`, parks, and on a confirm reply (a `QuestionAnswered` carrying the edited JSON) produces a `ToolResult` referencing the outcome. (Uses a mocked/no-network `submit`.)
 - Tool interception: a `submit_feedback` tool call with an invalid `kind` emits a `ToolResult` error and `continue`s without parking.
 
 ## 10. Dependencies
