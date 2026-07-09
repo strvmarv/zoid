@@ -316,6 +316,9 @@ impl EventStore {
         let mut out = Vec::new();
         for row in rows {
             let (id, blob) = row?;
+            // Unlike `search_fts` (`.parse()?`), a bad event_id here is skipped, not
+            // propagated: this is a recall/resume-fill read path, and one corrupt
+            // embedding row must never break it.
             if let Ok(u) = Ulid::from_string(&id) {
                 out.push((u, blob_to_f32s(&blob)));
             }
@@ -348,6 +351,9 @@ impl EventStore {
         let mut out = Vec::new();
         for row in rows {
             let (id, content) = row?;
+            // Unlike `search_fts` (`.parse()?`), a bad event_id here is skipped, not
+            // propagated: unembedded-detection must degrade gracefully, so one
+            // corrupt row never breaks it.
             if let Ok(u) = Ulid::from_string(&id) {
                 out.push((u, content));
             }
@@ -815,6 +821,50 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].0, Ulid::from(10u128));
         assert_eq!(loaded[0].1, vec![0.1, 0.2, 0.3]);
+    }
+
+    #[test]
+    fn embeddings_load_recent_truncates_to_cap_newest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("e.db");
+        let store = EventStore::open(path.to_str().unwrap()).unwrap();
+        let sid = Ulid::from(1u128);
+        store.insert_session(sid, "s", "/tmp", 0, 0).unwrap();
+
+        // Write 5 embeddings (ids 20..24), more than the cap of 3 requested below.
+        for i in 20u128..25u128 {
+            store
+                .write_embedding(Ulid::from(i), "bge", &[i as f32])
+                .unwrap();
+        }
+
+        let loaded = store.load_recent_embeddings("bge", 3).unwrap();
+        assert_eq!(loaded.len(), 3);
+        // Newest-first (highest rowid / most-recently-written first): 24, 23, 22.
+        assert_eq!(
+            loaded.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![Ulid::from(24u128), Ulid::from(23u128), Ulid::from(22u128)]
+        );
+    }
+
+    #[test]
+    fn embeddings_write_is_idempotent_per_event_and_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("e.db");
+        let store = EventStore::open(path.to_str().unwrap()).unwrap();
+        let sid = Ulid::from(1u128);
+        store.insert_session(sid, "s", "/tmp", 0, 0).unwrap();
+
+        let id = Ulid::from(30u128);
+        store.write_embedding(id, "bge", &[0.1, 0.2]).unwrap();
+        // Same (event_id, model_id), different vector: INSERT OR REPLACE must
+        // overwrite, not duplicate.
+        store.write_embedding(id, "bge", &[0.9, 0.9]).unwrap();
+
+        let loaded = store.load_recent_embeddings("bge", 10).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].0, id);
+        assert_eq!(loaded[0].1, vec![0.9, 0.9]);
     }
 
     #[test]
