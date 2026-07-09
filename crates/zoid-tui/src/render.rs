@@ -688,20 +688,9 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
                 format!(" · {}", state.provider),
                 Style::new().fg(color::DIM),
             ),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                format!("{} ", glyph::SESS_DURATION),
-                Style::new().fg(color::DIM),
-            ),
-            Span::styled("dur ", Style::new().fg(color::DIM)),
-            Span::styled(
-                format!("{}  ", state.duration),
-                Style::new().fg(color::TXT),
-            ),
             if let Some(label) = &state.thinking_label {
                 Span::styled(
-                    format!("◆ {}", label),
+                    format!(" · ◆ {}", label),
                     Style::new().fg(color::CHAT_ACCENT),
                 )
             } else {
@@ -710,38 +699,28 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled(
-                if state.cache_supported {
-                    "tok "
-                } else {
-                    "tok/cac "
-                },
+                format!("{} ", glyph::SESS_DURATION),
                 Style::new().fg(color::DIM),
             ),
+            Span::styled("tok ", Style::new().fg(color::DIM)),
             Span::styled(
-                format!(
-                    "{}   ",
-                    if state.cache_supported {
-                        human_tokens(state.session_tokens)
-                    } else {
-                        human_tokens(state.session_tokens + state.cached_tokens)
-                    }
-                ),
+                format!("{}", human_tokens(state.session_tokens)),
                 Style::new().fg(color::TXT),
             ),
             if state.cache_supported {
-                Span::styled("cac ", Style::new().fg(color::DIM))
+                Span::styled("  cac ", Style::new().fg(color::DIM))
             } else {
                 Span::styled("", Style::new())
             },
             if state.cache_supported {
                 Span::styled(
-                    format!("{}   ", human_tokens(state.cached_tokens)),
+                    format!("{}", human_tokens(state.cached_tokens)),
                     Style::new().fg(color::TXT),
                 )
             } else {
                 Span::styled("", Style::new())
             },
-            Span::styled("tps ", Style::new().fg(color::DIM)),
+            Span::styled("  tps ", Style::new().fg(color::DIM)),
             Span::styled(
                 format!("{}", state.tps),
                 Style::new().fg(color::TXT),

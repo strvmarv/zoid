@@ -1,5 +1,6 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
+assertion_line: 850
 expression: "format!(\"{:#?}\", terminal.backend().buffer())"
 ---
 Buffer {
@@ -13,8 +14,8 @@ Buffer {
         "                                                      █ ╭ ▾ session ──────────────────────────────╮ ",
         "                                                      █ │🟢 (unnamed)                             │ ", // hidden by multi-width symbols: [(58, " ")]
         "                                                      █ │🤖  ·                                    │ ", // hidden by multi-width symbols: [(58, " ")]
-        "                                                      █ │⌚ dur 0m                                │ ", // hidden by multi-width symbols: [(58, " ")]
-        "                                                      █ │tok/cac 0   tps 0                        │ ",
+        "                                                      █ │⌚ tok 0  tps 0                          │ ", // hidden by multi-width symbols: [(58, " ")]
+        "                                                      █ │📊 ctx 0                                 │ ", // hidden by multi-width symbols: [(58, " ")]
         "                                                      █ ╰─────────────────────────────────────────╯ ",
         "                                                      █                                             ",
         "                                                      █ ╭ ▾ context · tokens ─────────────────────╮ ",
@@ -93,17 +94,19 @@ Buffer {
         x: 58, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 59, y: 8, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 64, y: 8, fg: Rgb(201, 209, 217), bg: Reset, underline: Reset, modifier: NONE,
-        x: 68, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 65, y: 8, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
+        x: 71, y: 8, fg: Rgb(201, 209, 217), bg: Reset, underline: Reset, modifier: NONE,
+        x: 72, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 98, y: 8, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
         x: 99, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 54, y: 9, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
         x: 55, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 56, y: 9, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
         x: 57, y: 9, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 65, y: 9, fg: Rgb(201, 209, 217), bg: Reset, underline: Reset, modifier: NONE,
-        x: 69, y: 9, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 73, y: 9, fg: Rgb(201, 209, 217), bg: Reset, underline: Reset, modifier: NONE,
-        x: 74, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 58, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 59, y: 9, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
+        x: 64, y: 9, fg: Rgb(201, 209, 217), bg: Reset, underline: Reset, modifier: NONE,
+        x: 66, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 98, y: 9, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
         x: 99, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 54, y: 10, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,

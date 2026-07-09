@@ -1,5 +1,6 @@
 ---
 source: crates/zoid-tui/tests/tasks_snapshot.rs
+assertion_line: 108
 expression: "draw_at(&s, &many_tasks(8), 160, 40)"
 ---
 "v0.1.2                                                                        zoid                                        Esc interrupt · : command · ^P palette"
@@ -12,10 +13,10 @@ expression: "draw_at(&s, &many_tasks(8), 160, 40)"
 "                                                                                                                  █ ╭ ▾ session ──────────────────────────────╮ "
 "                                                                                                                  █ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(118, " ")]
 "                                                                                                                  █ │🤖  ·                                    │ " Hidden by multi-width symbols: [(118, " ")]
-"                                                                                                                  █ │⌚ dur 0m                                │ " Hidden by multi-width symbols: [(118, " ")]
-"                                                                                                                  █ │tok/cac 0   tps 0                        │ "
+"                                                                                                                  █ │⌚ tok 0  tps 0                          │ " Hidden by multi-width symbols: [(118, " ")]
 "                                                                                                                  █ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(118, " ")]
 "                                                                                                                  █ │📁 cwd                                   │ " Hidden by multi-width symbols: [(118, " ")]
+"                                                                                                                  █ │                                         │ "
 "                                                                                                                  █ ╰─────────────────────────────────────────╯ "
 "                                                                                                                  █                                             "
 "                                                                                                                  █ ╭ ▾ context · tokens ─────────────────────╮ "

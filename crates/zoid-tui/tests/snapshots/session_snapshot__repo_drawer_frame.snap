@@ -1,5 +1,6 @@
 ---
 source: crates/zoid-tui/tests/session_snapshot.rs
+assertion_line: 65
 expression: "draw(&s, &[], 100, 24)"
 ---
 "v0.1.2                                          zoid          Esc interrupt · : command · ^P palette"
@@ -10,8 +11,8 @@ expression: "draw(&s, &[], 100, 24)"
 "                                                      █ ╭ ▾ session ──────────────────────────────╮ "
 "                                                      █ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
-"                                                      █ │⌚ dur 0m                                │ " Hidden by multi-width symbols: [(58, " ")]
-"                                                      █ │tok/cac 0   tps 0                        │ "
+"                                                      █ │⌚ tok 0  tps 0                          │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "                                                      █ ╭ ▾ context · tokens ─────────────────────╮ "

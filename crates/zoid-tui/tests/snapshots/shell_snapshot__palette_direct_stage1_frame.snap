@@ -1,5 +1,6 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
+assertion_line: 444
 expression: "draw(&s, &seeded(), 100, 24)"
 ---
 "v0.1.2                                          zoid          Esc interrupt · : command · ^P palette"
@@ -10,8 +11,8 @@ expression: "draw(&s, &seeded(), 100, 24)"
 "│ companion                                           │ ╭ ▾ session ──────────────────────────────╮ "
 "│ compact                                             │ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
 "│ delegate                                            │ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
-"│ config                                              │ │⌚ dur 0m                                │ " Hidden by multi-width symbols: [(58, " ")]
-"│ q                                                   │ │tok/cac 0   tps 0                        │ "
+"│ config                                              │ │⌚ tok 0  tps 0                          │ " Hidden by multi-width symbols: [(58, " ")]
+"│ q                                                   │ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
 "│ quit                                                │ ╰─────────────────────────────────────────╯ "
 "│↑↓ move · ⏎ select · esc close · type to filter      │                                             "
 "│                                                     │ ╭ ▾ context · tokens ─────────────────────╮ "

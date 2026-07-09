@@ -1,5 +1,6 @@
 ---
 source: crates/zoid-tui/tests/session_snapshot.rs
+assertion_line: 88
 expression: out
 ---
 "v0.1.2                                          zoid          Esc interrupt · : command · ^P palette"
@@ -12,10 +13,10 @@ expression: out
 "                                                      █ ╭ ▾ session ──────────────────────────────╮ "
 "                                                      █ │🟢 fix 500 on GET /users                 │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ │🤖 glm-5.2 · ollama                      │ " Hidden by multi-width symbols: [(58, " ")]
-"                                                      █ │⌚ dur 12m                               │ " Hidden by multi-width symbols: [(58, " ")]
-"                                                      █ │tok/cac 58k   tps 0                      │ "
+"                                                      █ │⌚ tok 58k  tps 0                        │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ │📊 ctx 58k/200k ██░░░░░░                 │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ │📁 cwd ~/develop/projects/zoid/crates/zo…│ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ │                                         │ "
 "                                                      █ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "                                                      █ ╭ ▾ context · tokens ─────────────────────╮ "

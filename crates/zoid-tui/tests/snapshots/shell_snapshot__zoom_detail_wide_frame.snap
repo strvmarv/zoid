@@ -1,5 +1,6 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
+assertion_line: 670
 expression: "draw_zoom(Zoom::Detail, 140, 24)"
 ---
 Buffer {
@@ -13,8 +14,8 @@ Buffer {
         "  fn parse(s: &str) -> u32 {                                                                  █ ╭ ▾ session ──────────────────────────────╮ ",
         "      …                                                                                       █ │🟢 (unnamed)                             │ ", // hidden by multi-width symbols: [(98, " ")]
         "  }                                                                                           █ │🤖  ·                                    │ ", // hidden by multi-width symbols: [(98, " ")]
-        "                                                                                              █ │⌚ dur 0m                                │ ", // hidden by multi-width symbols: [(98, " ")]
-        "                                                                                              █ │tok/cac 0   tps 0                        │ ",
+        "                                                                                              █ │⌚ tok 0  tps 0                          │ ", // hidden by multi-width symbols: [(98, " ")]
+        "                                                                                              █ │📊 ctx 0                                 │ ", // hidden by multi-width symbols: [(98, " ")]
         "                                                                                              █ ╰─────────────────────────────────────────╯ ",
         "                                                                                              █                                             ",
         "                                                                                              █ ╭ ▾ context · tokens ─────────────────────╮ ",
@@ -112,17 +113,19 @@ Buffer {
         x: 98, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 99, y: 8, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 104, y: 8, fg: Rgb(201, 209, 217), bg: Reset, underline: Reset, modifier: NONE,
-        x: 108, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 105, y: 8, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
+        x: 111, y: 8, fg: Rgb(201, 209, 217), bg: Reset, underline: Reset, modifier: NONE,
+        x: 112, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 138, y: 8, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
         x: 139, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 94, y: 9, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
         x: 95, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 96, y: 9, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
         x: 97, y: 9, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 105, y: 9, fg: Rgb(201, 209, 217), bg: Reset, underline: Reset, modifier: NONE,
-        x: 109, y: 9, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 113, y: 9, fg: Rgb(201, 209, 217), bg: Reset, underline: Reset, modifier: NONE,
-        x: 114, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 98, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 99, y: 9, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
+        x: 104, y: 9, fg: Rgb(201, 209, 217), bg: Reset, underline: Reset, modifier: NONE,
+        x: 106, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 138, y: 9, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
         x: 139, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 94, y: 10, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
