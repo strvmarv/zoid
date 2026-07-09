@@ -9,6 +9,7 @@ pub mod config;
 pub mod context;
 pub mod economy;
 pub mod event;
+pub mod feedback;
 pub mod eviction;
 pub mod mode;
 pub mod projection;

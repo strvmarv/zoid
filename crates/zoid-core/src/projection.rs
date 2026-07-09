@@ -808,6 +808,51 @@ mod tests {
         );
     }
 
+    fn feedback_q_asked(id: u128, qid: &str, kind: &str, title: &str, body: &str) -> Event {
+        Event::new(
+            Ulid::from(id),
+            None,
+            0,
+            EventKind::QuestionAsked {
+                id: qid.into(),
+                kind: QuestionKind::Feedback {
+                    kind: kind.into(),
+                    title: title.into(),
+                    body: body.into(),
+                },
+                question: format!("Submit {kind} feedback?"),
+                choices: vec!["Submit".into(), "Cancel".into()],
+            },
+        )
+    }
+
+    #[test]
+    fn feedback_question_suppresses_paired_tool_result() {
+        let events = vec![
+            user(1, "report a bug"),
+            feedback_q_asked(2, "fb1", "bug", "Crash", "steps"),
+            q_answered(3, "fb1", "Created issue #7"),
+            Event::new(
+                Ulid::from(4u128),
+                None,
+                0,
+                EventKind::ToolResult {
+                    id: "fb1".into(),
+                    name: "submit_feedback".into(),
+                    output: "Created issue #7".into(),
+                    is_error: false,
+                },
+            ),
+        ];
+        let conv = conversation(&events);
+        assert!(
+            !conv
+                .iter()
+                .any(|m| matches!(m, ChatMsg::ToolResult { id, .. } if id == "fb1")),
+            "ToolResult matching a Feedback QuestionAsked must be suppressed"
+        );
+    }
+
     #[test]
     fn unrelated_tool_result_still_renders() {
         let events = vec![

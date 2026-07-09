@@ -303,6 +303,10 @@ mod tests {
             !tools.iter().any(|t| t.name() == "ask_user"),
             "ask_user must be filtered out of a subagent's tool set"
         );
+        assert!(
+            !tools.iter().any(|t| t.name() == "submit_feedback"),
+            "submit_feedback must be filtered out of a subagent's tool set"
+        );
 
         let req = build_subagent_request(
             "do a thing",
@@ -315,6 +319,10 @@ mod tests {
         assert!(
             !req.tools.iter().any(|s| s.name == "ask_user"),
             "ask_user must not be advertised to the provider for a subagent"
+        );
+        assert!(
+            !req.tools.iter().any(|s| s.name == "submit_feedback"),
+            "submit_feedback must not be advertised to the provider for a subagent"
         );
     }
 

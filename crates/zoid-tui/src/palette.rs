@@ -402,6 +402,10 @@ pub fn all_items(active_mode: &str, mode_names: &[String], companion_on: bool) -
         command: Command::OpenMcp,
     });
     items.push(PaletteItem {
+        label: "Submit feedback…".to_string(),
+        command: Command::Feedback,
+    });
+    items.push(PaletteItem {
         label: companion_label.to_string(),
         command: companion_cmd,
     });
@@ -508,6 +512,7 @@ mod tests {
                 "Toggle context drawer",
                 "Open settings",
                 "MCP servers…",
+                "Submit feedback…",
                 "Enable companion",
                 "Quit zoid",
             ]

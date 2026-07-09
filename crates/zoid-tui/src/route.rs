@@ -90,6 +90,12 @@ pub enum Action {
     QuestionChar(char),
     QuestionBackspace,
     QuestionAbort,
+    FeedbackMoveFocus(i32),
+    FeedbackCycleKind(i32),
+    FeedbackChar(char),
+    FeedbackBackspace,
+    FeedbackSubmit,
+    FeedbackAbort,
     OpenProviderSwitch,
     SwitchPaneMove(i32),
     SwitchItemMove(i32),
@@ -136,6 +142,12 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
         Overlay::Config => return route_config_key(state, key),
         Overlay::ProviderSwitch => return route_provider_switch_key(state, key),
         Overlay::Mcp => return route_mcp_key(state, key),
+        Overlay::Feedback => {
+            if let Some(fs) = &state.feedback {
+                return crate::feedback_view::route_feedback_key(fs, key);
+            }
+            return Action::Noop;
+        }
         Overlay::None => {}
     }
 

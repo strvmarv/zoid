@@ -1426,6 +1426,10 @@ struct App {
     textarea: TextArea<'static>,
     streaming: bool,
     shell: zoid_tui::ShellState,
+    /// Stashed oneshot reply for the agent-loop `submit_feedback` path: when
+    /// the loop parks on a feedback question, the bin stores the `rtx` here so
+    /// `Action::FeedbackSubmit` can send `Answer::Feedback(report)` back.
+    feedback_reply: Option<tokio::sync::oneshot::Sender<zoid::agent::Answer>>,
     ui_tx: mpsc::Sender<AgentUpdate>,
     /// Monotonic clock start for motion timing (Ⓡ2).
     started: std::time::Instant,
@@ -1810,6 +1814,7 @@ async fn main() -> Result<()> {
         textarea: make_input(TextArea::default()),
         streaming: false,
         shell,
+        feedback_reply: None,
         ui_tx,
         started: std::time::Instant::now(),
         proj: ProjectionCache::default(),
@@ -2434,9 +2439,43 @@ where
                             "main: AskUser received, opening inline card (choices={})",
                             choices.len()
                         );
-                        app.shell.question =
-                            Some(zoid_tui::question::QuestionState::new(question, choices));
-                        app.pending_answer = Some(reply);
+                        // If this is a feedback question, open the Feedback
+                        // overlay seeded from the proposal and stash the reply.
+                        let kind = latest_open_question(&app.events).cloned();
+                        if matches!(
+                            kind,
+                            Some(zoid_core::event::QuestionKind::Feedback { .. })
+                        ) {
+                            if let Some(zoid_core::event::QuestionKind::Feedback {
+                                kind,
+                                title,
+                                body,
+                            }) = kind
+                            {
+                                let fk =
+                                    zoid_core::feedback::FeedbackKind::parse(&kind)
+                                        .unwrap_or(zoid_core::feedback::FeedbackKind::Bug);
+                                let idx = zoid_core::feedback::FeedbackKind::all()
+                                    .iter()
+                                    .position(|k| *k == fk)
+                                    .unwrap_or(0);
+                                let mut fs = zoid_tui::state::FeedbackState::new();
+                                fs.kind = fk;
+                                fs.kind_selected = idx;
+                                fs.title = title;
+                                fs.body = body;
+                                fs.focus = zoid_tui::state::FeedbackField::Title;
+                                app.shell.feedback = Some(fs);
+                                app.shell.overlay = zoid_tui::Overlay::Feedback;
+                            }
+                            app.feedback_reply = Some(reply);
+                        } else {
+                            app.shell.question =
+                                Some(zoid_tui::question::QuestionState::new(
+                                    question, choices,
+                                ));
+                            app.pending_answer = Some(reply);
+                        }
                         app.body_cache.key = None;
                     }
                     AgentUpdate::ModelsFetched { provider, models } => {
@@ -2559,6 +2598,49 @@ where
                         // Don't clear app.shell.compacting here — the per-frame
                         // debounce check clears it once the 3s minimum has
                         // elapsed.
+                    }
+                    AgentUpdate::FeedbackOutcome(outcome) => {
+                        match outcome {
+                            Ok(zoid_core::feedback::SubmitOutcome::Created {
+                                url,
+                                number,
+                            }) => {
+                                if let Some(fs) = app.shell.feedback.as_mut() {
+                                    fs.status =
+                                        zoid_tui::state::FeedbackStatus::Done(
+                                            zoid_core::feedback::SubmitOutcome::Created {
+                                                url: url.clone(),
+                                                number,
+                                            },
+                                        );
+                                }
+                                app.shell.status_hint =
+                                    Some(format!("Created issue #{}: {}", number, url));
+                            }
+                            Ok(zoid_core::feedback::SubmitOutcome::BrowserFallback {
+                                url,
+                            }) => {
+                                if let Some(fs) = app.shell.feedback.as_mut() {
+                                    fs.status =
+                                        zoid_tui::state::FeedbackStatus::Done(
+                                            zoid_core::feedback::SubmitOutcome::BrowserFallback {
+                                                url: url.clone(),
+                                            },
+                                        );
+                                }
+                                let _ = open_url(&url);
+                                app.shell.status_hint =
+                                    Some(format!("Opened browser: {}", url));
+                            }
+                            Err(e) => {
+                                if let Some(fs) = app.shell.feedback.as_mut() {
+                                    fs.status =
+                                        zoid_tui::state::FeedbackStatus::Error(
+                                            e.to_string(),
+                                        );
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -3823,6 +3905,58 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::SwitchCancel => {
             app.shell.overlay = zoid_tui::state::Overlay::None;
         }
+        Action::FeedbackAbort => {
+            app.shell.feedback = None;
+            app.shell.overlay = Overlay::None;
+            if let Some(reply) = app.feedback_reply.take() {
+                let _ = reply.send(zoid::agent::Answer::Choice("Cancel".into()));
+            }
+        }
+        Action::FeedbackMoveFocus(dir) => {
+            if let Some(fs) = app.shell.feedback.as_mut() {
+                use zoid_tui::state::FeedbackField;
+                let order = [FeedbackField::Kind, FeedbackField::Title, FeedbackField::Body];
+                let idx = order.iter().position(|f| *f == fs.focus).unwrap_or(0);
+                let n = order.len() as i32;
+                let next = ((idx as i32 + dir).rem_euclid(n)) as usize;
+                fs.focus = order[next];
+            }
+        }
+        Action::FeedbackCycleKind(dir) => {
+            if let Some(fs) = app.shell.feedback.as_mut() {
+                let n = zoid_core::feedback::FeedbackKind::all().len() as i32;
+                fs.kind_selected =
+                    ((fs.kind_selected as i32 + dir).rem_euclid(n)) as usize;
+                fs.kind = zoid_core::feedback::FeedbackKind::all()[fs.kind_selected];
+            }
+        }
+        Action::FeedbackChar(c) => {
+            if let Some(fs) = app.shell.feedback.as_mut() {
+                use zoid_tui::state::FeedbackField;
+                match fs.focus {
+                    FeedbackField::Title => fs.title.push(c),
+                    FeedbackField::Body => fs.body.push(c),
+                    FeedbackField::Kind => {}
+                }
+            }
+        }
+        Action::FeedbackBackspace => {
+            if let Some(fs) = app.shell.feedback.as_mut() {
+                use zoid_tui::state::FeedbackField;
+                match fs.focus {
+                    FeedbackField::Title => {
+                        fs.title.pop();
+                    }
+                    FeedbackField::Body => {
+                        fs.body.pop();
+                    }
+                    FeedbackField::Kind => {}
+                }
+            }
+        }
+        Action::FeedbackSubmit => {
+            handle_feedback_submit(app).await?;
+        }
         Action::Noop => {}
     }
     Ok(false)
@@ -3939,6 +4073,7 @@ fn answer_question(app: &mut App, ans: zoid::agent::Answer) {
                             s.clone()
                         }
                         zoid::agent::Answer::LetYouDecide => "[let you decide]".into(),
+                        zoid::agent::Answer::Feedback(_) => "[feedback]".into(),
                     };
                     let ts = now_ms();
                     let ev = zoid_core::event::Event::new(
@@ -3951,6 +4086,9 @@ fn answer_question(app: &mut App, ans: zoid::agent::Answer) {
                 }
                 zoid::agent::Answer::LetYouDecide => {
                     // Treat as Approve for the wizard (matches the old behavior).
+                }
+                zoid::agent::Answer::Feedback(_) => {
+                    // Unreachable: feedback answers are not wizard (ModeMapping) questions.
                 }
             }
         }
@@ -3974,6 +4112,83 @@ fn open_url(url: &str) {
     let _ = std::process::Command::new("cmd")
         .args(["/c", "start", "", url])
         .spawn();
+}
+
+/// Capture diagnostics from the running `App` for a feedback report.
+fn capture_app_diagnostics(app: &App) -> zoid_core::feedback::Diagnostics {
+    let recent_error = app
+        .events
+        .snapshot()
+        .iter()
+        .rev()
+        .find_map(|e| match &e.kind {
+            zoid_core::event::EventKind::ToolResult {
+                is_error: true,
+                output,
+                ..
+            } => Some(output.clone()),
+            _ => None,
+        });
+    let cwd = std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .display()
+        .to_string();
+    zoid_core::feedback::Diagnostics::capture(
+        env!("CARGO_PKG_VERSION").to_string(),
+        std::env::consts::OS.to_string(),
+        std::env::consts::ARCH.to_string(),
+        app.session_id.to_string(),
+        app.modes.active_name().to_string(),
+        app.config.provider.clone(),
+        app.config.model.clone(),
+        cwd,
+        recent_error,
+    )
+}
+
+/// Handle `Action::FeedbackSubmit`: build a report from `FeedbackState` +
+/// diagnostics, then either send it back to the agent loop (tool path) or
+/// submit it async (command path).
+async fn handle_feedback_submit(app: &mut App) -> Result<bool> {
+    use zoid_tui::state::FeedbackStatus;
+
+    let fs = match app.shell.feedback.clone() {
+        Some(fs) => fs,
+        None => return Ok(false),
+    };
+    if fs.title.trim().is_empty() || fs.body.trim().is_empty() {
+        if let Some(f) = app.shell.feedback.as_mut() {
+            f.status = FeedbackStatus::Error("Title and description are required.".into());
+        }
+        return Ok(false);
+    }
+    let diagnostics = capture_app_diagnostics(app);
+    let report = zoid_core::feedback::FeedbackReport {
+        kind: fs.kind,
+        title: fs.title,
+        body: fs.body,
+        diagnostics,
+    };
+
+    if let Some(reply) = app.feedback_reply.take() {
+        // TOOL PATH: the agent loop is parked awaiting this reply.
+        let _ = reply.send(zoid::agent::Answer::Feedback(report));
+    } else {
+        // COMMAND PATH: no parked loop. Submit async, mirroring CompactNow.
+        if let Some(f) = app.shell.feedback.as_mut() {
+            f.status = FeedbackStatus::Submitting;
+        }
+        let ui_tx = app.ui_tx.clone();
+        let api: std::sync::Arc<dyn zoid_core::feedback::FeedbackApi> =
+            std::sync::Arc::new(zoid_core::feedback::HttpFeedbackApi::new());
+        tokio::spawn(async move {
+            let outcome = report.submit_via(api.as_ref()).await;
+            let _ = ui_tx
+                .send(zoid::agent::AgentUpdate::FeedbackOutcome(outcome))
+                .await;
+        });
+    }
+    Ok(false)
 }
 
 /// Turn the companion server on. Idempotent — if it's already running this
@@ -4311,6 +4526,11 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
                 }
                 let _ = ui_tx.send(AgentUpdate::CompactionComplete).await;
             });
+            Ok(false)
+        }
+        Command::Feedback => {
+            app.shell.overlay = zoid_tui::Overlay::Feedback;
+            app.shell.feedback = Some(zoid_tui::state::FeedbackState::new());
             Ok(false)
         }
         Command::Unknown(_) => Ok(false),
@@ -5373,6 +5593,7 @@ mod tests {
             textarea: make_input(TextArea::default()),
             streaming: false,
             shell: zoid_tui::ShellState::new(),
+            feedback_reply: None,
             ui_tx,
             started: std::time::Instant::now(),
             proj: ProjectionCache::default(),

@@ -86,6 +86,57 @@ pub struct SkillRegistry {
     skills: Vec<Skill>,
 }
 
+/// The body of the built-in `feedback` skill. References the `submit_feedback`
+/// tool and the `strvmarv/zoid-releases` repo.
+const FEEDBACK_SKILL_BODY: &str = "\
+# Submitting Feedback & Bug Reports
+
+zoid can file feedback or bug reports to the maintainers as GitHub issues on
+`strvmarv/zoid-releases`. The `submit_feedback` tool proposes a report; the
+user **always confirms and can edit** before it is submitted — never file
+silently.
+
+## When to Offer
+
+Offer the tool when:
+- The user explicitly asks to \"report a bug\", \"give feedback\", or \"file an issue\".
+- A reproducible error occurs AND the user agrees to report it (ask first via
+  `ask_user` — don't assume).
+- The user expresses frustration about zoid's behavior and a concrete, actionable
+  issue can be identified.
+
+Do NOT offer when:
+- The user is frustrated with *their own code* (that's not a zoid bug).
+- The error is clearly user error (wrong path, bad config) — help them instead.
+- The user just wants to vent; only file if there's something actionable.
+
+## Writing a Good Report
+
+Call `submit_feedback` with a well-structured report:
+
+- **kind**: `bug`, `feature`, or `general`.
+- **title**: One line, specific. Bad: \"it crashed\". Good: \"Crash on `:config`
+  open when no provider is configured\".
+- **body**: For bugs — steps to reproduce, expected behavior, actual behavior.
+  For features — the use case and the proposed solution. For general — what's
+  on your mind.
+
+Diagnostics (version, OS, session, mode, model, cwd, recent error) are
+attached automatically — you don't need to gather them. But **describe the
+user's situation in the body**, since you know the context that led here.
+
+## After Submitting
+
+The tool result tells you the outcome:
+- `Created issue #N: <url>` — tell the user the issue number and URL.
+- `Opened browser at <url>` — tell the user to finish submitting in the
+  browser (no token was available), and give them the URL.
+- `User declined` — acknowledge and move on; don't push.
+
+Never call `submit_feedback` twice for the same issue in one session unless the
+user asks.
+";
+
 impl SkillRegistry {
     /// Build a registry from an explicit skill list.
     pub fn new(skills: Vec<Skill>) -> Self {
@@ -131,6 +182,16 @@ impl SkillRegistry {
                     .into(),
                 base_dir: None,
             },
+            Skill {
+                name: "feedback".into(),
+                description: "Use when the user asks to report a bug or give feedback, \
+                    or when a reproducible error occurs and the user agrees to report it — \
+                    offers the submit_feedback tool to file a GitHub issue on \
+                    strvmarv/zoid-releases, with the user confirming before anything \
+                    is submitted.".into(),
+                body: FEEDBACK_SKILL_BODY.into(),
+                base_dir: None,
+            },
         ])
     }
 
@@ -169,7 +230,11 @@ mod tests {
         let r = SkillRegistry::builtin();
         assert_eq!(
             r.names(),
-            vec!["spike-plan".to_string(), "spike-implement".to_string()]
+            vec![
+                "spike-plan".to_string(),
+                "spike-implement".to_string(),
+                "feedback".to_string()
+            ]
         );
         let plan = r.get("spike-plan").unwrap();
         assert!(
@@ -192,7 +257,8 @@ mod tests {
         let menu = SkillRegistry::builtin().menu();
         assert!(menu.contains("- spike-plan: "));
         assert!(menu.contains("- spike-implement: "));
-        assert_eq!(menu.lines().count(), 2);
+        assert!(menu.contains("- feedback: "));
+        assert_eq!(menu.lines().count(), 3);
     }
 
     #[test]
@@ -205,6 +271,43 @@ mod tests {
         let r = SkillRegistry::builtin();
         assert!(r.get("spike-plan").unwrap().base_dir.is_none());
         assert!(r.get("spike-implement").unwrap().base_dir.is_none());
+        assert!(r.get("feedback").unwrap().base_dir.is_none());
+    }
+
+    #[test]
+    fn builtin_includes_feedback_skill() {
+        let r = SkillRegistry::builtin();
+        assert_eq!(
+            r.names(),
+            vec![
+                "spike-plan".to_string(),
+                "spike-implement".to_string(),
+                "feedback".to_string()
+            ]
+        );
+        let fb = r.get("feedback").unwrap();
+        assert!(
+            fb.body.contains("submit_feedback"),
+            "feedback skill must reference the submit_feedback tool"
+        );
+        assert!(fb.body.contains("strvmarv/zoid-releases"));
+        assert!(fb.base_dir.is_none());
+    }
+
+    #[test]
+    fn push_unique_protects_feedback_builtin_from_shadow() {
+        let mut r = SkillRegistry::builtin();
+        let shadow = Skill {
+            name: "feedback".into(),
+            description: "shadow".into(),
+            body: "SHADOW".into(),
+            base_dir: None,
+        };
+        assert!(
+            !r.push_unique(shadow),
+            "an import must not shadow the built-in feedback"
+        );
+        assert_eq!(r.get("feedback").unwrap().body, FEEDBACK_SKILL_BODY);
     }
 
     #[test]
@@ -261,6 +364,6 @@ mod tests {
     fn all_exposes_every_skill_in_order() {
         let r = SkillRegistry::builtin();
         let names: Vec<&str> = r.all().iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, vec!["spike-plan", "spike-implement"]);
+        assert_eq!(names, vec!["spike-plan", "spike-implement", "feedback"]);
     }
 }

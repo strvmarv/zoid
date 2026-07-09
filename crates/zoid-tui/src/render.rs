@@ -200,6 +200,12 @@ pub fn render_shell(
         render_config(frame, state, &state.config_sections, frame.area());
     } else if state.overlay == Overlay::ProviderSwitch {
         render_provider_switch(frame, state, frame.area());
+    } else if state.overlay == Overlay::Feedback {
+        if let Some(fs) = &state.feedback {
+            if let Some(p) = layout.palette {
+                render_feedback_modal(frame, p, fs);
+            }
+        }
     }
     conv_max_scroll
 }
@@ -897,6 +903,7 @@ fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
                     Command::CompanionEnable => "→ Enable companion".to_string(),
                     Command::CompanionDisable => "→ Disable companion".to_string(),
                     Command::CompactNow => "→ Compact context now".to_string(),
+                    Command::Feedback => "→ Submit feedback".to_string(),
                 };
                 lines.push(Line::styled(preview, Style::new().fg(color::DIM)));
             }
@@ -1499,6 +1506,97 @@ pub(crate) fn wrap_plain(s: &str, width: usize) -> Vec<String> {
         lines.push(cur);
     }
     lines
+}
+
+/// Render the `:feedback` modal: kind picker, title, body, status line.
+fn render_feedback_modal(frame: &mut Frame, area: Rect, fs: &crate::state::FeedbackState) {
+    use crate::state::FeedbackField;
+    use ratatui::layout::{Constraint, Layout, Margin};
+    use ratatui::widgets::{Block, Borders, Paragraph};
+
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Submit feedback "),
+        area,
+    );
+    let inner = area.inner(Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    let chunks = Layout::default()
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Min(3),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+
+    // 1. Kind row.
+    let kinds = zoid_core::feedback::FeedbackKind::all();
+    let kind_row: String = kinds
+        .iter()
+        .enumerate()
+        .map(|(i, k)| {
+            if i == fs.kind_selected {
+                format!("[{}]", k.display())
+            } else {
+                format!(" {} ", k.display())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("  ");
+    let kind_style = if fs.focus == FeedbackField::Kind {
+        Style::new().fg(color::CHAT_ACCENT)
+    } else {
+        Style::new().fg(color::TXT)
+    };
+    frame.render_widget(Paragraph::new(kind_row).style(kind_style), chunks[0]);
+
+    // 2. Title input.
+    let title_focused = fs.focus == FeedbackField::Title;
+    let title_block = Block::default()
+        .borders(Borders::ALL)
+        .title(if title_focused { " Title * " } else { " Title " });
+    frame.render_widget(
+        Paragraph::new(fs.title.as_str()).block(title_block),
+        chunks[1],
+    );
+
+    // 3. Body (plain paragraph for v1; multi-line editing via the bin's buffer).
+    let body_block = Block::default().borders(Borders::ALL).title(" Description ");
+    frame.render_widget(
+        Paragraph::new(fs.body.as_str()).block(body_block),
+        chunks[2],
+    );
+
+    // 4. Footer hint.
+    frame.render_widget(
+        Paragraph::new("Tab next · Ctrl+Enter submit · Esc cancel")
+            .style(Style::new().fg(color::DIM)),
+        chunks[3],
+    );
+
+    // 5. Status line.
+    let status = match &fs.status {
+        crate::state::FeedbackStatus::Idle => String::new(),
+        crate::state::FeedbackStatus::Submitting => "Submitting…".to_string(),
+        crate::state::FeedbackStatus::Done(
+            zoid_core::feedback::SubmitOutcome::Created { url, number },
+        ) => format!("Created issue #{}: {}", number, url),
+        crate::state::FeedbackStatus::Done(
+            zoid_core::feedback::SubmitOutcome::BrowserFallback { url },
+        ) => format!("No token — opened your browser: {}", url),
+        crate::state::FeedbackStatus::Error(msg) => format!("Error: {}", msg),
+    };
+    if !status.is_empty() {
+        frame.render_widget(
+            Paragraph::new(status).style(Style::new().fg(color::ERROR)),
+            chunks[4],
+        );
+    }
 }
 
 #[cfg(test)]
