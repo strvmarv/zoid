@@ -10,10 +10,12 @@ name: publish-public
 # `packages: write` permissions (see release.yml — "publish jobs get escalated
 # permissions"), so `contents` is implicitly `none`. A checkout of the private
 # source repo would fail under those permissions. Release notes therefore come
-# from cargo-dist's own changelog parsing (CHANGELOG.md, verified via
+# from cargo-dist's own changelog parsing of the root, customer-facing
+# RELEASES.md (verified via
 # `dist plan --output-format=json` to populate `announcement_changelog` with
 # the version's section text) passed through the `plan` input — no checkout
-# needed.
+# needed. The developer changelog lives at docs/CHANGELOG.md and is NOT
+# published (kept out of the repo root so dist detects only RELEASES.md).
 #
 # Artifact handoff: cargo-dist does NOT hand built artifacts to custom publish
 # jobs through the `plan` input or any single named bundle. Every earlier job in

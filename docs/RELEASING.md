@@ -32,11 +32,17 @@ checksum-verified). No tokens live on user machines.
   `packages: write` permissions (see the "publish jobs get escalated
   permissions" comment in the generated `release.yml`), so `contents` is
   implicitly `none` and a checkout would fail. Instead, release notes come
-  from cargo-dist's own changelog parsing of `CHANGELOG.md`: the reusable
+  from cargo-dist's own changelog parsing of `RELEASES.md`: the reusable
   workflow's `plan` input carries `announcement_changelog` (populated by dist
-  when it finds a matching `## <version>` section in `CHANGELOG.md`), and
+  when it finds a matching `## <version>` section in `RELEASES.md`), and
   `publish-public.yml` writes that straight to a notes file for
   `gh release create --notes-file`.
+- **Two changelogs, by audience.** `RELEASES.md` (repo root) is the
+  **public, customer-facing** notes — dist reads it, so it must contain no
+  internal detail. `docs/CHANGELOG.md` is the **developer** changelog and is
+  never published; it lives under `docs/` so dist detects only the single
+  root `RELEASES.md` (avoiding ambiguous precedence between two root
+  changelog files). See `AGENTS.md`. Do not reintroduce a root `CHANGELOG.md`.
 - `source-tarball = false` in `dist-workspace.toml` stops dist from building
   `source.tar.gz` at all (it would otherwise leak the private source into the
   public repo). `publish-public.yml` also strips any stray
@@ -45,20 +51,27 @@ checksum-verified). No tokens live on user machines.
 ## Cut a release
 
 1. Bump the version: edit `[workspace.package] version` in the root `Cargo.toml`.
-2. Add a `## X.Y.Z` section to the top of `CHANGELOG.md` by hand with the
-   release notes. Do NOT paste the private commit log — this file becomes
-   public (dist reads it via its changelog parser and threads the matching
-   section through to the public release notes; no checkout of the private
-   repo happens). The version header must match the tag you're about to push
-   (e.g. `## 0.1.0` for tag `v0.1.0`) or dist won't find a section to use.
-3. Commit: `git commit -am "release: vX.Y.Z"`.
-4. Tag and push: `git tag vX.Y.Z && git push origin main --tags`.
-5. CI (`release.yml`) cross-compiles the three targets and the `publish-public`
+2. Add a `## X.Y.Z` section to the top of **`RELEASES.md`** (root) with the
+   **customer-facing** notes. This file becomes public — write for users, no
+   internal detail (crate names, algorithms, file paths). Do NOT paste the
+   private commit log. The version header must be a bare `## X.Y.Z` matching
+   the tag (e.g. `## 0.1.0` for tag `v0.1.0`) or dist won't find a section to
+   use. Write the narrative only; dist appends the install one-liners and
+   download table. Add the detailed engineering entry to `docs/CHANGELOG.md`
+   separately (not published).
+3. Regenerate TUI snapshots — the status bar renders the version, so the bump
+   changes ~35 insta frame snapshots: `cargo insta test --accept -p zoid-tui`,
+   then confirm `git diff` is version-token-only before staging them.
+4. Commit: `git commit -am "release: vX.Y.Z"`.
+5. Tag and push: `git tag vX.Y.Z && git push origin main --tags`.
+6. CI (`release.yml`) cross-compiles the three targets and the `publish-public`
    job creates the Release at `strvmarv/zoid-releases`.
-6. Verify: the public repo's Releases page shows three archives + `sha256.sum`
+7. Verify: the public repo's Releases page shows three archives + `sha256.sum`
    (plus per-archive `.sha256` files and the `zoid-installer.sh` /
-   `zoid-installer.ps1` installer scripts) and NO `source.tar.gz`.
-7. Smoke-test: on a machine with an older zoid, run `zoid update`.
+   `zoid-installer.ps1` installer scripts) and NO `source.tar.gz`. Confirm the
+   published notes read as customer-facing (from `RELEASES.md`), with no
+   internal detail leaked.
+8. Smoke-test: on a machine with an older zoid, run `zoid update`.
 
 ## First-time install (new machine)
 

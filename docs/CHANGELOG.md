@@ -1,5 +1,11 @@
 # Changelog
 
+> **Internal engineering changelog.** This file is the detailed development
+> record and is **not** published. It lives under `docs/` specifically so
+> cargo-dist does not detect it as a root changelog. Customer-facing release
+> notes (what ships to the public releases repo) live in the root
+> `RELEASES.md`.
+
 ## 0.2.0
 
 The first feature release since the distribution pipeline landed — a large batch of new capabilities for beta testing.
