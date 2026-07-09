@@ -4658,6 +4658,7 @@ dependencies = [
  "zip 2.4.2",
  "zoid-companion",
  "zoid-core",
+ "zoid-embed",
  "zoid-mcp",
  "zoid-provider",
  "zoid-testkit",

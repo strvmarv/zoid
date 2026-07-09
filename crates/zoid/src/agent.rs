@@ -46,7 +46,7 @@ pub fn default_profile() -> AgentProfile {
 /// How one agent turn is run: its system prompt, working directory, and the
 /// event branch its output is recorded on. Chat uses the main branch + process
 /// cwd; a subagent uses its own branch + (optionally) a worktree.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TurnConfig {
     pub system: String,
     pub cwd: PathBuf,
@@ -60,6 +60,11 @@ pub struct TurnConfig {
     /// subagents and tests (no MCP). Carried here (not as a fn parameter) so
     /// the turn-function signatures are unchanged.
     pub mcp: Option<std::sync::Arc<zoid_mcp::McpManager>>,
+    /// In-memory embedding index for hybrid recall (None = FTS-only). Present
+    /// only when built with `local-embed` and `[embed] enabled = true`.
+    pub embed: Option<std::sync::Arc<std::sync::RwLock<zoid_core::embed_index::EmbeddingIndex>>>,
+    /// The embedder used to embed the recall query. Paired with `embed`.
+    pub embedder: Option<std::sync::Arc<dyn zoid_core::retrieval::Embedder>>,
     /// Thinking mode for this turn. Resolved from config + model capability
     /// in spawn_turn. Defaults to Off.
     pub thinking: ThinkingMode,
@@ -71,6 +76,28 @@ pub struct TurnConfig {
     /// fresh (unshared) slot for subagents/tests; the chat turn shares the same
     /// slot given to the chat tool list (see spawn_turn).
     pub kill: zoid_tools::KillSlot,
+}
+
+// Manual `Debug`: `embed`/`embedder` hold a trait object (`dyn Embedder`) and
+// an index type that don't implement `Debug`, so they can't be part of a
+// `#[derive(Debug)]`. Every other field is printed normally; those two are
+// summarized as present/absent, matching how `mcp` would render.
+impl std::fmt::Debug for TurnConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TurnConfig")
+            .field("system", &self.system)
+            .field("cwd", &self.cwd)
+            .field("branch", &self.branch)
+            .field("policy", &self.policy)
+            .field("eviction", &self.eviction)
+            .field("mcp", &self.mcp.is_some())
+            .field("embed", &self.embed.is_some())
+            .field("embedder", &self.embedder.is_some())
+            .field("thinking", &self.thinking)
+            .field("approval", &self.approval)
+            .field("kill", &self.kill)
+            .finish()
+    }
 }
 
 /// The orchestrator (Chat) turn config for an explicit mode profile + skill menu.
@@ -92,6 +119,8 @@ pub fn chat_turn_config_with(profile: &AgentProfile, skill_menu: &str) -> TurnCo
         policy: zoid_core::assembler::ContextPolicy::default(),
         eviction: zoid_core::eviction::EvictionPolicy::disabled(),
         mcp: None,
+        embed: None,
+        embedder: None,
         thinking: ThinkingMode::Off,
         approval: zoid_core::config::ApprovalConfig::default(),
         kill: zoid_tools::KillSlot::new(),
@@ -2440,6 +2469,104 @@ mod tests {
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
         let out = run_agent_turn(
             chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        // Re-admission event for the evicted id …
+        assert!(out.iter().any(|e| matches!(&e.kind, EventKind::TurnsReadmitted { ids } if ids.contains(&Ulid::from(1u128)))));
+        // … the recall ToolResult carries the retrieved content …
+        assert!(out.iter().any(|e| matches!(&e.kind, EventKind::ToolResult { name, output, .. } if name == "recall" && output.contains("vector backend"))));
+        // … and the turn is back in the projection.
+        assert!(conversation(out.iter())
+            .iter()
+            .any(|m| matches!(m, ChatMsg::User { text, .. } if text.contains("vector backend"))));
+    }
+
+    /// Task 9a graceful-degradation guarantee: a `TurnConfig` built via
+    /// `chat_turn_config()` has `embed`/`embedder` both `None` (no
+    /// `local-embed` wiring yet), so recall must stay byte-identical to the
+    /// pure-FTS path. Body copied from `recall_tool_readmits_and_returns_content`.
+    #[tokio::test]
+    async fn recall_stays_fts_only_when_embed_config_absent() {
+        use serde_json::json;
+        use ulid::Ulid;
+        use zoid_core::event::{Event, EventKind, EvictionMarker};
+        use zoid_core::projection::{conversation, ChatMsg};
+        use zoid_provider::{ProviderEvent, ToolCall};
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        // Seed: an evicted user turn (indexed in the store at append) + a recent turn + the marker.
+        let e1 = Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "configure the vector backend".into(),
+            },
+        );
+        let e2 = Event::new(
+            Ulid::from(2u128),
+            None,
+            2,
+            EventKind::UserMessage {
+                text: "recent question".into(),
+            },
+        );
+        let evicted = Event::new(
+            Ulid::from(9u128),
+            None,
+            9,
+            EventKind::TurnsEvicted {
+                ids: vec![Ulid::from(1u128)],
+                reclaimed_tokens: 10,
+                marker: EvictionMarker { spans: vec![] },
+            },
+        );
+        for e in [&e1, &e2, &evicted] {
+            session.append(e.clone()).await.unwrap();
+        }
+        let seed = vec![e1.clone(), e2.clone(), evicted.clone()];
+        // Initially the evicted turn is NOT in the projection.
+        assert!(!conversation(&seed)
+            .iter()
+            .any(|m| matches!(m, ChatMsg::User { text, .. } if text.contains("vector backend"))));
+
+        let config = chat_turn_config();
+        assert!(config.embed.is_none(), "embed must default to None");
+        assert!(config.embedder.is_none(), "embedder must default to None");
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "r1".into(),
+                    name: "recall".into(),
+                    args: json!({"query": "vector"}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![
+                ProviderEvent::TextDelta("thanks".into()),
+                ProviderEvent::Done,
+            ],
+        ]));
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let out = run_agent_turn(
+            config,
             provider,
             tools,
             std::sync::Arc::new(zoid_tools::AllowAll),

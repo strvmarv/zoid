@@ -155,6 +155,8 @@ pub async fn run_subagent(
         policy: subagent_policy(),
         eviction: zoid_core::eviction::EvictionPolicy::disabled(),
         mcp: None,
+        embed: None,
+        embedder: None,
         thinking: zoid_provider::ThinkingMode::Off,
         approval: approval.clone(),
         kill: zoid_tools::KillSlot::new(),

@@ -1518,6 +1518,11 @@ struct App {
     /// Background MCP manager (None if no servers are configured). Its tools are
     /// merged into the Chat tool set each turn.
     mcp: Option<std::sync::Arc<zoid_mcp::McpManager>>,
+    /// In-memory embedding index for hybrid recall (None = FTS-only). Wired up
+    /// in a later task; always `None` in this scaffold.
+    embed_index: Option<std::sync::Arc<std::sync::RwLock<zoid_core::embed_index::EmbeddingIndex>>>,
+    /// The embedder used to embed the recall query. Paired with `embed_index`.
+    embedder: Option<std::sync::Arc<dyn zoid_core::retrieval::Embedder>>,
 }
 
 impl App {
@@ -1842,6 +1847,8 @@ async fn main() -> Result<()> {
         pending_message: None,
         pending_takeover: None,
         mcp,
+        embed_index: None,
+        embedder: None,
     };
 
     // Restore the resumed session's persisted active mode (a no-op if that mode
@@ -4803,6 +4810,8 @@ fn spawn_turn(app: &mut App) {
     let tools = std::sync::Arc::new(tools);
     let mut turn_config = zoid::agent::chat_turn_config_with(&profile, &menu);
     turn_config.mcp = app.mcp.clone();
+    turn_config.embed = app.embed_index.clone();
+    turn_config.embedder = app.embedder.clone();
     turn_config.policy = policy_from_config(&app.economy, app.context_target);
     turn_config.eviction = zoid_core::eviction::EvictionPolicy {
         enabled: app.economy.compact_threshold_pct > 0, // master switch (back-compat)
@@ -5621,6 +5630,8 @@ mod tests {
             pending_message: None,
             pending_takeover: None,
             mcp: None,
+            embed_index: None,
+            embedder: None,
         }
     }
 
