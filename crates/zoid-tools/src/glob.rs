@@ -37,10 +37,11 @@ impl Tool for GlobTool {
             Ok(g) => g.compile_matcher(),
             Err(e) => return ToolOutput::err(format!("Glob: invalid pattern: {e}")),
         };
-        let root = crate::resolve(
-            cwd,
-            args.get("path").and_then(|v| v.as_str()).unwrap_or("."),
-        );
+        let path_arg = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        let root = crate::resolve(cwd, path_arg);
+        if !root.is_dir() {
+            return ToolOutput::err(format!("Glob: path is not a directory: {path_arg}"));
+        }
         let mut found: Vec<(std::time::SystemTime, String)> = Vec::new();
         walk(&root, &root, &matcher, &mut found);
         if found.is_empty() {
@@ -135,5 +136,18 @@ mod tests {
             std::path::Path::new("."),
         );
         assert!(out.text.contains("no files match"));
+    }
+
+    #[test]
+    fn file_path_errors_not_silent() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.rs");
+        std::fs::write(&file, "").unwrap();
+        let out = GlobTool.run(
+            &json!({ "pattern": "*.rs", "path": file.to_str().unwrap() }),
+            std::path::Path::new("."),
+        );
+        assert!(out.is_error, "expected error for file path, got: {}", out.text);
+        assert!(out.text.contains("not a directory"), "{}", out.text);
     }
 }

@@ -56,10 +56,11 @@ impl Tool for Grep {
             .get("output_mode")
             .and_then(|v| v.as_str())
             .unwrap_or("files_with_matches");
-        let root = crate::resolve(
-            cwd,
-            args.get("path").and_then(|v| v.as_str()).unwrap_or("."),
-        );
+        let path_arg = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        let root = crate::resolve(cwd, path_arg);
+        if !root.is_dir() {
+            return ToolOutput::err(format!("Grep: path is not a directory: {path_arg}"));
+        }
 
         let (text_body, truncated, is_empty) = match mode {
             "content" => {
@@ -338,5 +339,17 @@ mod tests {
         );
         assert!(!out.is_error);
         assert!(out.text.contains("no matches"));
+    }
+
+    #[test]
+    fn file_path_errors_not_silent_no_match() {
+        let dir = seed();
+        let file = dir.path().join("a.rs");
+        let out = Grep.run(
+            &json!({ "pattern": "fn", "path": file.to_str().unwrap() }),
+            std::path::Path::new("."),
+        );
+        assert!(out.is_error, "expected error for file path, got: {}", out.text);
+        assert!(out.text.contains("not a directory"), "{}", out.text);
     }
 }
