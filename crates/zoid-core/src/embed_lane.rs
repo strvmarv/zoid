@@ -71,4 +71,24 @@ mod tests {
         let batch = vec![(Ulid::from(1u128), "same text".to_string())];
         assert_eq!(lane.tick(&batch)[0].1, lane.tick(&batch)[0].1);
     }
+
+    struct FailingEmbedder;
+    impl crate::retrieval::Embedder for FailingEmbedder {
+        fn embed(&self, _texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+            anyhow::bail!("embed failed")
+        }
+        fn dim(&self) -> usize { 16 }
+        fn model_id(&self) -> &str { "failing" }
+    }
+
+    #[test]
+    fn tick_degrades_to_empty_on_embed_error() {
+        let emb = Arc::new(FailingEmbedder);
+        let idx = Arc::new(RwLock::new(EmbeddingIndex::new(16, 100)));
+        let lane = EmbedLane::new(emb, idx.clone());
+        let batch = vec![(Ulid::from(1u128), "alpha".to_string())];
+        let rows = lane.tick(&batch);
+        assert!(rows.is_empty(), "embed error must yield no rows");
+        assert_eq!(idx.read().unwrap().len(), 0, "index must be untouched on embed error");
+    }
 }
