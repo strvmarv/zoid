@@ -201,6 +201,10 @@ fn stage2_items(ns: &str, state: &ShellState) -> Vec<PaletteItem> {
                     label: "update".into(),
                     command: Command::ModeUpdate(String::new()),
                 },
+                PaletteItem {
+                    label: "install superpowers".into(),
+                    command: Command::ModeInstallSuperpowers,
+                },
             ];
             rows.extend(
                 state
@@ -701,7 +705,10 @@ mod tests {
         let items = direct_items(&s);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         // Subcommands first, then mode-name rows (excluding the active mode Chat).
-        assert_eq!(labels, vec!["reload", "import", "update", "Build"]);
+        assert_eq!(
+            labels,
+            vec!["reload", "import", "update", "install superpowers", "Build"]
+        );
     }
 
     #[test]

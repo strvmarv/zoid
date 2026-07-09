@@ -20,20 +20,30 @@ const NEW_USER_PROMPTS: &[&str] = &[
 /// The hint shown to a returning user with an empty session.
 const RETURNING_HINT: &str =
     "welcome back — type a message, or :resume to pick up another session";
+/// The instructional line offering the Superpowers skill set install, shown
+/// to first-time users who haven't installed it yet.
+const SUPERPOWERS_OFFER: &str =
+    "Run :mode install superpowers to install the Superpowers skill set (brainstorming, TDD, systematic debugging, code review, planning…)";
 
 /// Build the empty-state lines for the conversation pane. `first_time_user`
 /// selects onboarding copy (new user) vs. a welcome-back hint (returning user).
-/// `width` is the text column width for prose wrapping (same `width` the
-/// transcript body is wrapped to). Pure; no terminal or state.
-pub fn empty_state_lines(first_time_user: bool, width: usize) -> Vec<Line<'static>> {
+/// `offer_superpowers` appends an instructional line pointing at
+/// `:mode install superpowers` (new-user path only). `width` is the text
+/// column width for prose wrapping (same `width` the transcript body is
+/// wrapped to). Pure; no terminal or state.
+pub fn empty_state_lines(
+    first_time_user: bool,
+    offer_superpowers: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
     if first_time_user {
-        new_user_lines(width)
+        new_user_lines(offer_superpowers, width)
     } else {
         returning_user_lines(width)
     }
 }
 
-fn new_user_lines(width: usize) -> Vec<Line<'static>> {
+fn new_user_lines(offer_superpowers: bool, width: usize) -> Vec<Line<'static>> {
     let indent = "  ";
     let mut lines: Vec<Line<'static>> = Vec::new();
 
@@ -73,6 +83,13 @@ fn new_user_lines(width: usize) -> Vec<Line<'static>> {
         }
     }
 
+    if offer_superpowers {
+        lines.push(Line::from(""));
+        for w in wrap_title(indent, SUPERPOWERS_OFFER, width) {
+            lines.push(Line::from(Span::styled(w, Style::new().fg(color::CHAT_ACCENT))));
+        }
+    }
+
     lines
 }
 
@@ -100,7 +117,7 @@ mod tests {
     /// prompts. The title line carries the accent color.
     #[test]
     fn new_user_renders_title_and_prompts() {
-        let lines = empty_state_lines(true, 80);
+        let lines = empty_state_lines(true, false, 80);
         let joined: String = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
@@ -132,7 +149,7 @@ mod tests {
     /// prompts appear.
     #[test]
     fn returning_user_renders_welcome_back_only() {
-        let lines = empty_state_lines(false, 80);
+        let lines = empty_state_lines(false, false, 80);
         let joined: String = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
@@ -157,17 +174,17 @@ mod tests {
     #[test]
     fn wrap_respects_narrow_width() {
         // Both branches must survive a width of 10 without panicking.
-        let _ = empty_state_lines(true, 10);
-        let _ = empty_state_lines(false, 10);
+        let _ = empty_state_lines(true, false, 10);
+        let _ = empty_state_lines(false, false, 10);
         // Width 1 is degenerate but must not panic either.
-        let _ = empty_state_lines(true, 1);
-        let _ = empty_state_lines(false, 1);
+        let _ = empty_state_lines(true, false, 1);
+        let _ = empty_state_lines(false, false, 1);
     }
 
     /// The `›` glyph (USER_TURN) must appear in the new-user output.
     #[test]
     fn new_user_uses_turn_glyph() {
-        let lines = empty_state_lines(true, 80);
+        let lines = empty_state_lines(true, false, 80);
         let joined: String = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
@@ -176,5 +193,16 @@ mod tests {
             joined.contains(glyph::USER_TURN),
             "the › turn glyph must appear in new-user output"
         );
+    }
+
+    #[test]
+    fn superpowers_offer_line_shown_only_when_offered() {
+        let joined = |ls: &[ratatui::text::Line]| ls.iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect::<String>();
+        let with = empty_state_lines(true, true, 80);
+        let without = empty_state_lines(true, false, 80);
+        assert!(joined(&with).contains(":mode install superpowers"));
+        assert!(!joined(&without).contains("Superpowers"));
     }
 }

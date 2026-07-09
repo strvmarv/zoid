@@ -20,6 +20,9 @@ pub enum Command {
     ModeImport(String),
     /// Start the update wizard for an existing imported mode (`:mode update <name>`).
     ModeUpdate(String),
+    /// Deterministically install the pinned obra/superpowers skill set as a
+    /// mode (`:mode install superpowers`). No model turn, no API key.
+    ModeInstallSuperpowers,
     Quit,
     OpenDrawer(DrawerId),
     NewSession,
@@ -72,6 +75,7 @@ pub fn parse_command(raw: &str) -> Command {
             Command::ModeUpdate(s["mode update ".len()..].trim().to_string())
         }
         "mode update" => Command::ModeUpdate(String::new()),
+        "mode install superpowers" => Command::ModeInstallSuperpowers,
         "mode" => Command::SwitchMode(String::new()),
         s if s.starts_with("mode ") => Command::SwitchMode(s["mode ".len()..].trim().to_string()),
         // --- :companion namespace ---
@@ -244,5 +248,26 @@ mod tests {
     #[test]
     fn mode_reload_still_wins_over_import() {
         assert_eq!(parse_command(":mode reload"), Command::ReloadModes);
+    }
+
+    #[test]
+    fn parses_mode_install_superpowers() {
+        assert_eq!(
+            parse_command(":mode install superpowers"),
+            Command::ModeInstallSuperpowers
+        );
+        assert_eq!(
+            parse_command("mode install superpowers"),
+            Command::ModeInstallSuperpowers
+        );
+    }
+
+    #[test]
+    fn mode_install_does_not_shadow_switch_to_a_mode_named_install() {
+        // "mode install foo" is NOT the superpowers installer — it stays a switch.
+        assert_eq!(
+            parse_command(":mode install foo"),
+            Command::SwitchMode("install foo".into())
+        );
     }
 }
