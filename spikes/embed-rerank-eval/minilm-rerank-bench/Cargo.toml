@@ -1,0 +1,22 @@
+[package]
+name = "minilm-rerank-bench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Phase-1b spike: validate a SMALL (~90MB) cross-encoder re-ranker on the candle
+# (pure-Rust) path. Model: cross-encoder/ms-marco-MiniLM-L-6-v2 (plain BERT).
+# candle-transformers 0.8 has no BertForSequenceClassification, so the SeqClass
+# head (BertPooler dense+tanh -> classifier Linear -> 1 logit) is hand-wired on
+# top of the base BertModel.
+[dependencies]
+candle-core = "0.8"
+candle-nn = "0.8"
+candle-transformers = "0.8"
+tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
+hf-hub = { version = "0.4", default-features = false, features = ["ureq", "rustls-tls"] }
+anyhow = "1"
+serde_json = "1"
+
+[profile.release]
+opt-level = 3

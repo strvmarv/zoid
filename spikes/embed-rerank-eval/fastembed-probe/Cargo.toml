@@ -1,0 +1,22 @@
+[package]
+name = "fastembed-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Phase-0 musl link probe: does the fastembed -> ort (ONNX Runtime, C++) stack
+# compile+link for x86_64-unknown-linux-musl? This is the path we EXPECT to be
+# hard: a statically-linked C++ runtime under musl.
+[dependencies]
+# default-features off to swap hf-hub's native-tls (OpenSSL) for rustls, so we
+# get PAST the openssl-sys musl failure and reach the real ort/ONNX-Runtime
+# musl link question. ort-download-binaries kept (the default ONNX runtime path).
+fastembed = { version = "4", default-features = false, features = ["hf-hub-rustls-tls", "ort-download-binaries"] }
+anyhow = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"
+codegen-units = 1

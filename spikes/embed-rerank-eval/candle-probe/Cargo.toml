@@ -1,0 +1,22 @@
+[package]
+name = "candle-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Phase-0 musl link probe: does a pure-Rust candle embedding/rerank stack
+# compile+link for x86_64-unknown-linux-musl? No model download needed — the
+# point is whether the dependency graph links at all.
+[dependencies]
+candle-core = "0.8"
+candle-nn = "0.8"
+candle-transformers = "0.8"
+tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
+anyhow = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"
+codegen-units = 1
