@@ -36,6 +36,7 @@ pub struct Config {
     pub companion: CompanionConfig,
     pub thinking: ThinkingConfig,
     pub approval: ApprovalConfig,
+    pub embed: EmbedConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +99,26 @@ impl Default for EconomyConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmbedConfig {
+    /// Master switch (default true when compiled in with feature `local-embed`).
+    pub enabled: bool,
+    /// Ring-buffer capacity = the RAM knob (≈73 MB @ 50k, ≈220 MB @ 150k).
+    pub max_vectors: usize,
+    /// Fetch model weights on first use; false = use only if already cached.
+    pub auto_download: bool,
+}
+
+impl Default for EmbedConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_vectors: 50_000,
+            auto_download: true,
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -111,6 +132,7 @@ impl Default for Config {
             companion: CompanionConfig::default(),
             thinking: ThinkingConfig::default(),
             approval: ApprovalConfig::default(),
+            embed: EmbedConfig::default(),
         }
     }
 }
@@ -142,6 +164,22 @@ mod tests {
         let (dflt, _) = merge(&[]);
         assert_eq!(dflt.companion.port, 0);
         assert!(dflt.companion.open);
+    }
+
+    #[test]
+    fn embed_defaults_and_parse() {
+        let c = Config::default();
+        assert!(c.embed.enabled);
+        assert_eq!(c.embed.max_vectors, 50_000);
+        assert!(c.embed.auto_download);
+
+        let (p, _warn) = parse_toml("[embed]\nenabled = false\nmax_vectors = 1000").unwrap();
+        assert_eq!(p.embed.enabled, Some(false));
+        assert_eq!(p.embed.max_vectors, Some(1000));
+        let (cfg, _prov) = merge(&[(Source::UserGlobal, p)]);
+        assert!(!cfg.embed.enabled);
+        assert_eq!(cfg.embed.max_vectors, 1000);
+        assert!(cfg.embed.auto_download); // default preserved when absent
     }
 }
 
@@ -208,6 +246,14 @@ pub struct PartialCompanion {
 
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default)]
+pub struct PartialEmbed {
+    pub enabled: Option<bool>,
+    pub max_vectors: Option<usize>,
+    pub auto_download: Option<bool>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(default)]
 pub struct PartialApproval {
     pub yolo: Option<bool>,
     pub shell_danger: Option<Vec<String>>,
@@ -227,6 +273,7 @@ pub struct PartialConfig {
     pub companion: PartialCompanion,
     pub thinking: PartialThinking,
     pub approval: PartialApproval,
+    pub embed: PartialEmbed,
 }
 
 /// Parse one TOML layer. Known keys deserialize normally; unknown keys are NOT
@@ -341,6 +388,15 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
                     cfg.approval.shell_allow.push(d.clone());
                 }
             }
+        }
+        if let Some(v) = p.embed.enabled {
+            cfg.embed.enabled = v;
+        }
+        if let Some(v) = p.embed.max_vectors {
+            cfg.embed.max_vectors = v;
+        }
+        if let Some(v) = p.embed.auto_download {
+            cfg.embed.auto_download = v;
         }
     }
     (cfg, prov)
