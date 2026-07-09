@@ -1977,7 +1977,7 @@ mod tests {
         assert_eq!(p.system_prompt, SYSTEM_PROMPT);
         assert!(p.tools.is_empty(), "empty allow-list = all tools permitted");
         assert!(p.allows("invoke_skill"));
-        assert!(p.allows("write_file"));
+        assert!(p.allows("Write"));
     }
 
     #[test]
@@ -2818,7 +2818,7 @@ mod tests {
             }),
             ProviderEvent::ToolCall(ToolCall {
                 id: "call-2".into(),
-                name: "read_file".into(),
+                name: "Read".into(),
                 args: serde_json::json!({ "path": "Cargo.toml" }),
             }),
             ProviderEvent::Done,
@@ -2898,7 +2898,7 @@ mod tool_call_id_threading_tests {
                 ts,
                 EventKind::ToolCall {
                     id: "call-7".into(),
-                    name: "read_file".into(),
+                    name: "Read".into(),
                     args: "{}".into(),
                 },
             ),
@@ -2908,7 +2908,7 @@ mod tool_call_id_threading_tests {
                 ts,
                 EventKind::ToolResult {
                     id: "call-7".into(),
-                    name: "read_file".into(),
+                    name: "Read".into(),
                     output: "ok".into(),
                     is_error: false,
                 },
