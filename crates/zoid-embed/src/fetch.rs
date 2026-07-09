@@ -99,4 +99,19 @@ mod tests {
         )
         .is_err());
     }
+    #[test]
+    fn ensure_weights_refuses_download_when_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        // empty dir → first artifact missing → with auto_download=false must error,
+        // never hit the network (offline / "use only if present" contract).
+        let res = ensure_weights(dir.path(), false);
+        assert!(
+            res.is_err(),
+            "auto_download=false with missing weights must refuse, not download"
+        );
+    }
+    // Note: the cached-hit success path (auto_download=true or false with all
+    // three artifacts present) is intentionally not tested here — it requires
+    // verifying model.safetensors (133MB), which cannot be fixtured. That path
+    // is covered by the #[ignore] smoke test instead.
 }
