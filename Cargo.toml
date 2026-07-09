@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/zoid-core", "crates/zoid-model", "crates/zoid-provider", "crates/zoid-tui", "crates/zoid-tools", "crates/zoid-syntax", "crates/zoid", "crates/zoid-testkit", "crates/zoid-companion", "crates/zoid-mcp"]
+members = ["crates/zoid-core", "crates/zoid-model", "crates/zoid-provider", "crates/zoid-tui", "crates/zoid-tools", "crates/zoid-syntax", "crates/zoid", "crates/zoid-testkit", "crates/zoid-companion", "crates/zoid-mcp", "crates/zoid-embed"]
 exclude = ["spikes"]
 resolver = "2"
 
@@ -52,3 +52,9 @@ codegen-units = 1
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+# candle's matmul kernels need real optimization even under the release
+# profile's opt-level = "z" (size-optimized); this override keeps the
+# embedding leaf crate fast without changing the rest of the release build.
+[profile.release.package.zoid-embed]
+opt-level = 3
