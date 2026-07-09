@@ -66,7 +66,7 @@ async fn agent_loop_runs_tool_then_finishes() {
         turns: Mutex::new(std::collections::VecDeque::from(vec![
             // Turn 1: the model calls write_file, then ends its turn.
             vec![
-                zoid_testkit::tool_call("write_file", json!({ "path": path_str, "content": "hi" })),
+                zoid_testkit::tool_call("Write", json!({ "path": path_str, "content": "hi" })),
                 ProviderEvent::Done,
             ],
             // Turn 2: with the tool result in context, the model replies in text.
@@ -129,7 +129,7 @@ async fn agent_loop_runs_tool_then_finishes() {
     assert!(matches!(kinds[0], EventKind::UserMessage { .. }));
     assert!(kinds
         .iter()
-        .any(|k| matches!(k, EventKind::ToolCall { name, .. } if name == "write_file")));
+        .any(|k| matches!(k, EventKind::ToolCall { name, .. } if name == "Write")));
     assert!(kinds.iter().any(|k| matches!(
         k,
         EventKind::ToolResult {
@@ -167,7 +167,7 @@ async fn gate_deny_blocks_tool_and_feeds_reason_back() {
             vec![
                 ProviderEvent::ToolCall(ToolCall {
                     id: "".into(),
-                    name: "write_file".into(),
+                    name: "Write".into(),
                     args: json!({ "path": path_str, "content": "hi" }),
                 }),
                 ProviderEvent::Done,
@@ -335,7 +335,7 @@ async fn cancel_mid_stream_drains_pending_tool_calls_without_running_them() {
     let cancel = CancellationToken::new();
     let provider = Arc::new(EmitToolCallThenStall {
         call: zoid_testkit::tool_call(
-            "write_file",
+            "Write",
             json!({ "path": path_str, "content": "should never be written" }),
         ),
     });

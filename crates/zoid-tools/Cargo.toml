@@ -7,6 +7,8 @@ edition.workspace = true
 shlex = "2.0"
 zoid-provider = { path = "../zoid-provider" }
 serde_json = { workspace = true }
+regex = { workspace = true }
+globset = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

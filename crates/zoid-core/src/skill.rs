@@ -106,7 +106,7 @@ impl SkillRegistry {
     /// The two hand-written built-in spike skills. `spike-plan` ends by
     /// instructing the model to invoke `spike-implement` — the chaining proof.
     /// Both bodies reference ONLY tools that exist in zoid (`invoke_skill`,
-    /// `write_file`).
+    /// `Write`).
     pub fn builtin() -> Self {
         Self::new(vec![
             Skill {
@@ -127,7 +127,7 @@ impl SkillRegistry {
                 description: "Write the spike artifact file described by the plan.".into(),
                 body: "You are executing the 'spike-implement' skill.\n\n\
                     Create the file ./spike-artifact.txt with exactly one line of content: spike ok\n\
-                    Use the write_file tool. Then confirm in one sentence that you wrote it."
+                    Use the Write tool. Then confirm in one sentence that you wrote it."
                     .into(),
                 base_dir: None,
             },
@@ -178,7 +178,7 @@ mod tests {
         );
         assert!(plan.body.contains("invoke_skill"));
         let imp = r.get("spike-implement").unwrap();
-        assert!(imp.body.contains("write_file"));
+        assert!(imp.body.contains("Write"));
         assert!(imp.body.contains("spike-artifact.txt"));
     }
 

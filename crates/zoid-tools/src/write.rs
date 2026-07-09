@@ -4,11 +4,11 @@ use std::path::Path;
 use zoid_provider::ToolSpec;
 
 /// Write (create or overwrite) a UTF-8 text file relative to the working dir.
-pub struct WriteFile;
+pub struct Write;
 
-impl Tool for WriteFile {
+impl Tool for Write {
     fn name(&self) -> &str {
-        "write_file"
+        "Write"
     }
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -36,7 +36,7 @@ impl Tool for WriteFile {
         };
         match std::fs::write(crate::resolve(cwd, &path), content.as_bytes()) {
             Ok(()) => ToolOutput::ok(format!("wrote {} bytes to {path}", content.len())),
-            Err(e) => ToolOutput::err(format!("write_file({path}): {e}")),
+            Err(e) => ToolOutput::err(format!("Write({path}): {e}")),
         }
     }
 }
@@ -50,7 +50,7 @@ mod tests {
     fn writes_then_reads_back() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.txt");
-        let out = WriteFile.run(
+        let out = Write.run(
             &json!({ "path": path.to_str().unwrap(), "content": "abc" }),
             std::path::Path::new("."),
         );
@@ -62,7 +62,7 @@ mod tests {
     fn missing_content_is_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("x.txt");
-        let out = WriteFile.run(
+        let out = Write.run(
             &json!({ "path": path.to_str().unwrap() }),
             std::path::Path::new("."),
         );

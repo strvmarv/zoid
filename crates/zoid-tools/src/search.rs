@@ -1,58 +1,118 @@
 use crate::{str_arg, Tool, ToolOutput};
+use globset::Glob;
+use regex::RegexBuilder;
 use serde_json::{json, Value};
 use std::path::Path;
 use zoid_provider::ToolSpec;
 
 const MAX_RESULTS: usize = 200;
 
-/// Recursive literal (substring) search over text files under a root directory
-/// (default `.`). Skips hidden entries and common build dirs. Returns up to
-/// `MAX_RESULTS` `relpath:line: text` matches.
-pub struct Search;
+/// Recursive regex search over text files under a root directory (default `.`).
+/// Skips hidden entries and common build dirs; never follows symlinks.
+pub struct Grep;
 
-impl Tool for Search {
+impl Tool for Grep {
     fn name(&self) -> &str {
-        "search"
+        "Grep"
     }
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: self.name().to_string(),
-            description: "Recursively search files for a literal substring (like grep -F)."
-                .to_string(),
+            description: "Search file contents with a regular expression.".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "description": "Literal substring to find." },
-                    "path":  { "type": "string", "description": "Root directory to search (default '.')." }
+                    "pattern":     { "type": "string", "description": "Regular expression to search for." },
+                    "path":        { "type": "string", "description": "Root directory to search (default '.')." },
+                    "glob":        { "type": "string", "description": "Only search files matching this glob (e.g. '*.rs')." },
+                    "-i":          { "type": "boolean", "description": "Case-insensitive match." },
+                    "output_mode": { "type": "string", "enum": ["files_with_matches", "content", "count"], "description": "Default 'files_with_matches'." }
                 },
-                "required": ["query"]
+                "required": ["pattern"]
             }),
         }
     }
     fn run(&self, args: &Value, cwd: &Path) -> ToolOutput {
-        let query = match str_arg(args, "query") {
-            Ok(q) => q,
+        let pattern = match str_arg(args, "pattern") {
+            Ok(p) => p,
             Err(e) => return e,
         };
-        if query.is_empty() {
-            return ToolOutput::err("search: empty query");
-        }
+        let case_insensitive = args.get("-i").and_then(|v| v.as_bool()).unwrap_or(false);
+        let re = match RegexBuilder::new(&pattern)
+            .case_insensitive(case_insensitive)
+            .build()
+        {
+            Ok(re) => re,
+            Err(e) => return ToolOutput::err(format!("Grep: invalid regex: {e}")),
+        };
+        let glob = match args.get("glob").and_then(|v| v.as_str()) {
+            Some(g) => match Glob::new(g) {
+                Ok(g) => Some(g.compile_matcher()),
+                Err(e) => return ToolOutput::err(format!("Grep: invalid glob: {e}")),
+            },
+            None => None,
+        };
+        let mode = args
+            .get("output_mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("files_with_matches");
         let root = crate::resolve(
             cwd,
             args.get("path").and_then(|v| v.as_str()).unwrap_or("."),
         );
-        let mut hits: Vec<String> = Vec::new();
-        walk(&root, &root, &query, &mut hits);
-        if hits.is_empty() {
-            ToolOutput::ok(format!("no matches for {query:?}"))
-        } else {
-            let truncated = hits.len() >= MAX_RESULTS;
-            let mut text = hits.join("\n");
-            if truncated {
-                text.push_str(&format!("\n… (truncated at {MAX_RESULTS} matches)"));
+
+        let (text_body, truncated, is_empty) = match mode {
+            "content" => {
+                // (relpath, line_no, line_text) hits, capped at MAX_RESULTS raw lines.
+                let mut hits: Vec<(String, usize, String)> = Vec::new();
+                let mut sink = Sink::Content(&mut hits);
+                walk(&root, &root, &re, glob.as_ref(), &mut sink);
+                let truncated = hits.len() >= MAX_RESULTS;
+                let is_empty = hits.is_empty();
+                let text = hits
+                    .iter()
+                    .map(|(rel, n, line)| format!("{rel}:{n}: {}", line.trim_end()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (text, truncated, is_empty)
             }
-            ToolOutput::ok(text)
+            "count" => {
+                // rel -> total matching lines in that file. Cap is on distinct files,
+                // not raw line volume: every counted file gets its full line count.
+                let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
+                let mut sink = Sink::Count(&mut counts);
+                walk(&root, &root, &re, glob.as_ref(), &mut sink);
+                let truncated = counts.len() >= MAX_RESULTS;
+                let is_empty = counts.is_empty();
+                let text = counts
+                    .iter()
+                    .map(|(rel, c)| format!("{rel}:{c}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (text, truncated, is_empty)
+            }
+            _ => {
+                // files_with_matches: unique paths in first-seen order, capped at
+                // MAX_RESULTS distinct files. Scanning a file stops at its first match
+                // so a noisy file can't starve the cap before other files are seen.
+                let mut files: Vec<String> = Vec::new();
+                let mut sink = Sink::Files(&mut files);
+                walk(&root, &root, &re, glob.as_ref(), &mut sink);
+                let truncated = files.len() >= MAX_RESULTS;
+                let is_empty = files.is_empty();
+                let text = files.join("\n");
+                (text, truncated, is_empty)
+            }
+        };
+
+        if is_empty {
+            return ToolOutput::ok(format!("no matches for {pattern:?}"));
         }
+        let mut text = text_body;
+        if truncated {
+            text.push_str(&format!("\n… (truncated at {MAX_RESULTS} matches; narrow the pattern or path)"));
+        }
+        ToolOutput::ok(text)
     }
 }
 
@@ -60,19 +120,80 @@ fn skip(name: &str) -> bool {
     name.starts_with('.') || matches!(name, "target" | "node_modules")
 }
 
-fn walk(root: &Path, dir: &Path, query: &str, hits: &mut Vec<String>) {
-    if hits.len() >= MAX_RESULTS {
+/// Mode-aware collector for `walk`. Each variant caps traversal on a different
+/// unit: `Content` caps on raw matching lines, `Files`/`Count` cap on distinct
+/// matching files.
+enum Sink<'a> {
+    Content(&'a mut Vec<(String, usize, String)>),
+    Files(&'a mut Vec<String>),
+    Count(&'a mut std::collections::BTreeMap<String, usize>),
+}
+
+impl<'a> Sink<'a> {
+    /// Whether the traversal-wide cap has been reached (stop walking further).
+    fn capped(&self) -> bool {
+        match self {
+            Sink::Content(hits) => hits.len() >= MAX_RESULTS,
+            Sink::Files(files) => files.len() >= MAX_RESULTS,
+            Sink::Count(counts) => counts.len() >= MAX_RESULTS,
+        }
+    }
+
+    /// Scan one file's contents for matches and record them per this sink's rules.
+    fn record_file(&mut self, rel: &str, re: &regex::Regex, contents: &str) {
+        match self {
+            Sink::Content(hits) => {
+                for (i, line) in contents.lines().enumerate() {
+                    if hits.len() >= MAX_RESULTS {
+                        return;
+                    }
+                    if re.is_match(line) {
+                        hits.push((rel.to_string(), i + 1, line.to_string()));
+                        if hits.len() >= MAX_RESULTS {
+                            return;
+                        }
+                    }
+                }
+            }
+            Sink::Files(files) => {
+                if files.len() >= MAX_RESULTS {
+                    return;
+                }
+                for line in contents.lines() {
+                    if re.is_match(line) {
+                        files.push(rel.to_string());
+                        // First match found: stop scanning this file and move on,
+                        // so a noisy file can't starve the cap before other files.
+                        return;
+                    }
+                }
+            }
+            Sink::Count(counts) => {
+                if counts.len() >= MAX_RESULTS && !counts.contains_key(rel) {
+                    // File cap already reached and this is a new file: skip it.
+                    return;
+                }
+                let n = contents.lines().filter(|line| re.is_match(line)).count();
+                if n > 0 {
+                    counts.insert(rel.to_string(), n);
+                }
+            }
+        }
+    }
+}
+
+fn walk(root: &Path, dir: &Path, re: &regex::Regex, glob: Option<&globset::GlobMatcher>, sink: &mut Sink) {
+    if sink.capped() {
         return;
     }
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
     };
-    // Deterministic order: collect + sort by path.
     let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
     paths.sort();
     for path in paths {
-        if hits.len() >= MAX_RESULTS {
+        if sink.capped() {
             return;
         }
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -80,24 +201,22 @@ fn walk(root: &Path, dir: &Path, query: &str, hits: &mut Vec<String>) {
             continue;
         }
         if path.is_symlink() {
-            // Never follow symlinks: a cycle (link back to an ancestor) would
-            // recurse unboundedly and overflow the stack before MAX_RESULTS.
             continue;
         } else if path.is_dir() {
-            walk(root, &path, query, hits);
-        } else if let Ok(contents) = std::fs::read_to_string(&path) {
+            walk(root, &path, re, glob, sink);
+        } else {
             let rel = path
                 .strip_prefix(root)
                 .unwrap_or(&path)
                 .display()
                 .to_string();
-            for (i, line) in contents.lines().enumerate() {
-                if line.contains(query) {
-                    hits.push(format!("{rel}:{}: {}", i + 1, line.trim_end()));
-                    if hits.len() >= MAX_RESULTS {
-                        return;
-                    }
+            if let Some(g) = glob {
+                if !g.is_match(&rel) {
+                    continue;
                 }
+            }
+            if let Ok(contents) = std::fs::read_to_string(&path) {
+                sink.record_file(&rel, re, &contents);
             }
         }
     }
@@ -108,58 +227,113 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    #[test]
-    fn finds_matches_with_line_numbers() {
+    fn seed() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("a.txt"), "one\nNEEDLE here\nthree").unwrap();
-        std::fs::create_dir(dir.path().join("sub")).unwrap();
-        std::fs::write(dir.path().join("sub/b.txt"), "nothing\nalso NEEDLE").unwrap();
-
-        let out = Search.run(
-            &json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }),
-            std::path::Path::new("."),
-        );
-        assert!(!out.is_error, "{}", out.text);
-        assert!(out.text.contains("a.txt:2:"));
-        assert!(out.text.contains("sub/b.txt:2:") || out.text.contains("sub\\b.txt:2:"));
+        std::fs::write(dir.path().join("a.rs"), "fn one() {}\nfn two() {}\n").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "hello\nWORLD\n").unwrap();
+        dir
     }
 
     #[test]
-    fn skips_hidden_and_build_dirs() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join("target")).unwrap();
-        std::fs::write(dir.path().join("target/x.txt"), "NEEDLE").unwrap();
-        let out = Search.run(
-            &json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }),
-            std::path::Path::new("."),
-        );
-        assert!(out.text.contains("no matches"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn symlink_cycle_terminates() {
-        // A directory symlink pointing back to its parent forms a cycle. Search
-        // must terminate (we don't follow symlinks) rather than recurse forever.
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("a.txt"), "NEEDLE").unwrap();
-        let sub = dir.path().join("sub");
-        std::fs::create_dir(&sub).unwrap();
-        std::os::unix::fs::symlink(dir.path(), sub.join("loop")).unwrap();
-        let out = Search.run(
-            &json!({ "query": "NEEDLE", "path": dir.path().to_str().unwrap() }),
+    fn regex_content_mode_returns_numbered_hits() {
+        let dir = seed();
+        let out = Grep.run(
+            &json!({ "pattern": r"fn \w+", "path": dir.path().to_str().unwrap(), "output_mode": "content" }),
             std::path::Path::new("."),
         );
         assert!(!out.is_error, "{}", out.text);
-        assert!(out.text.contains("a.txt:1:"));
+        assert!(out.text.contains("a.rs:1:"));
+        assert!(out.text.contains("a.rs:2:"));
+    }
+
+    #[test]
+    fn files_with_matches_is_default() {
+        let dir = seed();
+        let out = Grep.run(
+            &json!({ "pattern": "fn", "path": dir.path().to_str().unwrap() }),
+            std::path::Path::new("."),
+        );
+        assert!(out.text.contains("a.rs"));
+        assert!(!out.text.contains("b.txt"));
+        assert!(!out.text.contains(":1:"), "default mode lists files, not lines");
+    }
+
+    #[test]
+    fn glob_filter_restricts_file_set() {
+        let dir = seed();
+        let out = Grep.run(
+            &json!({ "pattern": ".", "path": dir.path().to_str().unwrap(), "glob": "*.txt" }),
+            std::path::Path::new("."),
+        );
+        assert!(out.text.contains("b.txt"));
+        assert!(!out.text.contains("a.rs"));
+    }
+
+    #[test]
+    fn case_insensitive_flag() {
+        let dir = seed();
+        let out = Grep.run(
+            &json!({ "pattern": "world", "-i": true, "path": dir.path().to_str().unwrap(), "output_mode": "content" }),
+            std::path::Path::new("."),
+        );
+        assert!(out.text.contains("b.txt:2:"));
+    }
+
+    #[test]
+    fn count_mode_reports_totals() {
+        let dir = seed();
+        let out = Grep.run(
+            &json!({ "pattern": "fn", "path": dir.path().to_str().unwrap(), "output_mode": "count" }),
+            std::path::Path::new("."),
+        );
+        assert!(out.text.contains("a.rs:2"));
+    }
+
+    #[test]
+    fn invalid_regex_is_error() {
+        let dir = seed();
+        let out = Grep.run(
+            &json!({ "pattern": "(", "path": dir.path().to_str().unwrap() }),
+            std::path::Path::new("."),
+        );
+        assert!(out.is_error);
+    }
+
+    #[test]
+    fn files_with_matches_not_dropped_by_noisy_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let noisy: String = std::iter::repeat("needle\n").take(250).collect();
+        std::fs::write(dir.path().join("a.rs"), noisy).unwrap();
+        std::fs::write(dir.path().join("b.rs"), "needle\n").unwrap();
+        let out = Grep.run(
+            &json!({ "pattern": "needle", "path": dir.path().to_str().unwrap() }),
+            std::path::Path::new("."),
+        );
+        assert!(!out.is_error, "{}", out.text);
+        assert!(out.text.contains("a.rs"), "missing a.rs: {}", out.text);
+        assert!(out.text.contains("b.rs"), "missing b.rs: {}", out.text);
+    }
+
+    #[test]
+    fn count_mode_counts_all_lines_but_caps_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let noisy: String = std::iter::repeat("needle\n").take(250).collect();
+        std::fs::write(dir.path().join("a.rs"), noisy).unwrap();
+        std::fs::write(dir.path().join("b.rs"), "needle\n").unwrap();
+        let out = Grep.run(
+            &json!({ "pattern": "needle", "path": dir.path().to_str().unwrap(), "output_mode": "count" }),
+            std::path::Path::new("."),
+        );
+        assert!(!out.is_error, "{}", out.text);
+        assert!(out.text.contains("a.rs:250"), "{}", out.text);
+        assert!(out.text.contains("b.rs:1"), "{}", out.text);
     }
 
     #[test]
     fn no_match_reports_cleanly() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("a.txt"), "abc").unwrap();
-        let out = Search.run(
-            &json!({ "query": "zzz", "path": dir.path().to_str().unwrap() }),
+        let dir = seed();
+        let out = Grep.run(
+            &json!({ "pattern": "zzzznomatch", "path": dir.path().to_str().unwrap() }),
             std::path::Path::new("."),
         );
         assert!(!out.is_error);

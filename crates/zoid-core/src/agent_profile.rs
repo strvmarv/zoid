@@ -33,15 +33,17 @@ impl AgentProfile {
             name: "delegate".into(),
             description: "Complete one discrete unit of work autonomously.".into(),
             system_prompt: "You are a zoid subagent. You are given ONE discrete task and the \
-                relevant code. Complete the task end to end using the tools (read, write, edit, \
-                search, shell). Work autonomously — do not ask questions. When done, give a \
-                one-paragraph summary of what you changed."
+                relevant code. Complete the task end to end using the tools (Read, Write, Edit, \
+                Grep, Glob, LS, shell). Work autonomously — do not ask questions. When done, give \
+                a one-paragraph summary of what you changed."
                 .into(),
             tools: vec![
-                "read_file".into(),
-                "write_file".into(),
-                "edit_file".into(),
-                "search".into(),
+                "Read".into(),
+                "Write".into(),
+                "Edit".into(),
+                "Grep".into(),
+                "Glob".into(),
+                "LS".into(),
                 "shell".into(),
             ],
             model: None,
@@ -60,8 +62,8 @@ mod tests {
         assert!(!p.description.is_empty());
         assert!(!p.system_prompt.is_empty());
         // The built-in profile may edit files and run the shell.
-        assert!(p.allows("write_file"));
-        assert!(p.allows("edit_file"));
+        assert!(p.allows("Write"));
+        assert!(p.allows("Edit"));
         assert!(p.allows("shell"));
         // A tool NOT on the allow-list is denied.
         assert!(!p.allows("launch_missiles"));
