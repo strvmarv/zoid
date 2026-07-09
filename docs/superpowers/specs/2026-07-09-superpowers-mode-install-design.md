@@ -62,7 +62,7 @@ Four steps; only step 2 is new code.
 | `crates/zoid/src/superpowers_install.rs` *(new)* | `const PINNED_*`; `superpowers_mapping()` (pure); `generate_mode_md()` (pure); `install_superpowers()` async orchestrator (acquire → map → materialize → reload). |
 | `crates/zoid-tui/src/command.rs` | Parse `:mode install superpowers` → `Command::ModeInstallSuperpowers`. |
 | `crates/zoid/src/main.rs` | Handle the command (async, progress, success/failure status); palette entry; onboarding keypress dispatch. |
-| `crates/zoid-tui/src/onboarding.rs` | Add the opt-in first-run affordance line (§6). |
+| `crates/zoid-tui/src/onboarding.rs` | `empty_state_lines` gains an `offer_superpowers: bool`; add the instructional first-run line (§6.2). No route/keypress change. |
 | `crates/zoid/src/mode_wizard.rs` / `github_fetch.rs` / `zoid_core::wizard` | **No behavior change.** `materialize` and `fetch_tree` already live in the `zoid` bin crate alongside the new module, so they are reachable in-crate (widen to `pub(crate)` only if currently private to their module). |
 
 ---
@@ -104,14 +104,14 @@ Two surfaces, one code path.
 
 **6.1 Command.** `:mode install superpowers` → `Command::ModeInstallSuperpowers`. Also a palette entry ("Install Superpowers mode"). The handler runs `install_superpowers()` asynchronously (network I/O off the UI thread), shows a progress hint while fetching, and reports success or a specific failure.
 
-**6.2 Onboarding.** `onboarding.rs`'s first-time-user empty-state screen gains one interactive line:
+**6.2 Onboarding.** `onboarding.rs`'s first-time-user empty-state screen gains one **instructional** line:
 
 ```
-  Press s to install the Superpowers skill set
+  Run :mode install superpowers to install the Superpowers skill set
   (brainstorming, TDD, systematic debugging, code review, planning…)
 ```
 
-Shown only when `first_time_user` is true and Superpowers is not already installed. **Keypress gating (explicit, to avoid hijacking typing):** `s` triggers the install **only while the empty-state onboarding is on screen AND the message input buffer is empty** — the same "special key on empty buffer" convention `route.rs` already uses for `:` opening the palette (`Focus::Input` + `state.input_empty`). Once the user types any character, `s` is a literal again and the affordance is inert. Declining (typing a message, or ignoring the line) leaves zoid completely untouched — the opt-in guarantee.
+Shown only when `first_time_user` is true and Superpowers is not already installed (the bin computes this and passes an `offer_superpowers: bool` to `empty_state_lines`). **No keypress binding.** An earlier design bound the letter `s` on an empty buffer to the install; it was rejected in review (M1): the empty-buffer guard is worthless because the buffer *is* empty at the first keystroke, so a new user typing "show…/set up…/search…" would trigger an install on keystroke one — unlike `:`, `s` commonly starts a sentence. The zero-friction path is the command + palette row from §6.1; the onboarding line merely points at it. Ignoring the line leaves zoid completely untouched — the opt-in guarantee.
 
 ---
 
@@ -119,7 +119,7 @@ Shown only when `first_time_user` is true and Superpowers is not already install
 
 Non-fatal, mirroring the mode importer's "degrade, never crash" stance.
 
-- **Network / GitHub API / rate-limit** (unauthenticated API is 60 req/hr) → clear status message ("couldn't reach github.com" / "GitHub rate limit — try later"); **no partial mode** is left behind (materialize writes the folder atomically, or the handler removes a half-written folder on error).
+- **Network / GitHub API / rate-limit** (unauthenticated API is 60 req/hr) → clear status message ("couldn't reach github.com" / "GitHub rate limit — try later"). **Cleanup on failure:** `materialize`'s built-in `rollback` only deletes files written in the failing attempt — it does **not** remove created directories, and on a *re-install over an existing good mode* it truncates old files before rollback deletes them, which can destroy a previously working `superpowers/` (M3). Therefore the install **must be clean-slate**: the handler removes the entire `dest` folder (`<cfg>/modes/superpowers/`) before calling `materialize`, so a failed install can never corrupt a prior good one and never leaves empty skill dirs. (Trade-off: a failed re-install leaves no mode rather than the previous one; acceptable because the pinned SHA makes re-running deterministic and cheap.)
 - **Offline** → "Superpowers install requires network access."
 - **Parse failure of an upstream SKILL.md** → that skill is skipped with a warning (the mode still installs), matching `build_mode_registry`'s per-skill tolerance. `mode.md`'s bullet list simply omits a skill it couldn't parse.
 - **Already installed** → re-run overwrites `superpowers/` (same semantics as `:mode update`). Pinned SHA ⇒ byte-stable re-install.
@@ -139,8 +139,8 @@ Non-fatal, mirroring the mode importer's "degrade, never crash" stance.
 - `superpowers_mapping()` — pure. Unit-test against a fixture `UpstreamScan`: asserts `using-superpowers/SKILL.md` maps to `mode.md`, every other file maps to `<skill>/**`, and supporting files (references, prompts) are included.
 - `generate_mode_md()` — pure. Unit-test: given fixture skills, asserts frontmatter, the `invoke_skill` instruction, alphabetical bullet list of `name: description`, and the closing verification instruction.
 - `fetch_tree` — already covered via the mockable `GithubApi`; add a recipe-level test that wires a fake API returning a small superpowers-shaped tree and asserts the materialized layout + provenance shape (schema, source.ref = pinned SHA, file entries). **No network in tests.**
-- Onboarding line — snapshot test for the `first_time_user` screen (present when not installed, absent otherwise).
-- Keypress gating — route unit test: `s` on the first-run empty-state with an **empty** buffer → install action; `s` with a **non-empty** buffer → literal character (`Edit`), no install.
+- Onboarding line — unit test for the `first_time_user` screen: present when `offer_superpowers` is true, absent when false. (No keypress test — there is no keypress.)
+- Clean-slate re-install — `finish_install` test: install, then install again over the existing folder, asserting the result is complete and consistent (no leftover files from a prior mapping).
 - Command parse — `:mode install superpowers` → `Command::ModeInstallSuperpowers` (and that it does not collide with `:mode <name>` switching to a mode literally named "install").
 
 ---

@@ -238,8 +238,8 @@ Wire the pure mapping to the reused writer, add the async fetch, and the main-lo
 **Files:**
 - Modify: `crates/zoid/src/superpowers_install.rs` (add `finish_install`)
 - Modify: `crates/zoid/src/agent.rs:167-210` (add `SuperpowersScan` variant)
-- Modify: `crates/zoid/src/main.rs` (add `install_superpowers()`; handle the new AgentUpdate near the `ModelsFetched` handler ~2625)
-- Test: inline `#[cfg(test)]` in `superpowers_install.rs` (uses `github_fetch::FakeGithubApi` + tempdir)
+- Modify: `crates/zoid/src/main.rs` (add `App.installing_superpowers: bool`; `install_superpowers()`; handle the new AgentUpdate near the `ModelsFetched` handler ~2625)
+- Test: inline `#[cfg(test)]` in `superpowers_install.rs` (fixture `UpstreamScan` + tempdir; no network — `finish_install` takes a scan directly)
 
 **Interfaces:**
 - Consumes: `superpowers_mapping` (Task 1); `mode_wizard::materialize(&ModeMapping, &UpstreamScan, dest_dir: &Path, fetched_at: &str) -> Result<PathBuf, MaterializeError>`; `github_fetch::{parse_github_url, HttpGithubApi, fetch_tree}`; `App.ui_tx`.
@@ -275,6 +275,19 @@ Append to the `#[cfg(test)] mod tests` in `superpowers_install.rs`:
         assert_eq!(v["source"]["repo"], "obra/superpowers");
         assert!(v["files"].as_array().unwrap().iter().any(|f| f["canonical_path"] == "mode.md"));
     }
+
+    #[test]
+    fn reinstall_is_clean_slate() {
+        let scan = fixture();
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("modes").join("superpowers");
+        finish_install(&scan, &dest).unwrap();
+        // Plant a stale file a later mapping would never produce.
+        std::fs::write(dest.join("STALE.md"), "old").unwrap();
+        finish_install(&scan, &dest).unwrap();
+        assert!(!dest.join("STALE.md").exists(), "clean-slate wipes stale files");
+        assert!(dest.join("mode.md").is_file());
+    }
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -288,10 +301,20 @@ Add to `superpowers_install.rs` (imports at top: add `use std::path::{Path, Path
 
 ```rust
 /// Map + write. Pure of app state so it is unit-testable; the caller resolves
-/// `dest_dir` (`<cfg>/modes/superpowers`) and handles reload/switch. Re-running
-/// overwrites in place (materialize reconciles against any existing sidecar).
+/// `dest_dir` (`<cfg>/modes/superpowers`) and handles reload/switch.
+///
+/// Clean-slate: remove any prior install before writing. `materialize`'s own
+/// rollback deletes only files written in the failing attempt (not dirs) and,
+/// on a re-install, truncates the old files before deleting them — a failed
+/// re-install could otherwise destroy a previously-good mode (review M3).
+/// Removing `dest_dir` first makes a failed install leave *nothing* rather than
+/// a corrupted mode; the pinned SHA makes a clean re-run cheap.
 pub fn finish_install(scan: &UpstreamScan, dest_dir: &Path) -> Result<PathBuf, String> {
     let mapping = superpowers_mapping(scan)?;
+    if dest_dir.exists() {
+        std::fs::remove_dir_all(dest_dir)
+            .map_err(|e| format!("remove old install {}: {e}", dest_dir.display()))?;
+    }
     let fetched_at = chrono::Utc::now().to_rfc3339();
     materialize(&mapping, scan, dest_dir, &fetched_at).map_err(|e| e.problems.join("; "))
 }
@@ -300,7 +323,7 @@ pub fn finish_install(scan: &UpstreamScan, dest_dir: &Path) -> Result<PathBuf, S
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `source "$HOME/.cargo/env" && cargo test -p zoid superpowers_install 2>&1 | tail -20`
-Expected: PASS — 4 tests.
+Expected: PASS — 5 tests (3 mapping + `finish_install` + `reinstall`).
 
 - [ ] **Step 5: Add the `AgentUpdate` variant**
 
@@ -317,12 +340,24 @@ In `crates/zoid/src/agent.rs`, inside `pub enum AgentUpdate { … }` (after `Fee
 
 Add a free function near `exec_command` in `crates/zoid/src/main.rs`:
 
+First add an in-flight flag to `struct App` (find its definition in `main.rs`) and initialize it `false` in the constructor:
+
+```rust
+    /// True while a Superpowers install fetch is in flight. Prevents a second
+    /// trigger from racing a concurrent write on the same folder (review M4).
+    installing_superpowers: bool,
+```
+
+Then the function:
+
 ```rust
 /// Kick off the deterministic Superpowers install: fetch the pinned tree
 /// off-thread, then hand the scan back to the main loop via SuperpowersScan.
 fn install_superpowers(app: &mut App) {
-    // Guard against re-install churn while one is in flight is unnecessary —
-    // materialize overwrites idempotently — but surface progress.
+    if app.installing_superpowers {
+        app.shell.status_hint = Some("Superpowers install already in progress…".into());
+        return;
+    }
     app.shell.status_hint = Some("installing Superpowers…".into());
     let parsed = match zoid::github_fetch::parse_github_url(
         zoid::superpowers_install::SUPERPOWERS_URL,
@@ -333,6 +368,7 @@ fn install_superpowers(app: &mut App) {
             return;
         }
     };
+    app.installing_superpowers = true;
     let ui_tx = app.ui_tx.clone();
     tokio::spawn(async move {
         let api = zoid::github_fetch::HttpGithubApi::new();
@@ -350,6 +386,7 @@ In the `match update { … }` block that handles `AgentUpdate` in the main loop 
 
 ```rust
                     AgentUpdate::SuperpowersScan(res) => {
+                        app.installing_superpowers = false; // fetch attempt concluded
                         match res {
                             Err(e) => app.shell.status_hint = Some(e),
                             Ok(scan) => {
@@ -364,10 +401,12 @@ In the `match update { … }` block that handles `AgentUpdate` in the main loop 
                                             &app.base_profile,
                                             &app.mode_dirs,
                                         );
-                                        app.modes.set_active(if app.modes.names().iter().any(|n| n == "Superpowers") {
+                                        let installed =
+                                            app.modes.names().iter().any(|n| n == "Superpowers");
+                                        app.modes.set_active(if installed {
                                             "Superpowers"
                                         } else {
-                                            &prev
+                                            prev.as_str()
                                         });
                                         sync_mode_mirror(app);
                                         persist_active_mode(app).await;
@@ -387,7 +426,7 @@ In the `match update { … }` block that handles `AgentUpdate` in the main loop 
 - [ ] **Step 7: Build + run the whole zoid crate tests**
 
 Run: `source "$HOME/.cargo/env" && cargo build -p zoid 2>&1 | tail -5 && cargo test -p zoid superpowers_install 2>&1 | tail -10`
-Expected: build OK; 4 tests PASS.
+Expected: build OK; 5 tests PASS.
 
 - [ ] **Step 8: Commit**
 
@@ -478,7 +517,16 @@ In `crates/zoid/src/main.rs` `exec_command`, add an arm (near the other `Command
 
 - [ ] **Step 7: Add the palette row**
 
-In `crates/zoid-tui/src/palette.rs`, find where `:mode import` is offered as a Direct/Pick row and add a sibling row that resolves to `Command::ModeInstallSuperpowers` with label `"Install Superpowers mode"`. (Follow the exact struct shape used by the neighboring `:mode import` row — do not invent fields.)
+The palette is **staged**: `crates/zoid-tui/src/palette.rs` has a `"mode" => { let mut rows = vec![ … ]; … }` block (~line 190) with terse `PaletteItem { label, command }` rows (`"reload"`, `"import"`, `"update"`). Add one sibling entry to that `rows` vec:
+
+```rust
+                PaletteItem {
+                    label: "install superpowers".into(),
+                    command: Command::ModeInstallSuperpowers,
+                },
+```
+
+(Terse label to match the neighbors — not "Install Superpowers mode".)
 
 - [ ] **Step 8: Build + test**
 
@@ -494,95 +542,44 @@ git commit -m "feat(superpowers): :mode install superpowers command + palette ro
 
 ---
 
-### Task 4: First-run onboarding affordance + gated `s` keypress
+### Task 4: First-run onboarding install line
+
+**No keypress, no route/state change** (review M1: a bare-`s` binding hijacks a new user's first keystroke; the empty-buffer guard is worthless because the buffer *is* empty at keystroke one). The install runs via `Command::ModeInstallSuperpowers` (command + palette, Task 3). The onboarding screen just adds an instructional line pointing at it, shown only when Superpowers isn't installed yet.
 
 **Files:**
-- Modify: `crates/zoid-tui/src/onboarding.rs` (`empty_state_lines` gains an `offer_superpowers: bool` param + the affordance line)
-- Modify: `crates/zoid-tui/src/state.rs` (add `pub offer_superpowers: bool` to `ShellState`, default `false`)
-- Modify: `crates/zoid-tui/src/route.rs` (`Focus::Input` arm: gated `s`; new `Action::InstallSuperpowers`)
-- Modify: `crates/zoid/src/main.rs` (set `app.shell.offer_superpowers` each frame in the empty-state prep ~line 2207; pass it to `empty_state_lines`; handle `Action::InstallSuperpowers`)
-- Test: onboarding snapshot test + route unit test
+- Modify: `crates/zoid-tui/src/onboarding.rs` (`empty_state_lines` gains `offer_superpowers: bool`; add the instructional line; fix the internal test callers broken by the arity change)
+- Modify: `crates/zoid/src/main.rs` (compute the offer bool at the empty-state call site ~line 2212 and pass it)
+- Test: `onboarding.rs` unit test
 
 **Interfaces:**
-- Consumes: `Command::ModeInstallSuperpowers` / `install_superpowers` (Tasks 2–3).
-- Produces: `Action::InstallSuperpowers`; `ShellState.offer_superpowers`; `empty_state_lines(first_time_user, offer_superpowers, width)`.
+- Consumes: nothing new (install is `Command::ModeInstallSuperpowers` from Task 3).
+- Produces: `empty_state_lines(first_time_user: bool, offer_superpowers: bool, width: usize)`.
 
-- [ ] **Step 1: Write the failing route test**
+- [ ] **Step 1: Write the failing onboarding test**
 
-In `crates/zoid-tui/src/route.rs` `#[cfg(test)] mod tests`, add:
+In `crates/zoid-tui/src/onboarding.rs` `#[cfg(test)] mod tests`, add (the test module already has `use super::*;`; `Line` is `ratatui::text::Line`):
 
 ```rust
     #[test]
-    fn s_on_empty_offer_installs_else_literal() {
-        let mut s = ShellState::new(); // focus Input, input_empty = true
-        s.offer_superpowers = true;
-        assert_eq!(
-            route_key(&s, key(KeyCode::Char('s'), KeyModifiers::NONE)),
-            Action::InstallSuperpowers
-        );
-        // Once the buffer has text, 's' is a literal edit again.
-        s.input_empty = false;
-        assert!(matches!(
-            route_key(&s, key(KeyCode::Char('s'), KeyModifiers::NONE)),
-            Action::Edit(_)
-        ));
-        // And when not offered, 's' is always literal.
-        s.input_empty = true;
-        s.offer_superpowers = false;
-        assert!(matches!(
-            route_key(&s, key(KeyCode::Char('s'), KeyModifiers::NONE)),
-            Action::Edit(_)
-        ));
+    fn superpowers_offer_line_shown_only_when_offered() {
+        let joined = |ls: &[ratatui::text::Line]| ls.iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect::<String>();
+        let with = empty_state_lines(true, true, 80);
+        let without = empty_state_lines(true, false, 80);
+        assert!(joined(&with).contains(":mode install superpowers"));
+        assert!(!joined(&without).contains("Superpowers"));
     }
 ```
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `source "$HOME/.cargo/env" && cargo test -p zoid-tui s_on_empty_offer 2>&1 | tail -15`
-Expected: FAIL — `Action::InstallSuperpowers` and `offer_superpowers` don't exist.
+Run: `source "$HOME/.cargo/env" && cargo test -p zoid-tui superpowers_offer_line 2>&1 | tail -15`
+Expected: FAIL — `empty_state_lines` takes 2 args, not 3 (arity error).
 
-- [ ] **Step 3: Add the state field**
+- [ ] **Step 3: Change the signature + thread the flag**
 
-In `crates/zoid-tui/src/state.rs`, add to `struct ShellState` (near `first_time_user`):
-
-```rust
-    /// True only while the first-run empty-state offer to install Superpowers
-    /// is on screen (first_time_user + empty conversation + not yet installed).
-    /// Gates the `s` install keypress so it never hijacks normal typing.
-    pub offer_superpowers: bool,
-```
-
-And in `ShellState::new()` initialize `offer_superpowers: false,`.
-
-- [ ] **Step 4: Add the Action + route arm**
-
-In `crates/zoid-tui/src/route.rs`, add to `enum Action`:
-
-```rust
-    InstallSuperpowers,
-```
-
-In the `Focus::Input => match (key.code, key.modifiers) { … }` block, add **before** the `_ => Action::Edit(key)` arm (mirrors the existing empty-buffer `:` convention):
-
-```rust
-            // First-run offer: `s` on an empty buffer installs Superpowers.
-            // Gated on `offer_superpowers` so it only fires on the onboarding
-            // screen; any typed text makes `s` literal again.
-            (KeyCode::Char('s'), KeyModifiers::NONE)
-                if state.input_empty && state.offer_superpowers =>
-            {
-                Action::InstallSuperpowers
-            }
-```
-
-- [ ] **Step 5: Run to verify the route test passes**
-
-Run: `source "$HOME/.cargo/env" && cargo test -p zoid-tui s_on_empty_offer 2>&1 | tail -15`
-Expected: PASS.
-
-- [ ] **Step 6: Add the onboarding line (failing snapshot first)**
-
-In `crates/zoid-tui/src/onboarding.rs`, change the signature and thread the flag:
+In `crates/zoid-tui/src/onboarding.rs`:
 
 ```rust
 pub fn empty_state_lines(first_time_user: bool, offer_superpowers: bool, width: usize) -> Vec<Line<'static>> {
@@ -598,10 +595,10 @@ Add a constant near the other `NEW_USER_*` consts:
 
 ```rust
 const SUPERPOWERS_OFFER: &str =
-    "Press s to install the Superpowers skill set (brainstorming, TDD, systematic debugging, code review, planning…)";
+    "Run :mode install superpowers to install the Superpowers skill set (brainstorming, TDD, systematic debugging, code review, planning…)";
 ```
 
-In `fn new_user_lines(offer_superpowers: bool, width: usize)`, after the suggested prompts block, append:
+Change `fn new_user_lines(width: usize)` → `fn new_user_lines(offer_superpowers: bool, width: usize)`, and just before its final `lines` return, append:
 
 ```rust
     if offer_superpowers {
@@ -612,50 +609,39 @@ In `fn new_user_lines(offer_superpowers: bool, width: usize)`, after the suggest
     }
 ```
 
-Add/adjust a unit test in `onboarding.rs`:
+- [ ] **Step 4: Fix the internal test callers broken by the arity change (m2)**
+
+The new 3-arg signature breaks **every** existing `empty_state_lines(bool, width)` call in this file's own test module — not just one. Enumerate and fix all of them, passing `false` for the new middle arg (they don't assert the offer):
+
+Run: `grep -n "empty_state_lines(" crates/zoid-tui/src/onboarding.rs`
+Then update each call — currently `:103` (`empty_state_lines(true, false, 80)`), `:135` (`empty_state_lines(false, false, 80)`), and every width/wrap test below them — to the 3-arg form. (Do NOT stop at the first one the compiler names; fix them all in one pass.)
+
+- [ ] **Step 5: Update the main.rs call site + compute the offer**
+
+At `crates/zoid/src/main.rs` (~line 2212), in the empty-state intercept block:
 
 ```rust
-    #[test]
-    fn superpowers_offer_shown_only_when_offered() {
-        let with = empty_state_lines(true, true, 80);
-        let without = empty_state_lines(true, false, 80);
-        let joined = |ls: &[ratatui::text::Line]| ls.iter().flat_map(|l| l.spans.iter().map(|s| s.content.to_string())).collect::<String>();
-        assert!(joined(&with).contains("install the Superpowers skill set"));
-        assert!(!joined(&without).contains("Superpowers"));
-    }
-```
-
-- [ ] **Step 7: Update callers + set the flag in main.rs**
-
-Update the call at `crates/zoid/src/main.rs` (~line 2212) and set the flag in the same empty-state intercept block (~2207):
-
-```rust
-                app.shell.offer_superpowers = app.shell.first_time_user
+                let offer_superpowers = app.shell.first_time_user
                     && !app.modes.names().iter().any(|n| n == "Superpowers");
-                let lines =
-                    zoid_tui::onboarding::empty_state_lines(app.shell.first_time_user, app.shell.offer_superpowers, body_w);
+                let lines = zoid_tui::onboarding::empty_state_lines(
+                    app.shell.first_time_user,
+                    offer_superpowers,
+                    body_w,
+                );
 ```
 
-Handle the Action in `handle_action` in `crates/zoid/src/main.rs`:
+Also fix any other `empty_state_lines(` call site the compiler flags (pass `false` where there is no offer context).
 
-```rust
-        Action::InstallSuperpowers => {
-            install_superpowers(app);
-        }
-```
+- [ ] **Step 6: Build + run onboarding + snapshot tests**
 
-Also fix any other `empty_state_lines(` call sites the compiler flags (pass the new bool; `false` where there is no offer).
+Run: `source "$HOME/.cargo/env" && cargo build -p zoid 2>&1 | tail -3 && cargo test -p zoid-tui onboarding 2>&1 | tail -12 && cargo test -p zoid-tui --test shell_snapshot 2>&1 | tail -8`
+Expected: build OK; onboarding tests PASS; snapshot tests PASS (if a snapshot fixture is a first-time user with the offer, the empty-state snapshot changes — review the diff and accept deliberately).
 
-- [ ] **Step 8: Build + run onboarding + route + snapshot tests**
-
-Run: `source "$HOME/.cargo/env" && cargo build -p zoid 2>&1 | tail -3 && cargo test -p zoid-tui onboarding s_on_empty_offer 2>&1 | tail -15 && cargo test -p zoid-tui --test shell_snapshot 2>&1 | tail -8`
-Expected: build OK; onboarding + route tests PASS; snapshot tests PASS (or update snapshots deliberately if the empty-state changed — review the diff first).
-
-- [ ] **Step 9: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add crates/zoid-tui/src/onboarding.rs crates/zoid-tui/src/state.rs crates/zoid-tui/src/route.rs crates/zoid/src/main.rs
-git commit -m "feat(superpowers): first-run onboarding offer + gated s keypress"
+git add crates/zoid-tui/src/onboarding.rs crates/zoid/src/main.rs
+git commit -m "feat(superpowers): first-run onboarding install line"
 ```
 
 ---
@@ -669,7 +655,7 @@ Expected: `ALL_GREEN`.
 
 - [ ] **Step 2: Manual smoke (real network, optional)**
 
-Run the release build, and on the first-run screen press `s` (or run `:mode install superpowers`). Expect: status "Superpowers mode installed.", `~/.config/zoid/modes/superpowers/` populated, and `Superpowers` in the Shift+Tab cycle. Then `:mode update superpowers` should report "unchanged" (proves provenance parity).
+Run the release build and execute `:mode install superpowers` (or click the palette row). Expect: status "Superpowers mode installed.", `~/.config/zoid/modes/superpowers/` populated, and `Superpowers` in the Shift+Tab cycle. Then `:mode update superpowers` should report "unchanged" — this proves provenance parity **and** verifies the pinned SHA round-trips through `fetch_tree`'s `resolved_ref` (review n2); if update reports drift on a fresh install, the pinned ref in the sidecar differs from the fetch and the `SUPERPOWERS_URL` const needs the tree SHA, not the commit SHA.
 
 - [ ] **Step 3: Commit any snapshot updates**
 
@@ -686,16 +672,23 @@ git add -A && git commit -m "test(superpowers): update snapshots for onboarding 
 - §4 architecture (acquire/map/write/reload) → Task 1 (map) + Task 2 (acquire/write/reload). ✓
 - §5 mode.md template + auto-extracted descriptions → Task 1 `generate_mode_body`. ✓
 - §6.1 command + palette → Task 3. ✓
-- §6.2 onboarding + gated keypress → Task 4. ✓
-- §7 error handling (fetch/materialize failures surface as status; materialize rolls back) → Task 2 handler + reused `materialize` rollback. ✓
-- §8 idempotency/update (provenance parity) → Task 2 test asserts sidecar; Task 5 smoke checks `:mode update`. ✓
-- §9 testing (pure mapping, mockable API, onboarding snapshot, keypress gating, parse collision) → Tasks 1,2,3,4 tests. ✓
+- §6.2 onboarding instructional line (no keypress) → Task 4. ✓
+- §7 error handling + clean-slate cleanup on failure → Task 2 `finish_install` removes `dest` before write. ✓
+- §8 idempotency/update (provenance parity) → Task 2 sidecar + reinstall tests; Task 5 smoke checks `:mode update`. ✓
+- §9 testing (pure mapping, mockable API, onboarding conditional line, clean-slate reinstall, parse collision) → Tasks 1,2,3,4 tests. ✓
 - §10 out of scope (no installer, no auto-install) → honored (opt-in only). ✓
 
-**Placeholder scan:** No TBD/TODO. The only "follow the neighboring shape" step is Task 3 Step 7 (palette row) — intentional, because the palette row struct must match the in-repo `:mode import` row exactly; the implementer copies that sibling rather than an invented field set.
+**Placeholder scan:** No TBD/TODO. All code steps show real code, verified against the codebase.
 
-**Type consistency:** `superpowers_mapping`/`finish_install`/`install_superpowers`/`AgentUpdate::SuperpowersScan`/`Command::ModeInstallSuperpowers`/`Action::InstallSuperpowers`/`ShellState.offer_superpowers`/`empty_state_lines(bool,bool,usize)` are used identically across tasks. `materialize(&ModeMapping,&UpstreamScan,&Path,&str)` and `parse_github_url`/`fetch_tree`/`HttpGithubApi` match `github_fetch.rs`/`mode_wizard.rs` verbatim.
+**Type consistency:** `superpowers_mapping`/`finish_install`/`install_superpowers`/`AgentUpdate::SuperpowersScan`/`Command::ModeInstallSuperpowers`/`empty_state_lines(bool,bool,usize)`/`App.installing_superpowers` are used identically across tasks. `materialize(&ModeMapping,&UpstreamScan,&Path,&str)` and `parse_github_url`/`fetch_tree`/`HttpGithubApi` match `github_fetch.rs`/`mode_wizard.rs` verbatim.
 
-## Open Reviewer Question
+## Gilfoyle review — resolution
 
-The spec (and this plan) bind the onboarding install to the letter **`s`** on an empty buffer. That is the one UX footgun worth scrutiny: a brand-new user who opens zoid and types a message *starting with* `s` will trigger an install on the first keystroke. The empty-buffer guard mirrors the existing `:`-opens-palette convention, but `:` rarely starts a message whereas `s` often does. Alternatives: a non-letter key, a chord (e.g. Ctrl+S), or a highlighted "[ Install ]" affordance activated by Enter. Flagged for the gilfoyle review to weigh before implementation.
+Reviewed by the gilfoyle-tech-reviewer; verdict "ready-with-fixes". All signatures verified against the real code; `materialize` semantics and the deterministic mapping confirmed against the on-disk install. Fixes folded into this plan + the spec:
+- **M1 (major) — bare-`s` keypress: removed.** The install is command + palette only; the onboarding screen shows an instructional line (`Run :mode install superpowers …`). Task 4 no longer touches `route.rs`/`state.rs` and adds no `Action`.
+- **m1 — palette:** Task 3 Step 7 now targets the real staged `"mode"` `rows` vec with a terse `PaletteItem { label: "install superpowers", command }`.
+- **m2 — onboarding test callers:** Task 4 Step 4 enumerates and fixes *all* internal `empty_state_lines` callers, not just the one the compiler names first.
+- **m3 — clean-slate:** `finish_install` removes `dest` before writing (materialize's rollback leaves dirs and can truncate a good install on failure); spec §7 corrected; reinstall test added.
+- **m4 — in-flight guard:** `App.installing_superpowers` prevents a second concurrent install racing the same folder.
+- **n1 — `prev.as_str()`** in the handler's `set_active` else arm.
+- **n2 — pinned-SHA round-trip** verified in the Task 5 smoke (update-reports-unchanged doubles as the ref-parity check).
