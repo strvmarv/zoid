@@ -52,16 +52,19 @@ impl Tool for Ls {
         paths.sort();
         let mut rows: Vec<String> = Vec::new();
         for p in paths {
-            if rows.len() >= MAX_RESULTS {
-                rows.push(format!("… (truncated at {MAX_RESULTS} entries)"));
-                break;
-            }
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-            if name.starts_with('.') || matches!(name.as_str(), "target" | "node_modules") {
+            if crate::skip_entry(&name) {
                 continue;
             }
             if ignores.iter().any(|g| g.is_match(&name)) {
                 continue;
+            }
+            // Cap check comes AFTER the skip/ignore filters so only entries we
+            // would actually list count toward the cap (a skip-listed entry past
+            // the cap must not trigger a spurious truncation notice).
+            if rows.len() >= MAX_RESULTS {
+                rows.push(format!("… (truncated at {MAX_RESULTS} entries)"));
+                break;
             }
             let (kind, size) = if p.is_symlink() {
                 ("link", 0)

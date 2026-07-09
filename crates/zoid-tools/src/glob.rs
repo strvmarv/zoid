@@ -43,7 +43,16 @@ impl Tool for GlobTool {
             return ToolOutput::err(format!("Glob: path is not a directory: {path_arg}"));
         }
         let mut found: Vec<(std::time::SystemTime, String)> = Vec::new();
-        walk(&root, &root, &matcher, &mut found);
+        crate::walk_files(&root, |rel, full| {
+            if matcher.is_match(rel) {
+                let mtime = full
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::UNIX_EPOCH);
+                found.push((mtime, rel.to_string()));
+            }
+            crate::Walk::Continue
+        });
         if found.is_empty() {
             return ToolOutput::ok(format!("no files match {pattern:?}"));
         }
@@ -60,48 +69,6 @@ impl Tool for GlobTool {
             text.push_str(&format!("\n… (truncated at {MAX_RESULTS} files)"));
         }
         ToolOutput::ok(text)
-    }
-}
-
-fn skip(name: &str) -> bool {
-    name.starts_with('.') || matches!(name, "target" | "node_modules")
-}
-
-fn walk(
-    root: &Path,
-    dir: &Path,
-    matcher: &globset::GlobMatcher,
-    found: &mut Vec<(std::time::SystemTime, String)>,
-) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
-    paths.sort();
-    for path in paths {
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if skip(name) {
-            continue;
-        }
-        if path.is_symlink() {
-            continue;
-        } else if path.is_dir() {
-            walk(root, &path, matcher, found);
-        } else {
-            let rel = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .display()
-                .to_string();
-            if matcher.is_match(&rel) {
-                let mtime = path
-                    .metadata()
-                    .and_then(|m| m.modified())
-                    .unwrap_or(std::time::UNIX_EPOCH);
-                found.push((mtime, rel));
-            }
-        }
     }
 }
 

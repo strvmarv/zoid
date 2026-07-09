@@ -72,7 +72,7 @@ impl Tool for Grep {
                 // (relpath, line_no, line_text) hits, capped at MAX_RESULTS raw lines.
                 let mut hits: Vec<(String, usize, String)> = Vec::new();
                 let mut sink = Sink::Content(&mut hits);
-                walk(&root, &root, &re, glob.as_ref(), &mut sink);
+                collect(&root, &re, glob.as_ref(), &mut sink);
                 let truncated = hits.len() >= MAX_RESULTS;
                 let is_empty = hits.is_empty();
                 let text = hits
@@ -87,7 +87,7 @@ impl Tool for Grep {
                 // not raw line volume: every counted file gets its full line count.
                 let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
                 let mut sink = Sink::Count(&mut counts);
-                walk(&root, &root, &re, glob.as_ref(), &mut sink);
+                collect(&root, &re, glob.as_ref(), &mut sink);
                 let truncated = counts.len() >= MAX_RESULTS;
                 let is_empty = counts.is_empty();
                 let text = counts
@@ -103,7 +103,7 @@ impl Tool for Grep {
                 // so a noisy file can't starve the cap before other files are seen.
                 let mut files: Vec<String> = Vec::new();
                 let mut sink = Sink::Files(&mut files);
-                walk(&root, &root, &re, glob.as_ref(), &mut sink);
+                collect(&root, &re, glob.as_ref(), &mut sink);
                 let truncated = files.len() >= MAX_RESULTS;
                 let is_empty = files.is_empty();
                 let text = files.join("\n");
@@ -122,11 +122,7 @@ impl Tool for Grep {
     }
 }
 
-fn skip(name: &str) -> bool {
-    name.starts_with('.') || matches!(name, "target" | "node_modules")
-}
-
-/// Mode-aware collector for `walk`. Each variant caps traversal on a different
+/// Mode-aware collector for `collect`. Each variant caps traversal on a different
 /// unit: `Content` caps on raw matching lines, `Files`/`Count` cap on distinct
 /// matching files.
 enum Sink<'a> {
@@ -188,44 +184,33 @@ impl<'a> Sink<'a> {
     }
 }
 
-fn walk(root: &Path, dir: &Path, re: &regex::Regex, glob: Option<&globset::GlobMatcher>, sink: &mut Sink) {
-    if sink.capped() {
-        return;
-    }
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
-    paths.sort();
-    for path in paths {
+/// Walk `root`, feeding each glob-matching file's contents to `sink` until its
+/// cap is reached. Uses the shared [`crate::walk_files`] traversal (dotfile /
+/// build-dir skip + no-symlink guard live there).
+///
+/// Note: `Grep` caps *during* the walk (it stops the moment `sink` is full) so a
+/// huge tree is never fully materialized — the context-safety guarantee. A
+/// consequence is that the truncation notice fires at `>= MAX_RESULTS`
+/// (conservative: exactly `MAX_RESULTS` matches still says "truncated"), unlike
+/// `Glob`, which collects everything to sort by mtime and so can report the
+/// exact `> MAX_RESULTS`. The difference is inherent to the two capping
+/// strategies, not a bug.
+fn collect(root: &Path, re: &regex::Regex, glob: Option<&globset::GlobMatcher>, sink: &mut Sink) {
+    crate::walk_files(root, |rel, full| {
+        if let Some(g) = glob {
+            if !g.is_match(rel) {
+                return crate::Walk::Continue;
+            }
+        }
+        if let Ok(contents) = std::fs::read_to_string(full) {
+            sink.record_file(rel, re, &contents);
+        }
         if sink.capped() {
-            return;
-        }
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if skip(name) {
-            continue;
-        }
-        if path.is_symlink() {
-            continue;
-        } else if path.is_dir() {
-            walk(root, &path, re, glob, sink);
+            crate::Walk::Stop
         } else {
-            let rel = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .display()
-                .to_string();
-            if let Some(g) = glob {
-                if !g.is_match(&rel) {
-                    continue;
-                }
-            }
-            if let Ok(contents) = std::fs::read_to_string(&path) {
-                sink.record_file(&rel, re, &contents);
-            }
+            crate::Walk::Continue
         }
-    }
+    });
 }
 
 #[cfg(test)]

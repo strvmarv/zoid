@@ -168,6 +168,59 @@ pub(crate) fn resolve(cwd: &Path, path: &str) -> PathBuf {
     }
 }
 
+/// Entry names the recursive file tools (`Grep`/`Glob`) and `LS` skip: dotfiles
+/// and common heavy build dirs. Centralized so the tools can't drift apart.
+pub(crate) fn skip_entry(name: &str) -> bool {
+    name.starts_with('.') || matches!(name, "target" | "node_modules")
+}
+
+/// Signal from a [`walk_files`] visitor: keep walking, or stop the whole
+/// traversal early (used by tools that cap their result set).
+pub(crate) enum Walk {
+    Continue,
+    Stop,
+}
+
+/// Recursively visit every file under `root`, skipping [`skip_entry`] names and
+/// never following symlinks. `visit(rel, full)` receives each file's path
+/// relative to `root` and its full path, and returns [`Walk`] to continue or
+/// stop the entire traversal. Entries within each directory are visited in
+/// sorted order for deterministic output.
+pub(crate) fn walk_files<F: FnMut(&str, &Path) -> Walk>(root: &Path, mut visit: F) {
+    fn recurse<F: FnMut(&str, &Path) -> Walk>(root: &Path, dir: &Path, visit: &mut F) -> Walk {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return Walk::Continue,
+        };
+        let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+        paths.sort();
+        for path in paths {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if skip_entry(name) {
+                continue;
+            }
+            if path.is_symlink() {
+                continue;
+            } else if path.is_dir() {
+                if let Walk::Stop = recurse(root, &path, visit) {
+                    return Walk::Stop;
+                }
+            } else {
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string();
+                if let Walk::Stop = visit(&rel, &path) {
+                    return Walk::Stop;
+                }
+            }
+        }
+        Walk::Continue
+    }
+    recurse(root, root, &mut visit);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
