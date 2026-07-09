@@ -9,6 +9,7 @@ pub mod config;
 pub mod context;
 pub mod economy;
 pub mod embed_index;
+pub mod embed_lane;
 pub mod event;
 pub mod feedback;
 pub mod eviction;
