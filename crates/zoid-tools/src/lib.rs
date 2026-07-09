@@ -5,6 +5,7 @@
 pub mod ask;
 pub mod approval;
 pub mod edit;
+pub mod feedback;
 pub mod glob;
 pub mod kill;
 pub mod ls;
@@ -86,6 +87,7 @@ pub fn registry() -> Vec<Box<dyn Tool>> {
         Box::new(shell::Shell::default()),
         Box::new(tasks::UpdateTasks),
         Box::new(ask::AskUser),
+        Box::new(feedback::SubmitFeedback),
     ]
 }
 
@@ -103,6 +105,7 @@ pub fn registry_with_kill(kill: KillSlot) -> Vec<Box<dyn Tool>> {
         Box::new(shell::Shell::new(kill)),
         Box::new(tasks::UpdateTasks),
         Box::new(ask::AskUser),
+        Box::new(feedback::SubmitFeedback),
     ]
 }
 
@@ -243,6 +246,7 @@ mod tests {
         assert!(names.contains(&"shell"));
         assert!(names.contains(&"update_tasks"));
         assert!(names.contains(&"ask_user"));
+        assert!(names.contains(&"submit_feedback"));
     }
 
     #[test]
@@ -292,7 +296,7 @@ mod tests {
         // intentional exceptions; everything else still defaults to Local.
         for t in registry()
             .into_iter()
-            .filter(|t| t.name() != "update_tasks" && t.name() != "ask_user")
+            .filter(|t| t.name() != "update_tasks" && t.name() != "ask_user" && t.name() != "submit_feedback")
         {
             assert_eq!(
                 t.kind(),

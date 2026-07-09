@@ -230,6 +230,7 @@ fn map_msg(m: ChatMsg) -> Message {
                 zoid_core::event::QuestionKind::Ask => "ask_user",
                 zoid_core::event::QuestionKind::ModeMapping { .. } => "apply_mode_mapping",
                 zoid_core::event::QuestionKind::Approval => "shell",
+                zoid_core::event::QuestionKind::Feedback { .. } => "submit_feedback",
             };
             match state {
                 zoid_core::projection::QuestionCardState::Answered { answer } => {
