@@ -23,6 +23,12 @@ use zoid_tools::{Gate, Tool, ToolGate};
 /// source of truth rather than a drifting sentinel of its own.
 pub(crate) const WARN_GLYPH: char = '⚠';
 
+/// Multiplier for how many vector recall candidates to fetch beyond the caller's
+/// `limit`. The in-memory embedding index is session-agnostic, so some hits
+/// belong to other sessions and are dropped by the per-session filter; fetching
+/// a multiple keeps enough session-matching hits to fill `limit`.
+const VECTOR_OVERFETCH: usize = 4;
+
 /// System prompt for Chat-mode turns.
 pub const SYSTEM_PROMPT: &str =
     "You are zoid, a terminal coding assistant. Be concise and precise. \
@@ -1056,13 +1062,20 @@ async fn run_turn_inner(
                         .unwrap_or_default();
                     let fts_ids: Vec<Ulid> = fts_events.iter().map(|e| e.id).collect();
 
+                    // The in-memory index is session-agnostic, so a vector hit may
+                    // belong to another session and get dropped by the session
+                    // filter in `events_by_ids` below. Over-fetch vector candidates
+                    // (and merge to the same larger bound) so enough survive the
+                    // filter to still fill `limit` in a multi-session DB.
+                    let vfetch = limit.saturating_mul(VECTOR_OVERFETCH).max(limit);
+
                     // Vector candidates — only when BOTH the index and embedder are present.
                     let vec_ids: Vec<Ulid> = match (&config.embed, &config.embedder) {
                         (Some(index), Some(emb)) => {
                             use zoid_core::retrieval::CandidateSource;
                             let vs = zoid_core::retrieval::VectorSource::new(emb.clone(), index.clone());
                             let q = query.clone();
-                            tokio::task::spawn_blocking(move || vs.candidates(&q, limit))
+                            tokio::task::spawn_blocking(move || vs.candidates(&q, vfetch))
                                 .await
                                 .unwrap_or_default()
                                 .into_iter()
@@ -1076,12 +1089,15 @@ async fn run_turn_inner(
                         // Pure-FTS fast path, byte-identical to pre-feature behavior.
                         fts_events
                     } else {
-                        let merged = zoid_core::hybrid::hybrid_recall(&fts_ids, &vec_ids, limit);
+                        let merged = zoid_core::hybrid::hybrid_recall(&fts_ids, &vec_ids, vfetch);
                         let mut evs = session
                             .events_by_ids(merged.clone(), session_id)
                             .await
                             .unwrap_or_default();
                         evs.sort_by_key(|e| merged.iter().position(|id| *id == e.id).unwrap_or(usize::MAX));
+                        // Session filter may have dropped cross-session vector hits;
+                        // trim the session-present survivors back to the requested limit.
+                        evs.truncate(limit);
                         evs
                     };
                     // Re-admit any currently-evicted originals so they re-enter the projection.
