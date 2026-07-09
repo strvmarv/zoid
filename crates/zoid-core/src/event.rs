@@ -56,6 +56,14 @@ pub enum QuestionKind {
     /// the approval string. The projection does NOT suppress the ToolResult
     /// for this kind, unlike Ask/ModeMapping where the card IS the result.
     Approval,
+    /// The `submit_feedback` tool's proposal: the agent's draft report. The
+    /// bin seeds the `Feedback` overlay from these fields; the user edits and
+    /// confirms. `kind` is the string form ("bug"|"feature"|"general").
+    Feedback {
+        kind: String,
+        title: String,
+        body: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,6 +245,18 @@ mod tests {
                 cached: 3
             })
         );
+    }
+
+    #[test]
+    fn question_kind_feedback_round_trips() {
+        let k = QuestionKind::Feedback {
+            kind: "bug".into(),
+            title: "Crash".into(),
+            body: "steps".into(),
+        };
+        let s = serde_json::to_string(&k).unwrap();
+        let back: QuestionKind = serde_json::from_str(&s).unwrap();
+        assert!(matches!(back, QuestionKind::Feedback { kind, .. } if kind == "bug"));
     }
 
     #[test]

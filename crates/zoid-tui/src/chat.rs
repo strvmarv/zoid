@@ -349,6 +349,7 @@ fn render_question_card(
         QuestionKind::Ask => " Question ",
         QuestionKind::ModeMapping { .. } => " Mode mapping — review ",
         QuestionKind::Approval => " Approve tool ",
+        QuestionKind::Feedback { .. } => " Submit feedback ",
     };
     let border = color::BRANCH;
     let content_w = width.saturating_sub(4).max(20);
