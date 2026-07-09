@@ -154,6 +154,124 @@ impl FeedbackReport {
     }
 }
 
+use async_trait::async_trait;
+
+/// The GitHub issue-creation seam. `HttpFeedbackApi` hits the real API;
+/// `FakeFeedbackApi` returns canned outcomes for tests. Mirrors the
+/// `GithubApi` trait pattern in `crates/zoid/src/github_fetch.rs`.
+#[async_trait]
+pub trait FeedbackApi: Send + Sync {
+    /// Create an issue on `repo` (e.g. "strvmarv/zoid-releases"). Returns
+    /// `(url, number)` on success. Returns `Err` for any HTTP/auth/network
+    /// failure. If no token is available, the implementation returns
+    /// `Err(NoToken)` so `submit_via` can fall back to the browser URL.
+    async fn create_issue(
+        &self,
+        repo: &str,
+        title: &str,
+        body: &str,
+        labels: Vec<String>,
+    ) -> anyhow::Result<(String, u64)>;
+}
+
+/// The sentinel error when no `$GITHUB_TOKEN` is set.
+#[derive(Debug, thiserror::Error)]
+#[error("no GITHUB_TOKEN set")]
+pub struct NoToken;
+
+/// Real GitHub API client. Token is `$GITHUB_TOKEN` if set.
+pub struct HttpFeedbackApi {
+    client: reqwest::Client,
+    token: Option<String>,
+}
+
+impl HttpFeedbackApi {
+    pub fn new() -> Self {
+        Self {
+            client: reqwest::Client::builder()
+                .user_agent(concat!("zoid-feedback/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .expect("reqwest client builds"),
+            token: std::env::var("GITHUB_TOKEN").ok(),
+        }
+    }
+}
+
+impl Default for HttpFeedbackApi {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl FeedbackApi for HttpFeedbackApi {
+    async fn create_issue(
+        &self,
+        repo: &str,
+        title: &str,
+        body: &str,
+        labels: Vec<String>,
+    ) -> anyhow::Result<(String, u64)> {
+        let token = self
+            .token
+            .as_ref()
+            .ok_or_else(|| anyhow::Error::new(NoToken))?;
+        let url = format!("https://api.github.com/repos/{repo}/issues");
+        let payload = serde_json::json!({
+            "title": title,
+            "body": body,
+            "labels": labels,
+        });
+        let resp = self
+            .client
+            .post(&url)
+            .bearer_auth(token)
+            .json(&payload)
+            .send()
+            .await?;
+        if resp.status().as_u16() == 403 {
+            let remaining = resp
+                .headers()
+                .get("x-ratelimit-remaining")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("?");
+            if remaining == "0" {
+                anyhow::bail!("GitHub rate-limited. Set $GITHUB_TOKEN for a higher limit.");
+            }
+        }
+        let resp = resp.error_for_status()?;
+        let v: serde_json::Value = resp.json().await?;
+        let number = v["number"]
+            .as_u64()
+            .ok_or_else(|| anyhow::anyhow!("missing issue number"))?;
+        let html_url = v["html_url"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("missing html_url"))?
+            .to_string();
+        Ok((html_url, number))
+    }
+}
+
+impl FeedbackReport {
+    /// Submit via `api`. With a token → `Created`; without → `BrowserFallback`.
+    pub async fn submit_via(&self, api: &dyn FeedbackApi) -> anyhow::Result<SubmitOutcome> {
+        let title = self.to_issue_title();
+        let body = self.to_issue_body();
+        match api
+            .create_issue(REPO, &title, &body, vec![self.kind.label().to_string()])
+            .await
+        {
+            Ok((url, number)) => Ok(SubmitOutcome::Created { url, number }),
+            Err(e) if e.downcast_ref::<NoToken>().is_some() => {
+                Ok(SubmitOutcome::BrowserFallback {
+                    url: self.to_browser_url(),
+                })
+            }
+            Err(e) => Err(e),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,5 +399,87 @@ mod tests {
         assert!(url.contains("&body="));
         // The label line rides in the body (percent-encoded).
         assert!(url.contains("%3E%20Label%3A%20bug"));
+    }
+
+    // --- Task 2: FeedbackApi seam + submit_via ---
+
+    /// Test double. Configured with a canned outcome.
+    pub struct FakeFeedbackApi {
+        outcome: std::sync::Mutex<Option<anyhow::Result<(String, u64)>>>,
+    }
+
+    impl FakeFeedbackApi {
+        pub fn created(url: &str, number: u64) -> Self {
+            Self {
+                outcome: std::sync::Mutex::new(Some(Ok((url.to_string(), number)))),
+            }
+        }
+        pub fn err(msg: &str) -> Self {
+            Self {
+                outcome: std::sync::Mutex::new(Some(Err(anyhow::anyhow!("{msg}")))),
+            }
+        }
+        pub fn no_token() -> Self {
+            Self {
+                outcome: std::sync::Mutex::new(Some(Err(anyhow::Error::new(NoToken)))),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl FeedbackApi for FakeFeedbackApi {
+        async fn create_issue(
+            &self,
+            _repo: &str,
+            _title: &str,
+            _body: &str,
+            _labels: Vec<String>,
+        ) -> anyhow::Result<(String, u64)> {
+            self.outcome
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap_or(Err(anyhow::anyhow!("fake already consumed")))
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_via_with_token_creates_issue() {
+        let api = FakeFeedbackApi::created(
+            "https://github.com/strvmarv/zoid-releases/issues/7",
+            7,
+        );
+        let outcome = sample_report().submit_via(&api).await.unwrap();
+        match outcome {
+            SubmitOutcome::Created { url, number } => {
+                assert_eq!(
+                    url,
+                    "https://github.com/strvmarv/zoid-releases/issues/7"
+                );
+                assert_eq!(number, 7);
+            }
+            _ => panic!("expected Created"),
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_via_without_token_returns_browser_fallback() {
+        let api = FakeFeedbackApi::no_token();
+        let outcome = sample_report().submit_via(&api).await.unwrap();
+        match outcome {
+            SubmitOutcome::BrowserFallback { url } => {
+                assert!(url.starts_with(
+                    "https://github.com/strvmarv/zoid-releases/issues/new?"
+                ));
+            }
+            _ => panic!("expected BrowserFallback"),
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_via_api_error_propagates() {
+        let api = FakeFeedbackApi::err("401 unauthorized");
+        let res = sample_report().submit_via(&api).await;
+        assert!(res.is_err());
     }
 }
