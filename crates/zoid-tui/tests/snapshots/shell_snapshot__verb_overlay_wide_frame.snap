@@ -1,12 +1,11 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
-assertion_line: 751
 expression: "draw_overlay(Overlay::Verbs, 140, 24)"
 ---
 Buffer {
     area: Rect { x: 0, y: 0, width: 140, height: 24 },
     content: [
-        "v0.1.2                                                              zoid                              Esc interrupt · : command · ^P palette",
+        "v0.2.0                                                              zoid                              Esc interrupt · : command · ^P palette",
         "    ● read_┌ ▷ verbs · src/ast.rs ────────────────────────────────────────────────┐           █ ╭ ▾ repo ─────────────────────────────────╮ ",
         "    ✓ read_│ explain                                                              │           █ │📦 repo   ⎇ main                         │ ", // hidden by multi-width symbols: [(98, " ")]
         "    ⚠ shell│ summarize                                                            │           █ ╰─────────────────────────────────────────╯ ",

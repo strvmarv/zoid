@@ -1,6 +1,40 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+The first feature release since the distribution pipeline landed — a large batch of new capabilities for beta testing.
+
+Active Context Management (ACM).
+- Demand-paged context: tool-result compaction with band-holding eviction (a pre-flight gate plus a hysteresis controller) keeps long sessions inside the model's window instead of truncating blindly.
+- Cold-tier recall: evicted content is re-admitted on demand via a session-scoped FTS/BM25 `recall` tool, so paged-out context stays reachable.
+- Local semantic recall (opt-in `local-embed` feature, baked into release binaries): a pure-Rust `candle` embedder (bge-small-en-v1.5, 384-dim) indexes events in an in-memory ring, and hybrid recall fuses FTS and vector candidates via Reciprocal Rank Fusion. Weights are checksum-verified on first fetch; the whole path is gated by a cargo feature and an `[embed]` config section.
+
+MCP client support.
+- zoid is now an MCP client: tools from external MCP servers configured in `.mcp.json` (project `./.mcp.json` + user `~/.config/zoid/mcp.json`, `${VAR}`-expanded, project wins) appear alongside built-ins, namespaced `server__tool`.
+- Hand-rolled JSON-RPC-over-stdio client (no SDK dependency): background connect with per-server timeouts, crash/disconnect detection, and a read-only `/mcp` status overlay. Trust-on-configure — a configured server's tools run like built-ins.
+
+Modes & skills.
+- Import any skill set as a first-class mode and switch with Shift+Tab; mode promotion plus an `Alt+`-style quick-switch.
+- `SKILL.md` source adapter/importer and a URL import wizard for pulling external skill definitions.
+
+Filesystem toolset (Claude Code parity).
+- `Read` (offset/limit paging, line numbers, per-line cap), `Write`, `Edit` (`replace_all` + atomic multi-edit), `Grep` (regex + glob filter + output modes), `Glob`, and `LS`.
+
+Reasoning & thinking modes.
+- Extended-thinking controls surfaced in the TUI (thinking markers, session-drawer effort indicator) with per-provider wiring.
+
+Escalating interrupt (Esc).
+- First Esc is graceful (abandons in-flight network/MCP waits, stops new tools); a second Esc hard-stops by `SIGKILL`-ing the running `shell` command's whole process group. Every started tool call still gets a synthesized result, preserving the request/response balance.
+
+Feedback tool.
+- Built-in `submit_feedback` tool + `:feedback` command + skill that files a GitHub issue (token or browser fallback) with optional diagnostics.
+
+Providers & operations.
+- Added the `opencode-go` provider (per-model wire routing) alongside the Ollama Cloud native and typed Anthropic paths.
+- Multi-instance safety: SQLite WAL + stateful sessions so concurrent instances don't corrupt state; a CWD-scoped startup session picker with `--new`/`--resume`.
+- Optional `zoid-companion` localhost metrics dashboard + push-card channel; an observability/Overview page.
+- Best-effort build-expiration tripwire so leaked pre-release builds stop running after 30 days (`--version`/`--help`/`zoid update` remain ungated).
+- TUI/UX: VSCode-style command palette redesign (flat, search-first, inline Rename), inline question cards replacing the modal overlay, status-bar indicators, `:compact` command, empty-state onboarding, and direct-phase autocomplete. Upgraded to ratatui 0.30 (clears advisory RUSTSEC #26).
 
 Settings redesign.
 - Full-screen three-column settings (sections · fields · contextual picker) replacing the cramped card; baseline 160×40 with graceful degradation.

@@ -1,12 +1,11 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
-assertion_line: 655
 expression: "draw_zoom(Zoom::Summary, 100, 24)"
 ---
 Buffer {
     area: Rect { x: 0, y: 0, width: 100, height: 24 },
     content: [
-        "v0.1.2                                          zoid          Esc interrupt · : command · ^P palette",
+        "v0.2.0                                          zoid          Esc interrupt · : command · ^P palette",
         "  › show me parse                            ~ 1t · 1 █ ╭ ▾ repo ─────────────────────────────────╮ ",
         "                                                      █ │📦 repo   ⎇ main                         │ ", // hidden by multi-width symbols: [(58, " ")]
         "                                                      █ ╰─────────────────────────────────────────╯ ",

@@ -1,9 +1,8 @@
 ---
 source: crates/zoid-tui/tests/session_snapshot.rs
-assertion_line: 54
 expression: "draw(&s, &[], 100, 24)"
 ---
-"v0.1.2                                          zoid          Esc interrupt · : command · ^P palette"
+"v0.2.0                                          zoid          Esc interrupt · : command · ^P palette"
 "┌ ↺ resume session ───────────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
 "│ fix 500 on GET /users  ·  12m ago  ·  58k           │ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
 "│ rail restructure       ·  3h ago   ·  120k          │ ╰─────────────────────────────────────────╯ "

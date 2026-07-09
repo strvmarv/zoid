@@ -1,9 +1,8 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
-assertion_line: 411
 expression: "draw(&s, &seeded(), 100, 24)"
 ---
-"v0.1.2                                          zoid          Esc interrupt · : command · ^P palette"
+"v0.2.0                                          zoid          Esc interrupt · : command · ^P palette"
 "┌ › build ────────────────────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
 "│ Switch to Build                                     │ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
 "│                                                     │ ╰─────────────────────────────────────────╯ "
