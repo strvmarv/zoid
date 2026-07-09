@@ -452,6 +452,13 @@ async fn run_turn_inner(
     let mut iterations: u32 = 0;
     let mut context_retries: u32 = 0;
     let mut outcome: &'static str = "completed";
+    // Whether the model produced any user-visible output (streamed text or a
+    // tool call) at any point this turn. When a turn ends cleanly having produced
+    // nothing — the signature of an empty upstream completion (e.g. a degraded
+    // model returning 200 with `content:""` and `done_reason:"stop"`) — we surface
+    // a ⚠ message instead of ending silently and leaving the UI to snap back to
+    // idle with no explanation.
+    let mut turn_produced_content = false;
 
     'turn: loop {
         // Cancelled between sub-turns: nothing is pending here, so end cleanly.
@@ -500,6 +507,7 @@ async fn run_turn_inner(
             };
             match pe {
                 ProviderEvent::TextDelta(s) => {
+                    turn_produced_content = true;
                     emit(
                         &session,
                         &mut events,
@@ -512,6 +520,7 @@ async fn run_turn_inner(
                     .await?;
                 }
                 ProviderEvent::ToolCall(tc) => {
+                    turn_produced_content = true;
                     emit(
                         &session,
                         &mut events,
@@ -681,6 +690,27 @@ async fn run_turn_inner(
                     now,
                 )
                 .await?;
+            }
+            // The turn ended without ever producing streamed text or a tool call:
+            // an empty upstream completion. Surface it so the UI doesn't just snap
+            // back to idle with no explanation (spec: no silent turns).
+            if !turn_produced_content {
+                emit(
+                    &session,
+                    &mut events,
+                    ui,
+                    &config.branch,
+                    EventKind::AssistantMessage {
+                        text: format!(
+                            "{WARN_GLYPH} model returned an empty response — the provider sent no \
+                             content. The upstream model may be degraded; try again or switch models."
+                        ),
+                    },
+                    session_id,
+                    now,
+                )
+                .await?;
+                outcome = "empty";
             }
             break 'turn; // model answered without tools — turn complete
         }
@@ -2281,6 +2311,56 @@ mod tests {
         );
         // and the surviving conversation is under the seed size
         assert!(zoid_core::projection::conversation(out.iter()).len() < 16);
+    }
+
+    #[tokio::test]
+    async fn empty_completion_surfaces_a_warning_not_silent_idle() {
+        use ulid::Ulid;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::ProviderEvent;
+        // Reproduces the upstream failure where Ollama Cloud's glm-5.2 returns a
+        // 200 with empty content and `done_reason:"stop"` — the provider stream
+        // yields ONLY Done (no TextDelta / ToolCall / Usage / Error). Before the
+        // guard, the turn ended with nothing to show and the UI went silently
+        // back to idle. The turn must now surface a ⚠ empty-response message.
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage { text: "are you there?".into() },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+        let provider = std::sync::Arc::new(zoid_provider::FakeProvider::new(vec![
+            ProviderEvent::Done,
+        ]));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            std::sync::Arc::new(zoid_tools::registry()),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::new(),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+        assert!(
+            out.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::AssistantMessage { text }
+                    if text.starts_with(WARN_GLYPH) && text.contains("empty response")
+            )),
+            "an empty completion must surface a ⚠ empty-response message, not a silent idle"
+        );
     }
 
     // Test double: replays a different script per stream() call (retry / multi-request turns).

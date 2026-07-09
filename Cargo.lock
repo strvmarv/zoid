@@ -3652,14 +3652,18 @@ name = "zoid-core"
 version = "0.1.2"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chacha20poly1305",
+ "percent-encoding",
  "proptest",
  "rand 0.8.6",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_ignored",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "toml",
  "ulid",
