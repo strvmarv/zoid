@@ -71,6 +71,7 @@ fn resolve_config_dir(env: impl Fn(&str) -> Option<String>) -> PathBuf {
 }
 
 /// `$XDG_CACHE_HOME/zoid` > `$HOME/.cache/zoid` (mirrors `resolve_config_dir`).
+#[cfg_attr(not(feature = "local-embed"), allow(dead_code))]
 fn resolve_cache_dir(env: impl Fn(&str) -> Option<String>) -> PathBuf {
     let base = env("XDG_CACHE_HOME")
         .filter(|s| !s.is_empty())
@@ -1855,7 +1856,16 @@ async fn main() -> Result<()> {
                                     continue;
                                 }
                             };
-                            for (id, v) in lane.tick(&todo) {
+                            let rows = lane.tick(&todo);
+                            if rows.is_empty() {
+                                // Every embed in a non-empty batch failed (tick degrade path).
+                                // Back off instead of immediately re-fetching the same batch —
+                                // avoids a hot-spin that would peg a core and hammer the
+                                // session actor on persistent failure.
+                                std::thread::sleep(std::time::Duration::from_secs(2));
+                                continue;
+                            }
+                            for (id, v) in rows {
                                 let _ = rt.block_on(sess.write_embedding(id, model.clone(), v));
                             }
                         }
