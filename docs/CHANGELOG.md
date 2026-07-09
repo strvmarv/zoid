@@ -6,6 +6,11 @@
 > notes (what ships to the public releases repo) live in the root
 > `RELEASES.md`.
 
+## 0.3.1
+
+Fixes.
+- Startup progress no longer staircases after the session picker. The picker (`main.rs` `BootPath::Picker`) calls `enable_raw_mode()` and deliberately leaves it on through launch (it re-enters the alt screen for `run()`), so `ONLCR` is off; the Reporter's bare-`\n` line endings (`writeln!`) then dropped a row without returning the carriage, indenting each subsequent step further right. Manifested only on launches that show the picker (i.e. when prior sessions exist) — first-run launches print in cooked mode and were unaffected. `crates/zoid/src/startup.rs` now emits explicit `\r\n` via a single `newline()` helper across `write_line`/`progress_done` (correct in raw mode, harmless in cooked mode). Regression test asserts no bare `\n` survives.
+
 ## 0.3.0
 
 Second beta feature drop: a one-action Superpowers mode install, startup progress feedback, a data-removal command, and default/UX fixes.

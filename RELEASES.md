@@ -10,6 +10,12 @@
 
 # Release Notes
 
+## 0.3.1
+
+### Fixes
+
+- **Tidier launch output** — fixed a display glitch where the startup progress lines could appear misaligned, each stepping further to the right, on launches that show the session picker.
+
 ## 0.3.0
 
 Faster to get started and easier to live with — a one-command way to add a curated engineering skill set, clearer feedback while zoid starts up, and a clean uninstall.

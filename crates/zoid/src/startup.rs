@@ -54,11 +54,21 @@ impl<W: Write> Reporter<W> {
             return;
         }
         if self.progress_open {
-            let _ = writeln!(self.out);
+            self.newline();
             self.progress_open = false;
         }
-        let _ = writeln!(self.out, "{s}");
+        let _ = write!(self.out, "{s}");
+        self.newline();
         let _ = self.out.flush();
+    }
+
+    /// Emit an explicit CRLF. A bare `\n` only returns the carriage in cooked
+    /// mode (via the terminal's `ONLCR` translation); the session picker leaves
+    /// the terminal in raw mode, where `\n` alone would staircase every line.
+    /// CRLF is correct in raw mode and harmless in cooked mode (`\r` is a no-op
+    /// at column 0).
+    fn newline(&mut self) {
+        let _ = self.out.write_all(b"\r\n");
     }
 
     /// Update the in-place download-progress line (overwrites via `\r`).
@@ -76,7 +86,7 @@ impl<W: Write> Reporter<W> {
         if !self.enabled || !self.progress_open {
             return;
         }
-        let _ = writeln!(self.out);
+        self.newline();
         let _ = self.out.flush();
         self.progress_open = false;
     }
@@ -142,6 +152,30 @@ mod tests {
     }
 
     #[test]
+    fn lines_terminate_with_crlf_so_raw_mode_does_not_staircase() {
+        // The reporter prints during startup, which straddles the session
+        // picker's `enable_raw_mode()` (turns ONLCR off). A bare `\n` there
+        // moves down a row but does NOT return the carriage, so each line
+        // starts where the previous ended — the staircase. CRLF renders
+        // correctly in raw mode and is harmless in cooked mode.
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let mut r = Reporter::new(&mut buf, true);
+            r.banner("zoid v9.9.9");
+            r.step("opening session store");
+            r.progress(1, Some(4));
+            r.progress_done();
+        }
+        let out = String::from_utf8(buf).unwrap();
+        // Every line feed must be preceded by a carriage return.
+        assert!(
+            !out.replace("\r\n", "").contains('\n'),
+            "bare LF (staircase) present: {out:?}"
+        );
+        assert!(out.contains("launching…\r\n"), "banner must end CRLF: {out:?}");
+    }
+
+    #[test]
     fn progress_then_line_breaks_to_a_fresh_row() {
         let mut buf: Vec<u8> = Vec::new();
         {
@@ -154,6 +188,6 @@ mod tests {
         assert!(out.contains('\r'));
         assert!(out.contains("· done"));
         // the step is on its own line, after a newline that closed the progress row
-        assert!(out.ends_with("· done\n"));
+        assert!(out.ends_with("· done\r\n"));
     }
 }
