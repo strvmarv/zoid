@@ -32,7 +32,7 @@ use zoid_provider::{default_model, default_provider};
 use zoid_tui::chat::ChatView;
 use zoid_tui::layout::compute;
 use zoid_tui::render_shell;
-use zoid_tui::route::{palette_selected_command, route_key, route_mouse};
+use zoid_tui::route::{palette_selected_command, route_key, route_mouse, route_paste, PasteTarget};
 
 /// Duration of the zoom fold/unfold line-reveal animation (Ⓡ2, T5).
 const ZOOM_ANIM_MS: u64 = 160;
@@ -1771,7 +1771,8 @@ async fn main() -> Result<()> {
     let context_target = config
         .economy
         .context_target
-        .unwrap_or_else(|| capacity.min(300_000));
+        .unwrap_or(300_000)
+        .min(capacity);
     shell.ctx_ceiling = capacity;
     shell.provider = provider_label(provider_name, has_key);
     shell.cache_supported = zoid_provider::has_prompt_cache(&model);
@@ -2422,7 +2423,50 @@ where
                         }
                     }
                     Some(Ok(CEvent::Paste(text))) => {
-                        app.textarea.insert_str(&text);
+                        // Bracketed paste is a distinct event that skips route_key,
+                        // so route it through the same focus/overlay precedence —
+                        // otherwise it always leaked into the message box (e.g. an
+                        // API key pasted into the config Secret field).
+                        match route_paste(&app.shell) {
+                            PasteTarget::Input => {
+                                app.textarea.insert_str(&text);
+                            }
+                            PasteTarget::ConfigEdit => {
+                                if let Some(buf) = app.shell.config_edit.as_mut() {
+                                    buf.push_str(&text);
+                                }
+                            }
+                            PasteTarget::PaletteQuery => {
+                                if let zoid_tui::state::PaletteStage::Pick = app.shell.palette.stage
+                                {
+                                    app.shell.palette.query.push_str(&text);
+                                    app.shell.palette.selected = 0;
+                                }
+                            }
+                            PasteTarget::PaletteArg => {
+                                if let zoid_tui::state::PaletteStage::Arg { input, .. } =
+                                    &mut app.shell.palette.stage
+                                {
+                                    input.push_str(&text);
+                                }
+                            }
+                            PasteTarget::Question => {
+                                if let Some(q) = app.shell.question.as_mut() {
+                                    q.free_text.push_str(&text);
+                                }
+                            }
+                            PasteTarget::FeedbackTitle => {
+                                if let Some(fs) = app.shell.feedback.as_mut() {
+                                    fs.title.push_str(&text);
+                                }
+                            }
+                            PasteTarget::FeedbackBody => {
+                                if let Some(fs) = app.shell.feedback.as_mut() {
+                                    fs.body.push_str(&text);
+                                }
+                            }
+                            PasteTarget::None => {}
+                        }
                     }
                     Some(Ok(_)) => { /* resize: redraw next loop */ }
                     Some(Err(_)) | None => return Ok(()),
@@ -3097,7 +3141,8 @@ fn apply_config_write(
         .config
         .economy
         .context_target
-        .unwrap_or_else(|| app.shell.ctx_ceiling.min(300_000));
+        .unwrap_or(300_000)
+        .min(app.shell.ctx_ceiling);
     // Live-apply the provider (same selection as startup) so a provider change
     // takes effect on the next turn, and keep the cached drawer label truthful
     // (shell.provider is set once at startup, not recomputed per frame).
@@ -3590,6 +3635,15 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                             eprintln!("zoid: secret store unavailable; cannot set {label}");
                         }
                         refresh_config_sections(app);
+                        // The key lives in the secret store, not config, so
+                        // apply_config_write's auto-reselect never ran. Rebuild the
+                        // live provider client so the new credential takes effect on
+                        // the next turn without a restart (mirrors the key-prompt
+                        // commit path above).
+                        let (provider, name, has_key) =
+                            select_provider(&app.config, &app.secrets);
+                        app.provider = provider;
+                        app.shell.provider = provider_label(name, has_key);
                     }
                     Some(FieldTarget::Toml { key, ty }) => {
                         if let Some(value) = value_from_buffer(&ty, &buffer) {
@@ -4126,12 +4180,23 @@ fn answer_question(app: &mut App, ans: zoid::agent::Answer) {
                     let dest = cfg_dir
                         .join("modes")
                         .join(zoid::mode_wizard::slugify(&mapping.mode_name));
-                    let scan = app
-                        .wizard
-                        .as_ref()
-                        .expect("wizard open during approval")
-                        .scan
-                        .clone();
+                    let scan = match app.wizard.as_ref() {
+                        Some(w) => w.scan.clone(),
+                        None => {
+                            // Defense-in-depth: the wizard should still be open
+                            // (we no longer clear it on Reject). If it's somehow
+                            // None, surface a clear error instead of panicking.
+                            app.shell.status_hint = Some(
+                                "wizard state lost — re-run :mode import to retry.".into(),
+                            );
+                            if let Some(tx) = app.pending_answer.take() {
+                                let _ = tx.send(zoid::agent::Answer::Choice("Reject".into()));
+                            }
+                            app.shell.question = None;
+                            app.shell.overlay = zoid_tui::state::Overlay::None;
+                            return;
+                        }
+                    };
                     let fetched_at = chrono::Utc::now().to_rfc3339();
                     match zoid::mode_wizard::materialize(&mapping, &scan, &dest, &fetched_at) {
                         Ok(_) => {
@@ -4153,7 +4218,8 @@ fn answer_question(app: &mut App, ans: zoid::agent::Answer) {
                                 "materialize failed: {}. Re-run :mode import to retry.",
                                 e.problems.join("; ")
                             ));
-                            app.wizard = None;
+                            // Don't clear app.wizard — the model may adjust
+                            // and re-propose after a materialize failure.
                             if let Some(tx) = app.pending_answer.take() {
                                 let _ = tx.send(zoid::agent::Answer::Choice("Reject".into()));
                             }
@@ -4164,7 +4230,11 @@ fn answer_question(app: &mut App, ans: zoid::agent::Answer) {
                     }
                 }
                 zoid::agent::Answer::Choice(c) if c == "Reject" => {
-                    app.wizard = None;
+                    // Do NOT clear app.wizard here — the model may re-propose
+                    // in the same turn (before the turn aborts, or in a follow-up
+                    // turn if the user re-triggers). Clearing the wizard here
+                    // caused a panic when a later Approve tried to access it.
+                    // The wizard is cleared on successful materialize instead.
                     app.shell.status_hint = Some("import cancelled".into());
                 }
                 zoid::agent::Answer::Choice(_) | zoid::agent::Answer::FreeText(_) => {
@@ -6541,6 +6611,128 @@ mod tests {
         assert_eq!(
             boot_decision(5, false, Some("ABCD")),
             BootPath::ForceResume("ABCD".to_string())
+        );
+    }
+
+    /// Regression: when a Reject clears app.wizard but the event log later has
+    /// an open ModeMapping question (e.g. the model re-proposed in the same
+    /// turn before the break, or a new scan re-opened the wizard), calling
+    /// `answer_question` with "Approve" must NOT panic on
+    /// `app.wizard.expect("wizard open during approval")`.
+    #[tokio::test]
+    async fn answer_question_no_panic_when_wizard_none_on_approve() {
+        use zoid_core::event::QuestionKind;
+        use zoid_core::wizard::{MappingEntry, ModeMapping};
+
+        let mut app = test_app().await;
+
+        // Seed an open QuestionAsked(ModeMapping) into the event log.
+        let mapping = Box::new(ModeMapping {
+            mode_name: "TestMode".into(),
+            mode_description: "d".into(),
+            mode_body: "".into(),
+            entries: vec![MappingEntry::Materialize {
+                canonical_path: "a/SKILL.md".into(),
+                source: "skills/a/SKILL.md".into(),
+                summary: "a".into(),
+            }],
+        });
+        let ev = zoid_core::event::Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::QuestionAsked {
+                id: "q1".to_string(),
+                kind: QuestionKind::ModeMapping { mapping },
+                question: "test".into(),
+                choices: vec!["Approve".into(), "Reject".into(), "Adjust".into()],
+            },
+        );
+        app.events.push(ev);
+
+        // app.wizard is None — simulates the state after a Reject cleared it.
+        assert!(app.wizard.is_none());
+
+        // This must not panic. Currently it does: `.expect("wizard open during
+        // approval")` at the Approve arm.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            answer_question(&mut app, zoid::agent::Answer::Choice("Approve".into()));
+        }));
+
+        assert!(
+            result.is_ok(),
+            "answer_question should not panic when wizard is None, even on Approve"
+        );
+    }
+
+    /// Regression: Reject must NOT clear app.wizard. Before the fix, Reject
+    /// set `app.wizard = None`, which meant (a) the wizard tools disappeared
+    /// from the next turn's tool set, and (b) if the model re-proposed in
+    /// the same turn and the user clicked Approve, `answer_question` panicked
+    /// on `app.wizard.expect("wizard open during approval")`.
+    #[tokio::test]
+    async fn reject_does_not_clear_wizard() {
+        use zoid_core::event::QuestionKind;
+        use zoid_core::wizard::{MappingEntry, ModeMapping, ScannedFile, UpstreamScan};
+
+        let mut app = test_app().await;
+
+        // Set up the wizard with a scan.
+        let scan = UpstreamScan {
+            url: "u".into(),
+            repo: "o/r".into(),
+            resolved_ref: "abc".into(),
+            subtree_path: "skills".into(),
+            files: vec![ScannedFile {
+                upstream_path: "skills/a/SKILL.md".into(),
+                sha: "sha-a".into(),
+                content: "---\nname: a\ndescription: d\n---\nBODY\n".into(),
+            }],
+        };
+        app.wizard = Some(zoid::mode_wizard::ModeImportWizard::new_import(scan));
+
+        // Seed an open QuestionAsked(ModeMapping).
+        let mapping = Box::new(ModeMapping {
+            mode_name: "TestMode".into(),
+            mode_description: "d".into(),
+            mode_body: "".into(),
+            entries: vec![MappingEntry::Materialize {
+                canonical_path: "a/SKILL.md".into(),
+                source: "skills/a/SKILL.md".into(),
+                summary: "a".into(),
+            }],
+        });
+        let ev = zoid_core::event::Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::QuestionAsked {
+                id: "q1".to_string(),
+                kind: QuestionKind::ModeMapping { mapping },
+                question: "test".into(),
+                choices: vec!["Approve".into(), "Reject".into(), "Adjust".into()],
+            },
+        );
+        app.events.push(ev);
+
+        // Set up a pending answer channel so answer_question can send the reply.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.pending_answer = Some(tx);
+
+        // Reject.
+        answer_question(&mut app, zoid::agent::Answer::Choice("Reject".into()));
+
+        // The wizard must still be alive.
+        assert!(
+            app.wizard.is_some(),
+            "Reject must not clear app.wizard — the model may need to re-propose"
+        );
+
+        // The reply should have been sent.
+        let ans = rx.await.unwrap();
+        assert!(
+            matches!(ans, zoid::agent::Answer::Choice(ref c) if c == "Reject"),
+            "the answer channel should receive Reject"
         );
     }
 }
