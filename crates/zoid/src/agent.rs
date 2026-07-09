@@ -1018,10 +1018,42 @@ async fn run_turn_inner(
                         .unwrap_or("")
                         .to_string();
                     let limit = tc.args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
-                    let hits = session
-                        .recall(query, session_id, limit)
+
+                    // FTS candidates (existing path) → ids.
+                    let fts_events = session
+                        .recall(query.clone(), session_id, limit)
                         .await
                         .unwrap_or_default();
+                    let fts_ids: Vec<Ulid> = fts_events.iter().map(|e| e.id).collect();
+
+                    // Vector candidates — only when BOTH the index and embedder are present.
+                    let vec_ids: Vec<Ulid> = match (&config.embed, &config.embedder) {
+                        (Some(index), Some(emb)) => {
+                            use zoid_core::retrieval::CandidateSource;
+                            let vs = zoid_core::retrieval::VectorSource::new(emb.clone(), index.clone());
+                            let q = query.clone();
+                            tokio::task::spawn_blocking(move || vs.candidates(&q, limit))
+                                .await
+                                .unwrap_or_default()
+                                .into_iter()
+                                .map(|c| c.event_id)
+                                .collect()
+                        }
+                        _ => Vec::new(),
+                    };
+
+                    let hits: Vec<Event> = if vec_ids.is_empty() {
+                        // Pure-FTS fast path, byte-identical to pre-feature behavior.
+                        fts_events
+                    } else {
+                        let merged = zoid_core::hybrid::hybrid_recall(&fts_ids, &vec_ids, limit);
+                        let mut evs = session
+                            .events_by_ids(merged.clone(), session_id)
+                            .await
+                            .unwrap_or_default();
+                        evs.sort_by_key(|e| merged.iter().position(|id| *id == e.id).unwrap_or(usize::MAX));
+                        evs
+                    };
                     // Re-admit any currently-evicted originals so they re-enter the projection.
                     let live_evicted = zoid_core::eviction::evicted_ids(events.iter());
                     let readmit: Vec<Ulid> = hits

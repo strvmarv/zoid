@@ -70,6 +70,20 @@ fn resolve_config_dir(env: impl Fn(&str) -> Option<String>) -> PathBuf {
     base.join("zoid")
 }
 
+/// `$XDG_CACHE_HOME/zoid` > `$HOME/.cache/zoid` (mirrors `resolve_config_dir`).
+fn resolve_cache_dir(env: impl Fn(&str) -> Option<String>) -> PathBuf {
+    let base = env("XDG_CACHE_HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            env("HOME")
+                .filter(|s| !s.is_empty())
+                .map(|h| PathBuf::from(h).join(".cache"))
+        })
+        .unwrap_or_else(|| PathBuf::from(".cache"));
+    base.join("zoid")
+}
+
 /// Pure secret-key-path resolver (env injected for testing), mirroring
 /// `resolve_db_path`'s precedence: `$XDG_DATA_HOME/zoid/secret.key` >
 /// `$HOME/.local/share/zoid/secret.key`.
@@ -1798,6 +1812,71 @@ async fn main() -> Result<()> {
         }
     };
 
+    #[cfg(feature = "local-embed")]
+    let (embed_index, embedder): (
+        Option<std::sync::Arc<std::sync::RwLock<zoid_core::embed_index::EmbeddingIndex>>>,
+        Option<std::sync::Arc<dyn zoid_core::retrieval::Embedder>>,
+    ) = if config.embed.enabled {
+        let cache = resolve_cache_dir(|k| std::env::var(k).ok())
+            .join("models")
+            .join("bge-small-en-v1.5");
+        match zoid_embed::CandleEmbedder::load(&cache, config.embed.auto_download) {
+            Ok(e) => {
+                let e: std::sync::Arc<dyn zoid_core::retrieval::Embedder> = std::sync::Arc::new(e);
+                let idx = std::sync::Arc::new(std::sync::RwLock::new(
+                    zoid_core::embed_index::EmbeddingIndex::new(e.dim(), config.embed.max_vectors),
+                ));
+                // boot-fill the ring from disk (newest-first rows appended oldest-first)
+                if let Ok(rows) = session
+                    .load_recent_embeddings(e.model_id().to_string(), config.embed.max_vectors)
+                    .await
+                {
+                    let mut g = idx.write().unwrap();
+                    for (id, v) in rows.into_iter().rev() {
+                        g.append(id, &v);
+                    }
+                }
+                // spawn the maintenance lane on a blocking OS thread (candle is
+                // CPU-bound; must not run on tokio's async worker threads).
+                // C5: capture the runtime handle BEFORE spawning the OS thread —
+                // `Handle::current()` panics if called from inside that thread.
+                let rt = tokio::runtime::Handle::current();
+                {
+                    let (sess, idx2, emb2, model) =
+                        (session.clone(), idx.clone(), e.clone(), e.model_id().to_string());
+                    let sid = session_id;
+                    std::thread::spawn(move || {
+                        let lane = zoid_core::embed_lane::EmbedLane::new(emb2, idx2);
+                        loop {
+                            let todo = match rt.block_on(sess.unembedded_events(model.clone(), sid, 64)) {
+                                Ok(t) if !t.is_empty() => t,
+                                _ => {
+                                    std::thread::sleep(std::time::Duration::from_secs(2));
+                                    continue;
+                                }
+                            };
+                            for (id, v) in lane.tick(&todo) {
+                                let _ = rt.block_on(sess.write_embedding(id, model.clone(), v));
+                            }
+                        }
+                    });
+                }
+                (Some(idx), Some(e))
+            }
+            Err(err) => {
+                tracing::warn!(%err, "local-embed disabled: model load failed");
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
+    };
+    #[cfg(not(feature = "local-embed"))]
+    let (embed_index, embedder): (
+        Option<std::sync::Arc<std::sync::RwLock<zoid_core::embed_index::EmbeddingIndex>>>,
+        Option<std::sync::Arc<dyn zoid_core::retrieval::Embedder>>,
+    ) = (None, None);
+
     let mut app = App {
         session,
         session_id,
@@ -1847,8 +1926,8 @@ async fn main() -> Result<()> {
         pending_message: None,
         pending_takeover: None,
         mcp,
-        embed_index: None,
-        embedder: None,
+        embed_index,
+        embedder,
     };
 
     // Restore the resumed session's persisted active mode (a no-op if that mode
