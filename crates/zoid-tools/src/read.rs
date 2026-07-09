@@ -50,7 +50,18 @@ impl Tool for Read {
             .unwrap_or(DEFAULT_LIMIT);
         let lines: Vec<&str> = contents.lines().collect();
         let total = lines.len();
+        if total == 0 {
+            return ToolOutput::ok("(empty file)".to_string());
+        }
+        if limit == 0 {
+            return ToolOutput::err("Read: limit must be >= 1".to_string());
+        }
         let start = offset.saturating_sub(1).min(total);
+        if start >= total {
+            return ToolOutput::err(format!(
+                "Read: offset {offset} is past the end of the file ({total} lines)"
+            ));
+        }
         let end = start.saturating_add(limit).min(total);
         let mut out = String::new();
         // 1-indexed line number of the first un-emitted line, if we stopped
@@ -203,5 +214,39 @@ mod tests {
         );
         assert!(out.text.contains("truncated"));
         assert!(out.text.contains("offset="));
+    }
+
+    #[test]
+    fn offset_past_eof_is_clear_error() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(f, "l1\nl2\nl3").unwrap();
+        let out = Read.run(
+            &json!({ "path": f.path().to_str().unwrap(), "offset": 100 }),
+            std::path::Path::new("."),
+        );
+        assert!(out.is_error, "{}", out.text);
+        assert!(out.text.contains("past the end"), "{}", out.text);
+    }
+
+    #[test]
+    fn limit_zero_is_error() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(f, "l1\nl2").unwrap();
+        let out = Read.run(
+            &json!({ "path": f.path().to_str().unwrap(), "limit": 0 }),
+            std::path::Path::new("."),
+        );
+        assert!(out.is_error, "{}", out.text);
+    }
+
+    #[test]
+    fn empty_file_reports_cleanly() {
+        let f = tempfile::NamedTempFile::new().unwrap();
+        let out = Read.run(
+            &json!({ "path": f.path().to_str().unwrap() }),
+            std::path::Path::new("."),
+        );
+        assert!(!out.is_error, "{}", out.text);
+        assert!(out.text.contains("empty"), "{}", out.text);
     }
 }
