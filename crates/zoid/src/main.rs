@@ -1538,6 +1538,9 @@ struct App {
     embed_index: Option<std::sync::Arc<std::sync::RwLock<zoid_core::embed_index::EmbeddingIndex>>>,
     /// The embedder used to embed the recall query. Paired with `embed_index`.
     embedder: Option<std::sync::Arc<dyn zoid_core::retrieval::Embedder>>,
+    /// True while a Superpowers install fetch is in flight. Prevents a second
+    /// trigger from racing a concurrent write on the same folder (review M4).
+    installing_superpowers: bool,
 }
 
 impl App {
@@ -1968,6 +1971,7 @@ async fn main() -> Result<()> {
         mcp,
         embed_index,
         embedder,
+        installing_superpowers: false,
     };
 
     // Restore the resumed session's persisted active mode (a no-op if that mode
@@ -2807,6 +2811,42 @@ where
                                         zoid_tui::state::FeedbackStatus::Error(
                                             e.to_string(),
                                         );
+                                }
+                            }
+                        }
+                    }
+                    AgentUpdate::SuperpowersScan(res) => {
+                        app.installing_superpowers = false; // fetch attempt concluded
+                        match res {
+                            Err(e) => app.shell.status_hint = Some(e),
+                            Ok(scan) => {
+                                let cfg_dir = resolve_config_dir(|k| std::env::var(k).ok());
+                                let dest = cfg_dir.join("modes").join("superpowers");
+                                match zoid::superpowers_install::finish_install(&scan, &dest) {
+                                    Ok(_) => {
+                                        // Reload the registry so the new mode is visible,
+                                        // then make it active.
+                                        let prev = app.modes.active_name().to_string();
+                                        app.modes = zoid::mode_import::build_mode_registry(
+                                            &app.base_profile,
+                                            &app.mode_dirs,
+                                        );
+                                        let installed =
+                                            app.modes.names().iter().any(|n| n == "Superpowers");
+                                        app.modes.set_active(if installed {
+                                            "Superpowers"
+                                        } else {
+                                            prev.as_str()
+                                        });
+                                        sync_mode_mirror(app);
+                                        persist_active_mode(app).await;
+                                        app.shell.status_hint =
+                                            Some("Superpowers mode installed.".into());
+                                    }
+                                    Err(e) => {
+                                        app.shell.status_hint =
+                                            Some(format!("Superpowers install failed: {e}"));
+                                    }
                                 }
                             }
                         }
@@ -4423,6 +4463,37 @@ fn disable_companion(app: &mut App) {
     }
 }
 
+/// Kick off the deterministic Superpowers install: fetch the pinned tree
+/// off-thread, then hand the scan back to the main loop via SuperpowersScan.
+#[allow(dead_code)] // wired to a `:mode install superpowers` trigger in a later task
+fn install_superpowers(app: &mut App) {
+    if app.installing_superpowers {
+        app.shell.status_hint = Some("Superpowers install already in progress…".into());
+        return;
+    }
+    app.shell.status_hint = Some("installing Superpowers…".into());
+    let parsed = match zoid::github_fetch::parse_github_url(
+        zoid::superpowers_install::SUPERPOWERS_URL,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            app.shell.status_hint = Some(e);
+            return;
+        }
+    };
+    app.installing_superpowers = true;
+    let ui_tx = app.ui_tx.clone();
+    tokio::spawn(async move {
+        let api = zoid::github_fetch::HttpGithubApi::new();
+        let res = zoid::github_fetch::fetch_tree(&api, &parsed)
+            .await
+            .map_err(|e| format!("Superpowers fetch failed: {e}"));
+        let _ = ui_tx
+            .send(zoid::agent::AgentUpdate::SuperpowersScan(res))
+            .await;
+    });
+}
+
 async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<bool> {
     use zoid_tui::command::Command;
     match cmd {
@@ -5820,6 +5891,7 @@ mod tests {
             mcp: None,
             embed_index: None,
             embedder: None,
+            installing_superpowers: false,
         }
     }
 
