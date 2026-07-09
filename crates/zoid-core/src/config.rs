@@ -75,11 +75,13 @@ impl Default for CompanionConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EconomyConfig {
-    /// The soft setpoint the controller manages toward (tokens). None → the bin
-    /// defaults it to min(capacity, 300_000). Renamed from `context_ceiling`.
+    /// The soft setpoint the controller manages toward (tokens). Defaults to
+    /// 300_000; None → the bin falls back to min(capacity, 300_000). The bin
+    /// clamps the resolved target to model capacity for small-window models.
+    /// Renamed from `context_ceiling`.
     pub context_target: Option<u64>,
     pub auto_evict_cold: bool,
-    /// 0 disables compaction; else percent of the target (1–100).
+    /// 0 disables compaction; else percent of the target (1–100). Default 80.
     pub compact_threshold_pct: u8,
     /// Eviction band headroom, percent of effective target (default 20).
     pub band_headroom_pct: u8,
@@ -90,9 +92,9 @@ pub struct EconomyConfig {
 impl Default for EconomyConfig {
     fn default() -> Self {
         Self {
-            context_target: None,
+            context_target: Some(300_000),
             auto_evict_cold: true,
-            compact_threshold_pct: 0,
+            compact_threshold_pct: 80,
             band_headroom_pct: 20,
             recent_n: 4,
         }
@@ -146,8 +148,8 @@ mod tests {
         let c = Config::default();
         assert_eq!(c.provider, "ollama");
         assert!(c.economy.auto_evict_cold);
-        assert_eq!(c.economy.compact_threshold_pct, 0);
-        assert!(c.economy.context_target.is_none());
+        assert_eq!(c.economy.compact_threshold_pct, 80);
+        assert_eq!(c.economy.context_target, Some(300_000));
         assert_eq!(c.economy.band_headroom_pct, 20);
         assert_eq!(c.economy.recent_n, 4);
     }
