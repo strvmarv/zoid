@@ -28,7 +28,7 @@
 **New files:**
 - `crates/zoid-core/src/feedback.rs` — the submission core: data model, rendering, `FeedbackApi` trait + `HttpFeedbackApi`/`FakeFeedbackApi`, `submit()`.
 - `crates/zoid-tools/src/feedback.rs` — the `submit_feedback` `Interactive` tool.
-- `crates/zoid-tui/src/feedback_view.rs` — `FeedbackState` helpers + `route_feedback_key`.
+- `crates/zoid-tui/src/feedback_view.rs` — `route_feedback_key` (key routing only; the state types live in `state.rs`).
 
 **Modified files:**
 - `crates/zoid-core/Cargo.toml` — add `reqwest`, `percent-encoding`, `async-trait` deps.
@@ -278,12 +278,12 @@ pub enum SubmitOutcome {
 
 const RECENT_ERROR_CAP: usize = 500;
 
-/// Truncate `s` to at most `cap` chars, marking the cut with "…".
+/// Truncate `s` to at most `RECENT_ERROR_CAP` chars, marking the cut with "…".
 fn cap(s: &str) -> String {
-    if s.chars().count() <= cap {
+    if s.chars().count() <= RECENT_ERROR_CAP {
         return s.to_string();
     }
-    let truncated: String = s.chars().take(cap.saturating_sub(1)).collect();
+    let truncated: String = s.chars().take(RECENT_ERROR_CAP.saturating_sub(1)).collect();
     format!("{truncated}…")
 }
 
@@ -390,7 +390,7 @@ Add to the `tests` module:
         assert!(url.starts_with("https://github.com/strvmarv/zoid-releases/issues/new?title="));
         assert!(url.contains("&body="));
         // The label line rides in the body (percent-encoded).
-        assert!(url.contains("%3E%20Label%3A%20bug") || url.contains("Label"));
+        assert!(url.contains("%3E%20Label%3A%20bug"));
     }
 ```
 
@@ -575,7 +575,6 @@ impl FeedbackApi for HttpFeedbackApi {
 #[cfg(test)]
 pub struct FakeFeedbackApi {
     outcome: std::sync::Mutex<Option<anyhow::Result<(String, u64)>>>,
-    has_token: bool,
 }
 
 #[cfg(test)]
@@ -583,19 +582,16 @@ impl FakeFeedbackApi {
     pub fn created(url: &str, number: u64) -> Self {
         Self {
             outcome: std::sync::Mutex::new(Some(Ok((url.to_string(), number)))),
-            has_token: true,
         }
     }
     pub fn err(msg: &str) -> Self {
         Self {
             outcome: std::sync::Mutex::new(Some(Err(anyhow::anyhow!("{msg}")))),
-            has_token: true,
         }
     }
     pub fn no_token() -> Self {
         Self {
             outcome: std::sync::Mutex::new(Some(Err(anyhow::Error::new(NoToken)))),
-            has_token: false,
         }
     }
 }
@@ -634,12 +630,18 @@ impl FeedbackReport {
 }
 ```
 
-- [ ] **Step 5: Add `thiserror` to `zoid-core/Cargo.toml`**
+- [ ] **Step 5: Add `thiserror` to the workspace and `zoid-core/Cargo.toml`**
 
-`NoToken` uses `thiserror::Error`. Append to the `[dependencies]` block:
+`NoToken` uses `thiserror::Error`. First add to the workspace `Cargo.toml` `[workspace.dependencies]` block:
 
 ```toml
 thiserror = "2"
+```
+
+Then in `crates/zoid-core/Cargo.toml`'s `[dependencies]` block:
+
+```toml
+thiserror = { workspace = true }
 ```
 
 - [ ] **Step 6: Run the `submit_via` tests**
@@ -718,12 +720,56 @@ Expected: PASS.
 Run: `cargo build -p zoid-core -p zoid-tui 2>&1 | grep -i "non-exhaustive\|QuestionKind"`
 Expected: any non-exhaustive match errors are listed. Fix each by adding a `QuestionKind::Feedback { .. } =>` arm. The known site is `crates/zoid-core/src/projection.rs:113` (`!matches!(kind, QuestionKind::Approval)`) — that one already treats `Feedback` correctly (it is not `Approval`, so it suppresses the ToolResult). If `projection.rs` has a rendering match on `QuestionKind` that needs a `Feedback` arm, add one that renders the proposed title/body (a simple one-line card; full rendering is Task 6). Check `crates/zoid/src/agent.rs` for matches on `QuestionKind` and add arms returning the appropriate string.
 
-- [ ] **Step 6: Run the full core + tui build**
+- [ ] **Step 6: Add a projection test asserting `Feedback` suppresses the ToolResult**
 
-Run: `cargo build -p zoid-core -p zoid-tui`
-Expected: clean build (no errors).
+The spec (§6.4) relies on `QuestionKind::Feedback` suppressing the paired `ToolResult` from the conversation view (same as `Ask`/`ModeMapping`). Add a test to `crates/zoid-core/src/projection.rs`'s tests, mirroring the existing `Ask` suppression test (search for a test that pairs `QuestionAsked` + `ToolResult` by id and asserts the `ToolResult` is hidden):
 
-- [ ] **Step 7: Commit**
+```rust
+    #[test]
+    fn feedback_question_suppresses_paired_tool_result() {
+        // A QuestionAsked(Feedback) followed by a ToolResult with the same id:
+        // the ToolResult must be suppressed from the conversation view (the card
+        // is the human-facing record), same as Ask/ModeMapping.
+        let events = vec![
+            Event::new(Ulid::new(), None, 0, EventKind::ToolCall {
+                id: "fb1".into(), name: "submit_feedback".into(), args: "{}".into(),
+            }),
+            Event::new(Ulid::new(), None, 1, EventKind::QuestionAsked {
+                id: "fb1".into(),
+                kind: QuestionKind::Feedback {
+                    kind: "bug".into(), title: "Crash".into(), body: "steps".into(),
+                },
+                question: "Submit Bug feedback?".into(),
+                choices: vec!["Submit".into(), "Cancel".into()],
+            }),
+            Event::new(Ulid::new(), None, 2, EventKind::ToolResult {
+                id: "fb1".into(), name: "submit_feedback".into(),
+                output: "Created issue #7".into(), is_error: false,
+            }),
+        ];
+        let msgs = crate::projection::project(&events, &Default::default());
+        // The ToolResult must NOT appear as a standalone line; it's folded into
+        // the question card. Assert no ChatMsg carries the raw "Created issue #7"
+        // as tool-result text outside the card.
+        for m in &msgs {
+            if let crate::projection::ChatMsg::Assistant { tool_calls, .. } = m {
+                for c in tool_calls {
+                    assert!(!c.result.as_deref().unwrap_or("").contains("Created issue #7"),
+                        "ToolResult must be suppressed by the Feedback question card");
+                }
+            }
+        }
+    }
+```
+
+(Adjust the assertion shape to match the actual `ChatMsg`/`ToolCallRef` projection types — read the existing `Ask` suppression test in `projection.rs` and mirror its exact assertion pattern.)
+
+- [ ] **Step 7: Run the full core + tui build + tests**
+
+Run: `cargo build -p zoid-core -p zoid-tui && cargo test -p zoid-core event::tests projection::tests::feedback_question_suppresses_paired_tool_result`
+Expected: clean build; projection test PASS.
+
+- [ ] **Step 8: Commit**
 
 ```bash
 git add crates/zoid-core/src/event.rs
@@ -989,13 +1035,7 @@ impl FeedbackState {
 }
 ```
 
-Add the field to `ShellState` (near the `question` field):
-
-```rust
-    pub feedback: Option<crate::feedback_view::FeedbackState>,
-```
-
-Wait — `FeedbackState` is defined in `state.rs` above; the field type is `Option<FeedbackState>`. Use the local type:
+Add the field to `ShellState` (near the `question` field). `FeedbackState` is defined in `state.rs` (this task, Step 5), so use the local type:
 
 ```rust
     pub feedback: Option<FeedbackState>,
@@ -1479,41 +1519,27 @@ git commit -m "feat(core): add built-in feedback skill to SkillRegistry::builtin
 - Consumes: `FeedbackKind::parse` (Task 1), `QuestionKind::Feedback` (Task 3), `FeedbackReport`/`Diagnostics`/`FeedbackApi`/`HttpFeedbackApi` (Tasks 1/2), `SubmitOutcome` (Task 2). The existing `ask_user`/`apply_mode_mapping` park-and-await plumbing (oneshot reply channel, `QuestionAsked`/`QuestionAnswered` events, `ToolResult` emit).
 - Produces: the `submit_feedback` interception that emits `QuestionAsked { kind: Feedback, .. }`, parks, and on reply either submits (building a `FeedbackReport` + `Diagnostics` + `submit_via`) or returns the decline string.
 
-**Note on the reply mechanism (verified against `agent.rs:1245-1281`):** the existing `ask_user`/`apply_mode_mapping` path works as follows: the loop creates a `oneshot::channel::<Answer>()`, sends `AgentUpdate::AskUser { question, choices, reply: rtx }` on `ui`, then `rrx.await` returns an `Answer` (`Choice(String)` | `FreeText(String)` | `LetYouDecide`) or `Err` (the bin drops the sender on Esc → `Err` → `"[user aborted]"`). The `Answer` enum (`agent.rs:117`) has **no explicit decline variant** — Esc is modeled by dropping the sender. The `Feedback` overlay must fit this mechanism:
+**Note on the reply mechanism (verified against `agent.rs:1245-1281`):** the existing `ask_user`/`apply_mode_mapping` path works as follows: the loop creates a `oneshot::channel::<Answer>()`, sends `AgentUpdate::AskUser { question, choices, reply: rtx }` on `ui`, then `rrx.await` returns an `Answer` (`Choice(String)` | `FreeText(String)` | `LetYouDecide`) or `Err` (the bin drops the sender on Esc → `Err` → `"[user aborted]"`). The `Answer` enum (`agent.rs:117`) has **no explicit decline variant** — Esc is modeled by dropping the sender.\n\nThe `Feedback` overlay fits this mechanism by carrying the report *inside* the `Answer` (no shared state between `agent.rs` and `main.rs`):\n- **Submit** → the bin builds the `FeedbackReport` from `FeedbackState` + `Diagnostics`, then sends `Answer::Feedback(report)` on `rtx`.\n- **Cancel/Esc** → the bin drops `rtx` (→ `Err` in the loop → treated as declined).\n- This requires adding a new `Answer::Feedback(FeedbackReport)` variant (`agent.rs:117`). The loop, on receiving `Answer::Feedback(report)`, submits it via the injected `FeedbackApi` and emits the `ToolResult`. The loop stays **stateless** — no `App` handle, no `feedback_pending` stash. This matches the existing oneshot pattern exactly and avoids threading `App` into the turn.\n\nBecause of this, **Task 8's loop code builds nothing** — it receives the pre-built `FeedbackReport` in the `Answer` and submits it. **Task 9's bin code** (the `Action::FeedbackSubmit` handler) builds the `FeedbackReport` + `Diagnostics` from `FeedbackState` + `App` state and sends `Answer::Feedback(report)` down the oneshot. This is a clean split: the bin owns report assembly (it has the state), the loop owns submission + tool-result emission.
 - **Submit** → the bin sends `Answer::Choice("submit")` (or `FreeText` with a marker) on `rtx`.
-- **Cancel/Esc** → the bin drops `rtx` (or sends `Answer::Choice("cancel")`), and the loop treats it as declined.
-- The **edited form** (kind/title/body) lives in the bin's `FeedbackState` (`app.shell.feedback`), NOT in the `Answer` string. So the bin stashes the edited `FeedbackReport` (or its kind/title/body) onto `App` before sending the reply, and the loop reads it back. The cleanest contract: the bin builds the `FeedbackReport` itself (it has the `FeedbackState` + can capture `Diagnostics`) and stashes it on `App.feedback_pending: Option<FeedbackReport>`; the loop, on `Answer::Choice("submit")`, takes `app.feedback_pending` and calls `submit_via`. This keeps the loop thin (no diagnostics capture in the loop) and the bin owns the report assembly — mirroring how the command path (Task 9) works.
+- **Cancel/Esc** → the bin drops `rtx` (→ `Err` in the loop → treated as declined).
 
-Because of this, **Task 8's loop code does not build the report itself** — it only signals submit/decline via the `Answer` and reads the pre-built report from a shared stash. **Task 9's bin code** builds the `FeedbackReport` + `Diagnostics` and stashes it before sending the reply. This is a deliberate split: the bin owns report assembly (it has the `FeedbackState` and `App` state), the loop owns the tool-result emission.
+This requires adding a new `Answer::Feedback(FeedbackReport)` variant (`agent.rs:117`). The loop, on receiving `Answer::Feedback(report)`, submits it via the injected `FeedbackApi` and emits the `ToolResult`. The loop stays **stateless** — no `App` handle, no shared stash. **Task 9's bin code** (the `Action::FeedbackSubmit` handler) builds the `FeedbackReport` + `Diagnostics` from `FeedbackState` + `App` state and sends `Answer::Feedback(report)` down the oneshot. Clean split: the bin owns report assembly, the loop owns submission + tool-result emission.
 
-- [ ] **Step 1: Write the failing integration test for the invalid-kind path**
+- [ ] **Step 1: Write the failing unit test for the parse/validate helper**
 
-Add to `crates/zoid/src/agent.rs`'s test module (or `tests/` if the agent loop is tested there). This test asserts the no-park error path:
-
-```rust
-    #[tokio::test]
-    async fn submit_feedback_invalid_kind_emits_error_tool_result_without_parking() {
-        // Build a minimal agent loop harness (reuse an existing test helper that
-        // constructs a turn with a single tool call). Feed a `submit_feedback`
-        // call with kind="not-a-kind". Assert the emitted events contain a
-        // `ToolResult { is_error: true, output contains "invalid kind" }` and
-        // NO `QuestionAsked { kind: Feedback, .. }`.
-        // (Reuse the existing `run_turn`/`emit` test scaffolding in agent.rs.)
-    }
-```
-
-If the agent loop's test scaffolding doesn't easily support this without significant setup, write a focused unit test on the parse/validate helper instead:
+The agent-loop turn harness is heavy to set up for a full integration test, so this task tests the parse/validate helper directly. Full loop-integration testing for the `submit_feedback` path is deferred (the harness would need a mocked provider + tool-call stream + `FeedbackApi` injection — a worthwhile follow-up, but out of scope for this plan). Add to `crates/zoid/src/agent.rs`'s test module:
 
 ```rust
     #[test]
     fn submit_feedback_parse_validates_kind_title_body() {
-        // Validate the parse helper used by the interception arm.
         let ok = parse_feedback_args(&json!({"kind":"bug","title":"t","body":"b"}));
         assert!(ok.is_some());
         let bad_kind = parse_feedback_args(&json!({"kind":"x","title":"t","body":"b"}));
         assert!(bad_kind.is_none());
         let empty_title = parse_feedback_args(&json!({"kind":"bug","title":"","body":"b"}));
         assert!(empty_title.is_none());
+        let empty_body = parse_feedback_args(&json!({"kind":"bug","title":"t","body":""}));
+        assert!(empty_body.is_none());
     }
 ```
 
@@ -1560,7 +1586,23 @@ Change the guard to also match `submit_feedback`:
                 {
 ```
 
-Inside the arm, add a branch for `submit_feedback` before the existing `ask_user`/`apply_mode_mapping` branches. It mirrors their structure (verified against `agent.rs:1245-1281`): parse+validate; on failure emit a `ToolResult { is_error: true }` and `continue`; on success emit a `QuestionAsked`, then create a `oneshot::channel::<Answer>()`, send `AgentUpdate::AskUser { question, choices, reply: rtx }` on `ui`, and `rrx.await` — exactly like the `ask_user` path. The `Answer` (`Choice(String)` | `FreeText(String)` | `LetYouDecide` | `Err`) is just the submit/cancel signal; the **edited form lives in the bin's `FeedbackState`**, so the loop reads a pre-built `FeedbackReport` from a shared stash (see Step 4) on `Answer::Choice("Submit")`.
+Inside the arm, add a branch for `submit_feedback` before the existing `ask_user`/`apply_mode_mapping` branches. It mirrors their structure (verified against `agent.rs:1245-1281`): parse+validate; on failure emit a `ToolResult { is_error: true }` and `continue`; on success emit a `QuestionAsked`, then create a `oneshot::channel::<Answer>()`, send `AgentUpdate::AskUser { question, choices, reply: rtx }` on `ui`, and `rrx.await`. The bin sends `Answer::Feedback(report)` on submit (carrying the pre-built `FeedbackReport` — no shared state), or drops `rtx` on cancel (`Err` → declined).
+
+**First, add the `Answer::Feedback` variant** to the `Answer` enum (`agent.rs:117`):
+
+```rust
+pub enum Answer {
+    Choice(String),
+    FreeText(String),
+    LetYouDecide,
+    /// The `submit_feedback` tool's confirmed report (built by the bin from
+    /// the edited `FeedbackState` + diagnostics). Carries the report back to
+    /// the loop so it can submit without shared state.
+    Feedback(zoid_core::feedback::FeedbackReport),
+}
+```
+
+Then the interception branch:
 
 ```rust
                     if tc.name == "submit_feedback" {
@@ -1615,17 +1657,17 @@ Inside the arm, add a branch for `submit_feedback` before the existing `ask_user
                         }).await;
                         let ans = rrx.await;
                         let output = match ans {
-                            Ok(Answer::Choice(s)) if s == "Submit" => {
-                                // The bin stashed the assembled report on App.feedback_pending
-                                // before sending the reply (Task 9 Step 2). Drain + submit.
-                                match take_feedback_report_and_submit(state).await {
-                                    Some(Ok(zoid_core::feedback::SubmitOutcome::Created { url, number })) =>
+                            Ok(Answer::Feedback(report)) => {
+                                // The bin built the report (FeedbackState + Diagnostics)
+                                // and sent it back inside the Answer. Submit it.
+                                let api = zoid_core::feedback::HttpFeedbackApi::new();
+                                match report.submit_via(&api).await {
+                                    Ok(zoid_core::feedback::SubmitOutcome::Created { url, number }) =>
                                         format!("Created issue #{}: {}", number, url),
-                                    Some(Ok(zoid_core::feedback::SubmitOutcome::BrowserFallback { url })) =>
+                                    Ok(zoid_core::feedback::SubmitOutcome::BrowserFallback { url }) =>
                                         format!("No GitHub token available — opened your browser at {}. \
                                             The user must finish submitting there.", url),
-                                    Some(Err(e)) => format!("Failed to submit feedback: {e}"),
-                                    None => "User declined to submit feedback.".to_string(),
+                                    Err(e) => format!("Failed to submit feedback: {e}"),
                                 }
                             }
                             _ => "User declined to submit feedback.".to_string(),
@@ -1645,9 +1687,9 @@ Inside the arm, add a branch for `submit_feedback` before the existing `ask_user
                     }
 ```
 
-`state` is whatever turn/App handle the loop has access to (the same handle through which `ui`, `session` are reached). The exact accessor for the stashed report depends on how `App` is threaded into the turn; mirror the existing `ask_user` reply plumbing. `cwd` is available on the turn context (`agent.rs:52`).
+**Test injection:** the `HttpFeedbackApi::new()` above is production-only. For tests that exercise the submit path without a network, thread an `Arc<dyn FeedbackApi>` through the turn state (add a `feedback_api` field to the turn args, defaulting to `Arc::new(HttpFeedbackApi::new())`, overridable with `Arc::new(FakeFeedbackApi::created(...))`). The exact threading follows the turn's existing construction (see where `session`/`ui` are assembled into the turn). This keeps the loop stateless while allowing injection.
 
-- [ ] **Step 4: Add the `kind_str` helper + the `take_feedback_report_and_submit` seam**
+- [ ] **Step 4: Add the `kind_str` helper**
 
 Add `kind_str` in `crates/zoid/src/agent.rs`:
 
@@ -1661,25 +1703,7 @@ fn kind_str(k: zoid_core::feedback::FeedbackKind) -> &'static str {
 }
 ```
 
-`take_feedback_report_and_submit(state)` is the seam where the loop drains the bin-stashed `FeedbackReport` and submits via a `FeedbackApi`. The contract:
-- `App.feedback_pending: Arc<Mutex<Option<FeedbackReport>>>` — set by the bin's `Action::FeedbackSubmit` handler (Task 9 Step 2) BEFORE it sends `Answer::Choice("Submit")` down the oneshot.
-- `take_feedback_report_and_submit(state)` locks `feedback_pending`, takes the `Option<FeedbackReport>`, and (if `Some`) calls `report.submit_via(&*api).await` with an `HttpFeedbackApi`; returns `Option<Result<SubmitOutcome>>` (`None` if no report was stashed, `Some(Ok(..))`/`Some(Err(..))` otherwise).
-
-```rust
-/// Drain the bin-stashed feedback report and submit it. Returns `None` if the
-/// bin didn't stash a report (treated as a decline).
-async fn take_feedback_report_and_submit(
-    state: &TurnState, // the handle carrying feedback_pending + the FeedbackApi
-) -> Option<anyhow::Result<zoid_core::feedback::SubmitOutcome>> {
-    let report = state.feedback_pending.lock().unwrap().take()?;
-    let api = zoid_core::feedback::HttpFeedbackApi::new();
-    Some(report.submit_via(&api).await)
-}
-```
-
-**Why this split:** the bin owns `FeedbackState` (the editable form) and `App` (diagnostics sources: `session_id: Ulid`, `modes.active_name()`, `config.provider: String`, `config.model: String`, `events.snapshot()`, `std::env::current_dir()`). Building the report in the loop would require threading all of that into the turn; building it in the bin and stashing one `FeedbackReport` is far simpler and matches how the command path (Task 9) already works. The `Config` struct (verified in `crates/zoid-core/src/config.rs:28-39`) has `provider: String` and `model: String` (NOT `Option`); the mode comes from `app.modes.active_name()` (the `ModeRegistry`), not from `Config`.
-
-**Test injection:** for tests that exercise the submit path without a network, thread an `Arc<dyn FeedbackApi>` through the turn state and use `FakeFeedbackApi` (Task 2) instead of `HttpFeedbackApi::new()`. Add a `feedback_api: Arc<dyn FeedbackApi>` field to the turn state (or read it from `App`) so the test harness can inject the fake.
+**Why `Answer::Feedback` (no shared state):** the bin owns `FeedbackState` (the editable form) and `App` (diagnostics sources: `session_id: Ulid`, `modes.active_name()`, `config.provider: String`, `config.model: String`, `events.snapshot()`, `std::env::current_dir()`). Building the report in the bin and carrying it back inside the `Answer` means the loop never needs an `App` handle — it matches the existing `ask_user` oneshot pattern exactly. The `Config` struct (verified in `crates/zoid-core/src/config.rs:28-39`) has `provider: String` and `model: String` (NOT `Option`); the mode comes from `app.modes.active_name()` (the `ModeRegistry`), not from `Config`.
 
 - [ ] **Step 6: Build the bin**
 
@@ -1774,7 +1798,6 @@ Find where `Action` variants are matched in `main.rs` (the key-dispatch site tha
             }
         }
         Action::FeedbackSubmit => {
-            // Spawn the async submit (non-blocking), mirroring CompactNow.
             let fs = match app.shell.feedback.clone() {
                 Some(fs) => fs,
                 None => return, // adjust to the surrounding control flow
@@ -1793,20 +1816,32 @@ Find where `Action` variants are matched in `main.rs` (the key-dispatch site tha
                 body: fs.body,
                 diagnostics,
             };
-            if let Some(f) = app.shell.feedback.as_mut() {
-                f.status = FeedbackStatus::Submitting;
+
+            if let Some(reply) = app.feedback_reply.take() {
+                // TOOL PATH: the agent loop is parked awaiting this reply.
+                // Send the built report back inside the Answer; the loop submits.
+                let _ = reply.send(zoid::agent::Answer::Feedback(report));
+            } else {
+                // COMMAND PATH: no parked loop. Submit async, mirroring CompactNow.
+                if let Some(f) = app.shell.feedback.as_mut() {
+                    f.status = FeedbackStatus::Submitting;
+                }
+                let ui_tx = app.ui_tx.clone();
+                let api: std::sync::Arc<dyn zoid_core::feedback::FeedbackApi> =
+                    std::sync::Arc::new(zoid_core::feedback::HttpFeedbackApi::new());
+                tokio::spawn(async move {
+                    let outcome = report.submit_via(api.as_ref()).await;
+                    let _ = ui_tx.send(zoid::agent::AgentUpdate::FeedbackOutcome(outcome)).await; // see Step 3
+                });
             }
-            let ui_tx = app.ui_tx.clone();
-            let api: std::sync::Arc<dyn zoid_core::feedback::FeedbackApi> =
-                std::sync::Arc::new(zoid_core::feedback::HttpFeedbackApi::new());
-            tokio::spawn(async move {
-                let outcome = report.submit_via(api.as_ref()).await;
-                let _ = ui_tx.send(zoid::agent::AgentUpdate::FeedbackOutcome(outcome)).await; // see Step 3
-            });
         }
 ```
 
 Use the real `FeedbackField`/`FeedbackStatus` import paths (`zoid_tui::state::FeedbackField`, `zoid_tui::state::FeedbackStatus`). The surrounding control flow's `return`/early-exit convention should match the existing `Action` match arms in `main.rs`.
+
+The branch needs two things on `App`:
+- `app.feedback_reply: Option<oneshot::Sender<Answer>>` — set when the agent loop parks on a `submit_feedback` tool call (the loop already creates the oneshot at `agent.rs:1245`; the bin stores the `rtx` here when it receives `AgentUpdate::AskUser` for a feedback question). Cleared by `take()` on submit or on `Action::FeedbackAbort`.
+- The command path (`None` reply) uses `tokio::spawn` + `AgentUpdate::FeedbackOutcome` (Step 3).
 
 - [ ] **Step 3: Add an `AgentUpdate::FeedbackOutcome` variant to carry the async result back**
 
@@ -1817,18 +1852,9 @@ The bin's UI channel carries `AgentUpdate` (verified: `CompactNow`'s spawn uses 
     FeedbackOutcome(anyhow::Result<zoid_core::feedback::SubmitOutcome>),
 ```
 
-Handle it in the main UI-receive loop (where `AgentUpdate::CompactionComplete` is handled): on `Ok(SubmitOutcome::Created { url, number })` set `app.shell.feedback.as_mut().unwrap().status = FeedbackStatus::Done(SubmitOutcome::Created { url, number })`, and surface the URL as a `status_hint`. On `Ok(BrowserFallback { url })`, set `Done` and open the browser (use whatever `update.rs`/companion uses to open URLs — check `crates/zoid/src/main.rs` for the companion's `open` call; if none exists, use `std::process::Command::new("open").arg(&url)` on macOS / `xdg-open` on Linux / `start` on Windows, or the `open` crate if already a dep). On `Err(e)`, set `FeedbackStatus::Error(e.to_string())`.
+Handle it in the main UI-receive loop (where `AgentUpdate::CompactionComplete` is handled): on `Ok(SubmitOutcome::Created { url, number })` set `app.shell.feedback.as_mut().unwrap().status = FeedbackStatus::Done(SubmitOutcome::Created { url, number })`, and surface the URL as a `status_hint`. On `Ok(BrowserFallback { url })`, set `Done` and open the browser (check `crates/zoid/src/main.rs` for the companion's existing `open` call; if none exists, use `std::process::Command::new("open").arg(&url)` on macOS / `xdg-open` on Linux / `start` on Windows, or the `open` crate if already a dep). On `Err(e)`, set `FeedbackStatus::Error(e.to_string())`.
 
-**For the tool path (Task 8):** the `Action::FeedbackSubmit` handler must, before sending the `Answer::Choice("Submit")` down the oneshot, build the `FeedbackReport` + `Diagnostics` and stash it on `app.feedback_pending` so the loop's `take_feedback_report_and_submit` (Task 8 Step 4) can drain it. Add a field to `App`:
-
-```rust
-    /// Stashed report for the agent-loop `submit_feedback` path: the bin
-    /// assembles it from `FeedbackState` + diagnostics, the loop drains +
-    /// submits it. `None` at rest.
-    feedback_pending: std::sync::Arc<std::sync::Mutex<Option<zoid_core::feedback::FeedbackReport>>>,
-```
-
-Initialize it `Arc::new(Mutex::new(None))` in `App`'s construction. In the `Action::FeedbackSubmit` handler, when the feedback overlay was triggered by the tool (i.e. a `QuestionAsked::Feedback` card is pending — detect via `app.pending_feedback_reply.is_some()` or an equivalent flag), build the report, stash it in `feedback_pending`, and send `Answer::Choice("Submit")` on the stashed oneshot. When triggered by the command (no pending tool), use the `tokio::spawn` + `AgentUpdate::FeedbackOutcome` path above.
+**For the tool path:** the loop parks on a `oneshot` and sends `AgentUpdate::AskUser { reply: rtx }`. The bin stores `rtx` on `app.feedback_reply` when it receives that `AgentUpdate` for a `QuestionKind::Feedback` question (detect via the pending `QuestionAsked` event). On `Action::FeedbackSubmit`, the bin builds the `FeedbackReport` + sends `Answer::Feedback(report)` on `app.feedback_reply.take()` (Step 2 above). On `Action::FeedbackAbort`, drop `app.feedback_reply` (the loop's `rrx.await` returns `Err` → "User declined"). No `feedback_pending` stash — the report rides inside the `Answer`.
 
 - [ ] **Step 4: Add `capture_app_diagnostics`**
 
@@ -1893,4 +1919,4 @@ git commit -m "feat(bin): wire Command::Feedback dispatch, diagnostics capture, 
 
 **Placeholder scan:** No "TBD"/"TODO"/"implement later". The `Config`/`App` field names referenced in Tasks 8 and 9 have been verified against the actual structs (`Config` at `crates/zoid-core/src/config.rs:28-39`: `provider: String`, `model: String`; `App` at `crates/zoid/src/main.rs:1382+`: `session_id: Ulid`, `modes: ModeRegistry`, `events: EventLog`, `config: Config`; cwd via `std::env::current_dir()`). The `Answer`/oneshot reply mechanism is verified against `agent.rs:1245-1281`. The `AgentUpdate` channel is verified against `CompactNow`'s spawn (`main.rs:4296`). The one remaining implementation-time detail is the exact handle through which `take_feedback_report_and_submit` reaches the stashed `feedback_pending` + injected `FeedbackApi` — this depends on the turn-state threading, which the plan describes as a contract (Task 8 Step 4) rather than guessing the field name.
 
-**Type consistency:** `FeedbackKind`/`Diagnostics`/`FeedbackReport`/`SubmitOutcome` (Task 1) are used unchanged in Tasks 2, 8, 9. `FeedbackApi::create_issue` signature (Task 2) is used by `submit_via` (Task 2) and `HttpFeedbackApi` (Task 2). `QuestionKind::Feedback { kind, title, body }` (Task 3) is constructed in Task 8 and rendered in Task 6. `FeedbackState`/`FeedbackField`/`FeedbackStatus`/`Overlay::Feedback` (Task 5) are consumed by Tasks 6 and 9. `Command::Feedback` (Task 5) is consumed by Tasks 6 (palette/preview) and 9 (dispatch). `Action::Feedback*` (Task 5) is consumed by Task 9. `route_feedback_key` (Task 5) is called from `route_key` (Task 5). The built-in skill `feedback` (Task 7) references `submit_feedback` (Task 4) — consistent.
+**Type consistency:** `FeedbackKind`/`Diagnostics`/`FeedbackReport`/`SubmitOutcome` (Task 1) are used unchanged in Tasks 2, 8, 9. `FeedbackApi::create_issue` signature (Task 2) is used by `submit_via` (Task 2) and `HttpFeedbackApi` (Task 2). `QuestionKind::Feedback { kind, title, body }` (Task 3) is constructed in Task 8 and rendered in Task 6. `FeedbackState`/`FeedbackField`/`FeedbackStatus`/`Overlay::Feedback` (Task 5, in `state.rs`) are consumed by Tasks 6 and 9. `Command::Feedback` (Task 5) is consumed by Tasks 6 (palette/preview) and 9 (dispatch). `Action::Feedback*` (Task 5) is consumed by Task 9. `route_feedback_key` (Task 5, in `feedback_view.rs`) is called from `route_key` (Task 5). The built-in skill `feedback` (Task 7) references `submit_feedback` (Task 4) — consistent. `Answer::Feedback(FeedbackReport)` (Task 8) carries the report from the bin (Task 9) back to the loop (Task 8) — the loop stays stateless, no shared `feedback_pending` stash.
