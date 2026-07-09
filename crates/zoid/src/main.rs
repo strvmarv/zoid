@@ -2237,8 +2237,13 @@ where
             // lines directly. When the first message arrives, proj.msgs becomes
             // non-empty and the else branch takes over (key is None → full
             // rebuild). Excluded from the body-render cache-hit ratio (None).
-            app.body_cache.body =
-                zoid_tui::onboarding::empty_state_lines(app.shell.first_time_user, body_w);
+            let offer_superpowers = app.shell.first_time_user
+                && !app.modes.names().iter().any(|n| n == "Superpowers");
+            app.body_cache.body = zoid_tui::onboarding::empty_state_lines(
+                app.shell.first_time_user,
+                offer_superpowers,
+                body_w,
+            );
             app.body_cache.key = None;
             app.body_cache.msg_count = 0;
             None
