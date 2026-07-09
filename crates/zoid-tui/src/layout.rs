@@ -273,6 +273,7 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
     let palette = if matches!(
         state.overlay,
         Overlay::Palette | Overlay::Objects | Overlay::Verbs | Overlay::Sessions | Overlay::Mcp
+        | Overlay::Feedback
     ) {
         Some(centered(conversation, 72, 18))
     } else {
