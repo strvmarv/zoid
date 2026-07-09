@@ -96,6 +96,25 @@ fn resolve_secret_key_path(env: impl Fn(&str) -> Option<String>) -> PathBuf {
     base.join("zoid").join("secret.key")
 }
 
+/// The four on-disk locations `zoid uninstall` removes. The data dir is derived
+/// from the XDG data base (not `resolve_db_path`, so a `$ZOID_DB` override can't
+/// point removal at an unrelated file) and holds `zoid.db` + `secret.key` +
+/// secrets alongside each other.
+fn uninstall_targets() -> zoid::uninstall::Targets {
+    let env = |k: &str| std::env::var(k).ok();
+    let data_dir = env("XDG_DATA_HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env("HOME").unwrap_or_default()).join(".local/share"))
+        .join("zoid");
+    zoid::uninstall::Targets {
+        data_dir,
+        config_dir: resolve_config_dir(env),
+        cache_dir: resolve_cache_dir(env),
+        binary: std::env::current_exe().unwrap_or_else(|_| PathBuf::from("zoid")),
+    }
+}
+
 /// Format one unknown-key warning for the log, qualified by its source file.
 fn layer_warning_line(file: &str, key: &str) -> String {
     format!("{file}: ignored unknown key {key}")
@@ -1570,6 +1589,10 @@ async fn main() -> Result<()> {
         }
         zoid::cli::Cli::Update => {
             return zoid::update::run().await;
+        }
+        zoid::cli::Cli::Uninstall { purge } => {
+            // Runs before any DB/terminal setup — we're deleting that state.
+            return zoid::uninstall::run(uninstall_targets(), purge);
         }
         zoid::cli::Cli::Unknown(arg) => {
             eprintln!(

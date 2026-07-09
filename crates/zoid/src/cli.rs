@@ -19,6 +19,11 @@ pub enum Cli {
     Help,
     /// Run the self-updater and exit.
     Update,
+    /// Remove zoid's data (sessions, config, cache, secrets); with `purge`,
+    /// also delete the binary. Exits after running.
+    Uninstall {
+        purge: bool,
+    },
     /// Unrecognised argument; carries the offending token.
     Unknown(String),
 }
@@ -36,6 +41,17 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Cli {
         Some("--version") | Some("-V") => return Cli::Version,
         Some("--help") | Some("-h") => return Cli::Help,
         Some("update") => return Cli::Update,
+        Some("uninstall") => {
+            // Only `--purge` may follow; anything else is an error.
+            let mut purge = false;
+            for a in &args[1..] {
+                match a.as_str() {
+                    "--purge" => purge = true,
+                    other => return Cli::Unknown(other.to_string()),
+                }
+            }
+            return Cli::Uninstall { purge };
+        }
         _ => {}
     }
 
@@ -92,6 +108,8 @@ USAGE:
     zoid --companion          Launch with the companion browser view enabled
     zoid --yolo               Disable all approval prompts (dangerous)
     zoid update               Download and install the latest release
+    zoid uninstall            Remove zoid's data (sessions, config, cache)
+    zoid uninstall --purge    Also delete the zoid binary
     zoid --version            Print version
     zoid --help               Print this help"
         .to_string()
@@ -174,5 +192,23 @@ mod tests {
             super::parse_args(vec!["--companion".to_string(), "--yolo".to_string()]),
             super::Cli::Run { companion: true, new: false, resume: None, yolo: true }
         );
+    }
+
+    #[test]
+    fn parses_uninstall_and_purge() {
+        assert_eq!(
+            super::parse_args(vec!["uninstall".to_string()]),
+            super::Cli::Uninstall { purge: false }
+        );
+        assert_eq!(
+            super::parse_args(vec!["uninstall".to_string(), "--purge".to_string()]),
+            super::Cli::Uninstall { purge: true }
+        );
+    }
+
+    #[test]
+    fn uninstall_with_unknown_flag_is_unknown() {
+        let r = super::parse_args(vec!["uninstall".to_string(), "--everything".to_string()]);
+        assert!(matches!(r, super::Cli::Unknown(_)), "unknown uninstall flag must error");
     }
 }
