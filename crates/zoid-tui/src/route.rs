@@ -113,6 +113,72 @@ pub enum Target {
     None,
 }
 
+/// Where a bracketed-paste string should be inserted. Bracketed paste arrives
+/// as a distinct `Event::Paste(String)` rather than a burst of `Char` keys, so
+/// it never passes through `route_key`. `route_paste` gives it the *same*
+/// precedence — an open question card and text-bearing overlays capture paste
+/// before the message box — so pasting an API key into the config Secret field
+/// (or a palette arg, feedback body, …) lands there instead of leaking into the
+/// message textarea. Read-only surfaces (Conversation/Rail focus, selection-only
+/// overlays, a config field that isn't being edited) return `None` and drop the
+/// paste, mirroring how a typed `Char` is a Noop in those contexts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasteTarget {
+    Input,
+    ConfigEdit,
+    PaletteQuery,
+    PaletteArg,
+    Question,
+    FeedbackTitle,
+    FeedbackBody,
+    None,
+}
+
+pub fn route_paste(state: &ShellState) -> PasteTarget {
+    // 0. An open question card soft-captures input (mirrors route_key step 0).
+    if state.question.is_some() {
+        return PasteTarget::Question;
+    }
+    // 1. Text-bearing overlays capture paste before the focus region.
+    match state.overlay {
+        Overlay::Palette => {
+            return if matches!(state.palette.stage, crate::state::PaletteStage::Arg { .. }) {
+                PasteTarget::PaletteArg
+            } else {
+                PasteTarget::PaletteQuery
+            };
+        }
+        // Only while an inline edit buffer is active (Text/Uint/Secret field).
+        Overlay::Config => {
+            return if state.config_edit.is_some() {
+                PasteTarget::ConfigEdit
+            } else {
+                PasteTarget::None
+            };
+        }
+        Overlay::Feedback => {
+            return match state.feedback.as_ref().map(|f| f.focus) {
+                Some(crate::state::FeedbackField::Title) => PasteTarget::FeedbackTitle,
+                Some(crate::state::FeedbackField::Body) => PasteTarget::FeedbackBody,
+                // Kind is a selection field with no text buffer.
+                _ => PasteTarget::None,
+            };
+        }
+        // Selection-only overlays have nowhere to put pasted text.
+        Overlay::Objects
+        | Overlay::Verbs
+        | Overlay::Sessions
+        | Overlay::Mcp
+        | Overlay::ProviderSwitch => return PasteTarget::None,
+        Overlay::None => {}
+    }
+    // 2. Focus-contextual: only the message box accepts text.
+    match state.focus {
+        Focus::Input => PasteTarget::Input,
+        Focus::Conversation | Focus::Rail => PasteTarget::None,
+    }
+}
+
 fn ctrl(key: &KeyEvent, c: char) -> bool {
     key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char(c)
 }
@@ -504,6 +570,82 @@ mod tests {
             }],
         }];
         s
+    }
+
+    // ---- route_paste: bracketed paste follows the same precedence as keys ----
+
+    #[test]
+    fn paste_defaults_to_the_message_box() {
+        let s = ShellState::new(); // overlay None, focus Input
+        assert_eq!(route_paste(&s), PasteTarget::Input);
+    }
+
+    #[test]
+    fn paste_targets_config_edit_buffer_not_the_message_box() {
+        // Regression: editing a Secret/Text field in the config overlay, a paste
+        // (e.g. an API key) must land in config_edit, not the message textarea.
+        let mut s = state_on_provider();
+        s.config_edit = Some(String::new());
+        assert_eq!(route_paste(&s), PasteTarget::ConfigEdit);
+    }
+
+    #[test]
+    fn paste_in_config_without_active_edit_is_dropped() {
+        // Field-list navigation (no edit buffer) has no text target — like a
+        // typed Char, which is a Noop there.
+        let s = state_on_provider();
+        assert_eq!(route_paste(&s), PasteTarget::None);
+    }
+
+    #[test]
+    fn paste_targets_question_card_free_text() {
+        use crate::question::QuestionState;
+        let mut s = ShellState::new();
+        s.question = Some(QuestionState::new("pick?", vec![]));
+        assert_eq!(route_paste(&s), PasteTarget::Question);
+    }
+
+    #[test]
+    fn paste_targets_palette_query_and_arg() {
+        use crate::state::PaletteStage;
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Palette;
+        assert_eq!(route_paste(&s), PasteTarget::PaletteQuery);
+        s.palette.stage = PaletteStage::Arg {
+            kind: crate::palette::ArgKind::Rename,
+            input: String::new(),
+        };
+        assert_eq!(route_paste(&s), PasteTarget::PaletteArg);
+    }
+
+    #[test]
+    fn paste_targets_feedback_text_fields_only() {
+        use crate::state::{FeedbackField, FeedbackState};
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Feedback;
+        let mut fs = FeedbackState {
+            focus: FeedbackField::Body,
+            kind: zoid_core::feedback::FeedbackKind::Bug,
+            kind_selected: 0,
+            title: String::new(),
+            body: String::new(),
+            status: crate::state::FeedbackStatus::Idle,
+        };
+        s.feedback = Some(fs.clone());
+        assert_eq!(route_paste(&s), PasteTarget::FeedbackBody);
+        fs.focus = FeedbackField::Title;
+        s.feedback = Some(fs.clone());
+        assert_eq!(route_paste(&s), PasteTarget::FeedbackTitle);
+        fs.focus = FeedbackField::Kind; // selection field: no text target
+        s.feedback = Some(fs);
+        assert_eq!(route_paste(&s), PasteTarget::None);
+    }
+
+    #[test]
+    fn paste_while_conversation_focused_is_dropped() {
+        let mut s = ShellState::new();
+        s.focus = Focus::Conversation;
+        assert_eq!(route_paste(&s), PasteTarget::None);
     }
 
     #[test]
