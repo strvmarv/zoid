@@ -26,7 +26,10 @@ pub(crate) const WARN_GLYPH: char = '⚠';
 /// Multiplier for how many vector recall candidates to fetch beyond the caller's
 /// `limit`. The in-memory embedding index is session-agnostic, so some hits
 /// belong to other sessions and are dropped by the per-session filter; fetching
-/// a multiple keeps enough session-matching hits to fill `limit`.
+/// a multiple keeps enough session-matching hits to fill `limit`. 4× covers
+/// roughly even dilution across ~4 active sessions; beyond that the vector
+/// contribution thins and recall leans on the (fully session-scoped) FTS side —
+/// a graceful quality taper, not a correctness cliff. Picked, not tuned.
 const VECTOR_OVERFETCH: usize = 4;
 
 /// System prompt for Chat-mode turns.
@@ -2619,6 +2622,125 @@ mod tests {
         assert!(conversation(out.iter())
             .iter()
             .any(|m| matches!(m, ChatMsg::User { text, .. } if text.contains("vector backend"))));
+    }
+
+    /// Facet A (multi-session over-fetch): the in-memory index is
+    /// session-agnostic, so vector hits from OTHER sessions can crowd out the
+    /// current session's own hit. Over-fetching (`VECTOR_OVERFETCH` × limit)
+    /// before the per-session `events_by_ids` filter keeps the session's
+    /// semantic hit alive.
+    ///
+    /// Setup: five foreign-session vectors sit exactly at the query vector
+    /// (cosine 1.0); the current session's target vector is orthogonal, so it
+    /// ranks 6th. With `limit = 5`, a naive top-5 vector scan returns only the
+    /// five foreign hits — all dropped by the session filter → the target never
+    /// surfaces. Over-fetching to `5 × VECTOR_OVERFETCH` pulls the target into
+    /// range, and the session filter keeps it. (`limit = 5` also leaves room for
+    /// the recall tool-call's own FTS self-match, which renders empty.)
+    #[tokio::test]
+    async fn recall_overfetches_past_cross_session_vectors() {
+        use serde_json::json;
+        use std::sync::{Arc, RwLock};
+        use ulid::Ulid;
+        use zoid_core::embed_index::EmbeddingIndex;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_core::retrieval::{Embedder, FakeEmbedder};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let sid_a = Ulid::from(100u128); // the recall (current) session
+        let sid_b = Ulid::from(200u128); // a foreign session sharing the DB
+
+        // Target lives in session A; its text shares no token with the query, so
+        // session FTS does not find it — only the vector path can surface it.
+        let target = Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "zzz nomatch target body".into(),
+            },
+        )
+        .with_session(sid_a);
+        // Five foreign events in session B (ids 2..=6).
+        let foreign: Vec<Event> = (2u128..=6)
+            .map(|i| {
+                Event::new(
+                    Ulid::from(i),
+                    None,
+                    1,
+                    EventKind::UserMessage { text: format!("foreign {i}") },
+                )
+                .with_session(sid_b)
+            })
+            .collect();
+        session.append(target.clone()).await.unwrap();
+        for e in &foreign {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        // Build the session-agnostic ring directly (vectors decoupled from event
+        // text, so FTS and the vector scan disagree — the whole point): the five
+        // foreign vectors ARE the query vector (cosine 1.0); the target's is
+        // orthogonal, so it ranks last.
+        let fake: Arc<dyn Embedder> = Arc::new(FakeEmbedder::new(16));
+        let qv = fake.embed(&["alpha"]).unwrap().remove(0);
+        let tv = fake.embed(&["beta"]).unwrap().remove(0);
+        let mut ring = EmbeddingIndex::new(16, 100);
+        for i in 2u128..=6 {
+            ring.append(Ulid::from(i), &qv);
+        }
+        ring.append(Ulid::from(1u128), &tv); // target ranks below the 5 foreign
+        let index = Arc::new(RwLock::new(ring));
+
+        let mut cfg = chat_turn_config();
+        cfg.embed = Some(index);
+        cfg.embedder = Some(fake);
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "r1".into(),
+                    name: "recall".into(),
+                    args: json!({"query": "alpha", "limit": 5}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
+        ]));
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let seed = std::iter::once(target.clone()).chain(foreign.clone()).collect();
+        let out = run_agent_turn(
+            cfg,
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            sid_a,
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        // The recall ToolResult carries the TARGET's content: over-fetch pulled it
+        // past the five higher-ranked foreign-session vectors, and the session
+        // filter kept it. Without over-fetch, a top-5 vector scan returns only the
+        // five foreign hits (all dropped by the session filter) → target absent.
+        assert!(
+            out.iter().any(|e| matches!(&e.kind,
+                EventKind::ToolResult { name, output, .. }
+                    if name == "recall" && output.contains("zzz nomatch target"))),
+            "over-fetch must surface the current session's semantic hit despite cross-session vectors"
+        );
     }
 
     /// Task 9a graceful-degradation guarantee: a `TurnConfig` built via
