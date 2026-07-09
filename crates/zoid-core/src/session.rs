@@ -67,6 +67,28 @@ enum Cmd {
         limit: usize,
         reply: oneshot::Sender<Result<Vec<Event>>>,
     },
+    WriteEmbedding {
+        event_id: Ulid,
+        model_id: String,
+        vector: Vec<f32>,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    LoadRecentEmbeddings {
+        model_id: String,
+        cap: usize,
+        reply: oneshot::Sender<Result<Vec<(Ulid, Vec<f32>)>>>,
+    },
+    UnembeddedEvents {
+        model_id: String,
+        session_id: Ulid,
+        limit: usize,
+        reply: oneshot::Sender<Result<Vec<(Ulid, String)>>>,
+    },
+    EventsByIds {
+        ids: Vec<Ulid>,
+        session_id: Ulid,
+        reply: oneshot::Sender<Result<Vec<Event>>>,
+    },
 }
 
 /// A cloneable handle to the single-writer event-store actor (spec §4.1).
@@ -164,6 +186,36 @@ impl SessionHandle {
                             .search_fts(&query, session_id, limit)
                             .and_then(|ids| store.events_by_ids(&ids, session_id));
                         let _ = reply.send(out);
+                    }
+                    Cmd::WriteEmbedding {
+                        event_id,
+                        model_id,
+                        vector,
+                        reply,
+                    } => {
+                        let _ = reply.send(store.write_embedding(event_id, &model_id, &vector));
+                    }
+                    Cmd::LoadRecentEmbeddings {
+                        model_id,
+                        cap,
+                        reply,
+                    } => {
+                        let _ = reply.send(store.load_recent_embeddings(&model_id, cap));
+                    }
+                    Cmd::UnembeddedEvents {
+                        model_id,
+                        session_id,
+                        limit,
+                        reply,
+                    } => {
+                        let _ = reply.send(store.unembedded_events(&model_id, session_id, limit));
+                    }
+                    Cmd::EventsByIds {
+                        ids,
+                        session_id,
+                        reply,
+                    } => {
+                        let _ = reply.send(store.events_by_ids(&ids, session_id));
                     }
                 }
             }
@@ -351,6 +403,82 @@ impl SessionHandle {
         rx.await
             .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
     }
+
+    /// Persist an embedding vector for an event under a given model id.
+    pub async fn write_embedding(
+        &self,
+        event_id: Ulid,
+        model_id: String,
+        vector: Vec<f32>,
+    ) -> Result<()> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Cmd::WriteEmbedding {
+                event_id,
+                model_id,
+                vector,
+                reply,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
+    }
+
+    /// Load up to `cap` most-recent embeddings for a model id.
+    pub async fn load_recent_embeddings(
+        &self,
+        model_id: String,
+        cap: usize,
+    ) -> Result<Vec<(Ulid, Vec<f32>)>> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Cmd::LoadRecentEmbeddings {
+                model_id,
+                cap,
+                reply,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
+    }
+
+    /// List events in a session that have not yet been embedded under a model id.
+    pub async fn unembedded_events(
+        &self,
+        model_id: String,
+        session_id: Ulid,
+        limit: usize,
+    ) -> Result<Vec<(Ulid, String)>> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Cmd::UnembeddedEvents {
+                model_id,
+                session_id,
+                limit,
+                reply,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
+    }
+
+    /// Load events by id, scoped to `session_id`.
+    pub async fn events_by_ids(&self, ids: Vec<Ulid>, session_id: Ulid) -> Result<Vec<Event>> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Cmd::EventsByIds {
+                ids,
+                session_id,
+                reply,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
+    }
 }
 
 #[cfg(test)]
@@ -465,5 +593,45 @@ mod tests {
         // A takeover (overwrite pid) makes the old owner's heartbeat return false.
         h.set_active(id, true, 5678, 1500).await.unwrap();
         assert!(!h.heartbeat(id, 1234, 2500).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn handle_embedding_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = SessionHandle::spawn(dir.path().join("s.db").to_str().unwrap()).unwrap();
+        let sid = Ulid::from(1u128);
+        h.new_session(sid, "s".into(), "/tmp".into(), 0)
+            .await
+            .unwrap();
+        // 2nd arg is parent, not session — set session via .with_session (event.rs:200).
+        let ev = Event::new(
+            Ulid::from(10u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "hi there".into(),
+            },
+        )
+        .with_session(sid);
+        h.append(ev).await.unwrap();
+
+        assert_eq!(
+            h.unembedded_events("bge".into(), sid, 10).await.unwrap().len(),
+            1
+        );
+        h.write_embedding(Ulid::from(10u128), "bge".into(), vec![0.5, 0.5])
+            .await
+            .unwrap();
+        assert_eq!(
+            h.unembedded_events("bge".into(), sid, 10).await.unwrap().len(),
+            0
+        );
+        let loaded = h.load_recent_embeddings("bge".into(), 10).await.unwrap();
+        assert_eq!(loaded, vec![(Ulid::from(10u128), vec![0.5, 0.5])]);
+        let evs = h
+            .events_by_ids(vec![Ulid::from(10u128)], sid)
+            .await
+            .unwrap();
+        assert_eq!(evs.len(), 1);
     }
 }
