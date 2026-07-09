@@ -897,6 +897,7 @@ fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
                     Command::CompanionEnable => "→ Enable companion".to_string(),
                     Command::CompanionDisable => "→ Disable companion".to_string(),
                     Command::CompactNow => "→ Compact context now".to_string(),
+                    Command::Feedback => "→ Submit feedback".to_string(),
                 };
                 lines.push(Line::styled(preview, Style::new().fg(color::DIM)));
             }

@@ -40,6 +40,8 @@ pub enum Command {
     CompanionEnable,
     /// Disable (stop) the companion server.
     CompanionDisable,
+    /// Open the feedback submission overlay (`:feedback`).
+    Feedback,
     Unknown(String),
 }
 
@@ -78,6 +80,7 @@ pub fn parse_command(raw: &str) -> Command {
         // --- flat commands ---
         "q" | "quit" => Command::Quit,
         "compact" => Command::CompactNow,
+        "feedback" => Command::Feedback,
         "config" => Command::OpenConfig,
         rest if rest == "delegate" || rest.starts_with("delegate ") => {
             Command::Delegate(rest.strip_prefix("delegate").unwrap().trim().to_string())
@@ -201,6 +204,12 @@ mod tests {
             Command::Delegate("add a test for parse()".into())
         );
         assert_eq!(parse_command(":delegate"), Command::Delegate(String::new()));
+    }
+
+    #[test]
+    fn parses_feedback_command() {
+        assert_eq!(parse_command(":feedback"), Command::Feedback);
+        assert_eq!(parse_command("feedback"), Command::Feedback);
     }
 
     #[test]

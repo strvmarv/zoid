@@ -53,6 +53,7 @@ pub enum Overlay {
     Config,
     ProviderSwitch,
     Mcp,
+    Feedback,
 }
 
 /// Read-only snapshot row for one MCP server, refreshed by the bin each tick
@@ -64,6 +65,46 @@ pub struct McpStatusRow {
     /// "connecting" | "ready" | "failed" | "disconnected"
     pub state: String,
     pub tool_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeedbackField {
+    Kind,
+    Title,
+    Body,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FeedbackStatus {
+    Idle,
+    Submitting,
+    Done(zoid_core::feedback::SubmitOutcome),
+    Error(String),
+}
+
+/// State for the `:feedback` overlay: a single form (kind picker, title, body).
+/// Seeded empty by the command, or pre-filled by the agent tool's proposal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeedbackState {
+    pub focus: FeedbackField,
+    pub kind: zoid_core::feedback::FeedbackKind,
+    pub kind_selected: usize,
+    pub title: String,
+    pub body: String,
+    pub status: FeedbackStatus,
+}
+
+impl FeedbackState {
+    pub fn new() -> Self {
+        Self {
+            focus: FeedbackField::Kind,
+            kind: zoid_core::feedback::FeedbackKind::Bug,
+            kind_selected: 0,
+            title: String::new(),
+            body: String::new(),
+            status: FeedbackStatus::Idle,
+        }
+    }
 }
 
 /// Which pane has focus inside the quick-switch (`Alt+P`) overlay: the
@@ -283,6 +324,8 @@ pub struct ShellState {
     /// question is pending (Task 11 renders it; Task 9 populates it via
     /// `AgentUpdate::AskUser`).
     pub question: Option<crate::question::QuestionState>,
+    /// The `:feedback` overlay's state, or `None` when the overlay is closed.
+    pub feedback: Option<FeedbackState>,
     /// Whether this is a first-time user (no prior session history for this repo
     /// at boot). Set once at boot from `sessions.is_empty()`, never changes
     /// during a session. Drives the empty-state onboarding copy vs. the
@@ -399,6 +442,7 @@ impl ShellState {
             active_tool: None,
             tool_started_at: None,
             question: None,
+            feedback: None,
             first_time_user: false,
             compacting: false,
             compaction_started_at: None,
