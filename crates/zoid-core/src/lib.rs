@@ -12,6 +12,7 @@ pub mod embed_index;
 pub mod event;
 pub mod feedback;
 pub mod eviction;
+pub mod hybrid;
 pub mod mode;
 pub mod projection;
 pub mod retrieval;
