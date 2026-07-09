@@ -35,6 +35,22 @@ pub struct EventStore {
     conn: Connection,
 }
 
+/// Little-endian pack of an embedding vector for BLOB storage.
+fn f32s_to_blob(v: &[f32]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(v.len() * 4);
+    for f in v {
+        b.extend_from_slice(&f.to_le_bytes());
+    }
+    b
+}
+
+/// Inverse of `f32s_to_blob`.
+fn blob_to_f32s(b: &[u8]) -> Vec<f32> {
+    b.chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
 /// The searchable text of an event, or None for content-less events (Usage,
 /// eviction markers, tasks). Indexed into `events_fts` at append.
 fn fts_content(kind: &crate::event::EventKind) -> Option<String> {
@@ -268,6 +284,75 @@ impl EventStore {
             params![id.to_string(), name, root_path, created_ts, last_touched_ts],
         )?;
         Ok(())
+    }
+
+    /// Persist one embedding (side-table row; never replayed). Idempotent per
+    /// (event_id, model_id).
+    pub fn write_embedding(&self, event_id: Ulid, model_id: &str, vector: &[f32]) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO event_embeddings (event_id, model_id, dim, vector)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                event_id.to_string(),
+                model_id,
+                vector.len() as i64,
+                f32s_to_blob(vector)
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Newest-first, capped — the resume-fill query. O(cap), not O(history).
+    pub fn load_recent_embeddings(&self, model_id: &str, cap: usize) -> Result<Vec<(Ulid, Vec<f32>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT event_id, vector FROM event_embeddings
+             WHERE model_id = ?1 ORDER BY rowid DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![model_id, cap as i64], |r| {
+            let id: String = r.get(0)?;
+            let blob: Vec<u8> = r.get(1)?;
+            Ok((id, blob))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, blob) = row?;
+            if let Ok(u) = Ulid::from_string(&id) {
+                out.push((u, blob_to_f32s(&blob)));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Searchable events lacking an embedding for `model_id`, in this session.
+    /// Content comes from `events_fts` (same set `recall` searches).
+    pub fn unembedded_events(
+        &self,
+        model_id: &str,
+        session_id: Ulid,
+        limit: usize,
+    ) -> Result<Vec<(Ulid, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.event_id, f.content FROM events_fts f
+             LEFT JOIN event_embeddings e ON e.event_id = f.event_id AND e.model_id = ?1
+             WHERE e.event_id IS NULL AND f.session_id = ?2
+             ORDER BY f.rowid LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(
+            params![model_id, session_id.to_string(), limit as i64],
+            |r| {
+                let id: String = r.get(0)?;
+                let content: String = r.get(1)?;
+                Ok((id, content))
+            },
+        )?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, content) = row?;
+            if let Ok(u) = Ulid::from_string(&id) {
+                out.push((u, content));
+            }
+        }
+        Ok(out)
     }
 
     pub fn rename_session(&self, id: Ulid, name: &str) -> Result<()> {
@@ -675,6 +760,61 @@ mod tests {
         store.append(&e).unwrap();
         let hits = store.search_fts("ceiling", Ulid::from(0u128), 10).unwrap();
         assert_eq!(hits, vec![Ulid::from(1u128)]);
+    }
+
+    #[test]
+    fn embeddings_write_load_and_unembedded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("e.db");
+        let store = EventStore::open(path.to_str().unwrap()).unwrap();
+        let sid = Ulid::from(1u128);
+        // insert_session takes 5 args (store.rs:257): id, name, root_path, created_ts, last_touched_ts
+        store.insert_session(sid, "s", "/tmp", 0, 0).unwrap();
+
+        // two searchable events (go into events_fts at append). NOTE: Event::new's
+        // 2nd arg is `parent`, NOT session (event.rs:187) — set the session with
+        // `.with_session(sid)` (event.rs:200) so unembedded_events' session filter matches.
+        let e1 = Event::new(
+            Ulid::from(10u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "hello world".into(),
+            },
+        )
+        .with_session(sid);
+        let e2 = Event::new(
+            Ulid::from(11u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "second body".into(),
+            },
+        )
+        .with_session(sid);
+        store.append(&e1).unwrap();
+        store.append(&e2).unwrap();
+
+        // both unembedded initially
+        let todo = store.unembedded_events("bge", sid, 10).unwrap();
+        assert_eq!(todo.len(), 2);
+        assert!(todo
+            .iter()
+            .any(|(id, c)| *id == Ulid::from(10u128) && c.contains("hello")));
+
+        // embed one; it drops out of the unembedded set
+        store
+            .write_embedding(Ulid::from(10u128), "bge", &[0.1, 0.2, 0.3])
+            .unwrap();
+        let todo2 = store.unembedded_events("bge", sid, 10).unwrap();
+        assert_eq!(todo2.len(), 1);
+        assert_eq!(todo2[0].0, Ulid::from(11u128));
+
+        // load round-trips the vector
+        let loaded = store.load_recent_embeddings("bge", 10).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].0, Ulid::from(10u128));
+        assert_eq!(loaded[0].1, vec![0.1, 0.2, 0.3]);
     }
 
     #[test]
