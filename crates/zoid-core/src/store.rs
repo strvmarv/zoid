@@ -361,6 +361,38 @@ impl EventStore {
         Ok(out)
     }
 
+    /// Like [`Self::unembedded_events`] but across ALL sessions in the DB, not a
+    /// single one. The embedding lane uses this so events written to any session
+    /// (including one switched to after boot) get embedded — the in-memory index
+    /// is session-agnostic and recall filters by session downstream, so the lane
+    /// must feed it every session's vectors, not just the boot session's.
+    pub fn unembedded_events_all(
+        &self,
+        model_id: &str,
+        limit: usize,
+    ) -> Result<Vec<(Ulid, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.event_id, f.content FROM events_fts f
+             LEFT JOIN event_embeddings e ON e.event_id = f.event_id AND e.model_id = ?1
+             WHERE e.event_id IS NULL
+             ORDER BY f.rowid LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![model_id, limit as i64], |r| {
+            let id: String = r.get(0)?;
+            let content: String = r.get(1)?;
+            Ok((id, content))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, content) = row?;
+            // Bad event_id skipped, not propagated (see unembedded_events).
+            if let Ok(u) = Ulid::from_string(&id) {
+                out.push((u, content));
+            }
+        }
+        Ok(out)
+    }
+
     pub fn rename_session(&self, id: Ulid, name: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE sessions SET name = ?2 WHERE id = ?1",
@@ -821,6 +853,52 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].0, Ulid::from(10u128));
         assert_eq!(loaded[0].1, vec![0.1, 0.2, 0.3]);
+    }
+
+    #[test]
+    fn unembedded_events_all_spans_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("e.db");
+        let store = EventStore::open(path.to_str().unwrap()).unwrap();
+        let sid_a = Ulid::from(1u128);
+        let sid_b = Ulid::from(2u128);
+        store.insert_session(sid_a, "a", "/tmp", 0, 0).unwrap();
+        store.insert_session(sid_b, "b", "/tmp", 0, 0).unwrap();
+
+        // one searchable event in each session
+        let ea = Event::new(
+            Ulid::from(10u128),
+            None,
+            1,
+            EventKind::UserMessage { text: "in session a".into() },
+        )
+        .with_session(sid_a);
+        let eb = Event::new(
+            Ulid::from(11u128),
+            None,
+            1,
+            EventKind::UserMessage { text: "in session b".into() },
+        )
+        .with_session(sid_b);
+        store.append(&ea).unwrap();
+        store.append(&eb).unwrap();
+
+        // Session-scoped query only sees its own session's unembedded event…
+        assert_eq!(store.unembedded_events("bge", sid_a, 10).unwrap().len(), 1);
+        // …but the all-sessions variant sees BOTH (this is what lets the lane
+        // embed events from a session switched to after boot).
+        let all = store.unembedded_events_all("bge", 10).unwrap();
+        let ids: Vec<u128> = all.iter().map(|(id, _)| u128::from(*id)).collect();
+        assert_eq!(all.len(), 2);
+        assert!(ids.contains(&10) && ids.contains(&11));
+
+        // Embedding one drops it from the all-sessions set; the other remains.
+        store
+            .write_embedding(Ulid::from(10u128), "bge", &[0.1])
+            .unwrap();
+        let all2 = store.unembedded_events_all("bge", 10).unwrap();
+        assert_eq!(all2.len(), 1);
+        assert_eq!(all2[0].0, Ulid::from(11u128));
     }
 
     #[test]

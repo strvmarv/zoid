@@ -84,6 +84,11 @@ enum Cmd {
         limit: usize,
         reply: oneshot::Sender<Result<Vec<(Ulid, String)>>>,
     },
+    UnembeddedEventsAll {
+        model_id: String,
+        limit: usize,
+        reply: oneshot::Sender<Result<Vec<(Ulid, String)>>>,
+    },
     EventsByIds {
         ids: Vec<Ulid>,
         session_id: Ulid,
@@ -209,6 +214,13 @@ impl SessionHandle {
                         reply,
                     } => {
                         let _ = reply.send(store.unembedded_events(&model_id, session_id, limit));
+                    }
+                    Cmd::UnembeddedEventsAll {
+                        model_id,
+                        limit,
+                        reply,
+                    } => {
+                        let _ = reply.send(store.unembedded_events_all(&model_id, limit));
                     }
                     Cmd::EventsByIds {
                         ids,
@@ -456,6 +468,27 @@ impl SessionHandle {
             .send(Cmd::UnembeddedEvents {
                 model_id,
                 session_id,
+                limit,
+                reply,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
+    }
+
+    /// Unembedded searchable events across ALL sessions (see
+    /// [`crate::store::EventStore::unembedded_events_all`]). Used by the embed
+    /// lane so events in any session get embedded, not just the boot session's.
+    pub async fn unembedded_events_all(
+        &self,
+        model_id: String,
+        limit: usize,
+    ) -> Result<Vec<(Ulid, String)>> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Cmd::UnembeddedEventsAll {
+                model_id,
                 limit,
                 reply,
             })

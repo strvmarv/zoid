@@ -1845,11 +1845,15 @@ async fn main() -> Result<()> {
                 {
                     let (sess, idx2, emb2, model) =
                         (session.clone(), idx.clone(), e.clone(), e.model_id().to_string());
-                    let sid = session_id;
+                    // NOTE: embed events from ALL sessions, not just the boot
+                    // session. The in-memory index is session-agnostic and recall
+                    // filters by session downstream, so pinning the lane to one
+                    // session would leave events in any session switched to after
+                    // boot permanently unembedded.
                     std::thread::spawn(move || {
                         let lane = zoid_core::embed_lane::EmbedLane::new(emb2, idx2);
                         loop {
-                            let todo = match rt.block_on(sess.unembedded_events(model.clone(), sid, 64)) {
+                            let todo = match rt.block_on(sess.unembedded_events_all(model.clone(), 64)) {
                                 Ok(t) if !t.is_empty() => t,
                                 _ => {
                                     std::thread::sleep(std::time::Duration::from_secs(2));
