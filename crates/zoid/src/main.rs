@@ -4465,7 +4465,6 @@ fn disable_companion(app: &mut App) {
 
 /// Kick off the deterministic Superpowers install: fetch the pinned tree
 /// off-thread, then hand the scan back to the main loop via SuperpowersScan.
-#[allow(dead_code)] // wired to a `:mode install superpowers` trigger in a later task
 fn install_superpowers(app: &mut App) {
     if app.installing_superpowers {
         app.shell.status_hint = Some("Superpowers install already in progress…".into());
@@ -4627,6 +4626,10 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
                     })
                     .await;
             });
+            Ok(false)
+        }
+        Command::ModeInstallSuperpowers => {
+            install_superpowers(app);
             Ok(false)
         }
         Command::OpenDrawer(id) => {
