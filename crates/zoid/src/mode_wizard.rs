@@ -350,16 +350,33 @@ impl Tool for ProposeModeMappingTool {
 }
 
 /// Render the scan as a text block the model can read.
+///
+/// `SKILL.md` files get full content (the model needs them to write accurate
+/// descriptions and the `mode_body`). All other files get path + size only —
+/// the model just needs enough to decide `Materialize` vs `Skip`. This keeps
+/// the tool output small even for large upstream skill trees.
 fn render_scan(scan: &UpstreamScan) -> String {
     let mut s = format!(
         "Upstream scan of {} (repo {}, ref {}, subtree {}):\n\n",
         scan.url, scan.repo, scan.resolved_ref, scan.subtree_path
     );
     for f in &scan.files {
-        s.push_str(&format!(
-            "---\npath: {}\nsha: {}\ncontent:\n{}\n\n",
-            f.upstream_path, f.sha, f.content
-        ));
+        let is_skill_md = f.upstream_path.ends_with("SKILL.md");
+        if is_skill_md {
+            s.push_str(&format!(
+                "---\npath: {}\nsha: {}\ncontent:\n{}\n\n",
+                f.upstream_path, f.sha, f.content
+            ));
+        } else {
+            // Path + size only — no content body. The model only needs to
+            // decide Materialize vs Skip for these files.
+            s.push_str(&format!(
+                "---\npath: {}\nsha: {}\nsize: {} bytes\n\n",
+                f.upstream_path,
+                f.sha,
+                f.content.len()
+            ));
+        }
     }
     s
 }
@@ -751,6 +768,33 @@ mod tests {
         s.files[1].content = "no frontmatter here\n".into();
         let err = materialize(&mapping(), &s, &tmp.path().join("m"), "t").unwrap_err();
         assert!(err.problems.iter().any(|p| p.contains("fails parse")));
+    }
+
+    #[test]
+    fn render_scan_full_content_for_skill_md_path_only_for_rest() {
+        let s = scan();
+        let text = render_scan(&s);
+
+        // SKILL.md files get full content.
+        assert!(
+            text.contains("LOADER"),
+            "SKILL.md content must appear in scan output"
+        );
+        assert!(
+            text.contains("BODY"),
+            "SKILL.md content must appear in scan output"
+        );
+
+        // Non-SKILL.md files (README.md) must NOT have their content body.
+        assert!(
+            !text.contains("# readme"),
+            "non-SKILL.md file content must not appear; got: {text}"
+        );
+        // But the path must still appear so the model can route it.
+        assert!(
+            text.contains("skills/README.md"),
+            "non-SKILL.md path must still appear for routing"
+        );
     }
 
     #[test]
