@@ -24,8 +24,8 @@ pub fn conv_text_width(conv_width: u16) -> u16 {
 }
 /// Repo drawer body rows: name+branch · worktree · changes.
 pub const REPO_BODY_ROWS: u16 = 3;
-/// Session drawer body rows: name · model·provider · dur·tok · ctx · cwd.
-pub const SESSION_BODY_ROWS: u16 = 6;
+/// Session drawer body rows: name · model·provider · tok·cac·tps · ctx · cwd.
+pub const SESSION_BODY_ROWS: u16 = 5;
 /// Context drawer body rows: items + the churn/cache sparkline line (the manual
 /// evict toggle and token-budget line were removed — observe-only drawer).
 pub const CONTEXT_BODY_ROWS: u16 = 7;

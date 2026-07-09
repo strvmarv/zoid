@@ -16,7 +16,6 @@ expression: out
 "                                                      █ │⌚ tok 58k  tps 0                        │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ │📊 ctx 58k/200k ██░░░░░░                 │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ │📁 cwd ~/develop/projects/zoid/crates/zo…│ " Hidden by multi-width symbols: [(58, " ")]
-"                                                      █ │                                         │ "
 "                                                      █ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "                                                      █ ╭ ▾ context · tokens ─────────────────────╮ "
@@ -32,6 +31,7 @@ expression: out
 "                                                      █ ╭ ▾ tasks ────────────────────────────────╮ "
 "                                                      █ │no tasks                                 │ "
 "                                                      █ ╰─────────────────────────────────────────╯ "
+"                                                      █                                             "
 "                                                      █                                             "
 "                                                      █                                             "
 "                                                      █                                             "

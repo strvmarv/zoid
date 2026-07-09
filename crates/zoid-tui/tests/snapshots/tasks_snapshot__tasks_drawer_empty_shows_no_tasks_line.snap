@@ -6,6 +6,7 @@ expression: "draw(&s, &[])"
 "v0.1.2                                          zoid          Esc interrupt · : command · ^P palette"
 "    (no messages yet)                                 █ ╭ ▾ repo ─────────────────────────────────╮ "
 "                                                      █ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
+"                                                      █ │🔧 worktree (none)                       │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "                                                      █ ╭ ▾ session ──────────────────────────────╮ "
@@ -14,7 +15,6 @@ expression: "draw(&s, &[])"
 "                                                      █ │⌚ tok 0  tps 0                          │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ │📁 cwd                                   │ " Hidden by multi-width symbols: [(58, " ")]
-"                                                      █ │                                         │ "
 "                                                      █ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "                                                      █ ╭ ▾ context · tokens ─────────────────────╮ "

@@ -14,11 +14,11 @@ expression: "draw(&s, &items)"
 "                                                      █ │⌚ tok 0  tps 0                          │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
 "                                                      █ │📁 cwd                                   │ " Hidden by multi-width symbols: [(58, " ")]
-"                                                      █ │                                         │ "
 "                                                      █ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "                                                      █ ╭ ▾ context · tokens ─────────────────────╮ "
 "                                                      █ │churn                              cache │ "
+"                                                      █ │                                         │ "
 "                                                      █ │                                         │ "
 "                                                      █ │                                         │ "
 "                                                      █ │                                         │ "
