@@ -13,7 +13,7 @@ pub struct Grep;
 
 impl Tool for Grep {
     fn name(&self) -> &str {
-        "Grep"
+        "grep"
     }
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -43,12 +43,12 @@ impl Tool for Grep {
             .build()
         {
             Ok(re) => re,
-            Err(e) => return ToolOutput::err(format!("Grep: invalid regex: {e}")),
+            Err(e) => return ToolOutput::err(format!("grep: invalid regex: {e}")),
         };
         let glob = match args.get("glob").and_then(|v| v.as_str()) {
             Some(g) => match Glob::new(g) {
                 Ok(g) => Some(g.compile_matcher()),
-                Err(e) => return ToolOutput::err(format!("Grep: invalid glob: {e}")),
+                Err(e) => return ToolOutput::err(format!("grep: invalid glob: {e}")),
             },
             None => None,
         };
@@ -58,13 +58,13 @@ impl Tool for Grep {
             .unwrap_or("files_with_matches");
         if !matches!(mode, "files_with_matches" | "content" | "count") {
             return ToolOutput::err(format!(
-                "Grep: invalid output_mode {mode:?}; valid: files_with_matches, content, count"
+                "grep: invalid output_mode {mode:?}; valid: files_with_matches, content, count"
             ));
         }
         let path_arg = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
         let root = crate::resolve(cwd, path_arg);
         if !root.is_dir() {
-            return ToolOutput::err(format!("Grep: path is not a directory: {path_arg}"));
+            return ToolOutput::err(format!("grep: path is not a directory: {path_arg}"));
         }
 
         let (text_body, truncated, is_empty) = match mode {

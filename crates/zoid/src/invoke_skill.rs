@@ -144,8 +144,8 @@ mod tests {
         let tools = chat_tools(Arc::new(SkillRegistry::builtin()), zoid_tools::KillSlot::new());
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(names.contains(&"invoke_skill"));
-        assert!(names.contains(&"Write"));
-        assert!(names.contains(&"Read"));
+        assert!(names.contains(&"write"));
+        assert!(names.contains(&"read"));
         // recall is a chat-only tool; it must be registered here (and never in the
         // subagent registry — see chat_tools).
         assert!(names.contains(&"recall"));

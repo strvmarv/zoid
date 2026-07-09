@@ -9,7 +9,7 @@ pub struct Edit;
 
 impl Tool for Edit {
     fn name(&self) -> &str {
-        "Edit"
+        "edit"
     }
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -42,11 +42,11 @@ impl Tool for Edit {
             for (i, e) in arr.iter().enumerate() {
                 let old = match e.get("old_string").and_then(|x| x.as_str()) {
                     Some(s) => s.to_string(),
-                    None => return ToolOutput::err(format!("Edit({path}): edits[{i}] missing old_string")),
+                    None => return ToolOutput::err(format!("edit({path}): edits[{i}] missing old_string")),
                 };
                 let new = match e.get("new_string").and_then(|x| x.as_str()) {
                     Some(s) => s.to_string(),
-                    None => return ToolOutput::err(format!("Edit({path}): edits[{i}] missing new_string")),
+                    None => return ToolOutput::err(format!("edit({path}): edits[{i}] missing new_string")),
                 };
                 let all = e.get("replace_all").and_then(|x| x.as_bool()).unwrap_or(false);
                 v.push((old, new, all));
@@ -66,24 +66,24 @@ impl Tool for Edit {
         };
 
         if edits.is_empty() {
-            return ToolOutput::err(format!("Edit({path}): empty edits list"));
+            return ToolOutput::err(format!("edit({path}): empty edits list"));
         }
 
         let full = crate::resolve(cwd, &path);
         let mut contents = match std::fs::read_to_string(&full) {
             Ok(c) => c,
-            Err(e) => return ToolOutput::err(format!("Edit({path}): {e}")),
+            Err(e) => return ToolOutput::err(format!("edit({path}): {e}")),
         };
         // Apply all edits in memory; bail (writing nothing) on the first failure.
         for (i, (old, new, replace_all)) in edits.iter().enumerate() {
             match apply_one(&contents, old, new, *replace_all) {
                 Ok(updated) => contents = updated,
-                Err(msg) => return ToolOutput::err(format!("Edit({path}) edit #{}: {msg}", i + 1)),
+                Err(msg) => return ToolOutput::err(format!("edit({path}) edit #{}: {msg}", i + 1)),
             }
         }
         match std::fs::write(&full, contents.as_bytes()) {
             Ok(()) => ToolOutput::ok(format!("edited {path} ({} change(s))", edits.len())),
-            Err(e) => ToolOutput::err(format!("Edit({path}): {e}")),
+            Err(e) => ToolOutput::err(format!("edit({path}): {e}")),
         }
     }
 }

@@ -11,7 +11,7 @@ pub struct Ls;
 
 impl Tool for Ls {
     fn name(&self) -> &str {
-        "LS"
+        "ls"
     }
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -46,7 +46,7 @@ impl Tool for Ls {
         let dir = crate::resolve(cwd, &path);
         let entries = match std::fs::read_dir(&dir) {
             Ok(e) => e,
-            Err(e) => return ToolOutput::err(format!("LS({path}): {e}")),
+            Err(e) => return ToolOutput::err(format!("ls({path}): {e}")),
         };
         let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
         paths.sort();

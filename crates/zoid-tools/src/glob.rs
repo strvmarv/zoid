@@ -11,7 +11,7 @@ pub struct GlobTool;
 
 impl Tool for GlobTool {
     fn name(&self) -> &str {
-        "Glob"
+        "glob"
     }
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -35,12 +35,12 @@ impl Tool for GlobTool {
         };
         let matcher = match Glob::new(&pattern) {
             Ok(g) => g.compile_matcher(),
-            Err(e) => return ToolOutput::err(format!("Glob: invalid pattern: {e}")),
+            Err(e) => return ToolOutput::err(format!("glob: invalid pattern: {e}")),
         };
         let path_arg = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
         let root = crate::resolve(cwd, path_arg);
         if !root.is_dir() {
-            return ToolOutput::err(format!("Glob: path is not a directory: {path_arg}"));
+            return ToolOutput::err(format!("glob: path is not a directory: {path_arg}"));
         }
         let mut found: Vec<(std::time::SystemTime, String)> = Vec::new();
         crate::walk_files(&root, |rel, full| {

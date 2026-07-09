@@ -8,7 +8,7 @@ pub struct Write;
 
 impl Tool for Write {
     fn name(&self) -> &str {
-        "Write"
+        "write"
     }
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -36,7 +36,7 @@ impl Tool for Write {
         };
         match std::fs::write(crate::resolve(cwd, &path), content.as_bytes()) {
             Ok(()) => ToolOutput::ok(format!("wrote {} bytes to {path}", content.len())),
-            Err(e) => ToolOutput::err(format!("Write({path}): {e}")),
+            Err(e) => ToolOutput::err(format!("write({path}): {e}")),
         }
     }
 }

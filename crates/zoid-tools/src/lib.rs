@@ -171,7 +171,7 @@ pub(crate) fn resolve(cwd: &Path, path: &str) -> PathBuf {
     }
 }
 
-/// Entry names the recursive file tools (`Grep`/`Glob`) and `LS` skip: dotfiles
+/// Entry names the recursive file tools (`grep`/`glob`) and `ls` skip: dotfiles
 /// and common heavy build dirs. Centralized so the tools can't drift apart.
 pub(crate) fn skip_entry(name: &str) -> bool {
     name.starts_with('.') || matches!(name, "target" | "node_modules")
@@ -237,12 +237,12 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), count, "tool names must be unique");
-        assert!(names.contains(&"Read"));
-        assert!(names.contains(&"Write"));
-        assert!(names.contains(&"Edit"));
-        assert!(names.contains(&"Grep"));
-        assert!(names.contains(&"Glob"));
-        assert!(names.contains(&"LS"));
+        assert!(names.contains(&"read"));
+        assert!(names.contains(&"write"));
+        assert!(names.contains(&"edit"));
+        assert!(names.contains(&"grep"));
+        assert!(names.contains(&"glob"));
+        assert!(names.contains(&"ls"));
         assert!(names.contains(&"shell"));
         assert!(names.contains(&"update_tasks"));
         assert!(names.contains(&"ask_user"));
@@ -323,7 +323,7 @@ mod tests {
     #[test]
     fn fs_tools_advertise_valid_object_schemas() {
         let reg = registry();
-        for want in ["Read", "Write", "Edit", "Grep", "Glob", "LS"] {
+        for want in ["read", "write", "edit", "grep", "glob", "ls"] {
             let t = reg
                 .iter()
                 .find(|t| t.name() == want)

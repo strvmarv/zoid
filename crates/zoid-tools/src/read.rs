@@ -8,7 +8,7 @@ pub struct Read;
 
 impl Tool for Read {
     fn name(&self) -> &str {
-        "Read"
+        "read"
     }
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -36,7 +36,7 @@ impl Tool for Read {
         };
         let contents = match std::fs::read_to_string(crate::resolve(cwd, &path)) {
             Ok(c) => c,
-            Err(e) => return ToolOutput::err(format!("Read({path}): {e}")),
+            Err(e) => return ToolOutput::err(format!("read({path}): {e}")),
         };
         let offset = args
             .get("offset")
@@ -54,12 +54,12 @@ impl Tool for Read {
             return ToolOutput::ok("(empty file)".to_string());
         }
         if limit == 0 {
-            return ToolOutput::err("Read: limit must be >= 1".to_string());
+            return ToolOutput::err("read: limit must be >= 1".to_string());
         }
         let start = offset.saturating_sub(1).min(total);
         if start >= total {
             return ToolOutput::err(format!(
-                "Read: offset {offset} is past the end of the file ({total} lines)"
+                "read: offset {offset} is past the end of the file ({total} lines)"
             ));
         }
         let end = start.saturating_add(limit).min(total);

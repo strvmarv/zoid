@@ -144,7 +144,7 @@ async fn abort_drains_remaining_batched_tool_calls() {
     // batch. Aborting ask_user must not leave read_file's ToolCall dangling.
     let provider = zoid_testkit::script(vec![
         zoid_testkit::tool_call("ask_user", serde_json::json!({ "question": "stop?" })),
-        zoid_testkit::tool_call("Read", serde_json::json!({ "path": "whatever.txt" })),
+        zoid_testkit::tool_call("read", serde_json::json!({ "path": "whatever.txt" })),
         ProviderEvent::Done,
     ]);
 
@@ -192,7 +192,7 @@ async fn abort_drains_remaining_batched_tool_calls() {
     assert!(
         results
             .iter()
-            .any(|(n, out, err)| n == "Read" && !err && out == "[skipped: turn aborted]"),
+            .any(|(n, out, err)| n == "read" && !err && out == "[skipped: turn aborted]"),
         "expected read_file to be drained with a balanced [skipped: turn aborted] result, got: {results:?}"
     );
 
