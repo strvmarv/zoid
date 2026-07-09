@@ -65,6 +65,10 @@ impl Tool for Edit {
             vec![(old, new, all)]
         };
 
+        if edits.is_empty() {
+            return ToolOutput::err(format!("Edit({path}): empty edits list"));
+        }
+
         let full = crate::resolve(cwd, &path);
         let mut contents = match std::fs::read_to_string(&full) {
             Ok(c) => c,
@@ -198,5 +202,16 @@ mod tests {
         assert!(out.is_error);
         // First edit must NOT have been written.
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "alpha beta");
+    }
+
+    #[test]
+    fn empty_edits_list_is_error() {
+        let (_d, path) = seed("hello");
+        let out = Edit.run(
+            &json!({ "path": path, "edits": [] }),
+            std::path::Path::new("."),
+        );
+        assert!(out.is_error, "{}", out.text);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
     }
 }
