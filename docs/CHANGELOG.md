@@ -6,6 +6,30 @@
 > notes (what ships to the public releases repo) live in the root
 > `RELEASES.md`.
 
+## 0.3.0
+
+Second beta feature drop: a one-action Superpowers mode install, startup progress feedback, a data-removal command, and default/UX fixes.
+
+Superpowers mode install.
+- Deterministic, model-free install of the canonical `obra/superpowers` skill set as a first-class zoid mode (`crates/zoid/src/superpowers_install.rs`). Reuses the URL-import wizard's fetch + materialize; the only bespoke logic is a pinned upstream ref (frozen commit for reproducibility), a deterministic mapping (`skills/using-superpowers/SKILL.md` → generated `mode.md` overlay; every other `skills/<skill>/**` file copied verbatim with the `skills/` prefix stripped), and the generated `mode.md` body.
+- Surfaced three ways: a `:mode install superpowers` palette command + row, a first-run onboarding install line, and an async install orchestrator wired into the main loop (materialize + reload without restart). Test coverage over the `SuperpowersScan` arm.
+
+Startup progress feedback.
+- TTY-gated `Reporter` (`crates/zoid/src/startup.rs`, gated via `std::io::IsTerminal`): a launch banner (`zoid vX.Y.Z`), step lines ("opening session store", "loading session", "building skills & modes", "loading semantic model"), and a live download progress readout for the first-run model-weight fetch. Pure `format_progress(downloaded, total)` helper unit-tested.
+- Streaming/atomic weight download (`crates/zoid-embed/src/fetch.rs`): `ensure_weights_with_progress` streams to a `.part` sidecar with incremental sha256 and throttled (200ms) progress callbacks, then atomic-renames after verification (replaces the old buffer-all-130MB-then-verify path). New `ProgressFn` type; `load_with_progress` threads the callback through `zoid-embed`.
+
+`zoid uninstall`.
+- New `Uninstall { purge }` CLI variant (`crates/zoid/src/cli.rs`) + `crates/zoid/src/uninstall.rs`: removes the data, config, and cache dirs after a typed `uninstall` confirmation; `--purge` also removes the binary (degrades gracefully when a running exe can't remove itself). Data dir derived from the XDG base (independent of `$ZOID_DB`); a guard refuses to `remove_dir_all` any path whose final component isn't `zoid`. Testable core (`run_with_io` over `&mut dyn BufRead`/`&mut dyn Write`).
+
+Defaults & UX fixes.
+- Config defaults: `context_target` 300k, `compact_threshold_pct` 80.
+- TUI: bracketed paste routed through focus/overlay precedence.
+- Wizard: don't clear `app.wizard` on Reject and guard the Approve path; `render_scan` trims non-`SKILL.md` files to path+size for faster scans of large folders.
+- Tools: tool names lowercased for convention consistency.
+
+Release docs.
+- Split public notes (root `RELEASES.md`) from this internal changelog (moved to `docs/`), added `AGENTS.md`, updated `docs/RELEASING.md`.
+
 ## 0.2.0
 
 The first feature release since the distribution pipeline landed — a large batch of new capabilities for beta testing.

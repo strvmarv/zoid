@@ -10,6 +10,28 @@
 
 # Release Notes
 
+## 0.3.0
+
+Faster to get started and easier to live with — a one-command way to add a curated engineering skill set, clearer feedback while zoid starts up, and a clean uninstall.
+
+### New
+
+- **One-command Superpowers install** — add a curated skill set for structured software-engineering workflows (test-driven development, systematic debugging, code review, planning, and parallel agents) as a ready-to-use mode, in a single step. It's offered during first-run onboarding, and available any time from the command palette.
+- **Startup progress** — zoid now tells you what it's doing while it launches instead of sitting silent — opening your session, preparing skills and modes, and loading its on-device model. The first time it downloads that model, you get a live progress readout so you know it's working, not stuck.
+- **Clean uninstall** — `zoid uninstall` removes zoid's data (sessions, configuration, and the model cache) after a typed confirmation, and tells you where the binary lives so you can finish up. Run `zoid uninstall --purge` to remove the binary too.
+
+### Improved
+
+- **Better out-of-the-box defaults** — a larger default working-context size and a smarter automatic-compaction threshold, so long sessions stay coherent for longer before anything is condensed.
+- **More reliable multi-line paste** — pasting several lines into the prompt now routes correctly regardless of what's focused on screen.
+- **Smoother skill-import wizard** — steadier behavior when reviewing, approving, and rejecting imported skills, plus faster scans of large skill folders.
+
+### Fixes
+
+- Consistency and stability improvements across tools and terminal rendering.
+
+> **Beta note:** builds are for evaluation and expire ~30 days after release — run `zoid update` periodically to stay current.
+
 ## 0.2.0
 
 Our largest update yet — smarter memory for long sessions, an open plugin ecosystem, and a faster, more refined terminal experience.

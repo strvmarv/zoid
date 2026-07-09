@@ -5,7 +5,7 @@ expression: "draw_overlay(Overlay::Verbs, 100, 24)"
 Buffer {
     area: Rect { x: 0, y: 0, width: 100, height: 24 },
     content: [
-        "v0.2.0                                          zoid          Esc interrupt · : command · ^P palette",
+        "v0.3.0                                          zoid          Esc interrupt · : command · ^P palette",
         "┌ ▷ verbs · src/ast.rs ───────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ ",
         "│ explain                                             │ │📦 repo   ⎇ main                         │ ", // hidden by multi-width symbols: [(58, " ")]
         "│ summarize                                           │ ╰─────────────────────────────────────────╯ ",

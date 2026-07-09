@@ -5,7 +5,7 @@ expression: "draw_overlay(Overlay::Objects, 140, 24)"
 Buffer {
     area: Rect { x: 0, y: 0, width: 140, height: 24 },
     content: [
-        "v0.2.0                                                              zoid                              Esc interrupt · : command · ^P palette",
+        "v0.3.0                                                              zoid                              Esc interrupt · : command · ^P palette",
         "    ● read_┌ ▤ select object ─────────────────────────────────────────────────────┐           █ ╭ ▾ repo ─────────────────────────────────╮ ",
         "    ✓ read_│ ▤ src/ast.rs                                                         │           █ │📦 repo   ⎇ main                         │ ", // hidden by multi-width symbols: [(98, " ")]
         "    ⚠ shell│ ● parse  (src/ast.rs)                                                │           █ ╰─────────────────────────────────────────╯ ",
