@@ -19,7 +19,18 @@ pub struct CandleEmbedder {
 
 impl CandleEmbedder {
     pub fn load(cache_dir: &Path, auto_download: bool) -> Result<Self> {
-        let w = fetch::ensure_weights(cache_dir, auto_download)?;
+        Self::load_with_progress(cache_dir, auto_download, &mut |_, _, _| {})
+    }
+
+    /// Like [`load`](Self::load), but forwards first-run weight-download progress
+    /// to `progress` (see [`fetch::ProgressFn`]). On a warm cache no download
+    /// happens and `progress` is never called.
+    pub fn load_with_progress(
+        cache_dir: &Path,
+        auto_download: bool,
+        progress: fetch::ProgressFn<'_>,
+    ) -> Result<Self> {
+        let w = fetch::ensure_weights_with_progress(cache_dir, auto_download, progress)?;
         let cfg: BertConfig = serde_json::from_str(&std::fs::read_to_string(&w.config)?)?;
         let tokenizer = Tokenizer::from_file(&w.tokenizer).map_err(anyhow::Error::msg)?;
         let device = Device::Cpu;

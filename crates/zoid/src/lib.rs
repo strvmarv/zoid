@@ -11,6 +11,7 @@ pub mod mode_import;
 pub mod mode_wizard;
 pub mod skill_import;
 pub mod spawn_subagent;
+pub mod startup;
 pub mod subagent;
 pub mod update;
 pub mod worktree;

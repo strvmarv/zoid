@@ -3,6 +3,7 @@
 //! hf-hub dep (its native-tls drags OpenSSL, which fails musl — Phase-0).
 
 use anyhow::{bail, Result};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 pub struct WeightPaths {
@@ -10,6 +11,11 @@ pub struct WeightPaths {
     pub tokenizer: PathBuf,
     pub weights: PathBuf,
 }
+
+/// Download-progress sink: `(label, bytes_downloaded, total_bytes)`. `total` is
+/// `None` when the server sends no `Content-Length`. Called repeatedly (throttled)
+/// during a download and once more at completion.
+pub type ProgressFn<'a> = &'a mut dyn FnMut(&str, u64, Option<u64>);
 
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
@@ -57,18 +63,35 @@ const ARTIFACTS: &[Artifact] = &[
 ];
 
 pub fn ensure_weights(cache_dir: &Path, auto_download: bool) -> Result<WeightPaths> {
+    ensure_weights_with_progress(cache_dir, auto_download, &mut |_, _, _| {})
+}
+
+/// Like [`ensure_weights`], but reports byte-level download progress through
+/// `progress` (see [`ProgressFn`]). Downloads stream to a `.part` file, verify
+/// their sha256 as bytes arrive, and only then atomically rename into place —
+/// so an interrupted or corrupt download never leaves a bad cache file, and the
+/// full artifact is never buffered in memory.
+pub fn ensure_weights_with_progress(
+    cache_dir: &Path,
+    auto_download: bool,
+    progress: ProgressFn<'_>,
+) -> Result<WeightPaths> {
     std::fs::create_dir_all(cache_dir)?;
     let mut paths = Vec::new();
     for a in ARTIFACTS {
         let dest = cache_dir.join(a.file);
-        if !dest.exists() {
+        if dest.exists() {
+            // Cached artifact: verify integrity (a freshly downloaded one is
+            // already verified in-stream below, so we never double-read it).
+            verify_file(&dest, a.sha256)?;
+        } else {
             if !auto_download {
                 bail!("weight {} missing and auto_download=false", a.file);
             }
-            let bytes = reqwest::blocking::get(a.url)?.error_for_status()?.bytes()?;
-            std::fs::write(&dest, &bytes)?;
+            let mut resp = reqwest::blocking::get(a.url)?.error_for_status()?;
+            let total = resp.content_length();
+            stream_verify(&mut resp, &dest, total, a.sha256, a.file, &mut *progress)?;
         }
-        verify_file(&dest, a.sha256)?;
         paths.push(dest);
     }
     Ok(WeightPaths {
@@ -76,6 +99,50 @@ pub fn ensure_weights(cache_dir: &Path, auto_download: bool) -> Result<WeightPat
         tokenizer: paths[1].clone(),
         weights: paths[2].clone(),
     })
+}
+
+/// Stream `reader` into `dest`, hashing as we go, reporting progress, and
+/// atomically renaming from a `.part` sidecar only after the sha256 matches.
+/// Network-free (takes any `Read`) so it is unit-testable without a server.
+fn stream_verify<R: Read>(
+    mut reader: R,
+    dest: &Path,
+    total: Option<u64>,
+    want_sha256: &str,
+    label: &str,
+    progress: ProgressFn<'_>,
+) -> Result<()> {
+    use sha2::{Digest, Sha256};
+    let part = dest.with_extension("part");
+    let mut f = std::fs::File::create(&part)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    let mut downloaded: u64 = 0;
+    let mut last = std::time::Instant::now();
+    progress(label, 0, total);
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        f.write_all(&buf[..n])?;
+        hasher.update(&buf[..n]);
+        downloaded += n as u64;
+        // Throttle callbacks so a fast link doesn't spam the terminal.
+        if last.elapsed() >= std::time::Duration::from_millis(200) {
+            progress(label, downloaded, total);
+            last = std::time::Instant::now();
+        }
+    }
+    f.flush()?;
+    progress(label, downloaded, total);
+    let got: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    if got != want_sha256 {
+        let _ = std::fs::remove_file(&part);
+        bail!("sha256 mismatch for {label}: got {got}, want {want_sha256}");
+    }
+    std::fs::rename(&part, dest)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -114,4 +181,47 @@ mod tests {
     // three artifacts present) is intentionally not tested here — it requires
     // verifying model.safetensors (133MB), which cannot be fixtured. That path
     // is covered by the #[ignore] smoke test instead.
+
+    #[test]
+    fn stream_verify_writes_and_reports_progress_on_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("blob.bin");
+        let data = vec![7u8; 300_000];
+        let want = sha256_hex(&data);
+        let mut calls: Vec<(u64, Option<u64>)> = Vec::new();
+        let mut progress = |_label: &str, done: u64, total: Option<u64>| calls.push((done, total));
+        stream_verify(
+            std::io::Cursor::new(data.clone()),
+            &dest,
+            Some(data.len() as u64),
+            &want,
+            "blob.bin",
+            &mut progress,
+        )
+        .unwrap();
+        // File landed with exact bytes; no .part sidecar left behind.
+        assert_eq!(std::fs::read(&dest).unwrap(), data);
+        assert!(!dest.with_extension("part").exists());
+        // Progress was reported and the final call equals the full size.
+        assert!(!calls.is_empty());
+        assert_eq!(calls.last().unwrap().0, data.len() as u64);
+    }
+
+    #[test]
+    fn stream_verify_rejects_mismatch_and_leaves_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("blob.bin");
+        let res = stream_verify(
+            std::io::Cursor::new(b"actual bytes".to_vec()),
+            &dest,
+            None,
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "blob.bin",
+            &mut |_, _, _| {},
+        );
+        assert!(res.is_err(), "sha mismatch must error");
+        // Neither the final file nor the .part sidecar survives a bad download.
+        assert!(!dest.exists());
+        assert!(!dest.with_extension("part").exists());
+    }
 }

@@ -1591,6 +1591,12 @@ async fn main() -> Result<()> {
         }
     };
 
+    // Pre-TUI launch feedback (stderr, TTY-gated; wiped when the alt-screen
+    // opens). Startup does real work — store open, session load, skill/mode
+    // scans, and a first-run model-weight download — that was previously silent.
+    let mut rep = zoid::startup::Reporter::stderr();
+    rep.banner(concat!("zoid v", env!("CARGO_PKG_VERSION")));
+
     let path = db_path()?;
     let root = repo_root();
     // One-time legacy import (pre-release): ./.zoid/session.db → new global DB.
@@ -1606,6 +1612,7 @@ async fn main() -> Result<()> {
         boot_ts,
     );
 
+    rep.step("opening session store");
     let session = SessionHandle::spawn(
         path.to_str()
             .context("session DB path is not valid UTF-8")?,
@@ -1723,6 +1730,7 @@ async fn main() -> Result<()> {
         .set_active(session_id, true, self_pid, boot_ts)
         .await
         .ok();
+    rep.step("loading session");
     let mut events =
         zoid::eventlog::EventLog::from_vec(session.snapshot_session(session_id).await?);
     // #6b: free compacted tool-result bodies on the boot auto-resume path too
@@ -1783,6 +1791,7 @@ async fn main() -> Result<()> {
 
     let cfg_dir = resolve_config_dir(|k: &str| std::env::var(k).ok());
     let home = std::env::var("HOME").ok().map(std::path::PathBuf::from);
+    rep.step("building skills & modes");
     let skills = {
         let dirs = zoid::skill_import::resolve_skill_dirs(
             &config.skills.source_dirs,
@@ -1822,7 +1831,23 @@ async fn main() -> Result<()> {
         let cache = resolve_cache_dir(|k| std::env::var(k).ok())
             .join("models")
             .join("bge-small-en-v1.5");
-        match zoid_embed::CandleEmbedder::load(&cache, config.embed.auto_download) {
+        rep.step("loading semantic model");
+        // On a warm cache the closure never fires (no download); on first run it
+        // announces the ~130MB fetch once, then streams a live byte counter.
+        let mut announced = false;
+        let load = zoid_embed::CandleEmbedder::load_with_progress(
+            &cache,
+            config.embed.auto_download,
+            &mut |_label, done, total| {
+                if !announced {
+                    announced = true;
+                    rep.step("first run: downloading model weights (~130MB, one time)");
+                }
+                rep.progress(done, total);
+            },
+        );
+        rep.progress_done();
+        match load {
             Ok(e) => {
                 let e: std::sync::Arc<dyn zoid_core::retrieval::Embedder> = std::sync::Arc::new(e);
                 let idx = std::sync::Arc::new(std::sync::RwLock::new(
