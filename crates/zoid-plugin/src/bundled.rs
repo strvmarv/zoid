@@ -30,4 +30,11 @@ mod tests {
     fn unknown_id_is_none() {
         assert!(bundled_manifest("nope").is_none());
     }
+
+    #[test]
+    fn every_bundled_id_resolves_to_a_manifest() {
+        for id in bundled_ids() {
+            assert!(bundled_manifest(id).is_some(), "bundled id {id} has no manifest");
+        }
+    }
 }

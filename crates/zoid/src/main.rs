@@ -4601,7 +4601,13 @@ fn apply_plugin_scan(
             zoid_plugin::effect::Effect::OnboardingHint { text } => {
                 onboarding = Some(text.clone());
             }
-            zoid_plugin::effect::Effect::SetConfig { .. } => { /* deferred; never reaches here in v1 */ }
+            zoid_plugin::effect::Effect::SetConfig { .. } => {
+                // Unreachable: `finish_plugin_install` rejects ALL SetConfig
+                // effects at the v1 gate (config application is deferred),
+                // and `safe_effects` is filtered to Safe effects only, so no
+                // SetConfig can ever appear in `installed.safe_effects`.
+                unreachable!("SetConfig is rejected at the v1 gate in finish_plugin_install")
+            }
         }
     }
     if wants_activate && !activated {

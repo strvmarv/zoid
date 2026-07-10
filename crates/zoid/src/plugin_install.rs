@@ -29,12 +29,21 @@ pub fn finish_plugin_install(
     manifest_ref: &str,
     origin: &str,
 ) -> Result<InstalledPlugin, String> {
-    // v1 gate: any Dangerous effect requires the (deferred) confirmation prompt.
+    // v1 gate: any Dangerous effect requires the (deferred) confirmation prompt,
+    // and ALL SetConfig effects (Safe or Dangerous) are rejected because config
+    // application itself is deferred in v1 — a Safe-key SetConfig (e.g.
+    // `skills.source_dirs`) must not slip through and be recorded as "applied"
+    // when nothing was ever written to config.toml.
     // Reject BEFORE touching the filesystem so a rejected install leaves nothing.
     for e in &plan.effects {
         if e.risk() == RiskTier::Dangerous {
             return Err(format!(
                 "effect requires confirmation, not yet supported in this zoid version: {e:?}"
+            ));
+        }
+        if matches!(e, Effect::SetConfig { .. }) {
+            return Err(format!(
+                "config effects are not yet supported in this zoid version: {e:?}"
             ));
         }
     }
@@ -56,12 +65,9 @@ pub fn finish_plugin_install(
         .map(|e| match e {
             Effect::Activate => AppliedEffect::Activate,
             Effect::OnboardingHint { text } => AppliedEffect::OnboardingHint { text: text.clone() },
-            // Unreachable in v1 (rejected above), but map for completeness.
-            Effect::SetConfig { key, value } => AppliedEffect::SetConfig {
-                key: key.clone(),
-                prev: serde_json::Value::Null,
-                new: serde_json::to_value(value).unwrap_or(serde_json::Value::Null),
-            },
+            // Unreachable: SetConfig is rejected at the v1 gate above, so no
+            // SetConfig ever reaches this mapping.
+            Effect::SetConfig { .. } => unreachable!("SetConfig is rejected at the v1 gate"),
         })
         .collect();
 
@@ -89,7 +95,16 @@ pub fn finish_plugin_install(
     std::fs::write(dest_dir.join(".zoid-plugin.json"), sidecar_json)
         .map_err(|e| format!("write plugin sidecar: {e}"))?;
 
-    let safe_effects = plan.effects.clone();
+    // Filter to genuinely-safe effects so the field name stays honest even if
+    // the gate above is later relaxed to prompt-and-continue for Dangerous
+    // effects. Today, after the v1 gate above, the survivors are Activate and
+    // OnboardingHint, both Safe — so behavior is unchanged.
+    let safe_effects: Vec<Effect> = plan
+        .effects
+        .iter()
+        .filter(|e| e.risk() == RiskTier::Safe)
+        .cloned()
+        .collect();
     Ok(InstalledPlugin {
         dest: dest_dir.to_path_buf(),
         safe_effects,
@@ -154,6 +169,29 @@ mod tests {
         let dest = tmp.path().join("modes").join("superpowers");
         let err = finish_plugin_install(&plan, &scan, &dest, "superpowers", "d884ae0", "bundled").unwrap_err();
         assert!(err.contains("requires confirmation") || err.contains("not yet supported"), "got: {err}");
+        // Nothing materialized on rejection.
+        assert!(!dest.exists());
+    }
+
+    #[test]
+    fn rejects_safe_setconfig_in_v1() {
+        // Pins the whole-branch-review bug: a Safe-key SetConfig (e.g.
+        // `skills.source_dirs`) must NOT slip through the v1 gate just
+        // because it's not Dangerous — config application is deferred
+        // entirely in v1, so it must be rejected too.
+        let scan = scan();
+        let plan = build_plan(
+            &manifest(vec![Effect::SetConfig {
+                key: "skills.source_dirs".into(),
+                value: toml::Value::String("x".into()),
+            }]),
+            &scan,
+        )
+        .unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("modes").join("superpowers");
+        let err = finish_plugin_install(&plan, &scan, &dest, "superpowers", "d884ae0", "bundled").unwrap_err();
+        assert!(err.contains("not yet supported"), "got: {err}");
         // Nothing materialized on rejection.
         assert!(!dest.exists());
     }
