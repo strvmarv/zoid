@@ -9,6 +9,7 @@ pub mod github_fetch;
 pub mod invoke_skill;
 pub mod mode_import;
 pub mod mode_wizard;
+pub mod plugin_install;
 pub mod skill_import;
 pub mod spawn_subagent;
 pub mod startup;

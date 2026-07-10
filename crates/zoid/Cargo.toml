@@ -60,6 +60,7 @@ local-embed = ["dep:zoid-embed"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
+toml = { workspace = true }
 async-trait = { workspace = true }
 rusqlite = { workspace = true }
 zoid-testkit = { path = "../zoid-testkit" }
