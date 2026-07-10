@@ -54,10 +54,10 @@ pub struct FetchResult {
     pub content_type: String,
 }
 
-/// Search the web via DuckDuckGo HTML. Returns up to 8 results. Stub here;
-/// Task 2 fills it.
-pub async fn search(_query: &str) -> anyhow::Result<Vec<SearchResult>> {
-    Err(anyhow::anyhow!("search not yet implemented"))
+/// Search the web via DuckDuckGo HTML. Returns up to 8 results.
+pub async fn search(query: &str) -> anyhow::Result<Vec<SearchResult>> {
+    let client = http_client();
+    search::search_with_client(&client, query).await
 }
 
 /// Fetch a URL, extract readable content, convert to markdown, page by char
@@ -78,8 +78,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_stub_returns_not_yet_implemented() {
-        let r = search("test").await;
+    async fn search_empty_query_returns_err_without_network() {
+        // An empty query is rejected before any network call.
+        let r = search("").await;
         assert!(r.is_err());
     }
 
