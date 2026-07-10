@@ -1,0 +1,1 @@
+//! DuckDuckGo HTML scrape. Filled in Task 2.

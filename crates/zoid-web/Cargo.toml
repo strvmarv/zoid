@@ -1,0 +1,23 @@
+[package]
+name = "zoid-web"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+# Readability extraction (arc90 port; no reqwest feature — we fetch ourselves).
+readability = "0.3"
+# HTML → markdown (turndown.js-inspired).
+htmd = "0.5"
+# HTML parsing for DDG result extraction.
+scraper = "0.22"
+# URL-decoding of DDG's `uddg` redirect param.
+urlencoding = "2"
+url = "2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["net", "io-util", "macros", "rt"] }
