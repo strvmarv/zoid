@@ -5674,6 +5674,7 @@ dependencies = [
  "shlex",
  "tempfile",
  "zoid-provider",
+ "zoid-web",
 ]
 
 [[package]]
