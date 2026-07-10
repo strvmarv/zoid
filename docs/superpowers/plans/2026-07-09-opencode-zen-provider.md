@@ -668,27 +668,28 @@ pub fn parse_event(data: &str, acc: &mut ResponsesToolAccum) -> Vec<ProviderEven
             if let Some(usage) = v
                 .get("response")
                 .and_then(|r| r.get("usage"))
-        {
-            let input = usage.get("input_tokens").and_then(|n| n.as_u64()).unwrap_or(0);
-            let output = usage.get("output_tokens").and_then(|n| n.as_u64()).unwrap_or(0);
-            let cached = usage
-                .get("input_tokens_details")
-                .and_then(|d| d.get("cached_tokens"))
-                .and_then(|n| n.as_u64())
-                .unwrap_or(0);
-            let thinking = usage
-                .get("output_tokens_details")
-                .and_then(|d| d.get("reasoning_tokens"))
-                .and_then(|n| n.as_u64())
-                .unwrap_or(0);
-            out.push(ProviderEvent::Usage(Usage {
-                input_tokens: input,
-                output_tokens: output,
-                cached,
-                thinking_tokens: thinking,
-            }));
+            {
+                let input = usage.get("input_tokens").and_then(|n| n.as_u64()).unwrap_or(0);
+                let output = usage.get("output_tokens").and_then(|n| n.as_u64()).unwrap_or(0);
+                let cached = usage
+                    .get("input_tokens_details")
+                    .and_then(|d| d.get("cached_tokens"))
+                    .and_then(|n| n.as_u64())
+                    .unwrap_or(0);
+                let thinking = usage
+                    .get("output_tokens_details")
+                    .and_then(|d| d.get("reasoning_tokens"))
+                    .and_then(|n| n.as_u64())
+                    .unwrap_or(0);
+                out.push(ProviderEvent::Usage(Usage {
+                    input_tokens: input,
+                    output_tokens: output,
+                    cached,
+                    thinking_tokens: thinking,
+                }));
+            }
+            out.push(ProviderEvent::Done);
         }
-        out.push(ProviderEvent::Done);
         "response.incomplete" => {
             out.push(ProviderEvent::Truncated);
             out.push(ProviderEvent::Done);
