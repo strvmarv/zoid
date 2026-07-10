@@ -1,0 +1,12 @@
+[package]
+name = "zoid-plugin"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+zoid-core = { path = "../zoid-core" }
+
+[dev-dependencies]

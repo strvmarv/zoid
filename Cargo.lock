@@ -4643,6 +4643,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "toml",
  "tracing",
  "tracing-subscriber",
  "ulid",
@@ -4651,6 +4652,7 @@ dependencies = [
  "zoid-core",
  "zoid-embed",
  "zoid-mcp",
+ "zoid-plugin",
  "zoid-provider",
  "zoid-testkit",
  "zoid-tools",
@@ -4721,6 +4723,16 @@ dependencies = [
 [[package]]
 name = "zoid-model"
 version = "0.3.2"
+
+[[package]]
+name = "zoid-plugin"
+version = "0.3.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "toml",
+ "zoid-core",
+]
 
 [[package]]
 name = "zoid-provider"

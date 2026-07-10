@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/zoid-core", "crates/zoid-model", "crates/zoid-provider", "crates/zoid-tui", "crates/zoid-tools", "crates/zoid-syntax", "crates/zoid", "crates/zoid-testkit", "crates/zoid-companion", "crates/zoid-mcp", "crates/zoid-embed"]
+members = ["crates/zoid-core", "crates/zoid-model", "crates/zoid-plugin", "crates/zoid-provider", "crates/zoid-tui", "crates/zoid-tools", "crates/zoid-syntax", "crates/zoid", "crates/zoid-testkit", "crates/zoid-companion", "crates/zoid-mcp", "crates/zoid-embed"]
 exclude = ["spikes"]
 resolver = "2"
 

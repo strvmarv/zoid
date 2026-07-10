@@ -23,7 +23,7 @@ const RETURNING_HINT: &str =
 /// The instructional line offering the Superpowers skill set install, shown
 /// to first-time users who haven't installed it yet.
 const SUPERPOWERS_OFFER: &str =
-    "Run :mode install superpowers to install the Superpowers skill set (brainstorming, TDD, systematic debugging, code review, planning…)";
+    "Run :plugin install superpowers to install the Superpowers skill set (structured TDD, debugging, planning, and review workflows).";
 /// Discoverability hint pointing at the keyboard-shortcuts overlay. Shown on
 /// every empty session (new and returning). Mentions `:help` as well as `?`
 /// because the input box is focused by default, where `?` is a literal char.
@@ -216,7 +216,7 @@ mod tests {
             .collect::<String>();
         let with = empty_state_lines(true, true, 80);
         let without = empty_state_lines(true, false, 80);
-        assert!(joined(&with).contains(":mode install superpowers"));
+        assert!(joined(&with).contains(":plugin install superpowers"));
         assert!(!joined(&without).contains("Superpowers"));
     }
 

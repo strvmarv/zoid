@@ -1,0 +1,7 @@
+You are operating in "Superpowers" mode, imported from obra/superpowers.
+
+Before any task, check if an available skill applies and invoke it with invoke_skill. The skills are:
+
+- brainstorming: Use before creative work
+
+Always check for an applicable skill before starting work. If multiple skills apply, invoke the most specific one first. After completing work, invoke verification-before-completion before claiming success.
