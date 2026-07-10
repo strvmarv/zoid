@@ -2378,6 +2378,21 @@ where
         // Mirror tool_started_at onto the shell for the renderer's animation.
         app.shell.tool_started_at = app.tool_started_at;
 
+        // Clamp the help overlay scroll to the real rect height (same idea as
+        // conv_max_scroll): the ScrollHelp handler only increments; this pins
+        // the ceiling for the current terminal size.
+        if app.shell.overlay == zoid_tui::Overlay::Help {
+            // Reuse the frame's already-computed `layout` (the help rect depends
+            // only on `overlay` + conversation bounds, unchanged since it was
+            // computed above), instead of a second full compute() pass.
+            let vh = layout
+                .palette
+                .map(|r| r.height.saturating_sub(2) as usize) // borders/margin
+                .unwrap_or(0);
+            let max = zoid_tui::help::help_lines().len().saturating_sub(vh);
+            app.shell.help_scroll = app.shell.help_scroll.min(max);
+        }
+
         let frame_start = std::time::Instant::now();
         terminal.draw(|f| {
             // The drawer is read-only/observability-only, so it needs only
@@ -3458,6 +3473,16 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::OpenObjects => {
             app.shell.overlay = zoid_tui::Overlay::Objects;
             app.shell.objects = Default::default();
+        }
+        Action::OpenHelp => {
+            app.shell.overlay = zoid_tui::Overlay::Help;
+            app.shell.help_scroll = 0;
+        }
+        Action::ScrollHelp(d) => {
+            let cur = app.shell.help_scroll as i64;
+            app.shell.help_scroll = (cur + d as i64).max(0) as usize;
+            // Upper bound is clamped per-frame against the real rect height
+            // (see the render-loop clamp), mirroring conv_max_scroll.
         }
         Action::ObjectMove(d) => {
             let n = zoid_tui::objects::selectable_objects(&conversation(app.events.iter())).len();
@@ -4780,6 +4805,11 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             // the per-frame sync in the render loop, so there is nothing to
             // populate here beyond switching the overlay.
             app.shell.overlay = zoid_tui::Overlay::Mcp;
+            Ok(false)
+        }
+        Command::OpenHelp => {
+            app.shell.overlay = zoid_tui::Overlay::Help;
+            app.shell.help_scroll = 0;
             Ok(false)
         }
         Command::CompanionEnable => {

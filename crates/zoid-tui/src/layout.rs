@@ -276,6 +276,12 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
         | Overlay::Feedback
     ) {
         Some(centered(conversation, 72, 18))
+    } else if state.overlay == Overlay::Help {
+        Some(centered(
+            conversation,
+            crate::help::HELP_RECT_W,
+            crate::help::HELP_RECT_H,
+        ))
     } else {
         None
     };
@@ -469,6 +475,7 @@ mod tests {
             Overlay::Verbs,
             Overlay::Sessions,
             Overlay::Mcp,
+            Overlay::Help,
         ] {
             let mut s = ShellState::new();
             s.overlay = ov;

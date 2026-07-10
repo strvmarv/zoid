@@ -45,6 +45,8 @@ pub enum Command {
     CompanionDisable,
     /// Open the feedback submission overlay (`:feedback`).
     Feedback,
+    /// Open the keyboard-shortcuts help overlay (`:help`).
+    OpenHelp,
     Unknown(String),
 }
 
@@ -86,6 +88,7 @@ pub fn parse_command(raw: &str) -> Command {
         "compact" => Command::CompactNow,
         "feedback" => Command::Feedback,
         "config" => Command::OpenConfig,
+        "help" => Command::OpenHelp,
         rest if rest == "delegate" || rest.starts_with("delegate ") => {
             Command::Delegate(rest.strip_prefix("delegate").unwrap().trim().to_string())
         }
@@ -219,6 +222,12 @@ mod tests {
     #[test]
     fn parses_config_command() {
         assert_eq!(parse_command(":config"), Command::OpenConfig);
+    }
+
+    #[test]
+    fn parses_help_command() {
+        assert_eq!(parse_command(":help"), Command::OpenHelp);
+        assert_eq!(parse_command("help"), Command::OpenHelp);
     }
 
     #[test]

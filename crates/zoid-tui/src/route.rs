@@ -60,6 +60,8 @@ pub enum Action {
     /// ⇧End in the conversation pane: jump the scroll to the bottom (re-engages follow).
     ScrollToBottom,
     OpenObjects,
+    /// Open the keyboard-shortcuts help overlay (`?` from conversation focus).
+    OpenHelp,
     ObjectMove(i32),
     ObjectPick,
     VerbMove(i32),
@@ -101,6 +103,8 @@ pub enum Action {
     SwitchItemMove(i32),
     SwitchApply,
     SwitchCancel,
+    /// Scroll the keyboard-shortcuts overlay by N rows (bin clamps the range).
+    ScrollHelp(i32),
     Noop,
 }
 
@@ -169,6 +173,7 @@ pub fn route_paste(state: &ShellState) -> PasteTarget {
         | Overlay::Verbs
         | Overlay::Sessions
         | Overlay::Mcp
+        | Overlay::Help
         | Overlay::ProviderSwitch => return PasteTarget::None,
         Overlay::None => {}
     }
@@ -208,6 +213,7 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
         Overlay::Config => return route_config_key(state, key),
         Overlay::ProviderSwitch => return route_provider_switch_key(state, key),
         Overlay::Mcp => return route_mcp_key(state, key),
+        Overlay::Help => return route_help_key(state, key),
         Overlay::Feedback => {
             if let Some(fs) = &state.feedback {
                 return crate::feedback_view::route_feedback_key(fs, key);
@@ -292,6 +298,7 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
             KeyCode::Home if key.modifiers.contains(KeyModifiers::SHIFT) => Action::ScrollToTop,
             KeyCode::End if key.modifiers.contains(KeyModifiers::SHIFT) => Action::ScrollToBottom,
             KeyCode::Esc => Action::FocusRegion(Focus::Input),
+            KeyCode::Char('?') => Action::OpenHelp,
             _ => Action::Noop,
         },
         Focus::Rail => match key.code {
@@ -366,6 +373,19 @@ fn route_sessions_key(state: &ShellState, key: KeyEvent) -> Action {
 fn route_mcp_key(_state: &ShellState, key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => Action::CloseOverlay,
+        _ => Action::Noop,
+    }
+}
+
+/// Route keys while the read-only keyboard-shortcuts overlay is up. Esc or `q`
+/// close it; Up/Down/j/k and PageUp/PageDown scroll (the bin clamps the range).
+fn route_help_key(_state: &ShellState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => Action::CloseOverlay,
+        KeyCode::Down | KeyCode::Char('j') => Action::ScrollHelp(1),
+        KeyCode::Up | KeyCode::Char('k') => Action::ScrollHelp(-1),
+        KeyCode::PageDown => Action::ScrollHelp(10),
+        KeyCode::PageUp => Action::ScrollHelp(-10),
         _ => Action::Noop,
     }
 }
@@ -646,6 +666,16 @@ mod tests {
         let mut s = ShellState::new();
         s.focus = Focus::Conversation;
         assert_eq!(route_paste(&s), PasteTarget::None);
+    }
+
+    #[test]
+    fn question_mark_opens_help_only_from_conversation() {
+        let q = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
+        let mut s = ShellState::new();
+        s.focus = Focus::Conversation;
+        assert_eq!(route_key(&s, q), Action::OpenHelp);
+        s.focus = Focus::Input;
+        assert!(matches!(route_key(&s, q), Action::Edit(_)));
     }
 
     #[test]
@@ -1491,5 +1521,17 @@ mod tests {
         s.overlay = Overlay::Mcp;
         let action = route_mcp_key(&s, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(matches!(action, Action::CloseOverlay));
+    }
+
+    #[test]
+    fn help_overlay_close_and_scroll_route() {
+        use crate::state::{Overlay, ShellState};
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Help;
+        let k = |c| KeyEvent::new(c, KeyModifiers::NONE);
+        assert_eq!(route_key(&s, k(KeyCode::Esc)), Action::CloseOverlay);
+        assert_eq!(route_key(&s, k(KeyCode::Char('q'))), Action::CloseOverlay);
+        assert_eq!(route_key(&s, k(KeyCode::Down)), Action::ScrollHelp(1));
+        assert_eq!(route_key(&s, k(KeyCode::Char('k'))), Action::ScrollHelp(-1));
     }
 }

@@ -146,6 +146,10 @@ fn stage1_items() -> Vec<PaletteItem> {
             command: Command::OpenConfig,
         },
         PaletteItem {
+            label: "help".into(),
+            command: Command::OpenHelp,
+        },
+        PaletteItem {
             label: "q".into(),
             command: Command::Quit,
         },
@@ -406,6 +410,10 @@ pub fn all_items(active_mode: &str, mode_names: &[String], companion_on: bool) -
         command: Command::OpenMcp,
     });
     items.push(PaletteItem {
+        label: "Keyboard shortcuts…".to_string(),
+        command: Command::OpenHelp,
+    });
+    items.push(PaletteItem {
         label: "Submit feedback…".to_string(),
         command: Command::Feedback,
     });
@@ -516,6 +524,7 @@ mod tests {
                 "Toggle context drawer",
                 "Open settings",
                 "MCP servers…",
+                "Keyboard shortcuts…",
                 "Submit feedback…",
                 "Enable companion",
                 "Quit zoid",
@@ -677,6 +686,7 @@ mod tests {
                 "compact",
                 "delegate",
                 "config",
+                "help",
                 "q",
                 "quit",
             ]
