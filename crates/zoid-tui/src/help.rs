@@ -73,7 +73,10 @@ pub fn help_lines() -> Vec<Line<'static>> {
             Style::new().fg(color::DIM),
         )));
         for (keys, desc) in *rows {
-            let row = format!("  {keys:<22}{desc}");
+            // Pad the key column to 22, but never let an over-width key butt
+            // against its description — always keep at least one space between.
+            let pad = 22.max(keys.chars().count() + 1);
+            let row = format!("  {keys:<pad$}{desc}");
             lines.push(Line::from(Span::styled(row, Style::new().fg(color::TXT))));
         }
     }
