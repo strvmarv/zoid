@@ -24,6 +24,10 @@ const RETURNING_HINT: &str =
 /// to first-time users who haven't installed it yet.
 const SUPERPOWERS_OFFER: &str =
     "Run :mode install superpowers to install the Superpowers skill set (brainstorming, TDD, systematic debugging, code review, planning…)";
+/// Discoverability hint pointing at the keyboard-shortcuts overlay. Shown on
+/// every empty session (new and returning). Mentions `:help` as well as `?`
+/// because the input box is focused by default, where `?` is a literal char.
+const HELP_HINT: &str = "Press ? (or run :help) for keyboard shortcuts";
 
 /// Build the empty-state lines for the conversation pane. `first_time_user`
 /// selects onboarding copy (new user) vs. a welcome-back hint (returning user).
@@ -90,6 +94,11 @@ fn new_user_lines(offer_superpowers: bool, width: usize) -> Vec<Line<'static>> {
         }
     }
 
+    lines.push(Line::from(""));
+    for w in wrap_title(indent, HELP_HINT, width) {
+        lines.push(Line::from(Span::styled(w, Style::new().fg(color::CHAT_ACCENT))));
+    }
+
     lines
 }
 
@@ -102,11 +111,16 @@ fn wrap_title(indent: &str, title: &str, width: usize) -> Vec<String> {
 }
 
 fn returning_user_lines(width: usize) -> Vec<Line<'static>> {
-    let full = format!("  {RETURNING_HINT}");
-    crate::render::wrap_plain(&full, width)
-        .into_iter()
-        .map(|w| Line::from(Span::styled(w, Style::new().fg(color::DIM))))
-        .collect()
+    let mut lines: Vec<Line<'static>> =
+        crate::render::wrap_plain(&format!("  {RETURNING_HINT}"), width)
+            .into_iter()
+            .map(|w| Line::from(Span::styled(w, Style::new().fg(color::DIM))))
+            .collect();
+    lines.push(Line::from(""));
+    for w in wrap_title("  ", HELP_HINT, width) {
+        lines.push(Line::from(Span::styled(w, Style::new().fg(color::CHAT_ACCENT))));
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -204,5 +218,17 @@ mod tests {
         let without = empty_state_lines(true, false, 80);
         assert!(joined(&with).contains(":mode install superpowers"));
         assert!(!joined(&without).contains("Superpowers"));
+    }
+
+    #[test]
+    fn help_hint_shown_in_both_empty_states() {
+        let joined = |ls: &[ratatui::text::Line]| {
+            ls.iter()
+                .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+                .collect::<String>()
+        };
+        assert!(joined(&empty_state_lines(true, true, 80)).contains(":help"));
+        assert!(joined(&empty_state_lines(true, false, 80)).contains(":help"));
+        assert!(joined(&empty_state_lines(false, false, 80)).contains(":help"));
     }
 }
