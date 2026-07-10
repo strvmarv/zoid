@@ -1560,6 +1560,9 @@ struct App {
     /// True while a Superpowers install fetch is in flight. Prevents a second
     /// trigger from racing a concurrent write on the same folder (review M4).
     installing_superpowers: bool,
+    /// True while a generic plugin install fetch is in flight. Mirrors
+    /// `installing_superpowers`'s race-guard rationale for the new path.
+    installing_plugin: bool,
 }
 
 impl App {
@@ -1995,6 +1998,7 @@ async fn main() -> Result<()> {
         embed_index,
         embedder,
         installing_superpowers: false,
+        installing_plugin: false,
     };
 
     // Restore the resumed session's persisted active mode (a no-op if that mode
@@ -2845,6 +2849,11 @@ where
                     }
                     AgentUpdate::SuperpowersScan(res) => {
                         if apply_superpowers_scan(app, res) {
+                            persist_active_mode(app).await;
+                        }
+                    }
+                    zoid::agent::AgentUpdate::PluginScan { id, origin, res } => {
+                        if apply_plugin_scan(app, id, origin, res) {
                             persist_active_mode(app).await;
                         }
                     }
@@ -4462,6 +4471,10 @@ fn disable_companion(app: &mut App) {
 
 /// Kick off the deterministic Superpowers install: fetch the pinned tree
 /// off-thread, then hand the scan back to the main loop via SuperpowersScan.
+/// Its `Command::ModeInstallSuperpowers` caller was removed when the generic
+/// plugin installer landed (Task 8); this function is kept — dispatch-less —
+/// until Task 11 deletes the whole bespoke Superpowers install path.
+#[allow(dead_code)]
 fn install_superpowers(app: &mut App) {
     if app.installing_superpowers {
         app.shell.status_hint = Some("Superpowers install already in progress…".into());
@@ -4532,6 +4545,165 @@ fn apply_superpowers_scan(
             false
         }
     }
+}
+
+/// Kick off a plugin install: resolve the manifest source, fetch the pinned
+/// tree off-thread, and hand the scan back via AgentUpdate::PluginScan.
+fn install_plugin(app: &mut App, arg: String) {
+    use zoid_plugin::resolve::{classify_ref, resolve_source, ManifestSource, PluginRef};
+    if arg.trim().is_empty() {
+        app.shell.status_hint = Some("usage: :plugin install <id|github-url>".into());
+        return;
+    }
+    if app.installing_plugin {
+        app.shell.status_hint = Some("a plugin install is already in progress…".into());
+        return;
+    }
+    let r = classify_ref(&arg);
+    let source = resolve_source(&r, zoid_plugin::bundled::bundled_ids(), false, false);
+
+    // v1 supports the Bundled source (by id). Repo/.zoid and wizard fallback are
+    // deferred; report them clearly rather than silently doing nothing.
+    let (manifest, id) = match (&r, source) {
+        (PluginRef::Id(id), ManifestSource::Bundled) => {
+            (zoid_plugin::bundled::bundled_manifest(id).expect("bundled id resolves"), id.clone())
+        }
+        (PluginRef::Id(id), _) => {
+            app.shell.status_hint = Some(format!("unknown plugin '{id}' (no bundled manifest)"));
+            return;
+        }
+        (PluginRef::Url(_), _) => {
+            app.shell.status_hint =
+                Some("installing plugins from a URL is not supported yet; use a bundled id".into());
+            return;
+        }
+    };
+    if let Err(e) = manifest.validate() {
+        app.shell.status_hint = Some(e);
+        return;
+    }
+    let Some(src) = manifest.source.clone() else {
+        app.shell.status_hint = Some(format!("plugin '{id}' has no [source] to fetch"));
+        return;
+    };
+    let url = format!("github.com/{}/tree/{}/{}", src.repo, src.ref_, src.subtree);
+    let parsed = match zoid::github_fetch::parse_github_url(&url) {
+        Ok(p) => p,
+        Err(e) => {
+            app.shell.status_hint = Some(e);
+            return;
+        }
+    };
+    app.installing_plugin = true;
+    app.shell.status_hint = Some(format!("installing plugin '{id}'…"));
+    let ui_tx = app.ui_tx.clone();
+    let id_for_msg = id.clone();
+    tokio::spawn(async move {
+        let api = zoid::github_fetch::HttpGithubApi::new();
+        let res = zoid::github_fetch::fetch_tree(&api, &parsed)
+            .await
+            .map_err(|e| format!("plugin fetch failed: {e}"));
+        let _ = ui_tx
+            .send(zoid::agent::AgentUpdate::PluginScan {
+                id: id_for_msg,
+                origin: "bundled".into(),
+                res,
+            })
+            .await;
+    });
+}
+
+/// Apply a completed plugin fetch on the main loop: build the plan, materialize
+/// into `<modes-dir>/<id>`, apply Safe effects (activate / onboarding hint),
+/// rebuild the registry. Returns `true` iff a mode was installed and activated.
+fn apply_plugin_scan(
+    app: &mut App,
+    id: String,
+    origin: String,
+    res: Result<zoid_core::wizard::UpstreamScan, String>,
+) -> bool {
+    app.installing_plugin = false;
+    let scan = match res {
+        Ok(s) => s,
+        Err(e) => {
+            app.shell.status_hint = Some(e);
+            return false;
+        }
+    };
+    let manifest = match zoid_plugin::bundled::bundled_manifest(&id) {
+        Some(m) => m,
+        None => {
+            app.shell.status_hint = Some(format!("bundled manifest for '{id}' vanished"));
+            return false;
+        }
+    };
+    let plan = match zoid_plugin::plan::build_plan(&manifest, &scan) {
+        Ok(p) => p,
+        Err(e) => {
+            app.shell.status_hint = Some(format!("plugin plan failed: {e}"));
+            return false;
+        }
+    };
+    let Some(dest) = app.mode_dirs.first().map(|d| d.join(&id)) else {
+        app.shell.status_hint = Some("no modes directory configured".into());
+        return false;
+    };
+    // The declared pin comes from the manifest's [source].ref; fall back to the
+    // resolved fetch ref if a manifest somehow omitted it.
+    let manifest_ref = manifest
+        .source
+        .as_ref()
+        .map(|s| s.ref_.clone())
+        .unwrap_or_else(|| scan.resolved_ref.clone());
+    let installed = match zoid::plugin_install::finish_plugin_install(&plan, &scan, &dest, &id, &manifest_ref, &origin) {
+        Ok(out) => out,
+        Err(e) => {
+            app.shell.status_hint = Some(format!("plugin install failed: {e}"));
+            return false;
+        }
+    };
+
+    // Rebuild registry so the new mode is visible.
+    let prev = app.modes.active_name().to_string();
+    app.modes = zoid::mode_import::build_mode_registry(&app.base_profile, &app.mode_dirs);
+
+    // Apply Safe effects. Activation may fail if the rebuilt registry doesn't
+    // surface the mode; capture the onboarding text and reconcile it with the
+    // REAL activation outcome after the loop, so we never claim "active" falsely
+    // (the bespoke path computed one honest status string; preserve that).
+    let mut activated = false;
+    let mut wants_activate = false;
+    let mut onboarding: Option<String> = None;
+    let mode_display = manifest.name.clone();
+    for e in &installed.safe_effects {
+        match e {
+            zoid_plugin::effect::Effect::Activate => {
+                wants_activate = true;
+                if app.modes.names().iter().any(|n| n == &mode_display) {
+                    app.modes.set_active(&mode_display);
+                    activated = true;
+                }
+            }
+            zoid_plugin::effect::Effect::OnboardingHint { text } => {
+                onboarding = Some(text.clone());
+            }
+            zoid_plugin::effect::Effect::SetConfig { .. } => { /* deferred; never reaches here in v1 */ }
+        }
+    }
+    if wants_activate && !activated {
+        app.modes.set_active(&prev); // activation requested but mode not found — keep prior active
+    }
+    sync_mode_mirror(app);
+    // Honest status: show the onboarding hint only when activation actually
+    // succeeded (or wasn't requested); otherwise report the accurate outcome.
+    app.shell.status_hint = Some(match (wants_activate, activated, onboarding) {
+        (true, true, Some(text)) => text,
+        (true, true, None) => format!("plugin '{id}' installed and active."),
+        (false, _, Some(text)) => text,
+        (false, _, None) => format!("plugin '{id}' installed."),
+        (true, false, _) => format!("plugin '{id}' installed but could not be activated."),
+    });
+    activated
 }
 
 async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<bool> {
@@ -4669,8 +4841,8 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             });
             Ok(false)
         }
-        Command::ModeInstallSuperpowers => {
-            install_superpowers(app);
+        Command::PluginInstall(arg) => {
+            install_plugin(app, arg);
             Ok(false)
         }
         Command::OpenDrawer(id) => {
@@ -5935,6 +6107,7 @@ mod tests {
             embed_index: None,
             embedder: None,
             installing_superpowers: false,
+            installing_plugin: false,
         }
     }
 

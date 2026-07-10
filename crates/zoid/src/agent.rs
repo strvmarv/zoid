@@ -211,6 +211,12 @@ pub enum AgentUpdate {
     /// upstream tree to finish (map + materialize) on the main loop; `Err`
     /// carries a user-facing message. Deterministic install — no model turn.
     SuperpowersScan(Result<zoid_core::wizard::UpstreamScan, String>),
+    /// A completed plugin fetch, ready to materialize on the main loop.
+    PluginScan {
+        id: String,
+        origin: String,
+        res: Result<zoid_core::wizard::UpstreamScan, String>,
+    },
 }
 
 /// The tool specs to advertise to the provider.
