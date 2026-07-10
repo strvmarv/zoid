@@ -2382,11 +2382,9 @@ where
         // conv_max_scroll): the ScrollHelp handler only increments; this pins
         // the ceiling for the current terminal size.
         if app.shell.overlay == zoid_tui::Overlay::Help {
-            let area = terminal
-                .size()
-                .map(|s| Rect { x: 0, y: 0, width: s.width, height: s.height })
-                .unwrap_or_default();
-            let layout = compute(area, &app.shell);
+            // Reuse the frame's already-computed `layout` (the help rect depends
+            // only on `overlay` + conversation bounds, unchanged since it was
+            // computed above), instead of a second full compute() pass.
             let vh = layout
                 .palette
                 .map(|r| r.height.saturating_sub(2) as usize) // borders/margin
