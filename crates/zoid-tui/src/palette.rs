@@ -203,7 +203,7 @@ fn stage2_items(ns: &str, state: &ShellState) -> Vec<PaletteItem> {
                 },
                 PaletteItem {
                     label: "install superpowers".into(),
-                    command: Command::ModeInstallSuperpowers,
+                    command: Command::PluginInstall("superpowers".into()),
                 },
             ];
             rows.extend(

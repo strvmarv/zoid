@@ -20,9 +20,10 @@ pub enum Command {
     ModeImport(String),
     /// Start the update wizard for an existing imported mode (`:mode update <name>`).
     ModeUpdate(String),
-    /// Deterministically install the pinned obra/superpowers skill set as a
-    /// mode (`:mode install superpowers`). No model turn, no API key.
-    ModeInstallSuperpowers,
+    /// Install a plugin by bundled id or github URL (`:plugin install <arg>`).
+    /// `:mode install superpowers` is a retained alias that produces this with
+    /// arg = "superpowers". Empty string = usage hint.
+    PluginInstall(String),
     Quit,
     OpenDrawer(DrawerId),
     NewSession,
@@ -75,9 +76,14 @@ pub fn parse_command(raw: &str) -> Command {
             Command::ModeUpdate(s["mode update ".len()..].trim().to_string())
         }
         "mode update" => Command::ModeUpdate(String::new()),
-        "mode install superpowers" => Command::ModeInstallSuperpowers,
+        "mode install superpowers" => Command::PluginInstall("superpowers".into()),
         "mode" => Command::SwitchMode(String::new()),
         s if s.starts_with("mode ") => Command::SwitchMode(s["mode ".len()..].trim().to_string()),
+        // --- :plugin namespace ---
+        s if s.starts_with("plugin install ") => {
+            Command::PluginInstall(s["plugin install ".len()..].trim().to_string())
+        }
+        "plugin install" => Command::PluginInstall(String::new()),
         // --- :companion namespace ---
         "companion on" => Command::CompanionEnable,
         "companion off" => Command::CompanionDisable,
@@ -251,14 +257,14 @@ mod tests {
     }
 
     #[test]
-    fn parses_mode_install_superpowers() {
+    fn mode_install_superpowers_aliases_to_plugin_install() {
         assert_eq!(
             parse_command(":mode install superpowers"),
-            Command::ModeInstallSuperpowers
+            Command::PluginInstall("superpowers".into())
         );
         assert_eq!(
             parse_command("mode install superpowers"),
-            Command::ModeInstallSuperpowers
+            Command::PluginInstall("superpowers".into())
         );
     }
 
@@ -268,6 +274,22 @@ mod tests {
         assert_eq!(
             parse_command(":mode install foo"),
             Command::SwitchMode("install foo".into())
+        );
+    }
+
+    #[test]
+    fn parses_plugin_install_id_and_url() {
+        assert_eq!(
+            parse_command(":plugin install superpowers"),
+            Command::PluginInstall("superpowers".into())
+        );
+        assert_eq!(
+            parse_command(":plugin install github.com/o/r/tree/main/skills"),
+            Command::PluginInstall("github.com/o/r/tree/main/skills".into())
+        );
+        assert_eq!(
+            parse_command(":plugin install"),
+            Command::PluginInstall(String::new())
         );
     }
 }
