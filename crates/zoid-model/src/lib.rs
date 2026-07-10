@@ -140,6 +140,16 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         models: &["claude-sonnet-4-6", "claude-opus-4-8"],
         status: Status::Available,
     },
+    ProviderEntry {
+        id: "zai-coding-plan",
+        display: "zai · coding plan",
+        family: "zai",
+        transport: Transport::Http {
+            default_base_url: "https://api.z.ai/api/coding/paas/v4",
+        },
+        models: &["glm-5.2"],
+        status: Status::Available,
+    },
 ];
 
 /// Per-model capabilities. One entry per known model id (case-insensitive
@@ -492,13 +502,31 @@ mod tests {
     }
 
     #[test]
-    fn selectable_has_four_providers() {
+    fn selectable_has_five_providers() {
         let ids: Vec<&str> = selectable().map(|e| e.id).collect();
-        assert_eq!(ids.len(), 4);
+        assert_eq!(ids.len(), 5);
         assert!(ids.contains(&"ollama-local"));
         assert!(ids.contains(&"ollama-cloud"));
         assert!(ids.contains(&"opencode-go"));
         assert!(ids.contains(&"anthropic-api"));
+        assert!(ids.contains(&"zai-coding-plan"));
+    }
+
+    #[test]
+    fn zai_coding_plan_registry_entry_exists_and_is_selectable() {
+        let e = entry("zai-coding-plan").expect("zai-coding-plan entry must exist");
+        assert_eq!(e.id, "zai-coding-plan");
+        assert_eq!(e.family, "zai");
+        assert_eq!(e.status, Status::Available);
+        assert_eq!(
+            e.transport,
+            Transport::Http {
+                default_base_url: "https://api.z.ai/api/coding/paas/v4"
+            }
+        );
+        assert_eq!(e.models, &["glm-5.2"]);
+        let ids: Vec<&str> = selectable().map(|e| e.id).collect();
+        assert!(ids.contains(&"zai-coding-plan"));
     }
 
     #[test]
