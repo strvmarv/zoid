@@ -61,6 +61,9 @@ pub enum ToolKind {
     /// Routed to an MCP server over async I/O; intercepted by the agent loop
     /// before the synchronous path, so `run()` is never called (like Emitting).
     Mcp,
+    /// Async HTTP (web_search, web_fetch). run_async(), not run(). The agent
+    /// loop's Network arm calls run_async; run() is never called for these.
+    Network,
 }
 
 /// A callable tool. `spec()` is sent to the provider; `run()` executes it.
@@ -72,6 +75,20 @@ pub trait Tool: Send + Sync {
     /// `update_tasks` overrides to `Emitting` and `ask_user` to `Interactive`.
     fn kind(&self) -> ToolKind {
         ToolKind::Local
+    }
+    /// Async execution for `ToolKind::Network` tools. Returns a pinned boxed
+    /// future (the stable-Rust pattern for an optional async trait method
+    /// without forcing all impls through async-trait). The agent loop only
+    /// calls this in the Network arm; the default panics so a sync tool that
+    /// wrongly returns Network fails loudly instead of silently doing nothing.
+    fn run_async(
+        &self,
+        _args: &Value,
+        _cwd: &Path,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolOutput> + Send + '_>> {
+        Box::pin(async {
+            panic!("run_async called on non-Network tool {}", self.name())
+        })
     }
 }
 
@@ -228,6 +245,12 @@ pub(crate) fn walk_files<F: FnMut(&str, &Path) -> Walk>(root: &Path, mut visit: 
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn network_kind_is_distinct() {
+        assert_ne!(ToolKind::Network, ToolKind::Local);
+        assert_ne!(ToolKind::Network, ToolKind::Mcp);
+    }
 
     #[test]
     fn registry_has_unique_named_tools() {
