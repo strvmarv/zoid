@@ -281,6 +281,7 @@ const DEFAULT_BASE_URL: &str = "https://api.openai.com";
 pub struct OpenAICompatProvider {
     api_key: String,
     base_url: String,
+    path_prefix: String,
     client: reqwest::Client,
     idle_timeout: Duration,
 }
@@ -290,6 +291,7 @@ impl OpenAICompatProvider {
         Self {
             api_key,
             base_url: DEFAULT_BASE_URL.to_string(),
+            path_prefix: "/v1".to_string(),
             client: crate::http_client(),
             idle_timeout: crate::stream_idle_timeout(),
         }
@@ -304,6 +306,10 @@ impl OpenAICompatProvider {
     }
     pub fn with_idle_timeout(mut self, idle: Duration) -> Self {
         self.idle_timeout = idle;
+        self
+    }
+    pub fn with_path_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.path_prefix = prefix.into();
         self
     }
 }
@@ -322,7 +328,7 @@ impl Provider for OpenAICompatProvider {
         let resp = match tokio::time::timeout(
             self.idle_timeout,
             self.client
-                .post(format!("{}/v1/chat/completions", self.base_url))
+                .post(format!("{}{}/chat/completions", self.base_url, self.path_prefix))
                 .header("authorization", format!("Bearer {}", self.api_key))
                 .header("content-type", "application/json")
                 .json(&request_body(req))
@@ -445,7 +451,7 @@ impl Provider for OpenAICompatProvider {
     async fn list_models(&self) -> Result<Vec<String>> {
         let resp = self
             .client
-            .get(format!("{}/v1/models", self.base_url))
+            .get(format!("{}{}/models", self.base_url, self.path_prefix))
             .bearer_auth(&self.api_key)
             .send()
             .await?;
@@ -1033,6 +1039,62 @@ mod tests {
             got.iter()
                 .any(|e| matches!(e, ProviderEvent::TextDelta(t) if t == "hi")),
             "expected the content delta, got {got:?}"
+        );
+    }
+
+    #[test]
+    fn default_path_prefix_is_v1() {
+        let p = OpenAICompatProvider::new("k".into());
+        assert_eq!(p.path_prefix, "/v1");
+    }
+
+    #[test]
+    fn with_path_prefix_overrides_default() {
+        let p = OpenAICompatProvider::new("k".into()).with_path_prefix("");
+        assert_eq!(p.path_prefix, "");
+    }
+
+    #[tokio::test]
+    async fn default_path_prefix_emits_v1_chat_completions() {
+        // Regression: default prefix must still emit /v1/chat/completions.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let recorded = std::sync::Arc::new(tokio::sync::Mutex::new(None));
+        let recorded_clone = recorded.clone();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let req_text = String::from_utf8_lossy(&buf[..n]);
+                let first_line = req_text.lines().next().unwrap_or("").to_string();
+                *recorded_clone.lock().await = Some(first_line);
+                let body = "data: [DONE]\r\n\r\n";
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+            }
+        });
+        let provider = OpenAICompatProvider::new("k".into())
+            .with_base_url(format!("http://{addr}"))
+            .with_idle_timeout(std::time::Duration::from_secs(2));
+        let req = CompletionRequest {
+            model: "m".into(),
+            system: None,
+            messages: vec![crate::Message::user("hi")],
+            max_tokens: 8,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Off,
+        };
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        let _ = provider.stream(&req, tx).await;
+        let first = recorded.lock().await.clone().unwrap_or_default();
+        assert!(
+            first.contains("/v1/chat/completions"),
+            "default prefix must emit /v1/chat/completions, got: {first}"
         );
     }
 }
