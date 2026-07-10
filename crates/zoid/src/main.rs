@@ -6198,6 +6198,94 @@ mod tests {
         assert_eq!(app.shell.status_hint.as_deref(), Some("fetch failed: boom"));
     }
 
+    /// The `PluginScan` main-loop path (`apply_plugin_scan`) for the bundled
+    /// `superpowers` plugin: a successful fetch materializes the mode into the
+    /// first mode dir, the rebuilt registry surfaces it under the manifest's
+    /// declared display name, it becomes active, the onboarding hint (not the
+    /// generic fallback) is reported, and the in-flight guard clears. This is
+    /// the "honest status" success half of the reconciliation in
+    /// `apply_plugin_scan` (~main.rs:4693): `wants_activate && activated` uses
+    /// the plugin's own onboarding text.
+    ///
+    /// The false-activation half of that reconciliation — `wants_activate &&
+    /// !activated`, which restores the previously-active mode, returns
+    /// `false`, and reports "installed but could not be activated." — is not
+    /// forceable here via real materialize: `build_plan` always writes
+    /// `mode.md`'s `name:` frontmatter from `manifest.name` verbatim (see
+    /// `zoid-plugin/src/plan.rs`), into exactly the dir `build_mode_registry`
+    /// rescans (`app.mode_dirs.first()`), so a successful install always
+    /// surfaces its own mode name on rebuild. The one way to make the name
+    /// "absent" from the rebuilt registry — pre-seeding a *different* folder
+    /// that parses to the same display name, so first-wins dedup skips ours —
+    /// still leaves that name present in `app.modes.names()` (just pointing at
+    /// the wrong entry), so it does not exercise the `!activated` branch
+    /// either; it would be a different bug (identity confusion) with its own
+    /// test, not this one. So instead we lock down the guard-clearing half of
+    /// the reconciliation (shared by both outcomes) on both the success path
+    /// and the error (bad-scan) path here, mirroring
+    /// `superpowers_scan_installs_activates_and_clears_guard` above.
+    #[tokio::test]
+    async fn apply_plugin_scan_reports_honest_status_and_clears_guard() {
+        use zoid_core::wizard::{ScannedFile, UpstreamScan};
+        fn skill(name: &str, desc: &str) -> String {
+            format!("---\nname: {name}\ndescription: {desc}\n---\nbody\n")
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let modes_dir = tmp.path().join("modes");
+        let mut app = test_app().await;
+        app.mode_dirs = vec![modes_dir.clone()];
+        app.installing_plugin = true; // pretend a fetch is in flight
+
+        let scan = UpstreamScan {
+            url: "github.com/obra/superpowers/tree/SHA/skills".into(),
+            repo: "obra/superpowers".into(),
+            resolved_ref: "SHA".into(),
+            subtree_path: "skills".into(),
+            files: vec![
+                ScannedFile {
+                    upstream_path: "skills/using-superpowers/SKILL.md".into(),
+                    sha: "a".into(),
+                    content: skill("using-superpowers", "loader"),
+                },
+                ScannedFile {
+                    upstream_path: "skills/brainstorming/SKILL.md".into(),
+                    sha: "b".into(),
+                    content: skill("brainstorming", "before creative work"),
+                },
+            ],
+        };
+
+        // Success path: the bundled manifest declares Activate + OnboardingHint.
+        let installed =
+            apply_plugin_scan(&mut app, "superpowers".into(), "bundled".into(), Ok(scan));
+        assert!(installed, "install + activation should succeed");
+        assert!(!app.installing_plugin, "guard must clear");
+        assert!(
+            app.modes.names().iter().any(|n| n == "Superpowers"),
+            "rebuilt registry must surface the installed mode under its declared name"
+        );
+        assert_eq!(app.modes.active_name(), "Superpowers", "mode must be activated");
+        assert_eq!(
+            app.shell.status_hint.as_deref(),
+            Some("Superpowers mode installed and active."),
+            "honest-success branch must report the plugin's own onboarding hint, \
+             not the generic fallback"
+        );
+        assert!(modes_dir.join("superpowers/mode.md").is_file());
+
+        // Error path: clears the guard, surfaces the message, installs nothing new.
+        app.installing_plugin = true;
+        let installed2 = apply_plugin_scan(
+            &mut app,
+            "superpowers".into(),
+            "bundled".into(),
+            Err("fetch failed: boom".into()),
+        );
+        assert!(!installed2);
+        assert!(!app.installing_plugin, "error path must also clear the guard");
+        assert_eq!(app.shell.status_hint.as_deref(), Some("fetch failed: boom"));
+    }
+
     /// `apply_models_fetched` replaces the OPEN model picker's options with the
     /// live list, seeding the selection cursor on the current model; an empty
     /// fetch result is a no-op (the static registry fallback is kept).
