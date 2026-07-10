@@ -83,7 +83,7 @@ fn generate_body_from_frontmatter(scan: &UpstreamScan, loader_full: &str, strip_
         };
         let segs: Vec<&str> = rel.split('/').collect();
         if segs.len() != 2 || segs[1] != "SKILL.md" {
-            continue; // only a skill's top-level SKILL.md
+            continue; // only a skill's top-level SKILL.md, not sibling docs
         }
         if let Ok(p) = parse_skill_md(&f.content) {
             skills.push((p.name, p.description));
@@ -115,7 +115,7 @@ mod tests {
     use super::*;
     use crate::effect::Effect;
     use crate::manifest::{BodyStrategy, ModeRecipe, PluginManifest};
-    use zoid_core::wizard::{MappingEntry, ScannedFile, UpstreamScan};
+    use zoid_core::wizard::{ScannedFile, UpstreamScan};
 
     fn skill_md(name: &str, desc: &str) -> String {
         format!("---\nname: {name}\ndescription: {desc}\n---\nbody for {name}\n")
