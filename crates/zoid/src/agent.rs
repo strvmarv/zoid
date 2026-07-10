@@ -1706,6 +1706,32 @@ async fn run_turn_inner(
                         now,
                     )
                     .await?;
+                    if hard.is_cancelled() {
+                        // Hard-stop mid-batch: answer every remaining call so no
+                        // tool_use is left without a tool_result, then end.
+                        // Mirrors the Local arm's drain (search/spawn_blocking is
+                        // detached; here the async future is dropped — the reqwest
+                        // connection is abandoned mid-flight).
+                        for rest in pending_iter.by_ref() {
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::ToolResult {
+                                    id: rest.id,
+                                    name: rest.name,
+                                    output: "[skipped: turn aborted]".to_string(),
+                                    is_error: false,
+                                },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                        }
+                        outcome = "aborted";
+                        break 'turn;
+                    }
                     tracing::info!(
                         kind = "tool",
                         name = tool_name.as_str(),
