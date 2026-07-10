@@ -1,7 +1,8 @@
 //! Effectful plugin installer: validate effects, materialize the mode
 //! clean-slate, write the plugin provenance sidecar, and return the Safe
 //! effects for the caller to apply to App state. App-state-free so it is
-//! unit-testable with a tempdir (mirrors superpowers_install::finish_install).
+//! unit-testable with a tempdir (mirrors the now-deleted bespoke Superpowers
+//! installer's `finish_install`).
 
 use std::path::{Path, PathBuf};
 
@@ -39,7 +40,8 @@ pub fn finish_plugin_install(
     }
 
     // Clean-slate so a failed re-install leaves nothing rather than a corrupted
-    // mode (same rationale as superpowers_install::finish_install).
+    // mode (same rationale as the now-deleted bespoke Superpowers installer's
+    // `finish_install`).
     if dest_dir.exists() {
         std::fs::remove_dir_all(dest_dir)
             .map_err(|e| format!("remove old install {}: {e}", dest_dir.display()))?;

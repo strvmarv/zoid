@@ -207,10 +207,6 @@ pub enum AgentUpdate {
     SessionTakenOver,
     /// A feedback submit finished; the bin updates the overlay's status line.
     FeedbackOutcome(anyhow::Result<zoid_core::feedback::SubmitOutcome>),
-    /// Result of an async Superpowers install fetch. `Ok` carries the scanned
-    /// upstream tree to finish (map + materialize) on the main loop; `Err`
-    /// carries a user-facing message. Deterministic install — no model turn.
-    SuperpowersScan(Result<zoid_core::wizard::UpstreamScan, String>),
     /// A completed plugin fetch, ready to materialize on the main loop.
     PluginScan {
         id: String,

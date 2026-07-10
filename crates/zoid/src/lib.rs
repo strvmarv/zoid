@@ -14,7 +14,6 @@ pub mod skill_import;
 pub mod spawn_subagent;
 pub mod startup;
 pub mod subagent;
-pub mod superpowers_install;
 pub mod uninstall;
 pub mod update;
 pub mod worktree;

@@ -1557,11 +1557,9 @@ struct App {
     embed_index: Option<std::sync::Arc<std::sync::RwLock<zoid_core::embed_index::EmbeddingIndex>>>,
     /// The embedder used to embed the recall query. Paired with `embed_index`.
     embedder: Option<std::sync::Arc<dyn zoid_core::retrieval::Embedder>>,
-    /// True while a Superpowers install fetch is in flight. Prevents a second
-    /// trigger from racing a concurrent write on the same folder (review M4).
-    installing_superpowers: bool,
-    /// True while a generic plugin install fetch is in flight. Mirrors
-    /// `installing_superpowers`'s race-guard rationale for the new path.
+    /// True while a generic plugin install fetch is in flight. Prevents a
+    /// second trigger from racing a concurrent write on the same folder
+    /// (review M4).
     installing_plugin: bool,
 }
 
@@ -1997,7 +1995,6 @@ async fn main() -> Result<()> {
         mcp,
         embed_index,
         embedder,
-        installing_superpowers: false,
         installing_plugin: false,
     };
 
@@ -2845,11 +2842,6 @@ where
                                         );
                                 }
                             }
-                        }
-                    }
-                    AgentUpdate::SuperpowersScan(res) => {
-                        if apply_superpowers_scan(app, res) {
-                            persist_active_mode(app).await;
                         }
                     }
                     zoid::agent::AgentUpdate::PluginScan { id, origin, res } => {
@@ -4469,84 +4461,6 @@ fn disable_companion(app: &mut App) {
     }
 }
 
-/// Kick off the deterministic Superpowers install: fetch the pinned tree
-/// off-thread, then hand the scan back to the main loop via SuperpowersScan.
-/// Its `Command::ModeInstallSuperpowers` caller was removed when the generic
-/// plugin installer landed (Task 8); this function is kept — dispatch-less —
-/// until Task 11 deletes the whole bespoke Superpowers install path.
-#[allow(dead_code)]
-fn install_superpowers(app: &mut App) {
-    if app.installing_superpowers {
-        app.shell.status_hint = Some("Superpowers install already in progress…".into());
-        return;
-    }
-    app.shell.status_hint = Some("installing Superpowers…".into());
-    let parsed = match zoid::github_fetch::parse_github_url(
-        zoid::superpowers_install::SUPERPOWERS_URL,
-    ) {
-        Ok(p) => p,
-        Err(e) => {
-            app.shell.status_hint = Some(e);
-            return;
-        }
-    };
-    app.installing_superpowers = true;
-    let ui_tx = app.ui_tx.clone();
-    tokio::spawn(async move {
-        let api = zoid::github_fetch::HttpGithubApi::new();
-        let res = zoid::github_fetch::fetch_tree(&api, &parsed)
-            .await
-            .map_err(|e| format!("Superpowers fetch failed: {e}"));
-        let _ = ui_tx
-            .send(zoid::agent::AgentUpdate::SuperpowersScan(res))
-            .await;
-    });
-}
-
-/// Apply a completed Superpowers install fetch on the main loop: materialize the
-/// mode into `<modes-dir>/superpowers`, rebuild the registry so it becomes
-/// visible, and activate it. Clears the in-flight guard and sets a status hint.
-/// Returns `true` iff the mode was installed and made active — the caller then
-/// persists the active-mode change (the async persist stays out of here so this
-/// is synchronous and unit-testable). `dest` is derived from the first mode dir
-/// (the user-global `<cfg>/modes`), which is exactly the dir the rebuilt
-/// registry scans, keeping install location and discovery in lockstep.
-fn apply_superpowers_scan(
-    app: &mut App,
-    res: Result<zoid_core::wizard::UpstreamScan, String>,
-) -> bool {
-    app.installing_superpowers = false; // fetch attempt concluded
-    let scan = match res {
-        Ok(s) => s,
-        Err(e) => {
-            app.shell.status_hint = Some(e);
-            return false;
-        }
-    };
-    let Some(dest) = app.mode_dirs.first().map(|d| d.join("superpowers")) else {
-        app.shell.status_hint = Some("no modes directory configured".into());
-        return false;
-    };
-    match zoid::superpowers_install::finish_install(&scan, &dest) {
-        Ok(_) => {
-            // Reload the registry so the new mode is visible, then make it active.
-            let prev = app.modes.active_name().to_string();
-            app.modes =
-                zoid::mode_import::build_mode_registry(&app.base_profile, &app.mode_dirs);
-            let installed = app.modes.names().iter().any(|n| n == "Superpowers");
-            app.modes
-                .set_active(if installed { "Superpowers" } else { prev.as_str() });
-            sync_mode_mirror(app);
-            app.shell.status_hint = Some("Superpowers mode installed.".into());
-            installed
-        }
-        Err(e) => {
-            app.shell.status_hint = Some(format!("Superpowers install failed: {e}"));
-            false
-        }
-    }
-}
-
 /// Kick off a plugin install: resolve the manifest source, fetch the pinned
 /// tree off-thread, and hand the scan back via AgentUpdate::PluginScan.
 fn install_plugin(app: &mut App, arg: String) {
@@ -6106,7 +6020,6 @@ mod tests {
             mcp: None,
             embed_index: None,
             embedder: None,
-            installing_superpowers: false,
             installing_plugin: false,
         }
     }
@@ -6134,68 +6047,6 @@ mod tests {
         assert!(cache.refresh(&events), "a longer log must recompute");
         assert_eq!(cache.events_len, Some(2));
         assert_eq!(cache.msgs.len(), 2);
-    }
-
-    /// The `SuperpowersScan` main-loop path (`apply_superpowers_scan`): a
-    /// successful fetch materializes the mode into the first mode dir, the
-    /// rebuilt registry surfaces it, it becomes active, and the in-flight guard
-    /// clears. The error path clears the guard and surfaces the message without
-    /// installing anything.
-    #[tokio::test]
-    async fn superpowers_scan_installs_activates_and_clears_guard() {
-        use zoid_core::wizard::{ScannedFile, UpstreamScan};
-        fn skill(name: &str, desc: &str) -> String {
-            format!("---\nname: {name}\ndescription: {desc}\n---\nbody\n")
-        }
-        let tmp = tempfile::tempdir().unwrap();
-        let modes_dir = tmp.path().join("modes");
-        let mut app = test_app().await;
-        app.mode_dirs = vec![modes_dir.clone()];
-        app.installing_superpowers = true; // pretend a fetch is in flight
-
-        let scan = UpstreamScan {
-            url: "github.com/obra/superpowers/tree/SHA/skills".into(),
-            repo: "obra/superpowers".into(),
-            resolved_ref: "SHA".into(),
-            subtree_path: "skills".into(),
-            files: vec![
-                ScannedFile {
-                    upstream_path: "skills/using-superpowers/SKILL.md".into(),
-                    sha: "a".into(),
-                    content: skill("using-superpowers", "loader"),
-                },
-                ScannedFile {
-                    upstream_path: "skills/brainstorming/SKILL.md".into(),
-                    sha: "b".into(),
-                    content: skill("brainstorming", "before creative work"),
-                },
-            ],
-        };
-
-        // Success path.
-        let installed = apply_superpowers_scan(&mut app, Ok(scan));
-        assert!(installed, "install should succeed");
-        assert!(!app.installing_superpowers, "guard must clear");
-        assert!(
-            app.modes.names().iter().any(|n| n == "Superpowers"),
-            "rebuilt registry must surface the installed mode"
-        );
-        assert_eq!(app.modes.active_name(), "Superpowers", "mode must be activated");
-        assert!(
-            modes_dir.join("superpowers/mode.md").is_file(),
-            "mode.md written into the dir the registry scans"
-        );
-        assert!(
-            modes_dir.join("superpowers/brainstorming/SKILL.md").is_file(),
-            "scoped skill copied verbatim"
-        );
-
-        // Error path: clears the guard, surfaces the message, installs nothing new.
-        app.installing_superpowers = true;
-        let installed2 = apply_superpowers_scan(&mut app, Err("fetch failed: boom".into()));
-        assert!(!installed2);
-        assert!(!app.installing_superpowers, "error path must also clear the guard");
-        assert_eq!(app.shell.status_hint.as_deref(), Some("fetch failed: boom"));
     }
 
     /// The `PluginScan` main-loop path (`apply_plugin_scan`) for the bundled

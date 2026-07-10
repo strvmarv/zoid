@@ -68,8 +68,8 @@ pub fn build_plan(manifest: &PluginManifest, scan: &UpstreamScan) -> Result<Inst
     })
 }
 
-/// Ported verbatim (behavior-preserving) from
-/// `superpowers_install.rs::generate_mode_body`: the skill bullet list is the
+/// Ported verbatim (behavior-preserving) from the now-deleted bespoke
+/// Superpowers installer's `generate_mode_body`: the skill bullet list is the
 /// name+description frontmatter of each top-level `<skill>/SKILL.md` under the
 /// stripped subtree (loader excluded), alphabetical by name.
 fn generate_body_from_frontmatter(scan: &UpstreamScan, loader_full: &str, strip_prefix: &str) -> String {
