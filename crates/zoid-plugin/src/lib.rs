@@ -4,7 +4,7 @@
 pub mod effect;
 pub mod manifest;
 pub mod resolve;
-// pub mod plan;
+pub mod plan;
 // pub mod provenance;
 // pub mod bundled;
 
