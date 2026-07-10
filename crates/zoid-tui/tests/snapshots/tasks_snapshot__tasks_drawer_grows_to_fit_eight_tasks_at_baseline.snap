@@ -2,7 +2,7 @@
 source: crates/zoid-tui/tests/tasks_snapshot.rs
 expression: "draw_at(&s, &many_tasks(8), 160, 40)"
 ---
-"v0.3.1                                                                        zoid                                        Esc interrupt · : command · ^P palette"
+"v0.3.2                                                                        zoid                                        Esc interrupt · : command · ^P palette"
 "    (no messages yet)                                                                                             █ ╭ ▾ repo ─────────────────────────────────╮ "
 "                                                                                                                  █ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(118, " ")]
 "                                                                                                                  █ │🔧 worktree (none)                       │ " Hidden by multi-width symbols: [(118, " ")]

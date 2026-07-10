@@ -10,6 +10,14 @@
 
 # Release Notes
 
+## 0.3.2
+
+### New
+
+- **Keyboard-shortcuts help** — a built-in reference of every shortcut and command, so you no longer have to hunt for them. Open it with `?` from the conversation view, the `:help` command, or "Keyboard shortcuts…" in the command palette. It's a scrollable overlay grouped by context — global keys, input, conversation, overlays, commands, and mouse. New sessions now point you to it.
+
+> **Beta note:** builds are for evaluation and expire ~30 days after release — run `zoid update` periodically to stay current.
+
 ## 0.3.1
 
 ### Fixes

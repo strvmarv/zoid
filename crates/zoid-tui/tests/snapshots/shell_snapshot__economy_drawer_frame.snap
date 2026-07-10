@@ -2,7 +2,7 @@
 source: crates/zoid-tui/tests/shell_snapshot.rs
 expression: "draw_econ(&s, &seeded_economy(), &seeded(), 100, 24)"
 ---
-"v0.3.1                                          zoid          Esc interrupt · : command · ^P palette"
+"v0.3.2                                          zoid          Esc interrupt · : command · ^P palette"
 "  00:00 › what's causing the 500?                     █ ╭ ▾ repo ─────────────────────────────────╮ "
 "                                                      █ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
 "  00:00 zoid an unwrapped lookup in the handler.      █ ╰─────────────────────────────────────────╯ "

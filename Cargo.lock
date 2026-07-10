@@ -4622,7 +4622,7 @@ checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 [[package]]
 name = "zoid"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4659,7 +4659,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-companion"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -4668,7 +4668,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4720,11 +4720,11 @@ dependencies = [
 
 [[package]]
 name = "zoid-model"
-version = "0.3.1"
+version = "0.3.2"
 
 [[package]]
 name = "zoid-provider"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4740,7 +4740,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-syntax"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "proptest",
  "tree-sitter",
@@ -4764,7 +4764,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-tools"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "globset",
  "nix",
@@ -4777,7 +4777,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-tui"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "insta",
  "pulldown-cmark",

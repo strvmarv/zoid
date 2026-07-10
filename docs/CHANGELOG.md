@@ -6,6 +6,16 @@
 > notes (what ships to the public releases repo) live in the root
 > `RELEASES.md`.
 
+## 0.3.2
+
+Discoverability: an in-app keyboard-shortcuts help overlay.
+
+Help overlay.
+- New `Overlay::Help` (`crates/zoid-tui/src/help.rs`): a bordered, read-only, scrollable shortcuts reference on its own centered 84×26 rect (`HELP_RECT_W`/`HELP_RECT_H`), clamped to the conversation area by `layout::centered`, mirroring the read-only `/mcp` overlay pattern. Content is produced by a single pure `help_lines() -> Vec<Line<'static>>` builder (6 sections, 31 rows) so it stays unit-testable and edited in one place. Registered at both compiler-blind overlay seams — `layout.rs`'s rect branch and `render.rs`'s if/else dispatch — with the layout guard-test array extended to `Overlay::Help` so a missed seam fails a test instead of rendering nothing.
+- Three open paths, all resetting overlay state consistently: `?` routed only in the `Focus::Conversation` arm (so a literal `?` typed into the input box is preserved), the `:help` command (`Command::OpenHelp`, parsing both `:help` and bare `help`), and a "Keyboard shortcuts…" command-palette row plus a `help` completion in the `:` direct phase. `Esc`/`q` close via `close_overlay()`, which resets `help_scroll`.
+- Scroll has a single source of truth: `Action::ScrollHelp(i32)` only increments `help_scroll` (saturating at 0, no ceiling); the bin clamps it per-frame against the real rect height (`saturating_sub(2)` for the borders, reusing the frame's already-computed layout), mirroring how `conv_max_scroll` bounds conversation scroll, so it can never run past the last page.
+- Empty-state hint (`Press ? (or run :help) for keyboard shortcuts`, `CHAT_ACCENT`) added to both the new-user and returning-user onboarding screens.
+
 ## 0.3.1
 
 Fixes.

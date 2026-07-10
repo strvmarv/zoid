@@ -5,7 +5,7 @@ expression: "draw_zoom(Zoom::Detail, 140, 24)"
 Buffer {
     area: Rect { x: 0, y: 0, width: 140, height: 24 },
     content: [
-        "v0.3.1                                                              zoid                              Esc interrupt · : command · ^P palette",
+        "v0.3.2                                                              zoid                              Esc interrupt · : command · ^P palette",
         "  00:00 › show me parse                                                                       █ ╭ ▾ repo ─────────────────────────────────╮ ",
         "  00:00 zoid reading it                                                                       █ │📦 repo   ⎇ main                         │ ", // hidden by multi-width symbols: [(98, " ")]
         "    ● read_file(path: src/parser.rs) ⏎ peek                                                   █ ╰─────────────────────────────────────────╯ ",
