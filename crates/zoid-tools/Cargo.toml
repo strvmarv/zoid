@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 shlex = "2.0"
 zoid-provider = { path = "../zoid-provider" }
+zoid-web = { path = "../zoid-web" }
 serde_json = { workspace = true }
 regex = { workspace = true }
 globset = { workspace = true }

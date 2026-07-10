@@ -18,6 +18,8 @@ pub mod show;
 pub mod tasks;
 pub mod write;
 pub mod subagent_diff;
+pub mod web_search;
+pub mod web_fetch;
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -81,11 +83,11 @@ pub trait Tool: Send + Sync {
     /// without forcing all impls through async-trait). The agent loop only
     /// calls this in the Network arm; the default panics so a sync tool that
     /// wrongly returns Network fails loudly instead of silently doing nothing.
-    fn run_async(
-        &self,
-        _args: &Value,
-        _cwd: &Path,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolOutput> + Send + '_>> {
+    fn run_async<'a>(
+        &'a self,
+        _args: &'a Value,
+        _cwd: &'a Path,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolOutput> + Send + 'a>> {
         Box::pin(async {
             panic!("run_async called on non-Network tool {}", self.name())
         })
@@ -105,6 +107,8 @@ pub fn registry() -> Vec<Box<dyn Tool>> {
         Box::new(tasks::UpdateTasks),
         Box::new(ask::AskUser),
         Box::new(feedback::SubmitFeedback),
+        Box::new(web_search::WebSearch),
+        Box::new(web_fetch::WebFetch),
     ]
 }
 
@@ -123,6 +127,8 @@ pub fn registry_with_kill(kill: KillSlot) -> Vec<Box<dyn Tool>> {
         Box::new(tasks::UpdateTasks),
         Box::new(ask::AskUser),
         Box::new(feedback::SubmitFeedback),
+        Box::new(web_search::WebSearch),
+        Box::new(web_fetch::WebFetch),
     ]
 }
 
@@ -270,6 +276,8 @@ mod tests {
         assert!(names.contains(&"update_tasks"));
         assert!(names.contains(&"ask_user"));
         assert!(names.contains(&"submit_feedback"));
+        assert!(names.contains(&"web_search"));
+        assert!(names.contains(&"web_fetch"));
     }
 
     #[test]
@@ -315,11 +323,18 @@ mod tests {
 
     #[test]
     fn registry_tools_are_all_local_by_default() {
-        // `update_tasks` (Emitting) and `ask_user` (Interactive) are the
-        // intentional exceptions; everything else still defaults to Local.
+        // `update_tasks` (Emitting), `ask_user` (Interactive), and the web
+        // tools (Network) are the intentional exceptions; everything else
+        // still defaults to Local.
         for t in registry()
             .into_iter()
-            .filter(|t| t.name() != "update_tasks" && t.name() != "ask_user" && t.name() != "submit_feedback")
+            .filter(|t| {
+                t.name() != "update_tasks"
+                    && t.name() != "ask_user"
+                    && t.name() != "submit_feedback"
+                    && t.name() != "web_search"
+                    && t.name() != "web_fetch"
+            })
         {
             assert_eq!(
                 t.kind(),
