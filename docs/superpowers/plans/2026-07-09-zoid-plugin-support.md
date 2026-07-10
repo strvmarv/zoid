@@ -38,8 +38,9 @@
 - Modify: `Cargo.toml` (root) — add `crates/zoid-plugin` to `members`.
 - Modify: `crates/zoid/Cargo.toml` — add `zoid-plugin` dependency.
 - Modify: `crates/zoid/src/lib.rs` — declare `pub mod plugin_install;`.
-- Modify: `crates/zoid-tui/src/command.rs` — add `Command::PluginInstall`, retarget parser.
-- Modify: `crates/zoid-tui/src/palette.rs:205` — palette row wording.
+- Modify: `crates/zoid-tui/src/command.rs` — add `Command::PluginInstall`, remove `ModeInstallSuperpowers`, retarget parser.
+- Modify: `crates/zoid-tui/src/palette.rs:206` — swap the row's `command:` from `ModeInstallSuperpowers` to `PluginInstall(...)` (type-level; Task 8), then label wording (Task 10).
+- Modify: `crates/zoid-tui/src/render.rs:874` — Direct-phase preview `match cmd` arm. **This match is exhaustive with NO wildcard arm**, so removing the variant and adding `PluginInstall(String)` requires editing this arm in the SAME commit as `command.rs` or the `zoid-tui` crate will not compile (E0004/E0599).
 - Modify: `crates/zoid-tui/src/onboarding.rs:26` — onboarding line wording.
 - Modify: `crates/zoid/src/agent.rs` (near `AgentUpdate` ~line 213) — add `PluginScan` variant.
 - Modify: `crates/zoid/src/main.rs` — kickoff/apply/dispatch; delete old superpowers path.
@@ -1001,11 +1002,31 @@ Add `zoid-plugin = { path = "../zoid-plugin" }` to `crates/zoid/Cargo.toml` `[de
 Run: `cargo test -p zoid generic_plan_matches_bespoke_mapping_byte_for_byte`
 Expected: PASS. If `mode_description` or `mode_body` differs, reconcile the manifest string (Step 1) until identical — do not change `build_plan` to match; the manifest data is the source of truth.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Pin a PERMANENT golden fixture in `zoid-plugin`**
+
+The Step 4 byte-identical test proves equivalence to `superpowers_mapping`, but that guard is DELETED in Task 11 (it references the removed function). Add a self-contained golden in `zoid-plugin` that survives the deletion and catches future drift in `generate_body_from_frontmatter`. In `plan.rs` tests (using the `manifest()`/`scan()` fixtures defined in Task 4), capture the exact body once and pin it:
+
+- Create `crates/zoid-plugin/tests/superpowers_body_golden.txt` by running `build_plan(&manifest(), &scan())` and writing `plan.mapping.mode_body` to that file verbatim (generate it; do not hand-type it).
+- Add this test to `plan.rs`:
+
+```rust
+#[test]
+fn mode_body_matches_golden_snapshot() {
+    let plan = build_plan(&manifest(), &scan()).unwrap();
+    let golden = include_str!("../tests/superpowers_body_golden.txt");
+    assert_eq!(plan.mapping.mode_body, golden,
+        "body generator drifted; if intentional, regenerate the golden file");
+}
+```
+
+Run: `cargo test -p zoid-plugin mode_body_matches_golden_snapshot`
+Expected: PASS. This golden is independent of the bespoke recipe, so Task 11's deletion leaves it intact.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add crates/zoid-plugin crates/zoid/Cargo.toml crates/zoid/src/superpowers_install.rs
-git commit -m "feat(plugin): bundle superpowers manifest + byte-identical regression guard"
+git commit -m "feat(plugin): bundle superpowers manifest + byte-identical + golden guards"
 ```
 
 ---
@@ -1147,7 +1168,7 @@ FS-effectful but App-state-free, so it is unit-testable with a tempdir (mirrors 
 - Consumes: `zoid_plugin::{plan::InstallPlan, effect::{Effect, RiskTier}, provenance::*}`; `zoid_core::wizard::UpstreamScan`; `crate::mode_wizard::materialize`.
 - Produces:
   - `pub struct InstalledPlugin { pub dest: std::path::PathBuf, pub safe_effects: Vec<Effect> }`
-  - `pub fn finish_plugin_install(plan: &InstallPlan, scan: &UpstreamScan, dest_dir: &Path, plugin_id: &str, origin: &str) -> Result<InstalledPlugin, String>`
+  - `pub fn finish_plugin_install(plan: &InstallPlan, scan: &UpstreamScan, dest_dir: &Path, plugin_id: &str, manifest_ref: &str, origin: &str) -> Result<InstalledPlugin, String>` — `manifest_ref` is the manifest's DECLARED pin (`[source].ref`), recorded distinctly from the fetch's `scan.resolved_ref` (which is the returned tree SHA and need not echo the commit SHA).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1188,7 +1209,7 @@ mod tests {
         let plan = build_plan(&manifest(vec![Effect::Activate]), &scan).unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("modes").join("superpowers");
-        let out = finish_plugin_install(&plan, &scan, &dest, "superpowers", "bundled").unwrap();
+        let out = finish_plugin_install(&plan, &scan, &dest, "superpowers", "d884ae0", "bundled").unwrap();
         assert_eq!(out.dest, dest);
         assert!(dest.join("mode.md").is_file());
         assert!(dest.join("brainstorming/SKILL.md").is_file());
@@ -1197,6 +1218,7 @@ mod tests {
         let side = std::fs::read_to_string(dest.join(".zoid-plugin.json")).unwrap();
         let pv: zoid_plugin::provenance::PluginProvenance = serde_json::from_str(&side).unwrap();
         assert_eq!(pv.plugin.id, "superpowers");
+        assert_eq!(pv.plugin.manifest_ref, "d884ae0"); // declared pin, not the fetched tree sha
         assert_eq!(pv.source.origin, "bundled");
         assert_eq!(out.safe_effects, vec![Effect::Activate]);
     }
@@ -1207,7 +1229,7 @@ mod tests {
         let plan = build_plan(&manifest(vec![Effect::SetConfig { key: "provider".into(), value: toml::Value::String("x".into()) }]), &scan).unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("modes").join("superpowers");
-        let err = finish_plugin_install(&plan, &scan, &dest, "superpowers", "bundled").unwrap_err();
+        let err = finish_plugin_install(&plan, &scan, &dest, "superpowers", "d884ae0", "bundled").unwrap_err();
         assert!(err.contains("requires confirmation") || err.contains("not yet supported"), "got: {err}");
         // Nothing materialized on rejection.
         assert!(!dest.exists());
@@ -1219,9 +1241,9 @@ mod tests {
         let plan = build_plan(&manifest(vec![Effect::Activate]), &scan).unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("modes").join("superpowers");
-        finish_plugin_install(&plan, &scan, &dest, "superpowers", "bundled").unwrap();
+        finish_plugin_install(&plan, &scan, &dest, "superpowers", "d884ae0", "bundled").unwrap();
         std::fs::write(dest.join("STALE.md"), "old").unwrap();
-        finish_plugin_install(&plan, &scan, &dest, "superpowers", "bundled").unwrap();
+        finish_plugin_install(&plan, &scan, &dest, "superpowers", "d884ae0", "bundled").unwrap();
         assert!(!dest.join("STALE.md").exists());
     }
 }
@@ -1261,6 +1283,7 @@ pub fn finish_plugin_install(
     scan: &UpstreamScan,
     dest_dir: &Path,
     plugin_id: &str,
+    manifest_ref: &str,
     origin: &str,
 ) -> Result<InstalledPlugin, String> {
     // v1 gate: any Dangerous effect requires the (deferred) confirmation prompt.
@@ -1302,7 +1325,7 @@ pub fn finish_plugin_install(
         schema: 1,
         plugin: PluginStamp {
             id: plugin_id.to_string(),
-            manifest_ref: scan.resolved_ref.clone(),
+            manifest_ref: manifest_ref.to_string(),
             installed_at: fetched_at.clone(),
         },
         source: PluginProvSource {
@@ -1344,10 +1367,14 @@ git commit -m "feat(plugin): effectful installer core (materialize + sidecar + e
 
 ---
 
-### Task 8: Command parsing — `:plugin install` + `:mode install superpowers` alias
+### Task 8: `zoid-tui` variant migration — parser + palette + render, one atomic commit
+
+**Why atomic:** `Command::ModeInstallSuperpowers` is referenced in THREE places inside the `zoid-tui` crate: `command.rs` (variant + parser + tests), `palette.rs:206` (a `PaletteItem.command`), and `render.rs:874` (an **exhaustive `match cmd` with no wildcard arm**). Removing the variant breaks the latter two the instant it's gone, and adding `PluginInstall(String)` makes `render.rs`'s match non-exhaustive. All three MUST change in the same task/commit so the crate transitions old-green → new-green with no broken intermediate state.
 
 **Files:**
 - Modify: `crates/zoid-tui/src/command.rs`
+- Modify: `crates/zoid-tui/src/palette.rs:206`
+- Modify: `crates/zoid-tui/src/render.rs:874`
 
 **Interfaces:**
 - Produces: `Command::PluginInstall(String)`. Removes `Command::ModeInstallSuperpowers` (retargeted to `PluginInstall("superpowers")`).
@@ -1428,16 +1455,35 @@ Replace the `"mode install superpowers" => Command::ModeInstallSuperpowers,` arm
         "plugin install" => Command::PluginInstall(String::new()),
 ```
 
-- [ ] **Step 5: Run to verify it passes**
+- [ ] **Step 5: Update the palette row's command (`palette.rs:206`)**
 
-Run: `cargo test -p zoid-tui command`
-Expected: PASS. (The compiler will also flag `ModeInstallSuperpowers` uses in `main.rs`/`palette.rs` — those are fixed in Tasks 9-10; if `zoid-tui` compiles standalone it's green here.)
+Change the `install superpowers` PaletteItem so its `command` is the new variant (label stays for now; Task 10 rewords it):
 
-- [ ] **Step 6: Commit**
+```rust
+                PaletteItem {
+                    label: "install superpowers".into(),
+                    command: Command::PluginInstall("superpowers".into()),
+                },
+```
+
+- [ ] **Step 6: Update the render preview arm (`render.rs:874`)**
+
+The `match cmd` at `render.rs:867-887` is exhaustive with no `_ =>` arm. Replace the `ModeInstallSuperpowers` arm:
+
+```rust
+                    Command::PluginInstall(arg) => format!("→ Install plugin: {arg}"),
+```
+
+- [ ] **Step 7: Run to verify the whole crate is green**
+
+Run: `cargo test -p zoid-tui`
+Expected: PASS, and the crate COMPILES (all three in-crate references to the old variant are now updated in this same commit). If you see E0004 (non-exhaustive match) or E0599, a reference was missed — grep `rg 'ModeInstallSuperpowers' crates/zoid-tui` and it must return nothing.
+
+- [ ] **Step 8: Commit**
 
 ```bash
-git add crates/zoid-tui/src/command.rs
-git commit -m "feat(plugin): :plugin install command + :mode install superpowers alias"
+git add crates/zoid-tui/src/command.rs crates/zoid-tui/src/palette.rs crates/zoid-tui/src/render.rs
+git commit -m "feat(plugin): :plugin install command + palette/render migration"
 ```
 
 ---
@@ -1577,7 +1623,14 @@ fn apply_plugin_scan(
         app.shell.status_hint = Some("no modes directory configured".into());
         return false;
     };
-    let installed = match zoid::plugin_install::finish_plugin_install(&plan, &scan, &dest, &id, &origin) {
+    // The declared pin comes from the manifest's [source].ref; fall back to the
+    // resolved fetch ref if a manifest somehow omitted it.
+    let manifest_ref = manifest
+        .source
+        .as_ref()
+        .map(|s| s.ref_.clone())
+        .unwrap_or_else(|| scan.resolved_ref.clone());
+    let installed = match zoid::plugin_install::finish_plugin_install(&plan, &scan, &dest, &id, &manifest_ref, &origin) {
         Ok(out) => out,
         Err(e) => {
             app.shell.status_hint = Some(format!("plugin install failed: {e}"));
@@ -1589,30 +1642,42 @@ fn apply_plugin_scan(
     let prev = app.modes.active_name().to_string();
     app.modes = zoid::mode_import::build_mode_registry(&app.base_profile, &app.mode_dirs);
 
-    // Apply Safe effects.
+    // Apply Safe effects. Activation may fail if the rebuilt registry doesn't
+    // surface the mode; capture the onboarding text and reconcile it with the
+    // REAL activation outcome after the loop, so we never claim "active" falsely
+    // (the bespoke path computed one honest status string; preserve that).
     let mut activated = false;
+    let mut wants_activate = false;
+    let mut onboarding: Option<String> = None;
     let mode_display = manifest.name.clone();
     for e in &installed.safe_effects {
         match e {
             zoid_plugin::effect::Effect::Activate => {
+                wants_activate = true;
                 if app.modes.names().iter().any(|n| n == &mode_display) {
                     app.modes.set_active(&mode_display);
                     activated = true;
                 }
             }
             zoid_plugin::effect::Effect::OnboardingHint { text } => {
-                app.shell.status_hint = Some(text.clone());
+                onboarding = Some(text.clone());
             }
             zoid_plugin::effect::Effect::SetConfig { .. } => { /* deferred; never reaches here in v1 */ }
         }
     }
-    if !activated {
-        app.modes.set_active(&prev); // preserve prior active if we didn't activate
+    if wants_activate && !activated {
+        app.modes.set_active(&prev); // activation requested but mode not found — keep prior active
     }
     sync_mode_mirror(app);
-    if app.shell.status_hint.is_none() {
-        app.shell.status_hint = Some(format!("plugin '{id}' installed."));
-    }
+    // Honest status: show the onboarding hint only when activation actually
+    // succeeded (or wasn't requested); otherwise report the accurate outcome.
+    app.shell.status_hint = Some(match (wants_activate, activated, onboarding) {
+        (true, true, Some(text)) => text,
+        (true, true, None) => format!("plugin '{id}' installed and active."),
+        (false, _, Some(text)) => text,
+        (false, _, None) => format!("plugin '{id}' installed."),
+        (true, false, _) => format!("plugin '{id}' installed but could not be activated."),
+    });
     activated
 }
 ```
@@ -1641,7 +1706,7 @@ Where the main loop matches `AgentUpdate::SuperpowersScan(res)` (~main.rs:2846),
 - [ ] **Step 5: Build and run the whole workspace test suite**
 
 Run: `cargo build -p zoid`
-Expected: compiles (old `ModeInstallSuperpowers` references now gone from command.rs; `install_superpowers`/`apply_superpowers_scan` may still exist and are removed in Task 10).
+Expected: compiles. `zoid-tui` is already fully green after Task 8, so the only new dispatch is `Command::PluginInstall`. The old `install_superpowers`/`apply_superpowers_scan`/`AgentUpdate::SuperpowersScan` still exist and are untouched here (they're deleted in Task 11) — they don't conflict with the new plugin path.
 Run: `cargo test -p zoid`
 Expected: PASS.
 
@@ -1654,15 +1719,17 @@ git commit -m "feat(plugin): wire generic installer into main loop (PluginScan)"
 
 ---
 
-### Task 10: Retarget palette + onboarding wording
+### Task 10: Reword palette label + onboarding copy
+
+The type-level command migration already happened in Task 8. This task is pure display-string churn (no compilation impact), which is why it's safe to split out.
 
 **Files:**
-- Modify: `crates/zoid-tui/src/palette.rs` (~line 205)
+- Modify: `crates/zoid-tui/src/palette.rs:205` (label string only)
 - Modify: `crates/zoid-tui/src/onboarding.rs` (~line 26)
 
-- [ ] **Step 1: Update the palette row test (if one exists) / update the row**
+- [ ] **Step 1: Reword the palette row label**
 
-At `palette.rs:205`, change the `install superpowers` row so its produced command is `Command::PluginInstall("superpowers".into())` and its label reads `plugin install superpowers`. If the palette builds `Command::ModeInstallSuperpowers` there, replace it with `Command::PluginInstall("superpowers".into())`.
+At `palette.rs:205`, the row's `command` is already `Command::PluginInstall("superpowers".into())` (from Task 8). Change only the `label` from `"install superpowers"` to `"plugin install superpowers"`.
 
 - [ ] **Step 2: Update the onboarding line**
 
