@@ -5,7 +5,7 @@ pub mod effect;
 pub mod manifest;
 pub mod resolve;
 pub mod plan;
-// pub mod provenance;
+pub mod provenance;
 pub mod bundled;
 
 pub use effect::{classify_config_key, Effect, RiskTier};
