@@ -9,7 +9,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -24,7 +24,8 @@ fn thinking_params(req: &CompletionRequest) -> Option<Vec<(&'static str, Value)>
             // deepseek-v4-pro is thinking-only: Off silently becomes Auto.
             let is_thinking_only = info.thinking == crate::model::ThinkingSupport::ToggleWithEffort
                 && req.model == "deepseek-v4-pro";
-            let effective = if is_thinking_only && matches!(req.thinking, crate::ThinkingMode::Off) {
+            let effective = if is_thinking_only && matches!(req.thinking, crate::ThinkingMode::Off)
+            {
                 tracing::warn!(model = %req.model, "thinking-only model: Off silently becomes Auto");
                 crate::ThinkingMode::Auto
             } else {
@@ -328,7 +329,10 @@ impl Provider for OpenAICompatProvider {
         let resp = match tokio::time::timeout(
             self.idle_timeout,
             self.client
-                .post(format!("{}{}/chat/completions", self.base_url, self.path_prefix))
+                .post(format!(
+                    "{}{}/chat/completions",
+                    self.base_url, self.path_prefix
+                ))
                 .header("authorization", format!("Bearer {}", self.api_key))
                 .header("content-type", "application/json")
                 .json(&request_body(req))
@@ -737,7 +741,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn deepseek_body_emits_thinking_and_effort_when_auto() {
         let req = CompletionRequest {
@@ -825,7 +828,10 @@ mod tests {
         };
         let body = request_body(&req);
         assert_eq!(body["reasoning_effort"], json!("medium"));
-        assert!(body.get("thinking").is_none(), "OpenAI shape must NOT emit a thinking key");
+        assert!(
+            body.get("thinking").is_none(),
+            "OpenAI shape must NOT emit a thinking key"
+        );
     }
 
     #[test]
@@ -845,7 +851,7 @@ mod tests {
     #[test]
     fn non_thinking_model_emits_nothing_when_off() {
         let req = CompletionRequest {
-            model: "glm-5.2".into(),
+            model: "mimo-v2.5".into(),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 4096,
@@ -860,7 +866,7 @@ mod tests {
     #[test]
     fn non_thinking_model_emits_nothing_even_when_thinking_on() {
         let req = CompletionRequest {
-            model: "glm-5.2".into(),
+            model: "mimo-v2.5".into(),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 4096,
@@ -874,12 +880,19 @@ mod tests {
 
     #[test]
     fn parse_chunk_reasoning_content_emits_thinking_delta() {
-        let data = r#"{"choices":[{"delta":{"content":"answer","reasoning_content":"thinking..."}}]}"#;
+        let data =
+            r#"{"choices":[{"delta":{"content":"answer","reasoning_content":"thinking..."}}]}"#;
         let events = parse_chunk(data, &mut ToolCallAccumulator::new());
-        assert!(events.contains(&ProviderEvent::ThinkingDelta("thinking...".into())),
-            "reasoning_content must emit ThinkingDelta, got: {:?}", events);
-        assert!(events.contains(&ProviderEvent::TextDelta("answer".into())),
-            "content must still emit TextDelta, got: {:?}", events);
+        assert!(
+            events.contains(&ProviderEvent::ThinkingDelta("thinking...".into())),
+            "reasoning_content must emit ThinkingDelta, got: {:?}",
+            events
+        );
+        assert!(
+            events.contains(&ProviderEvent::TextDelta("answer".into())),
+            "content must still emit TextDelta, got: {:?}",
+            events
+        );
     }
 
     #[test]

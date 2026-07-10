@@ -2,17 +2,17 @@ use anyhow::{Context, Result};
 use crossterm::{
     event::{
         DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event as CEvent, EventStream, KeyboardEnhancementFlags,
-        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        Event as CEvent, EventStream, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{
-        disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, EnterAlternateScreen,
-        LeaveAlternateScreen,
+        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+        supports_keyboard_enhancement,
     },
 };
 use futures_util::StreamExt;
-use ratatui::{layout::Rect, prelude::CrosstermBackend, text::Line, Terminal};
+use ratatui::{Terminal, layout::Rect, prelude::CrosstermBackend, text::Line};
 use ratatui_textarea::{CursorMove, TextArea};
 use std::io::stdout;
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ use ulid::Ulid;
 
 mod obs;
 
-use zoid::agent::{run_agent_turn_cancellable, AgentUpdate};
+use zoid::agent::{AgentUpdate, run_agent_turn_cancellable};
 use zoid_core::event::{Event, EventKind};
 use zoid_core::projection::conversation;
 use zoid_core::session::SessionHandle;
@@ -32,7 +32,7 @@ use zoid_provider::{default_model, default_provider};
 use zoid_tui::chat::ChatView;
 use zoid_tui::layout::compute;
 use zoid_tui::render_shell;
-use zoid_tui::route::{palette_selected_command, route_key, route_mouse, route_paste, PasteTarget};
+use zoid_tui::route::{PasteTarget, palette_selected_command, route_key, route_mouse, route_paste};
 
 /// Duration of the zoom fold/unfold line-reveal animation (Ⓡ2, T5).
 const ZOOM_ANIM_MS: u64 = 160;
@@ -138,7 +138,7 @@ fn load_config() -> (
     zoid_core::config::Provenance,
     Vec<String>,
 ) {
-    use zoid_core::config::{merge, parse_toml, PartialConfig, Source};
+    use zoid_core::config::{PartialConfig, Source, merge, parse_toml};
     let env = |k: &str| std::env::var(k).ok();
     let cfg_dir = resolve_config_dir(env);
     let mut warnings: Vec<String> = Vec::new();
@@ -596,7 +596,11 @@ fn pick_choice(n_sessions: usize, selected: usize, key: PickKey) -> PickOutcome 
 /// create a new one) before `run()` begins.
 enum PickResult {
     /// Resume this session (id, name, created_ts).
-    Resume { id: Ulid, name: String, created_ts: i64 },
+    Resume {
+        id: Ulid,
+        name: String,
+        created_ts: i64,
+    },
     /// Create a fresh session.
     CreateNew,
 }
@@ -647,7 +651,10 @@ async fn pick_session(
             let area = f.area();
             let title = format!(" Resume a session for {} ", repo_name);
             let mut lines: Vec<Line> = Vec::new();
-            lines.push(Line::from(Span::styled(title, Style::new().fg(Color::Cyan))));
+            lines.push(Line::from(Span::styled(
+                title,
+                Style::new().fg(Color::Cyan),
+            )));
             lines.push(Line::from(""));
 
             for (i, s) in sessions.iter().enumerate() {
@@ -933,9 +940,7 @@ fn select_provider(
         },
         "zai" => match key_for("ZAI_API_KEY") {
             Some(k) => (
-                Arc::new(
-                    zoid_provider::zai::ZaiProvider::new(k).with_base_url(base_url),
-                ),
+                Arc::new(zoid_provider::zai::ZaiProvider::new(k).with_base_url(base_url)),
                 "zai",
                 true,
             ),
@@ -1379,10 +1384,7 @@ impl BodyCache {
         // from `matches_structure`). The question card is always the last
         // message, so re-rendering just that message keeps typing O(1) instead
         // of re-parsing/wrapping the whole transcript on every keystroke.
-        let structural_match = self
-            .key
-            .as_ref()
-            .is_some_and(|k| k.matches_structure(&key));
+        let structural_match = self.key.as_ref().is_some_and(|k| k.matches_structure(&key));
         if structural_match && self.msg_count == msgs.len() && self.msg_count > 0 {
             let last_idx = msgs.len() - 1;
             let start = self.msg_starts[last_idx];
@@ -1620,7 +1622,12 @@ async fn main() -> Result<()> {
             );
             std::process::exit(2);
         }
-        zoid::cli::Cli::Run { companion, new, resume, yolo } => {
+        zoid::cli::Cli::Run {
+            companion,
+            new,
+            resume,
+            yolo,
+        } => {
             // Build expiration: refuse to launch a >30-day-old build (or one on
             // a clock that predates the build). Runs before any DB/terminal
             // setup so the message prints cleanly. --version/--help/update are
@@ -1748,7 +1755,11 @@ async fn main() -> Result<()> {
             let pick = pick_session(&mut picker_term, &session, &root, &repo_name, boot_ts).await;
             let _ = execute!(picker_term.backend_mut(), LeaveAlternateScreen);
             match pick {
-                Ok(PickResult::Resume { id, name, created_ts }) => {
+                Ok(PickResult::Resume {
+                    id,
+                    name,
+                    created_ts,
+                }) => {
                     session.touch_session(id, boot_ts).await.ok();
                     (id, name, created_ts)
                 }
@@ -1911,8 +1922,12 @@ async fn main() -> Result<()> {
                 // `Handle::current()` panics if called from inside that thread.
                 let rt = tokio::runtime::Handle::current();
                 {
-                    let (sess, idx2, emb2, model) =
-                        (session.clone(), idx.clone(), e.clone(), e.model_id().to_string());
+                    let (sess, idx2, emb2, model) = (
+                        session.clone(),
+                        idx.clone(),
+                        e.clone(),
+                        e.model_id().to_string(),
+                    );
                     // NOTE: embed events from ALL sessions, not just the boot
                     // session. The in-memory index is session-agnostic and recall
                     // filters by session downstream, so pinning the lane to one
@@ -1921,13 +1936,14 @@ async fn main() -> Result<()> {
                     std::thread::spawn(move || {
                         let lane = zoid_core::embed_lane::EmbedLane::new(emb2, idx2);
                         loop {
-                            let todo = match rt.block_on(sess.unembedded_events_all(model.clone(), 64)) {
-                                Ok(t) if !t.is_empty() => t,
-                                _ => {
-                                    std::thread::sleep(std::time::Duration::from_secs(2));
-                                    continue;
-                                }
-                            };
+                            let todo =
+                                match rt.block_on(sess.unembedded_events_all(model.clone(), 64)) {
+                                    Ok(t) if !t.is_empty() => t,
+                                    _ => {
+                                        std::thread::sleep(std::time::Duration::from_secs(2));
+                                        continue;
+                                    }
+                                };
                             let rows = lane.tick(&todo);
                             if rows.is_empty() {
                                 // Every embed in a non-empty batch failed (tick degrade path).
@@ -2114,9 +2130,11 @@ where
     // the render loop (it previously ran synchronously on the loop every second,
     // hitching typing/scrolling). The loop reads the latest value non-blocking.
     let (git_tx, mut git_rx) = tokio::sync::watch::channel((
-        0usize, 0usize, 0usize, // added, removed, files
-        String::new(),           // branch
-        "(none)".to_string(),   // worktree
+        0usize,
+        0usize,
+        0usize,               // added, removed, files
+        String::new(),        // branch
+        "(none)".to_string(), // worktree
     ));
     // Only poll git when the Repo drawer is actually present; outside a repo the
     // stats are neither shown nor meaningful, so we skip the per-second `git`
@@ -2127,8 +2145,9 @@ where
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
             loop {
                 tick.tick().await;
-                let (added, removed, files) =
-                    tokio::task::spawn_blocking(git_status).await.unwrap_or((0, 0, 0));
+                let (added, removed, files) = tokio::task::spawn_blocking(git_status)
+                    .await
+                    .unwrap_or((0, 0, 0));
                 let branch = tokio::task::spawn_blocking(current_branch)
                     .await
                     .unwrap_or("main".into());
@@ -2276,8 +2295,8 @@ where
             // lines directly. When the first message arrives, proj.msgs becomes
             // non-empty and the else branch takes over (key is None → full
             // rebuild). Excluded from the body-render cache-hit ratio (None).
-            let offer_superpowers = app.shell.first_time_user
-                && !app.modes.names().iter().any(|n| n == "Superpowers");
+            let offer_superpowers =
+                app.shell.first_time_user && !app.modes.names().iter().any(|n| n == "Superpowers");
             app.body_cache.body = zoid_tui::onboarding::empty_state_lines(
                 app.shell.first_time_user,
                 offer_superpowers,
@@ -3038,7 +3057,10 @@ fn current_write(
         ),
         "recent turns" => ("economy.recent_n", TomlValue::Int(econ.recent_n as i64)),
         "reduced motion" => ("reduced_motion", TomlValue::Bool(app.config.reduced_motion)),
-        "thinking" => ("thinking.enabled", TomlValue::Bool(app.config.thinking.enabled)),
+        "thinking" => (
+            "thinking.enabled",
+            TomlValue::Bool(app.config.thinking.enabled),
+        ),
         "effort" => (
             "thinking.effort",
             app.config
@@ -3250,8 +3272,8 @@ fn apply_config_write(
 }
 
 async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result<bool> {
-    use zoid_tui::route::Action;
     use zoid_tui::Overlay;
+    use zoid_tui::route::Action;
     match action {
         Action::Quit => return Ok(true),
         Action::CycleMode => {
@@ -3597,8 +3619,8 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 app.body_cache = BodyCache::default();
                 app.shell.conversation_scroll = 0;
                 app.shell.follow_tail = true; // jump to the latest of the loaded session
-                                              // The resumed session runs with ITS OWN mode, never the
-                                              // previous session's overlay prompt + scoped skills.
+                // The resumed session runs with ITS OWN mode, never the
+                // previous session's overlay prompt + scoped skills.
                 restore_mode_for_session(app).await;
                 if let Some(info) = app
                     .session
@@ -3744,8 +3766,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                         // live provider client so the new credential takes effect on
                         // the next turn without a restart (mirrors the key-prompt
                         // commit path above).
-                        let (provider, name, has_key) =
-                            select_provider(&app.config, &app.secrets);
+                        let (provider, name, has_key) = select_provider(&app.config, &app.secrets);
                         app.provider = provider;
                         app.shell.provider = provider_label(name, has_key);
                     }
@@ -4173,7 +4194,11 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::FeedbackMoveFocus(dir) => {
             if let Some(fs) = app.shell.feedback.as_mut() {
                 use zoid_tui::state::FeedbackField;
-                let order = [FeedbackField::Kind, FeedbackField::Title, FeedbackField::Body];
+                let order = [
+                    FeedbackField::Kind,
+                    FeedbackField::Title,
+                    FeedbackField::Body,
+                ];
                 let idx = order.iter().position(|f| *f == fs.focus).unwrap_or(0);
                 let n = order.len() as i32;
                 let next = ((idx as i32 + dir).rem_euclid(n)) as usize;
@@ -4183,8 +4208,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::FeedbackCycleKind(dir) => {
             if let Some(fs) = app.shell.feedback.as_mut() {
                 let n = zoid_core::feedback::FeedbackKind::all().len() as i32;
-                fs.kind_selected =
-                    ((fs.kind_selected as i32 + dir).rem_euclid(n)) as usize;
+                fs.kind_selected = ((fs.kind_selected as i32 + dir).rem_euclid(n)) as usize;
                 fs.kind = zoid_core::feedback::FeedbackKind::all()[fs.kind_selected];
             }
         }
@@ -4290,9 +4314,8 @@ fn answer_question(app: &mut App, ans: zoid::agent::Answer) {
                             // Defense-in-depth: the wizard should still be open
                             // (we no longer clear it on Reject). If it's somehow
                             // None, surface a clear error instead of panicking.
-                            app.shell.status_hint = Some(
-                                "wizard state lost — re-run :mode import to retry.".into(),
-                            );
+                            app.shell.status_hint =
+                                Some("wizard state lost — re-run :mode import to retry.".into());
                             if let Some(tx) = app.pending_answer.take() {
                                 let _ = tx.send(zoid::agent::Answer::Choice("Reject".into()));
                             }
@@ -4505,7 +4528,7 @@ fn disable_companion(app: &mut App) {
 /// Kick off a plugin install: resolve the manifest source, fetch the pinned
 /// tree off-thread, and hand the scan back via AgentUpdate::PluginScan.
 fn install_plugin(app: &mut App, arg: String) {
-    use zoid_plugin::resolve::{classify_ref, resolve_source, ManifestSource, PluginRef};
+    use zoid_plugin::resolve::{ManifestSource, PluginRef, classify_ref, resolve_source};
     if arg.trim().is_empty() {
         app.shell.status_hint = Some("usage: :plugin install <id|github-url>".into());
         return;
@@ -4520,9 +4543,10 @@ fn install_plugin(app: &mut App, arg: String) {
     // v1 supports the Bundled source (by id). Repo/.zoid and wizard fallback are
     // deferred; report them clearly rather than silently doing nothing.
     let (manifest, id) = match (&r, source) {
-        (PluginRef::Id(id), ManifestSource::Bundled) => {
-            (zoid_plugin::bundled::bundled_manifest(id).expect("bundled id resolves"), id.clone())
-        }
+        (PluginRef::Id(id), ManifestSource::Bundled) => (
+            zoid_plugin::bundled::bundled_manifest(id).expect("bundled id resolves"),
+            id.clone(),
+        ),
         (PluginRef::Id(id), _) => {
             app.shell.status_hint = Some(format!("unknown plugin '{id}' (no bundled manifest)"));
             return;
@@ -4610,7 +4634,14 @@ fn apply_plugin_scan(
         .as_ref()
         .map(|s| s.ref_.clone())
         .unwrap_or_else(|| scan.resolved_ref.clone());
-    let installed = match zoid::plugin_install::finish_plugin_install(&plan, &scan, &dest, &id, &manifest_ref, &origin) {
+    let installed = match zoid::plugin_install::finish_plugin_install(
+        &plan,
+        &scan,
+        &dest,
+        &id,
+        &manifest_ref,
+        &origin,
+    ) {
         Ok(out) => out,
         Err(e) => {
             app.shell.status_hint = Some(format!("plugin install failed: {e}"));
@@ -4832,8 +4863,8 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             app.body_cache = BodyCache::default();
             app.shell.conversation_scroll = 0;
             app.shell.follow_tail = true; // new session starts pinned to the latest
-                                          // A fresh session has no saved mode yet ⇒ this resets to Chat rather
-                                          // than carrying over the previous session's active mode.
+            // A fresh session has no saved mode yet ⇒ this resets to Chat rather
+            // than carrying over the previous session's active mode.
             restore_mode_for_session(app).await;
             // Claim the new session and clear any yielded state from the prior
             // (taken-over) session — `:new` is the documented yield escape hatch.
@@ -5347,7 +5378,10 @@ mod thinking_tests {
             effort: Some("max".into()),
         };
         let mode = resolve_thinking(&cfg, zoid_provider::model::ThinkingSupport::Adaptive);
-        assert_eq!(mode, zoid_provider::ThinkingMode::Effort(zoid_provider::EffortLevel::Max));
+        assert_eq!(
+            mode,
+            zoid_provider::ThinkingMode::Effort(zoid_provider::EffortLevel::Max)
+        );
     }
 
     #[test]
@@ -5357,7 +5391,10 @@ mod thinking_tests {
             effort: Some("high".into()),
         };
         let mode = resolve_thinking(&cfg, zoid_provider::model::ThinkingSupport::Budget);
-        assert_eq!(mode, zoid_provider::ThinkingMode::Effort(zoid_provider::EffortLevel::High));
+        assert_eq!(
+            mode,
+            zoid_provider::ThinkingMode::Effort(zoid_provider::EffortLevel::High)
+        );
         let mode = resolve_thinking(&cfg, zoid_provider::model::ThinkingSupport::None);
         assert_eq!(mode, zoid_provider::ThinkingMode::Off);
     }
@@ -5367,34 +5404,48 @@ mod thinking_tests {
         use zoid_core::config::PartialThinking;
         assert_eq!(
             parse_thinking_env("off"),
-            Some(PartialThinking { enabled: Some(false), effort: None })
+            Some(PartialThinking {
+                enabled: Some(false),
+                effort: None
+            })
         );
         assert_eq!(
             parse_thinking_env("auto"),
-            Some(PartialThinking { enabled: Some(true), effort: None })
+            Some(PartialThinking {
+                enabled: Some(true),
+                effort: None
+            })
         );
         assert_eq!(
             parse_thinking_env("high"),
-            Some(PartialThinking { enabled: Some(true), effort: Some("high".into()) })
+            Some(PartialThinking {
+                enabled: Some(true),
+                effort: Some("high".into())
+            })
         );
         assert_eq!(
             parse_thinking_env("max"),
-            Some(PartialThinking { enabled: Some(true), effort: Some("max".into()) })
+            Some(PartialThinking {
+                enabled: Some(true),
+                effort: Some("max".into())
+            })
         );
         assert!(parse_thinking_env("").is_none());
         assert!(parse_thinking_env("garbage").is_none());
         assert_eq!(
             parse_thinking_env("HIGH"),
-            Some(PartialThinking { enabled: Some(true), effort: Some("high".into()) })
+            Some(PartialThinking {
+                enabled: Some(true),
+                effort: Some("high".into())
+            })
         );
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{backend::TestBackend, style::Modifier, Terminal};
+    use ratatui::{Terminal, backend::TestBackend, style::Modifier};
     use ratatui_textarea::TextArea;
 
     #[test]
@@ -5678,7 +5729,7 @@ mod tests {
         assert!(!p.auto_evict_cold);
         assert_eq!(p.token_ceiling, None); // EconomyConfig.token_ceiling retired
         assert_eq!(p.compact_threshold, Some(160_000)); // 80% of 200k
-                                                        // 0% disables compaction
+        // 0% disables compaction
         let econ0 = zoid_core::config::EconomyConfig {
             compact_threshold_pct: 0,
             ..econ
@@ -5819,7 +5870,7 @@ mod tests {
 
     #[test]
     fn write_config_file_round_trips_through_temp_dir() {
-        use zoid_core::config::{parse_toml, TomlValue};
+        use zoid_core::config::{TomlValue, parse_toml};
         let dir = tempfile::tempdir().unwrap();
         // Parent dir does not exist yet — write_config_file must create it.
         let path = dir.path().join("nested").join("config.toml");
@@ -5927,14 +5978,14 @@ mod tests {
     fn parses_numstat_sums_and_counts_files() {
         let out = "12\t3\tsrc/a.rs\n0\t5\tsrc/b.rs\n7\t0\tCargo.toml\n";
         assert_eq!(parse_numstat(out), (19, 8, 3)); // added=12+0+7, removed=3+5+0, files=3
-                                                    // Binary files show `-\t-\tpath`; count the file, add zero lines.
+        // Binary files show `-\t-\tpath`; count the file, add zero lines.
         assert_eq!(parse_numstat("-\t-\tlogo.png\n"), (0, 0, 1));
         assert_eq!(parse_numstat(""), (0, 0, 0));
     }
 
     #[test]
     fn imports_legacy_events_under_one_session_once() {
-        use rusqlite::{params, Connection};
+        use rusqlite::{Connection, params};
         use ulid::Ulid;
         use zoid_core::event::EventKind;
         use zoid_core::store::EventStore;
@@ -6167,7 +6218,11 @@ mod tests {
             app.modes.names().iter().any(|n| n == "Superpowers"),
             "rebuilt registry must surface the installed mode under its declared name"
         );
-        assert_eq!(app.modes.active_name(), "Superpowers", "mode must be activated");
+        assert_eq!(
+            app.modes.active_name(),
+            "Superpowers",
+            "mode must be activated"
+        );
         assert_eq!(
             app.shell.status_hint.as_deref(),
             Some("Superpowers mode installed and active."),
@@ -6185,7 +6240,10 @@ mod tests {
             Err("fetch failed: boom".into()),
         );
         assert!(!installed2);
-        assert!(!app.installing_plugin, "error path must also clear the guard");
+        assert!(
+            !app.installing_plugin,
+            "error path must also clear the guard"
+        );
         assert_eq!(app.shell.status_hint.as_deref(), Some("fetch failed: boom"));
     }
 
@@ -6385,7 +6443,10 @@ mod tests {
     #[tokio::test]
     async fn submit_while_delegating_queues_message() {
         let mut app = test_app().await;
-        app.in_flight_subagents.push(SubagentInfo { id: "sub-test".into(), task: "test".into() });
+        app.in_flight_subagents.push(SubagentInfo {
+            id: "sub-test".into(),
+            task: "test".into(),
+        });
         app.textarea = make_input(TextArea::from(vec!["hello".to_string()]));
 
         let quit = handle_action(&mut app, zoid_tui::route::Action::Submit)
@@ -6396,7 +6457,11 @@ mod tests {
         assert!(!app.in_flight_subagents.is_empty(), "in_flight untouched");
         assert!(!app.streaming, "no turn spawned");
         assert!(app.events.is_empty(), "no UserMessage recorded yet");
-        assert_eq!(app.pending_message.as_deref(), Some("hello"), "message queued");
+        assert_eq!(
+            app.pending_message.as_deref(),
+            Some("hello"),
+            "message queued"
+        );
         assert!(app.textarea.lines()[0].is_empty(), "textarea cleared");
         assert!(app.shell.status_hint.as_deref().unwrap().contains("queued"));
     }
@@ -6421,7 +6486,10 @@ mod tests {
         app.session_ids = vec![other_id];
         app.shell.session_selected = 0;
 
-        app.in_flight_subagents.push(SubagentInfo { id: "sub-test".into(), task: "test".into() });
+        app.in_flight_subagents.push(SubagentInfo {
+            id: "sub-test".into(),
+            task: "test".into(),
+        });
         let quit = handle_action(&mut app, zoid_tui::route::Action::SessionPick)
             .await
             .unwrap();
@@ -6452,7 +6520,10 @@ mod tests {
     async fn new_session_is_noop_while_delegating() {
         let mut app = test_app().await;
         let original_session_id = app.session_id;
-        app.in_flight_subagents.push(SubagentInfo { id: "sub-test".into(), task: "test".into() });
+        app.in_flight_subagents.push(SubagentInfo {
+            id: "sub-test".into(),
+            task: "test".into(),
+        });
 
         let quit = exec_command(&mut app, zoid_tui::command::Command::NewSession)
             .await
@@ -6523,7 +6594,7 @@ mod tests {
         // result exceeds the threshold and compaction fires.
         app.economy.compact_threshold_pct = 50;
         app.context_target = 100; // 50% of 100 = 50 tokens threshold
-                                  // Seed an event log with an uncompacted tool result.
+        // Seed an event log with an uncompacted tool result.
         let tc_id = Ulid::new();
         app.record(EventKind::UserMessage {
             text: "do something".into(),

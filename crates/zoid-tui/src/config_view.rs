@@ -149,7 +149,11 @@ pub fn build_sections(
             },
             FieldRow {
                 label: "effort",
-                value: cfg.thinking.effort.clone().unwrap_or_else(|| "(auto)".into()),
+                value: cfg
+                    .thinking
+                    .effort
+                    .clone()
+                    .unwrap_or_else(|| "(auto)".into()),
                 kind: FieldKind::Pick,
                 source: prov.thinking_effort,
                 env_shadowed: prov.thinking_effort == Source::Env,
@@ -256,7 +260,8 @@ mod tests {
             recent_n: Source::Default,
             reduced_motion: Source::Default,
             thinking_enabled: Source::Default,
-            thinking_effort: Source::Default, approval: Source::Default,
+            thinking_effort: Source::Default,
+            approval: Source::Default,
         };
         let ks = [
             ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
@@ -290,21 +295,26 @@ mod tests {
         // The falsified anthropic-cli/anthropic-sdk rows were removed
         // (spikes/cc-infer/RESULTS.md); all surviving providers are
         // selectable (no [planned] rows remain), so this test no longer
-        // exercises the planned-row marking path. Verify the 4-entry shape
-        // (ollama-local, ollama-cloud, opencode-go, anthropic-api) and that
-        // anthropic-api is present + selectable.
-        assert_eq!(opts.len(), 4);
+        // exercises the planned-row marking path. Verify the 5-entry shape
+        // (ollama-local, ollama-cloud, opencode-go, anthropic-api,
+        // zai-coding-plan) and that anthropic-api + zai-coding-plan are
+        // present + selectable.
+        assert_eq!(opts.len(), 5);
         let api = opts.iter().find(|o| o.id == "anthropic-api").unwrap();
         assert!(api.selectable);
         assert!(api.detail.contains("https://api.anthropic.com"));
+        let zai = opts.iter().find(|o| o.id == "zai-coding-plan").unwrap();
+        assert!(zai.selectable);
+        assert!(zai.detail.contains("https://api.z.ai"));
     }
 
     #[test]
     fn model_options_list_registry_models() {
         let opts = model_options("anthropic-api", "claude-opus-4-8");
-        assert!(opts
-            .iter()
-            .any(|o| o.id == "claude-sonnet-4-6" && o.selectable));
+        assert!(
+            opts.iter()
+                .any(|o| o.id == "claude-sonnet-4-6" && o.selectable)
+        );
         let cur = opts.iter().find(|o| o.id == "claude-opus-4-8").unwrap();
         assert!(cur.is_current);
     }
@@ -323,7 +333,8 @@ mod tests {
             recent_n: Source::Default,
             reduced_motion: Source::Default,
             thinking_enabled: Source::Default,
-            thinking_effort: Source::Default, approval: Source::Default,
+            thinking_effort: Source::Default,
+            approval: Source::Default,
         };
         let sections = build_sections(&cfg, &prov, &[]);
         let pm = &sections[0];

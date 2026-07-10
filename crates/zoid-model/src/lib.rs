@@ -54,7 +54,6 @@ pub enum ThinkingWireShape {
     Ollama,
 }
 
-
 /// How a provider entry is reached. Http/Cli carry their default connection
 /// value; Sdk has none (ambient auth). This is the growth seam for new
 /// transports (spec 2026-07-03-settings-redesign).
@@ -588,7 +587,6 @@ mod thinking_tests {
         assert_eq!(info.thinking_wire, ThinkingWireShape::None);
     }
 }
-
 
 #[cfg(test)]
 mod opencode_go_tests {
