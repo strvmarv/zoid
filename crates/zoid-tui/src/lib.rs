@@ -6,6 +6,7 @@ pub mod command;
 pub mod config_view;
 pub mod economy_view;
 pub mod feedback_view;
+pub mod help;
 pub mod layout;
 pub mod markdown;
 pub mod motion;
