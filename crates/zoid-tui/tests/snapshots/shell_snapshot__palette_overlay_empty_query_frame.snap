@@ -1,5 +1,6 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
+assertion_line: 425
 expression: "draw(&s, &seeded(), 100, 24)"
 ---
 "v0.3.1                                          zoid          Esc interrupt · : command · ^P palette"
@@ -17,9 +18,9 @@ expression: "draw(&s, &seeded(), 100, 24)"
 "│ Toggle context drawer                               │ ╭ ▾ context · tokens ─────────────────────╮ "
 "│ Open settings                                       │ │churn                              cache │ "
 "│ MCP servers…                                        │ ╰─────────────────────────────────────────╯ "
-"│ Submit feedback…                                    │                                             "
-"│ Enable companion                                    │ ╭ ▾ tasks ────────────────────────────────╮ "
-"│ Quit zoid                                           │ │no tasks                                 │ "
+"│ Keyboard shortcuts…                                 │                                             "
+"│ Submit feedback…                                    │ ╭ ▾ tasks ────────────────────────────────╮ "
+"│ Enable companion                                    │ │no tasks                                 │ "
 "└─────────────────────────────────────────────────────┘ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"

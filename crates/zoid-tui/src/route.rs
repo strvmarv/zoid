@@ -60,6 +60,8 @@ pub enum Action {
     /// ⇧End in the conversation pane: jump the scroll to the bottom (re-engages follow).
     ScrollToBottom,
     OpenObjects,
+    /// Open the keyboard-shortcuts help overlay (`?` from conversation focus).
+    OpenHelp,
     ObjectMove(i32),
     ObjectPick,
     VerbMove(i32),
@@ -296,6 +298,7 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
             KeyCode::Home if key.modifiers.contains(KeyModifiers::SHIFT) => Action::ScrollToTop,
             KeyCode::End if key.modifiers.contains(KeyModifiers::SHIFT) => Action::ScrollToBottom,
             KeyCode::Esc => Action::FocusRegion(Focus::Input),
+            KeyCode::Char('?') => Action::OpenHelp,
             _ => Action::Noop,
         },
         Focus::Rail => match key.code {
@@ -663,6 +666,16 @@ mod tests {
         let mut s = ShellState::new();
         s.focus = Focus::Conversation;
         assert_eq!(route_paste(&s), PasteTarget::None);
+    }
+
+    #[test]
+    fn question_mark_opens_help_only_from_conversation() {
+        let q = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
+        let mut s = ShellState::new();
+        s.focus = Focus::Conversation;
+        assert_eq!(route_key(&s, q), Action::OpenHelp);
+        s.focus = Focus::Input;
+        assert!(matches!(route_key(&s, q), Action::Edit(_)));
     }
 
     #[test]

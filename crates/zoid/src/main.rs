@@ -3476,6 +3476,10 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             app.shell.overlay = zoid_tui::Overlay::Objects;
             app.shell.objects = Default::default();
         }
+        Action::OpenHelp => {
+            app.shell.overlay = zoid_tui::Overlay::Help;
+            app.shell.help_scroll = 0;
+        }
         Action::ScrollHelp(d) => {
             let cur = app.shell.help_scroll as i64;
             app.shell.help_scroll = (cur + d as i64).max(0) as usize;
@@ -4803,6 +4807,11 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             // the per-frame sync in the render loop, so there is nothing to
             // populate here beyond switching the overlay.
             app.shell.overlay = zoid_tui::Overlay::Mcp;
+            Ok(false)
+        }
+        Command::OpenHelp => {
+            app.shell.overlay = zoid_tui::Overlay::Help;
+            app.shell.help_scroll = 0;
             Ok(false)
         }
         Command::CompanionEnable => {
