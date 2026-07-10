@@ -206,6 +206,10 @@ pub fn render_shell(
                 render_feedback_modal(frame, p, fs);
             }
         }
+    } else if state.overlay == Overlay::Help {
+        if let Some(p) = layout.palette {
+            render_help_overlay(frame, state, p);
+        }
     }
     conv_max_scroll
 }
@@ -1071,6 +1075,30 @@ fn render_mcp_overlay(frame: &mut Frame, state: &ShellState, area: Rect) {
     list_overlay(frame, area, " mcp servers ".to_string(), &rows, rows.len());
 }
 
+/// The read-only keyboard-shortcuts overlay (`Overlay::Help`). Scrolls via
+/// `state.help_scroll`; Esc/`q` close it (see `route::route_help_key`). The bin
+/// clamps `help_scroll` per-frame against this rect's height; the extra clamp
+/// here keeps a stale/oversized value from scrolling into emptiness.
+fn render_help_overlay(frame: &mut Frame, state: &ShellState, area: Rect) {
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(color::CHAT_ACCENT))
+        .title(Span::styled(
+            " keyboard shortcuts — esc to close ",
+            Style::new().fg(color::TXT),
+        ));
+    let inner = area.inner(ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    frame.render_widget(block, area);
+    let lines = crate::help::help_lines();
+    let vh = inner.height as usize;
+    let off = state.help_scroll.min(lines.len().saturating_sub(vh));
+    frame.render_widget(Paragraph::new(lines).scroll((off as u16, 0)), inner);
+}
+
 /// The config overlay (Task 8): a full-frame "zoid · settings" three-column
 /// layout — col 1 the sections rail (active marked), col 2 the active
 /// section's fields (label, current value or the in-progress edit buffer +
@@ -1838,6 +1866,27 @@ mod tests {
             !content.contains("srv19"),
             "tail server must be scrolled off, not shown from the bottom"
         );
+    }
+
+    #[test]
+    fn help_overlay_lists_shortcuts() {
+        use crate::state::{Overlay, ShellState};
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Help;
+        let backend = TestBackend::new(84, 26);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| render_help_overlay(f, &s, f.area()))
+            .unwrap();
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
+        assert!(content.contains("Ctrl+P"), "got: {content}");
+        assert!(content.contains("keyboard shortcuts"));
     }
 
     /// Flatten a `Line`'s spans back into the visible string.

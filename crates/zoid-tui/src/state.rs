@@ -54,6 +54,7 @@ pub enum Overlay {
     ProviderSwitch,
     Mcp,
     Feedback,
+    Help,
 }
 
 /// Read-only snapshot row for one MCP server, refreshed by the bin each tick
@@ -356,6 +357,11 @@ pub struct ShellState {
     pub switch_models: Vec<crate::config_view::PickOption>,
     /// Read-only snapshot of MCP servers, refreshed by the bin each tick.
     pub mcp_status: Vec<McpStatusRow>,
+    /// Scroll offset (rows) into the read-only keyboard-shortcuts overlay
+    /// (`Overlay::Help`). Incremented/decremented by `Action::ScrollHelp`; the
+    /// bin clamps the upper bound per-frame against the real rect height
+    /// (mirrors `conv_max_scroll`). Reset to 0 in `close_overlay`.
+    pub help_scroll: usize,
 }
 
 impl ShellState {
@@ -419,6 +425,7 @@ impl ShellState {
             sessions: Vec::new(),
             sessions_live: Vec::new(),
             session_selected: 0,
+            help_scroll: 0,
             session_name: String::new(),
             model: String::new(),
             provider: String::new(),
@@ -504,6 +511,7 @@ impl ShellState {
         self.sessions.clear();
         self.sessions_live.clear();
         self.session_selected = 0;
+        self.help_scroll = 0;
     }
 
     /// Increase detail (Overview → Summary → Normal → Detail), saturating. A

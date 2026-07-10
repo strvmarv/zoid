@@ -2378,6 +2378,23 @@ where
         // Mirror tool_started_at onto the shell for the renderer's animation.
         app.shell.tool_started_at = app.tool_started_at;
 
+        // Clamp the help overlay scroll to the real rect height (same idea as
+        // conv_max_scroll): the ScrollHelp handler only increments; this pins
+        // the ceiling for the current terminal size.
+        if app.shell.overlay == zoid_tui::Overlay::Help {
+            let area = terminal
+                .size()
+                .map(|s| Rect { x: 0, y: 0, width: s.width, height: s.height })
+                .unwrap_or_default();
+            let layout = compute(area, &app.shell);
+            let vh = layout
+                .palette
+                .map(|r| r.height.saturating_sub(2) as usize) // borders/margin
+                .unwrap_or(0);
+            let max = zoid_tui::help::help_lines().len().saturating_sub(vh);
+            app.shell.help_scroll = app.shell.help_scroll.min(max);
+        }
+
         let frame_start = std::time::Instant::now();
         terminal.draw(|f| {
             // The drawer is read-only/observability-only, so it needs only
@@ -3458,6 +3475,12 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::OpenObjects => {
             app.shell.overlay = zoid_tui::Overlay::Objects;
             app.shell.objects = Default::default();
+        }
+        Action::ScrollHelp(d) => {
+            let cur = app.shell.help_scroll as i64;
+            app.shell.help_scroll = (cur + d as i64).max(0) as usize;
+            // Upper bound is clamped per-frame against the real rect height
+            // (see the render-loop clamp), mirroring conv_max_scroll.
         }
         Action::ObjectMove(d) => {
             let n = zoid_tui::objects::selectable_objects(&conversation(app.events.iter())).len();

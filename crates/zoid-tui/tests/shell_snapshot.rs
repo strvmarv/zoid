@@ -751,6 +751,19 @@ fn verb_overlay_wide_frame() {
     insta::assert_snapshot!(draw_overlay(Overlay::Verbs, 140, 24));
 }
 
+/// Drives the real `render_shell` overlay dispatch (not `render_help_overlay`
+/// directly) so a missing `Overlay::Help` if/else branch — which renders
+/// invisibly rather than failing to compile — is caught.
+#[test]
+fn help_overlay_frame_dispatches_from_render_shell() {
+    let frame = draw_overlay(Overlay::Help, 100, 24);
+    assert!(
+        frame.contains("keyboard shortcuts"),
+        "help overlay must render via render_shell's overlay dispatch: {frame}"
+    );
+    assert!(frame.contains("Ctrl+P"), "help overlay must list shortcuts: {frame}");
+}
+
 /// The message box grows with its content (spec §2.2). A 3-line input yields a
 /// 5-row box (3 content + 2 borders); Buffer-Debug captures the taller frame.
 #[test]
