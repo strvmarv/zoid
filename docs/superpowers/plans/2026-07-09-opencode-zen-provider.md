@@ -15,8 +15,9 @@
 - **Shared key.** `opencode-zen` reads `OPENCODE_GO_API_KEY` (same env var as Go). No new env var, no new settings secret field.
 - **Provider trait unchanged.** No new `ProviderEvent` variants. Non-essential Responses/Gemini event types are parsed-but-ignored (logged at trace).
 - **Go entry unchanged.** The `opencode-go` `ProviderEntry` (id, family, display, base_url) is not modified. Only the Secrets *section row labels* change (via `FieldRow::secret_key`), not the picker.
-- **No placeholders in shipped code.** The `ZEN_MODELS` table, registry `models`, and `MODEL_CAPS` entries use the concrete placeholder set defined in Task 1 (a minimal representative model per wire shape) so the build is green and tests pass end-to-end; real Zen catalog fill-in is a follow-up spec-review pass, not part of this plan.
-- **PRODUCT DECISION — placeholder model ids are user-visible.** The four `zen-*-demo` ids are deliberately fake, but the `opencode-zen` entry is `Status::Available`, so a user who selects it sees `zen-chat-demo` / `zen-claude-demo` / `zen-gpt-demo` / `zen-gemini-demo` in the model picker. This is a deliberate trade-off: shipping the provider selectable (so the wiring is exercised end-to-end and the slice is mergeable) vs. gating it `Status::Planned` (visible-but-not-selectable) until the real Zen catalog lands. **If this plan merges before the real catalog is filled in, prefer `Status::Planned` for `opencode-zen`** so fake model names never reach a user; flip to `Available` in the catalog-fill follow-up. If the real catalog lands in the same PR, keep `Available`. The implementer should confirm which path with the reviewer before Task 1.
+- **No placeholders in shipped code.** The `ZEN_MODELS` table, registry `models`, and `MODEL_CAPS` entries use the real 52-model Zen catalog (confirmed via API research, see `docs/superpowers/spikes/2026-07-10-opencode-zen-api-research.md`). Four wire shapes: 17 OpenAI Responses (GPT), 13 Anthropic Messages (Claude+Qwen), 19 OpenAI Chat Completions (deepseek/glm/grok/kimi/minimax/misc), 3 Google Gemini.
+- **Default model:** `claude-sonnet-4-5` (Anthropic Messages) — matches Go's default family for user-perceived continuity.
+- **PRODUCT DECISION — real model ids, Status::Available.** The `opencode-zen` entry is `Status::Available` with all 52 real Zen models in the picker. No fake model names reach the user.
 - **Existing patterns.** New clients mirror `openai_compat.rs` structurally: `request_body()`/`parse_event()` pure fns + provider struct + `new().with_base_url().with_idle_timeout()` + `TcpListener`-stubbed tests. New tests mirror `opencode_go.rs`'s `spawn_recording_server` and `openai_compat.rs`'s `spawn_stalling_server`.
 - **Known follow-up (out of this plan's scope): key-prompt gate label.** When a key-requiring provider is selected without a key, the gate prompt (`render.rs:1206`, `Enter {env}`) shows the raw env-var name (e.g. `OPENCODE_GO_API_KEY`), while the Secrets *rows* now show the friendly name (`opencode`). This is a cosmetic inconsistency in a transient prompt, scoped out per the spec (which limits prettification to Secrets rows). Closing it requires extracting `friendly_secret_label` to a public helper and wiring `render.rs` to it — a small but separate change, deferred to a follow-up so this plan doesn't expand into the render layer.
 - Commit frequently (every task or sub-step).
@@ -39,14 +40,14 @@
 
 ---
 
-## Task 1: Registry entry + placeholder model caps (zoid-model)
+## Task 1: Registry entry + real model caps (zoid-model)
 
 **Files:**
 - Modify: `crates/zoid-model/src/lib.rs`
 - Test: same file (`#[cfg(test)]`)
 
 **Interfaces:**
-- Produces: `ProviderEntry { id: "opencode-zen", family: "opencode-zen", display: "opencode · zen", transport: Http { default_base_url: "https://opencode.ai/zen" }, models: &[ZEN_PLACEHOLDER_MODELS], status: Available }` where `ZEN_PLACEHOLDER_MODELS = &["zen-chat-demo", "zen-claude-demo", "zen-gpt-demo", "zen-gemini-demo"]` (first = default). Also `MODEL_CAPS` entries for those four ids.
+- Produces: `ProviderEntry { id: "opencode-zen", family: "opencode-zen", display: "opencode · zen", transport: Http { default_base_url: "https://opencode.ai/zen" }, models: ZEN_MODEL_IDS, status: Available }` where `ZEN_MODEL_IDS` is a static array of all 52 model ids (first = `claude-sonnet-4-5`, the default). Also `MODEL_CAPS` entries for all 52 ids.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -137,66 +138,115 @@ In `crates/zoid-model/src/lib.rs`, append to `PROVIDERS` (after the `anthropic-a
         transport: Transport::Http {
             default_base_url: "https://opencode.ai/zen",
         },
-        models: &[
-            "zen-chat-demo",
-            "zen-claude-demo",
-            "zen-gpt-demo",
-            "zen-gemini-demo",
-        ],
+        models: ZEN_MODEL_IDS,
         status: Status::Available,
     },
 ```
 
-Append to `MODEL_CAPS` (before the `o3` entry or at the end):
+Add a static array of all 52 model ids (first = default model `claude-sonnet-4-5`):
 
 ```rust
-    // --- OpenCode Zen placeholder models (one per wire shape; real catalog
-    // filled in a later spec-review pass). Conservative caps. ---
-    (
-        "zen-chat-demo",
-        ModelInfo {
-            context_window: 128_000,
-            max_output: 0,
-            tools: true,
-            prompt_cache: false,
-            thinking: ThinkingSupport::None,
-            thinking_wire: ThinkingWireShape::None,
-        },
-    ),
-    (
-        "zen-claude-demo",
-        ModelInfo {
-            context_window: 200_000,
-            max_output: 0,
-            tools: false, // Anthropic text-only P1b limitation, same as Go's Anthropic-shape models
-            prompt_cache: true,
-            thinking: ThinkingSupport::None,
-            thinking_wire: ThinkingWireShape::None,
-        },
-    ),
-    (
-        "zen-gpt-demo",
-        ModelInfo {
-            context_window: 200_000,
-            max_output: 0,
-            tools: true,
-            prompt_cache: false,
-            thinking: ThinkingSupport::ToggleWithEffort,
-            thinking_wire: ThinkingWireShape::OpenAI,
-        },
-    ),
-    (
-        "zen-gemini-demo",
-        ModelInfo {
-            context_window: 1_000_000,
-            max_output: 0,
-            tools: true,
-            prompt_cache: false,
-            thinking: ThinkingSupport::Toggle,
-            thinking_wire: ThinkingWireShape::None,
-        },
-    ),
+/// All 52 Zen model ids, grouped by wire shape. First entry = default model.
+/// Wire-shape routing lives in `opencode_zen.rs::ZEN_MODELS`; this list is the
+/// registry's model picker source.
+pub static ZEN_MODEL_IDS: &[&str] = &[
+    // --- Anthropic Messages (13) ---
+    "claude-sonnet-4-5",      // default model
+    "claude-fable-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-opus-4-5",
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+    "qwen3.7-max",
+    "qwen3.7-plus",
+    "qwen3.6-plus",
+    "qwen3.5-plus",
+    // --- OpenAI Responses (17) ---
+    "gpt-5.5",
+    "gpt-5.5-pro",
+    "gpt-5.4",
+    "gpt-5.4-pro",
+    "gpt-5.4-mini",
+    "gpt-5.4-nano",
+    "gpt-5.3-codex",
+    "gpt-5.3-codex-spark",
+    "gpt-5.2",
+    "gpt-5.2-codex",
+    "gpt-5.1",
+    "gpt-5.1-codex-max",
+    "gpt-5.1-codex",
+    "gpt-5.1-codex-mini",
+    "gpt-5",
+    "gpt-5-codex",
+    "gpt-5-nano",
+    // --- OpenAI Chat Completions (19) ---
+    "deepseek-v4-pro",
+    "deepseek-v4-flash",
+    "deepseek-v4-flash-free",
+    "glm-5.2",
+    "glm-5.1",
+    "glm-5",
+    "grok-4.5",
+    "grok-build-0.1",
+    "kimi-k2.5",
+    "kimi-k2.6",
+    "kimi-k2.7-code",
+    "minimax-m3",
+    "minimax-m2.7",
+    "minimax-m2.5",
+    "big-pickle",
+    "hy3-free",
+    "mimo-v2.5-free",
+    "north-mini-code-free",
+    "nemotron-3-ultra-free",
+    // --- Google Gemini (3) ---
+    "gemini-3.5-flash",
+    "gemini-3.1-pro",
+    "gemini-3-flash",
+];
 ```
+
+Append 52 `MODEL_CAPS` entries to `MODEL_CAPS`. Conservative caps per
+family (researched from the Zen docs; confirm against published specs):
+
+```rust
+    // --- OpenCode Zen models ---
+    // Anthropic Messages models: 200k context, tools=false (P1b text-only,
+    // matching Go's Anthropic-shape models), prompt_cache=true.
+    (
+        "claude-sonnet-4-5",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: false, prompt_cache: true, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    // ... (repeat for each claude-* and qwen* model with the same caps)
+    // OpenAI Responses models: 200k context, tools=true, prompt_cache=false,
+    // thinking=ToggleWithEffort (OpenAI reasoning).
+    (
+        "gpt-5.4",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::ToggleWithEffort, thinking_wire: ThinkingWireShape::OpenAI },
+    ),
+    // ... (repeat for each gpt-* model with the same caps)
+    // OpenAI Chat Completions models: 128k context, tools=true, prompt_cache=false.
+    (
+        "glm-5.2",
+        ModelInfo { context_window: 128_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    // ... (repeat for each chat-completions model with the same caps)
+    // Google Gemini models: 1M context, tools=true, prompt_cache=false,
+    // thinking=Toggle.
+    (
+        "gemini-3-flash",
+        ModelInfo { context_window: 1_000_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::Toggle, thinking_wire: ThinkingWireShape::None },
+    ),
+    // ... (repeat for each gemini-* model with the same caps)
+```
+
+The implementer should generate all 52 entries (not just the examples
+above) by applying the family-level caps template to each model id.
+The `opencode_zen_placeholder_caps_match_table` test in Task 10 will
+lock the exact values.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -207,7 +257,7 @@ Expected: PASS — all `opencode_zen_tests` + `selectable_has_five_providers` gr
 
 ```bash
 git add crates/zoid-model/src/lib.rs
-git commit -m "feat(model): add opencode-zen registry entry + placeholder model caps"
+git commit -m "feat(model): add opencode-zen registry entry + real model caps (52 models)"
 ```
 
 ---
@@ -252,7 +302,7 @@ mod tests {
     #[test]
     fn body_has_model_input_instructions_stream() {
         let req = CompletionRequest {
-            model: "zen-gpt-demo".into(),
+            model: "gpt-5.4".into(),
             system: Some("be terse".into()),
             messages: vec![Message::user("hi")],
             max_tokens: 1024,
@@ -260,7 +310,7 @@ mod tests {
             thinking: crate::ThinkingMode::Off,
         };
         let body = request_body(&req);
-        assert_eq!(body["model"], "zen-gpt-demo");
+        assert_eq!(body["model"], "gpt-5.4");
         assert_eq!(body["stream"], true);
         assert_eq!(body["instructions"], "be terse");
         // input is a string shorthand when there's a single user message and no tool messages
@@ -441,7 +491,7 @@ Append to the `tests` module:
     #[test]
     fn body_emits_reasoning_effort_for_auto() {
         let req = CompletionRequest {
-            model: "zen-gpt-demo".into(),
+            model: "gpt-5.4".into(),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 8,
@@ -455,7 +505,7 @@ Append to the `tests` module:
     #[test]
     fn body_emits_xhigh_for_max_effort() {
         let req = CompletionRequest {
-            model: "zen-gpt-demo".into(),
+            model: "gpt-5.4".into(),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 8,
@@ -761,7 +811,7 @@ Append to the `tests` module in `openai_responses.rs`:
 
     fn probe_req() -> CompletionRequest {
         CompletionRequest {
-            model: "zen-gpt-demo".into(),
+            model: "gpt-5.4".into(),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 8,
@@ -1115,15 +1165,15 @@ mod tests {
     #[test]
     fn body_path_includes_model_and_endpoint() {
         let req = CompletionRequest {
-            model: "zen-gemini-demo".into(),
+            model: "gemini-3-flash".into(),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 128,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
         };
-        let (path, body) = request_body(&req, "zen-gemini-demo");
-        assert_eq!(path, "v1/models/zen-gemini-demo:streamGenerateContent");
+        let (path, body) = request_body(&req, "gemini-3-flash");
+        assert_eq!(path, "v1/models/gemini-3-flash:streamGenerateContent");
         assert_eq!(body["contents"][0]["role"], "user");
         assert_eq!(body["contents"][0]["parts"][0]["text"], "hi");
         assert_eq!(body["generationConfig"]["maxOutputTokens"], 128);
@@ -1426,7 +1476,7 @@ Append to the `tests` module:
 
     fn probe_req() -> CompletionRequest {
         CompletionRequest {
-            model: "zen-gemini-demo".into(),
+            model: "gemini-3-flash".into(),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 8,
@@ -1700,10 +1750,62 @@ enum ZenWireShape {
 }
 
 const ZEN_MODELS: &[(&str, ZenWireShape)] = &[
-    ("zen-chat-demo", ZenWireShape::OpenAIChat),
-    ("zen-claude-demo", ZenWireShape::AnthropicMessages),
-    ("zen-gpt-demo", ZenWireShape::OpenAIResponses),
-    ("zen-gemini-demo", ZenWireShape::GoogleGemini),
+    // --- Anthropic Messages (13) ---
+    ("claude-sonnet-4-5", ZenWireShape::AnthropicMessages),
+    ("claude-fable-5", ZenWireShape::AnthropicMessages),
+    ("claude-opus-4-8", ZenWireShape::AnthropicMessages),
+    ("claude-opus-4-7", ZenWireShape::AnthropicMessages),
+    ("claude-opus-4-6", ZenWireShape::AnthropicMessages),
+    ("claude-opus-4-5", ZenWireShape::AnthropicMessages),
+    ("claude-sonnet-5", ZenWireShape::AnthropicMessages),
+    ("claude-sonnet-4-6", ZenWireShape::AnthropicMessages),
+    ("claude-haiku-4-5", ZenWireShape::AnthropicMessages),
+    ("qwen3.7-max", ZenWireShape::AnthropicMessages),
+    ("qwen3.7-plus", ZenWireShape::AnthropicMessages),
+    ("qwen3.6-plus", ZenWireShape::AnthropicMessages),
+    ("qwen3.5-plus", ZenWireShape::AnthropicMessages),
+    // --- OpenAI Responses (17) ---
+    ("gpt-5.5", ZenWireShape::OpenAIResponses),
+    ("gpt-5.5-pro", ZenWireShape::OpenAIResponses),
+    ("gpt-5.4", ZenWireShape::OpenAIResponses),
+    ("gpt-5.4-pro", ZenWireShape::OpenAIResponses),
+    ("gpt-5.4-mini", ZenWireShape::OpenAIResponses),
+    ("gpt-5.4-nano", ZenWireShape::OpenAIResponses),
+    ("gpt-5.3-codex", ZenWireShape::OpenAIResponses),
+    ("gpt-5.3-codex-spark", ZenWireShape::OpenAIResponses),
+    ("gpt-5.2", ZenWireShape::OpenAIResponses),
+    ("gpt-5.2-codex", ZenWireShape::OpenAIResponses),
+    ("gpt-5.1", ZenWireShape::OpenAIResponses),
+    ("gpt-5.1-codex-max", ZenWireShape::OpenAIResponses),
+    ("gpt-5.1-codex", ZenWireShape::OpenAIResponses),
+    ("gpt-5.1-codex-mini", ZenWireShape::OpenAIResponses),
+    ("gpt-5", ZenWireShape::OpenAIResponses),
+    ("gpt-5-codex", ZenWireShape::OpenAIResponses),
+    ("gpt-5-nano", ZenWireShape::OpenAIResponses),
+    // --- OpenAI Chat Completions (19) ---
+    ("deepseek-v4-pro", ZenWireShape::OpenAIChat),
+    ("deepseek-v4-flash", ZenWireShape::OpenAIChat),
+    ("deepseek-v4-flash-free", ZenWireShape::OpenAIChat),
+    ("glm-5.2", ZenWireShape::OpenAIChat),
+    ("glm-5.1", ZenWireShape::OpenAIChat),
+    ("glm-5", ZenWireShape::OpenAIChat),
+    ("grok-4.5", ZenWireShape::OpenAIChat),
+    ("grok-build-0.1", ZenWireShape::OpenAIChat),
+    ("kimi-k2.5", ZenWireShape::OpenAIChat),
+    ("kimi-k2.6", ZenWireShape::OpenAIChat),
+    ("kimi-k2.7-code", ZenWireShape::OpenAIChat),
+    ("minimax-m3", ZenWireShape::OpenAIChat),
+    ("minimax-m2.7", ZenWireShape::OpenAIChat),
+    ("minimax-m2.5", ZenWireShape::OpenAIChat),
+    ("big-pickle", ZenWireShape::OpenAIChat),
+    ("hy3-free", ZenWireShape::OpenAIChat),
+    ("mimo-v2.5-free", ZenWireShape::OpenAIChat),
+    ("north-mini-code-free", ZenWireShape::OpenAIChat),
+    ("nemotron-3-ultra-free", ZenWireShape::OpenAIChat),
+    // --- Google Gemini (3) ---
+    ("gemini-3.5-flash", ZenWireShape::GoogleGemini),
+    ("gemini-3.1-pro", ZenWireShape::GoogleGemini),
+    ("gemini-3-flash", ZenWireShape::GoogleGemini),
 ];
 
 pub struct OpenCodeZenProvider {
@@ -1837,7 +1939,7 @@ Append to the `tests` module in `opencode_zen.rs` (mirrors `opencode_go.rs`'s `s
             .with_base_url(format!("http://{addr}"))
             .with_idle_timeout(Duration::from_secs(2));
         let (tx, _rx) = mpsc::channel::<ProviderEvent>(16);
-        let _ = provider.stream(&zen_req("zen-chat-demo"), tx).await;
+        let _ = provider.stream(&zen_req("glm-5.2"), tx).await;
         let first = recorded.lock().await.clone().unwrap_or_default();
         assert!(first.contains("/v1/chat/completions"), "expected /v1/chat/completions, got: {first}");
     }
@@ -1849,7 +1951,7 @@ Append to the `tests` module in `opencode_zen.rs` (mirrors `opencode_go.rs`'s `s
             .with_base_url(format!("http://{addr}"))
             .with_idle_timeout(Duration::from_secs(2));
         let (tx, _rx) = mpsc::channel::<ProviderEvent>(16);
-        let _ = provider.stream(&zen_req("zen-claude-demo"), tx).await;
+        let _ = provider.stream(&zen_req("claude-sonnet-4-5"), tx).await;
         let first = recorded.lock().await.clone().unwrap_or_default();
         assert!(first.contains("/v1/messages"), "expected /v1/messages, got: {first}");
     }
@@ -1861,7 +1963,7 @@ Append to the `tests` module in `opencode_zen.rs` (mirrors `opencode_go.rs`'s `s
             .with_base_url(format!("http://{addr}"))
             .with_idle_timeout(Duration::from_secs(2));
         let (tx, _rx) = mpsc::channel::<ProviderEvent>(16);
-        let _ = provider.stream(&zen_req("zen-gpt-demo"), tx).await;
+        let _ = provider.stream(&zen_req("gpt-5.4"), tx).await;
         let first = recorded.lock().await.clone().unwrap_or_default();
         assert!(first.contains("/v1/responses"), "expected /v1/responses, got: {first}");
     }
@@ -1873,7 +1975,7 @@ Append to the `tests` module in `opencode_zen.rs` (mirrors `opencode_go.rs`'s `s
             .with_base_url(format!("http://{addr}"))
             .with_idle_timeout(Duration::from_secs(2));
         let (tx, _rx) = mpsc::channel::<ProviderEvent>(16);
-        let _ = provider.stream(&zen_req("zen-gemini-demo"), tx).await;
+        let _ = provider.stream(&zen_req("gemini-3-flash"), tx).await;
         let first = recorded.lock().await.clone().unwrap_or_default();
         assert!(
             first.contains("streamGenerateContent"),
@@ -2307,13 +2409,19 @@ In `crates/zoid-model/src/lib.rs`, add to `opencode_zen_tests`:
 
 ```rust
     #[test]
-    fn opencode_zen_placeholder_caps_match_table() {
+    fn opencode_zen_caps_match_table() {
+        // Spot-check one model per wire shape (full table locked by
+        // opencode_zen_model_caps_present which iterates all 52 ids).
         let cases: &[(&str, u64, u64, bool, bool)] = &[
             // (id, context_window, max_output, tools, prompt_cache)
-            ("zen-chat-demo", 128_000, 0, true, false),
-            ("zen-claude-demo", 200_000, 0, false, true),
-            ("zen-gpt-demo", 200_000, 0, true, false),
-            ("zen-gemini-demo", 1_000_000, 0, true, false),
+            // Anthropic Messages
+            ("claude-sonnet-4-5", 200_000, 0, false, true),
+            // OpenAI Responses
+            ("gpt-5.4", 200_000, 0, true, false),
+            // OpenAI Chat Completions
+            ("glm-5.2", 128_000, 0, true, false),
+            // Google Gemini
+            ("gemini-3-flash", 1_000_000, 0, true, false),
         ];
         for (id, ctx, max_out, tools, pc) in cases {
             let info = model_info(id);
@@ -2354,5 +2462,5 @@ Expected: no warnings; formatting clean.
 
 ```bash
 git add crates/zoid-model/src/lib.rs
-git commit -m "test(model): regression lock for opencode-zen placeholder caps + opencode-go unchanged"
+git commit -m "test(model): regression lock for opencode-zen caps + opencode-go unchanged"
 ```

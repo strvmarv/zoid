@@ -1,7 +1,7 @@
 # OpenCode Zen provider — full-parity subscription, four-way per-model wire routing
 
 Date: 2026-07-09
-Status: Design (approved in brainstorm; awaiting spec review → writing-plans)
+Status: Design (approved in brainstorm; spec research complete 2026-07-10, ready for writing-plans)
 Extends: `2026-07-05-opencode-go-provider-design.md` (registry shape, provider picker, key gate), `2026-07-03-settings-redesign-design.md`
 
 ## 1. Problem
@@ -12,10 +12,10 @@ The key wrinkle (carried over from the Go design doc, which explicitly deferred 
 
 | Wire shape | Zen models | Endpoint |
 |---|---|---|
-| OpenAI Chat Completions | *(placeholder — fill during implementation plan)* | `POST {base}/v1/chat/completions` |
-| Anthropic Messages | *(placeholder)* | `POST {base}/v1/messages` |
-| OpenAI Responses | GPT-5.x and other Responses-API models *(placeholder)* | `POST {base}/v1/responses` |
-| Google Gemini | Gemini models *(placeholder)* | `POST {base}/v1/models/<model>:streamGenerateContent?alt=sse` |
+| OpenAI Chat Completions | deepseek-v4-*, glm-5.*, grok-4.5, grok-build-0.1, minimax-m*, kimi-k2.*, big-pickle, hy3-free, mimo-v2.5-free, north-mini-code-free, nemotron-3-ultra-free (19 models) | `POST {base}/v1/chat/completions` |
+| Anthropic Messages | claude-fable-5, claude-opus-4-5..4-8, claude-sonnet-4-5..4-6/5, claude-haiku-4-5, qwen3.5-plus..3.7-max (16 models) | `POST {base}/v1/messages` |
+| OpenAI Responses | gpt-5..5.5, gpt-*-codex, gpt-5.4-mini/nano (17 models) | `POST {base}/v1/responses` |
+| Google Gemini | gemini-3-flash, gemini-3.1-pro, gemini-3.5-flash (3 models) | `POST {base}/v1/models/<model>:streamGenerateContent?alt=sse` |
 
 zoid already has clients for the first two (the shared `OpenAICompatProvider` and `AnthropicProvider` leaves, used by Go). It has **no client** for OpenAI Responses or Google Gemini. So this slice adds two new generic transport leaves alongside a dedicated `OpenCodeZenProvider` that owns per-model routing across all four.
 
@@ -96,12 +96,65 @@ enum ZenWireShape {
 }
 
 const ZEN_MODELS: &[(&str, ZenWireShape)] = &[
-    // PLACEHOLDER — filled during implementation plan / spec review.
-    // First entry = default model; must agree with the registry entry's models[0].
-    // ("gpt-5.x",       ZenWireShape::OpenAIResponses),
-    // ("gemini-…",      ZenWireShape::GoogleGemini),
-    // (…chat models…,   ZenWireShape::OpenAIChat),
-    // (…anthropic…,     ZenWireShape::AnthropicMessages),
+    // Claude (Anthropic Messages)
+    ("claude-fable-5",     ZenWireShape::AnthropicMessages),
+    ("claude-opus-4-8",    ZenWireShape::AnthropicMessages),
+    ("claude-opus-4-7",    ZenWireShape::AnthropicMessages),
+    ("claude-opus-4-6",    ZenWireShape::AnthropicMessages),
+    ("claude-opus-4-5",    ZenWireShape::AnthropicMessages),
+    ("claude-sonnet-5",    ZenWireShape::AnthropicMessages),
+    ("claude-sonnet-4-6",  ZenWireShape::AnthropicMessages),
+    ("claude-sonnet-4-5",  ZenWireShape::AnthropicMessages),
+    ("claude-haiku-4-5",   ZenWireShape::AnthropicMessages),
+    ("qwen3.7-max",        ZenWireShape::AnthropicMessages),
+    ("qwen3.7-plus",       ZenWireShape::AnthropicMessages),
+    ("qwen3.6-plus",       ZenWireShape::AnthropicMessages),
+    ("qwen3.5-plus",       ZenWireShape::AnthropicMessages),
+
+    // GPT (OpenAI Responses)
+    ("gpt-5.5",            ZenWireShape::OpenAIResponses),
+    ("gpt-5.5-pro",        ZenWireShape::OpenAIResponses),
+    ("gpt-5.4",            ZenWireShape::OpenAIResponses),
+    ("gpt-5.4-pro",        ZenWireShape::OpenAIResponses),
+    ("gpt-5.4-mini",       ZenWireShape::OpenAIResponses),
+    ("gpt-5.4-nano",       ZenWireShape::OpenAIResponses),
+    ("gpt-5.3-codex",      ZenWireShape::OpenAIResponses),
+    ("gpt-5.3-codex-spark", ZenWireShape::OpenAIResponses),
+    ("gpt-5.2",            ZenWireShape::OpenAIResponses),
+    ("gpt-5.2-codex",      ZenWireShape::OpenAIResponses),
+    ("gpt-5.1",            ZenWireShape::OpenAIResponses),
+    ("gpt-5.1-codex-max",  ZenWireShape::OpenAIResponses),
+    ("gpt-5.1-codex",      ZenWireShape::OpenAIResponses),
+    ("gpt-5.1-codex-mini", ZenWireShape::OpenAIResponses),
+    ("gpt-5",              ZenWireShape::OpenAIResponses),
+    ("gpt-5-codex",        ZenWireShape::OpenAIResponses),
+    ("gpt-5-nano",         ZenWireShape::OpenAIResponses),
+
+    // Chat Completions (OpenAI compat)
+    ("deepseek-v4-pro",    ZenWireShape::OpenAIChat),
+    ("deepseek-v4-flash",  ZenWireShape::OpenAIChat),
+    ("glm-5.2",            ZenWireShape::OpenAIChat),
+    ("glm-5.1",            ZenWireShape::OpenAIChat),
+    ("glm-5",              ZenWireShape::OpenAIChat),
+    ("grok-4.5",           ZenWireShape::OpenAIChat),
+    ("grok-build-0.1",     ZenWireShape::OpenAIChat),
+    ("kimi-k2.5",          ZenWireShape::OpenAIChat),
+    ("kimi-k2.6",          ZenWireShape::OpenAIChat),
+    ("kimi-k2.7-code",     ZenWireShape::OpenAIChat),
+    ("minimax-m3",         ZenWireShape::OpenAIChat),
+    ("minimax-m2.7",       ZenWireShape::OpenAIChat),
+    ("minimax-m2.5",       ZenWireShape::OpenAIChat),
+    ("big-pickle",         ZenWireShape::OpenAIChat),
+    ("hy3-free",           ZenWireShape::OpenAIChat),
+    ("mimo-v2.5-free",     ZenWireShape::OpenAIChat),
+    ("north-mini-code-free", ZenWireShape::OpenAIChat),
+    ("nemotron-3-ultra-free", ZenWireShape::OpenAIChat),
+    ("deepseek-v4-flash-free", ZenWireShape::OpenAIChat),
+
+    // Google Gemini
+    ("gemini-3.5-flash",   ZenWireShape::GoogleGemini),
+    ("gemini-3.1-pro",     ZenWireShape::GoogleGemini),
+    ("gemini-3-flash",     ZenWireShape::GoogleGemini),
 ];
 ```
 
@@ -196,11 +249,23 @@ Placeholder `MODEL_CAPS` entries: one per Zen model id with conservative fields 
 5. The sub-client POSTs to its wire-shape endpoint, parses the SSE stream, and emits `ProviderEvent`s into `sink` (`TextDelta`/`ThinkingDelta`/`ToolCall`/`Usage`/`Truncated`/`Error`/`Done`). The agent loop consumes `sink` exactly as it does for Go/Ollama/Anthropic — no agent-loop changes.
 6. `list_models()` (picker live-fetch) hits `{base}/v1/models` and parses with the shared `parse_data_id_models`.
 
-## 6. Model catalog — placeholder
+## 6. Model catalog — filled (52 models, 4 wire shapes)
 
-The concrete Zen model ids, their wire shapes, and per-model caps are **not yet in the repo** and were not supplied during brainstorm. The routing architecture, client shapes, and wiring are specified fully; the `ZEN_MODELS` table and `MODEL_CAPS` entries are left as placeholders to be filled during the implementation plan (or a quick spec-review pass once the catalog is available).
+The concrete Zen model ids, their wire shapes, and per-model caps were confirmed via API research (see `docs/superpowers/spikes/2026-07-10-opencode-zen-api-research.md`). The `/v1/models` endpoint returns 52 models; model→wire-shape mapping is determined by the upstream provider:
 
-Constraints on the placeholders so the fill-in is mechanical:
+- **Anthropic Messages (13):** claude-fable-5, claude-opus-4-5..4-8, claude-sonnet-4-5..4-6/5, claude-haiku-4-5, qwen3.5-plus..3.7-max
+- **OpenAI Responses (17):** gpt-5..5.5, gpt-*-codex, gpt-5.4-mini/nano
+- **OpenAI Chat Completions (19):** deepseek-v4-*, glm-5.*, grok-4.5, grok-build-0.1, kimi-k2.*, minimax-m*, big-pickle, hy3-free, mimo-v2.5-free, north-mini-code-free, nemotron-3-ultra-free, deepseek-v4-flash-free
+- **Google Gemini (3):** gemini-3-flash, gemini-3.1-pro, gemini-3.5-flash
+
+Default model: `claude-sonnet-4-5` (Anthropic Messages, matching Go's default family).
+Deprecated models excluded: claude-opus-4-1, claude-sonnet-4.
+
+`ZEN_MODELS[0]` = `claude-sonnet-4-5` = the registry entry's `models[0]`.
+Each Zen model id gets an explicit `MODEL_CAPS` entry (family-level conservative caps).
+The four-way routing table covers all 52 models.
+
+Constraints on the placeholders so the fill-in is mechanical: (filled — see §4.2 `ZEN_MODELS` for the concrete 52-model table; see `docs/superpowers/spikes/2026-07-10-opencode-zen-api-research.md` for the research)
 - `ZEN_MODELS[0]` must equal the registry entry's `models[0]` (the default model).
 - Each Zen model id gets exactly one `MODEL_CAPS` entry (case-insensitive lookup is already supported by `model_info`).
 - The four-way routing table covers every model in the registry's `models` list — no model without a wire-shape entry.
@@ -225,7 +290,8 @@ Offline, `TcpListener`-stubbed, matching the existing stance (no live-endpoint C
 
 ## 9. Open questions (to resolve before/during implementation plan)
 
-1. **Zen model catalog** — the concrete model ids, their wire shapes, and caps. Fill `ZEN_MODELS`, the registry `models` list, and `MODEL_CAPS`.
-2. **Default Zen base URL** — assumed `https://opencode.ai/zen` (parallel to Go's `https://opencode.ai/zen/go`). Confirm against Zen's published endpoint.
-3. **Responses `call_id` source** — whether the function tool-call `call_id` arrives on `response.output_item.added`/`.done` or is reliably present on `response.function_call_arguments.done`. Confirm from a real capture or the spec examples; the `.done` event carries `item_id`/`name`/`arguments` and may carry `call_id` on the parent output item.
+1. **~~Zen model catalog~~** — RESOLVED. 52 models across four wire shapes: 17 OpenAI Responses (GPT), 13 Anthropic Messages (Claude + Qwen), 19 OpenAI Chat Completions (deepseek, glm, grok, kimi, minimax, misc), 3 Google Gemini. Disabled models (claude-opus-4-1, claude-sonnet-4) excluded. See `docs/superpowers/spikes/2026-07-10-opencode-zen-api-research.md`.
+2. **~~Default Zen base URL~~** — RESOLVED: `https://opencode.ai/zen` (confirmed via curl).
+3. **Responses `call_id` source** — the `.done` event carries `item_id`/`name`/`arguments`; confirm `call_id` presence on a real capture (confirmed the endpoint works with `input` string + `max_output_tokens`; need a tool-bearing capture for the `function_call_arguments` event shape).
 4. **Gemini tool-call `id`** — `FunctionCall.id` is optional in the schema; confirm whether Zen's Gemini models populate it (falls back to empty string, matching Ollama's call-id-less shape, if absent).
+5. **ZEN_MODELS[0]** — must equal the registry's `models[0]` (the default model). Pick: `claude-sonnet-4-5` (same as Go's default) or `gpt-5.4`? *Recommendation: `claude-sonnet-4-5` — same family as Go's default, user-perceived continuity.*
