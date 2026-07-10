@@ -1,8 +1,7 @@
-//! Pure functions for readability extraction + HTML→markdown + heading-outline
-//! + char paging. Factored out of `fetch` so they're unit-testable with fixture
-//! HTML (no network).
+//! Pure functions for readability extraction, HTML→markdown, heading-outline,
+//! and char paging. Factored out of `fetch` for unit testing with fixture HTML.
 
-use crate::{FetchResult, HeadingMark};
+use crate::HeadingMark;
 use anyhow::{anyhow, Result};
 use readability::extractor;
 use url::Url;
@@ -41,7 +40,7 @@ pub(crate) fn build_outline(markdown: &str) -> Vec<HeadingMark> {
         let trimmed = line.trim_start();
         if trimmed.starts_with('#') {
             let level = trimmed.chars().take_while(|c| *c == '#').count() as u8;
-            if level >= 1 && level <= 6 {
+            if (1..=6).contains(&level) {
                 let text = trimmed
                     .trim_start_matches('#')
                     .trim()

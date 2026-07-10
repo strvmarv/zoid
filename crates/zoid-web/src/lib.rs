@@ -217,4 +217,23 @@ ensure the article node wins the readability scoring against the nav.</p>
         assert!(r.is_err());
         assert!(r.unwrap_err().to_string().contains("404"));
     }
+
+    /// Live DDG smoke — run manually with `cargo test -p zoid-web -- --ignored live`.
+    /// Never runs in CI. A canary for DDG markup changes.
+    #[tokio::test]
+    #[ignore]
+    async fn live_ddg_search_returns_results() {
+        let results = search("rust async trait").await.unwrap();
+        assert!(!results.is_empty(), "DDG should return results for a common query");
+        assert!(!results[0].url.is_empty());
+    }
+
+    /// Live fetch smoke — run manually with `cargo test -p zoid-web -- --ignored live`.
+    #[tokio::test]
+    #[ignore]
+    async fn live_fetch_extracts_markdown() {
+        let r = fetch("https://doc.rust-lang.org/book/", 0, 5000).await.unwrap();
+        assert!(!r.content.is_empty(), "fetch should return content");
+        assert!(!r.outline.is_empty(), "first fetch includes outline");
+    }
 }

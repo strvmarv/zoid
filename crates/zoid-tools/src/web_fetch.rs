@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::path::Path;
 use std::pin::Pin;
 use std::future::Future;
-use zoid_web::{FetchResult, HeadingMark};
+use zoid_web::FetchResult;
 
 pub struct WebFetch;
 
@@ -108,6 +108,7 @@ impl Tool for WebFetch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zoid_web::HeadingMark;
 
     fn sample(offset: usize) -> FetchResult {
         FetchResult {
