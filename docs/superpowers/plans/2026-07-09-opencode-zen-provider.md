@@ -16,7 +16,9 @@
 - **Provider trait unchanged.** No new `ProviderEvent` variants. Non-essential Responses/Gemini event types are parsed-but-ignored (logged at trace).
 - **Go entry unchanged.** The `opencode-go` `ProviderEntry` (id, family, display, base_url) is not modified. Only the Secrets *section row labels* change (via `FieldRow::secret_key`), not the picker.
 - **No placeholders in shipped code.** The `ZEN_MODELS` table, registry `models`, and `MODEL_CAPS` entries use the concrete placeholder set defined in Task 1 (a minimal representative model per wire shape) so the build is green and tests pass end-to-end; real Zen catalog fill-in is a follow-up spec-review pass, not part of this plan.
+- **PRODUCT DECISION — placeholder model ids are user-visible.** The four `zen-*-demo` ids are deliberately fake, but the `opencode-zen` entry is `Status::Available`, so a user who selects it sees `zen-chat-demo` / `zen-claude-demo` / `zen-gpt-demo` / `zen-gemini-demo` in the model picker. This is a deliberate trade-off: shipping the provider selectable (so the wiring is exercised end-to-end and the slice is mergeable) vs. gating it `Status::Planned` (visible-but-not-selectable) until the real Zen catalog lands. **If this plan merges before the real catalog is filled in, prefer `Status::Planned` for `opencode-zen`** so fake model names never reach a user; flip to `Available` in the catalog-fill follow-up. If the real catalog lands in the same PR, keep `Available`. The implementer should confirm which path with the reviewer before Task 1.
 - **Existing patterns.** New clients mirror `openai_compat.rs` structurally: `request_body()`/`parse_event()` pure fns + provider struct + `new().with_base_url().with_idle_timeout()` + `TcpListener`-stubbed tests. New tests mirror `opencode_go.rs`'s `spawn_recording_server` and `openai_compat.rs`'s `spawn_stalling_server`.
+- **Known follow-up (out of this plan's scope): key-prompt gate label.** When a key-requiring provider is selected without a key, the gate prompt (`render.rs:1206`, `Enter {env}`) shows the raw env-var name (e.g. `OPENCODE_GO_API_KEY`), while the Secrets *rows* now show the friendly name (`opencode`). This is a cosmetic inconsistency in a transient prompt, scoped out per the spec (which limits prettification to Secrets rows). Closing it requires extracting `friendly_secret_label` to a public helper and wiring `render.rs` to it — a small but separate change, deferred to a follow-up so this plan doesn't expand into the render layer.
 - Commit frequently (every task or sub-step).
 
 ---
@@ -612,6 +614,18 @@ impl ResponsesToolAccum {
             .ok()
             .filter(Value::is_object)
             .unwrap_or_else(|| json!({}));
+        // ASSUMPTION (spec §9 open-question #3): the `response.function_call_arguments.done`
+        // event's `item_id` is usable as the tool-call `call_id` for the next turn's
+        // `function_call_output` input item. OpenAI's Responses API distinguishes
+        // `item_id` (the output item's id) from `call_id` (the function-call id the
+        // model generated); the `function_call_output` input item on the next turn
+        // is keyed by `call_id`, not `item_id`. If Zen's gateway surfaces them as
+        // distinct values, this must source `call_id` from `response.output_item.added`
+        // / `response.output_item.done` (which carry the full function_call output
+        // item including `call_id`) rather than the `.done` event's `item_id`.
+        // Until confirmed against a real Zen capture, we use `item_id` as a
+        // best-effort id (matches Ollama's call-id-less fallback shape if empty).
+        // TODO(spec §9 q3): confirm item_id == call_id against a real Zen capture.
         Some(ProviderEvent::ToolCall(ToolCall {
             id: item_id.to_string(),
             name: name.to_string(),
@@ -792,6 +806,12 @@ Append to the `tests` module in `openai_responses.rs`:
             got.push(ev);
         }
         assert!(got.iter().any(|e| matches!(e, ProviderEvent::TextDelta(t) if t == "hi")));
+        // Exercise the usage path end-to-end (not just the pure-parse unit test):
+        // response.completed carries usage, which must emit a Usage event.
+        assert!(
+            got.iter().any(|e| matches!(e, ProviderEvent::Usage(u) if u.input_tokens == 1 && u.output_tokens == 1)),
+            "expected a Usage event from response.completed, got {got:?}"
+        );
         assert!(got.iter().any(|e| matches!(e, ProviderEvent::Done)));
     }
 
@@ -2134,10 +2154,53 @@ This test depends on the `opencode-zen` arm in `key_env_for`, which is added in 
 Run: `cargo test -p zoid key_env_for_opencode_zen`
 Expected: PASS.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 9: Update the provider-options count test (Task 1 added a 5th provider)**
+
+Adding the `opencode-zen` registry entry (Task 1) grows `PROVIDERS` to 5, so `provider_options()` now returns 5 entries. The existing test `provider_options_annotate_endpoints_and_mark_planned` in `crates/zoid-tui/src/config_view.rs` asserts `opts.len() == 4` — it will fail. Update it:
+
+```rust
+    #[test]
+    fn provider_options_annotate_endpoints_and_mark_planned() {
+        let opts = provider_options("ollama-cloud");
+        let cloud = opts.iter().find(|o| o.id == "ollama-cloud").unwrap();
+        assert!(cloud.is_current);
+        assert!(cloud.selectable);
+        assert!(cloud.detail.contains("https://ollama.com"));
+
+        // All surviving providers are selectable (no [planned] rows remain).
+        assert_eq!(opts.len(), 5);
+        let zen = opts.iter().find(|o| o.id == "opencode-zen").unwrap();
+        assert!(zen.selectable);
+        assert!(zen.detail.contains("https://opencode.ai/zen"));
+        let api = opts.iter().find(|o| o.id == "anthropic-api").unwrap();
+        assert!(api.selectable);
+        assert!(api.detail.contains("https://api.anthropic.com"));
+    }
+```
+
+Run: `cargo test -p zoid-tui provider_options_annotate_endpoints`
+Expected: PASS.
+
+- [ ] **Step 10: Regenerate the provider-picker insta snapshots**
+
+Three `insta` snapshot files embed the full provider-picker list and will break when `opencode-zen` is added (Task 1): `shell_snapshot__config_overlay_provider_picker.snap`, `shell_snapshot__config_overlay_narrow_degrades.snap`, `shell_snapshot__provider_switch_card.snap`. The snapshots assert the rendered picker, which now includes the `opencode · zen` row.
+
+Run: `INSTA_UPDATE=always cargo test -p zoid-tui --test shell_snapshot`
+Expected: the three snapshots update with the new 5th row; the rest are unchanged.
+
+Then review the diffs to confirm only the expected new row was added (no incidental whitespace drift):
+
+Run: `git diff crates/zoid-tui/tests/snapshots/`
+
+If the diff shows only the new `opencode · zen` row in each affected snapshot, accept the updates:
+
+Run: `cargo test -p zoid-tui --test shell_snapshot`
+Expected: PASS (snapshots now match).
+
+- [ ] **Step 11: Commit**
 
 ```bash
-git add crates/zoid-tui/src/config_view.rs crates/zoid-tui/src/route.rs crates/zoid/src/main.rs
+git add crates/zoid-tui/src/config_view.rs crates/zoid-tui/src/route.rs crates/zoid-tui/tests/snapshots/ crates/zoid/src/main.rs
 git commit -m "feat(ui): prettify Secrets labels via FieldRow::secret_key decoupling"
 ```
 
