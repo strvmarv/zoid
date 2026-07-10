@@ -320,6 +320,60 @@ impl Provider for EmitToolCallThenStall {
     }
 }
 
+/// A stub Network tool whose `run_async` sleeps, for hard-cancel testing.
+struct SlowNetworkTool;
+impl zoid_tools::Tool for SlowNetworkTool {
+    fn name(&self) -> &str { "slow_network" }
+    fn spec(&self) -> zoid_provider::ToolSpec {
+        zoid_provider::ToolSpec {
+            name: "slow_network".into(),
+            description: "test stub".into(),
+            parameters: json!({"type":"object","properties":{}}),
+        }
+    }
+    fn run(&self, _: &serde_json::Value, _: &std::path::Path) -> zoid_tools::ToolOutput {
+        unreachable!("Network tool: run() never called")
+    }
+    fn kind(&self) -> zoid_tools::ToolKind { zoid_tools::ToolKind::Network }
+    fn run_async(&self, _: &serde_json::Value, _: &std::path::Path)
+        -> std::pin::Pin<Box<dyn std::future::Future<Output = zoid_tools::ToolOutput> + Send + '_>>
+    {
+        Box::pin(async {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            zoid_tools::ToolOutput::ok("done")
+        })
+    }
+}
+
+/// A stub Network tool whose `run_async` returns immediately, for the
+/// happy-path test (asserts the ToolResult flows back like a Local tool).
+struct FastNetworkTool;
+impl zoid_tools::Tool for FastNetworkTool {
+    fn name(&self) -> &str { "fast_network" }
+    fn spec(&self) -> zoid_provider::ToolSpec {
+        zoid_provider::ToolSpec {
+            name: "fast_network".into(),
+            description: "test stub".into(),
+            parameters: json!({"type":"object","properties":{}}),
+        }
+    }
+    fn run(&self, _: &serde_json::Value, _: &std::path::Path) -> zoid_tools::ToolOutput {
+        unreachable!("Network tool: run() never called")
+    }
+    fn kind(&self) -> zoid_tools::ToolKind { zoid_tools::ToolKind::Network }
+    fn run_async(&self, _: &serde_json::Value, _: &std::path::Path)
+        -> std::pin::Pin<Box<dyn std::future::Future<Output = zoid_tools::ToolOutput> + Send + '_>>
+    {
+        Box::pin(async { zoid_tools::ToolOutput::ok("network-ok") })
+    }
+}
+
+/// A tool registry containing only the given Network stub (the agent calls it
+/// by name; no other tools are needed for these tests).
+fn network_tool_registry(stub: Box<dyn zoid_tools::Tool>) -> Arc<Vec<Box<dyn zoid_tools::Tool>>> {
+    Arc::new(vec![stub])
+}
+
 #[tokio::test]
 async fn cancel_mid_stream_drains_pending_tool_calls_without_running_them() {
     // A cancel that lands after a tool call is recorded but before it executes
@@ -405,6 +459,147 @@ async fn cancel_mid_stream_drains_pending_tool_calls_without_running_them() {
             EventKind::ToolResult { output, .. } if output == "[skipped: turn aborted]"
         )),
         "cancel must drain pending tool calls with a balanced skipped result"
+    );
+}
+
+/// A Network tool whose run_async sleeps must be abandonable on a hard-stop:
+/// the cancel yields a `[killed: hard-stop]` ToolResult, balanced so the next
+/// request isn't malformed.
+#[tokio::test]
+async fn network_tool_hard_cancel_yields_killed_result() {
+    // The hard token (Esc/Ctrl-C analog) fires when the tool call is observed.
+    // The Network arm's select! listens on `hard.cancelled()`, not `cancel`.
+    let cancel = CancellationToken::new();
+    let hard = CancellationToken::new();
+    let provider = Arc::new(EmitToolCallThenStall {
+        call: zoid_testkit::tool_call("slow_network", json!({})),
+    });
+    let tools = network_tool_registry(Box::new(SlowNetworkTool));
+    let session = SessionHandle::spawn(":memory:").unwrap();
+    let seed = vec![Event::new(
+        ulid::Ulid::from(1u128),
+        None,
+        0,
+        EventKind::UserMessage { text: "go".into() },
+    )];
+    session.append(seed[0].clone()).await.unwrap();
+
+    let (tx, mut rx) = mpsc::channel(64);
+    let hard_on_toolcall = hard.clone();
+    let drain = tokio::spawn(async move {
+        let mut complete = false;
+        let mut fired = false;
+        while let Some(u) = rx.recv().await {
+            if let AgentUpdate::Appended(ev) = &u {
+                if !fired && matches!(ev.kind, EventKind::ToolCall { .. }) {
+                    hard_on_toolcall.cancel();
+                    fired = true;
+                }
+            }
+            if matches!(u, AgentUpdate::TurnComplete) {
+                complete = true;
+            }
+        }
+        complete
+    });
+
+    run_agent_turn_cancellable(
+        zoid::agent::chat_turn_config(),
+        provider,
+        tools,
+        std::sync::Arc::new(zoid_tools::AllowAll),
+        session.clone(),
+        zoid::eventlog::EventLog::from_vec(seed),
+        "fake".into(),
+        tx,
+        ulid::Ulid::new(),
+        zoid_companion::CompanionHub::new(),
+        fixed_now,
+        cancel,
+        hard,
+    )
+    .await
+    .unwrap();
+
+    let complete = drain.await.unwrap();
+    assert!(complete, "TurnComplete must fire even when the turn is cancelled");
+
+    let log = session.snapshot().await.unwrap();
+    assert!(
+        log.iter().any(|e| matches!(
+            &e.kind,
+            EventKind::ToolResult { output, is_error, .. } if output == "[killed: hard-stop]" && *is_error
+        )),
+        "network tool hard-stop must yield a [killed: hard-stop] error ToolResult"
+    );
+}
+
+/// A Network tool whose run_async returns immediately must flow its ToolResult
+/// back like a Local tool (the success path).
+#[tokio::test]
+async fn network_tool_happy_path_flows_tool_result() {
+    // No cancel — the tool returns immediately and the turn completes normally.
+    // ScriptedProvider is constructed with its struct literal (no `new` ctor):
+    // `turns` is a VecDeque of per-turn scripts (one turn here: [ToolCall, Done]);
+    // `requests` is the capture sink (empty initially).
+    let provider = Arc::new(ScriptedProvider {
+        turns: Mutex::new(std::collections::VecDeque::from(vec![vec![
+            ProviderEvent::ToolCall(ToolCall {
+                id: String::new(),
+                name: "fast_network".into(),
+                args: json!({}),
+            }),
+            ProviderEvent::Done,
+        ]])),
+        requests: Mutex::new(vec![]),
+    });
+    let tools = network_tool_registry(Box::new(FastNetworkTool));
+    let session = SessionHandle::spawn(":memory:").unwrap();
+    let seed = vec![Event::new(
+        ulid::Ulid::from(1u128),
+        None,
+        0,
+        EventKind::UserMessage { text: "go".into() },
+    )];
+    session.append(seed[0].clone()).await.unwrap();
+
+    let (tx, mut rx) = mpsc::channel(64);
+    let drain = tokio::spawn(async move {
+        let mut complete = false;
+        while let Some(u) = rx.recv().await {
+            if matches!(u, AgentUpdate::TurnComplete) {
+                complete = true;
+            }
+        }
+        complete
+    });
+
+    run_agent_turn(
+        zoid::agent::chat_turn_config(),
+        provider,
+        tools,
+        std::sync::Arc::new(zoid_tools::AllowAll),
+        session.clone(),
+        zoid::eventlog::EventLog::from_vec(seed),
+        "fake".into(),
+        tx,
+        ulid::Ulid::new(),
+        zoid_companion::CompanionHub::new(),
+        fixed_now,
+    )
+    .await
+    .unwrap();
+
+    let complete = drain.await.unwrap();
+    assert!(complete, "TurnComplete must fire after the network tool returns");
+
+    let log = session.snapshot().await.unwrap();
+    assert!(
+        log.iter().any(|e| matches!(
+            &e.kind,
+            EventKind::ToolResult { output, is_error, .. } if output == "network-ok" && !*is_error
+        )),
+        "network tool happy path must yield a network-ok ToolResult (got: {log:?})"
     );
 }
 

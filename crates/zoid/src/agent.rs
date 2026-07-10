@@ -1667,6 +1667,57 @@ async fn run_turn_inner(
                         tracing::warn!(ctx = ctx.as_str(), message = msg.as_str(), "tool failed");
                     }
                 }
+                Some(zoid_tools::ToolKind::Network) => {
+                    let _ = ui
+                        .send(AgentUpdate::ToolStarted {
+                            name: tc.name.clone(),
+                        })
+                        .await;
+                    let tools_for_async = tools.clone();
+                    let name = tc.name.clone();
+                    let args = tc.args.clone();
+                    let cwd = cwd_for_exec.clone();
+                    let out = tokio::select! {
+                        biased;
+                        _ = hard.cancelled() => {
+                            zoid_tools::ToolOutput::err("[killed: hard-stop]")
+                        }
+                        o = async move {
+                            match tools_for_async.iter().find(|t| t.name() == name) {
+                                Some(t) => t.run_async(&args, &cwd).await,
+                                None => zoid_tools::ToolOutput::err(format!("unknown tool: {name}")),
+                            }
+                        } => o,
+                    };
+                    let tool_ok = !out.is_error;
+                    let tool_fail_msg = out.is_error.then(|| out.text.clone());
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::ToolResult {
+                            id: tc.id,
+                            name: tc.name,
+                            output: out.text,
+                            is_error: out.is_error,
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                    tracing::info!(
+                        kind = "tool",
+                        name = tool_name.as_str(),
+                        ms = tool_start.elapsed().as_millis() as u64,
+                        ok = tool_ok,
+                        "tool executed"
+                    );
+                    if let Some(msg) = tool_fail_msg {
+                        let ctx = format!("tool {tool_name}");
+                        tracing::warn!(ctx = ctx.as_str(), message = msg.as_str(), "tool failed");
+                    }
+                }
                 _ => {
                     // Local tools (the default): run in the working directory.
                     let _ = ui
