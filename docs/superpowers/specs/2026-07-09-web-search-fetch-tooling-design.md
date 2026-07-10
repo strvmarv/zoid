@@ -199,6 +199,8 @@ pub struct FetchResult {
 
 The new `Network` arm (§4.1) sits in `run_turn_inner`'s per-call loop, after `gate.check(&tc)` and the existing kind-dispatch `match`. The `ToolStarted`/`ToolResult` emit and the `hard.cancelled()` cancel path mirror the `Mcp` arm exactly — no new UI events, no new `AgentUpdate` variants. The tool result flows back to the model as a `Tool`-role message, identical to Local tools.
 
+**Inline readability+markdown (v1 choice):** `zoid_web::fetch` runs the synchronous `readability::extract` + `htmd::convert` inline in the async `fetch` future (CPU-bound DOM parse + conversion, not network I/O — the page is already in memory). On the multi-threaded runtime (workspace uses `rt-multi-thread`) this occupies one worker thread for the parse duration (tens of ms to low hundreds for a large page). This is acceptable for v1; a `tokio::task::spawn_blocking` wrap is the follow-up if large-page parsing causes latency spikes. The async `search` call is pure network I/O (no CPU-bound parse) and runs naturally on the runtime.
+
 The `gate.check` call runs before the `Network` arm too (as it does for all kinds), but the default `AllowAll`/`BlacklistGate` never denies/prompts on web tools — `BlacklistGate` only inspects shell commands (it pattern-matches the `shell` tool's command string, not arbitrary tool names). See §5 for the auto-allow decision.
 
 ## 5. Approval / trust model
