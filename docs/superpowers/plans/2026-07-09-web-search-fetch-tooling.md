@@ -1437,16 +1437,22 @@ async fn network_tool_hard_cancel_yields_killed_result() {
 #[tokio::test]
 async fn network_tool_happy_path_flows_tool_result() {
     // No cancel — the tool returns immediately and the turn completes normally.
-    // ScriptedProvider takes Vec<Vec<ProviderEvent>> (one script per turn); this
-    // single-turn script is [ToolCall, Done].
-    let provider = Arc::new(ScriptedProvider::new(vec![vec![
-        ProviderEvent::ToolCall(ToolCall {
-            id: String::new(),
-            name: "fast_network".into(),
-            args: json!({}),
-        }),
-        ProviderEvent::Done,
-    ]]));
+    // ScriptedProvider is constructed with its struct literal (no `new` ctor):
+    // `turns` is a VecDeque of per-turn scripts (one turn here: [ToolCall, Done]);
+    // `requests` is the capture sink (empty initially).
+    let provider = Arc::new(ScriptedProvider {
+        turns: std::sync::Mutex::new(std::collections::VecDeque::from(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: String::new(),
+                    name: "fast_network".into(),
+                    args: json!({}),
+                }),
+                ProviderEvent::Done,
+            ],
+        ])),
+        requests: std::sync::Mutex::new(vec![]),
+    });
     let tools = network_tool_registry(Box::new(FastNetworkTool));
     let session = SessionHandle::spawn(":memory:").unwrap();
     let seed = vec![Event::new(
@@ -1498,7 +1504,7 @@ async fn network_tool_happy_path_flows_tool_result() {
 }
 ```
 
-**Notes for the implementer:** `EmitToolCallThenStall` (already defined at `agent_loop.rs:306`) emits one `ToolCall` then sleeps — reused unchanged for the cancel test. `ScriptedProvider::new(vec![…])` takes a `Vec<Vec<ProviderEvent>>` (one script per turn); the happy-path test passes a single turn whose script is `[ToolCall, Done]`. `run_agent_turn_cancellable` takes two trailing `CancellationToken` args (cancel + hard); `run_agent_turn` takes none — confirm the exact signatures against `agent.rs` before compiling, and adjust the calls if they differ from what's modeled on `cancel_mid_stream_drains_pending_tool_calls_without_running_them` (line 373).
+**Notes for the implementer:** `EmitToolCallThenStall` (already defined at `agent_loop.rs:306`) emits one `ToolCall` then sleeps — reused unchanged for the cancel test. `ScriptedProvider` (line 17) has no `new` constructor; it's built via struct literal with `turns: Mutex::new(VecDeque::from([...]))` and `requests: Mutex::new(vec![])` — the happy-path test shows the exact construction. `run_agent_turn_cancellable` takes two trailing `CancellationToken` args (cancel + hard); `run_agent_turn` takes none — the signatures are confirmed against `agent.rs:361`/`401`. If the harness drifts (e.g. a `SessionHandle::spawn` signature change), adjust the calls to match `cancel_mid_stream_drains_pending_tool_calls_without_running_them` (line 323).
 
 - [ ] **Step 2: Run test to verify it fails**
 
