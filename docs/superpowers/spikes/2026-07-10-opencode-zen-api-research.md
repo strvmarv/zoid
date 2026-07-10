@@ -161,3 +161,38 @@ which endpoint to POST to without trial-and-error.
 - `/v1/messages` with `claude-sonnet-4-5` — 200 ✓
 - `/v1/responses` with `gpt-5.4-nano` — 200 ✓ (stream + non-stream)
 - `/v1/models/gemini-3-flash:generateContent` with `x-goog-api-key` — 200 ✓
+
+## Gotchas discovered during research
+
+### Gemini `usageMetadata` on every chunk
+
+Zen's Gemini `streamGenerateContent?alt=sse` emits `usageMetadata` on **every**
+chunk, not just the final one. Intermediate chunks carry `"usageMetadata":{}`
+(empty object). Only the final chunk has real values:
+```json
+"usageMetadata": {
+    "candidatesTokensDetails": [{"modality":"TEXT","tokenCount":1}],
+    "promptTokensDetails": [{"modality":"TEXT","tokenCount":5}],
+    "candidatesTokenCount": 7,
+    "promptTokenCount": 10,
+    "thoughtsTokenCount": 189,
+    "totalTokenCount": 206
+}
+```
+
+**Parse logic must gate on `promptTokenCount` being present**, not on
+`usageMetadata` existing — an empty `{}` is `Some`, not `None`. Failing to
+gate emits premature `Usage{0,0,0,0}` + `Done` on the first intermediate
+chunk, killing the stream after the first text delta.
+
+Also: `cachedContentTokenCount` is **absent** from Zen's Gemini response
+(not zero — the field is missing). `unwrap_or(0)` is safe; cached reads
+always report 0 via Gemini.
+
+### Zen Responses rejects small `max_output_tokens` with streaming
+
+The `/v1/responses` endpoint returns HTTP 400 when `max_output_tokens < ~50`
+and `stream: true`. Values ≥ 50 work. Non-streaming requests accept small
+values. The zoid agent loop always sends `max_tokens >= 4096`, so this is
+not a production issue. Unit tests use `max_tokens: 8` but hit `TcpListener`
+stubs, not the real API.

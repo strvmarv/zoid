@@ -18,7 +18,9 @@
 - **No placeholders in shipped code.** The `ZEN_MODELS` table, registry `models`, and `MODEL_CAPS` entries use the real 52-model Zen catalog (confirmed via API research, see `docs/superpowers/spikes/2026-07-10-opencode-zen-api-research.md`). Four wire shapes: 17 OpenAI Responses (GPT), 13 Anthropic Messages (Claude+Qwen), 19 OpenAI Chat Completions (deepseek/glm/grok/kimi/minimax/misc), 3 Google Gemini.
 - **Default model:** `claude-sonnet-4-5` (Anthropic Messages) — matches Go's default family for user-perceived continuity.
 - **PRODUCT DECISION — real model ids, Status::Available.** The `opencode-zen` entry is `Status::Available` with all 52 real Zen models in the picker. No fake model names reach the user.
-- **Existing patterns.** New clients mirror `openai_compat.rs` structurally: `request_body()`/`parse_event()` pure fns + provider struct + `new().with_base_url().with_idle_timeout()` + `TcpListener`-stubbed tests. New tests mirror `opencode_go.rs`'s `spawn_recording_server` and `openai_compat.rs`'s `spawn_stalling_server`.
+- **13 Zen models overlap with Go.** 13 of the 52 Zen models (`glm-5.2`, `glm-5.1`, `deepseek-v4-pro`, `deepseek-v4-flash`, `kimi-k2.6`, `kimi-k2.7-code`, `minimax-m3`, `minimax-m2.7`, `minimax-m2.5`, `qwen3.7-max`, `qwen3.7-plus`, `claude-sonnet-4-6`, `claude-opus-4-8`) already have `MODEL_CAPS` entries from the Go provider, carefully researched from upstream docs. `model_info()` uses `.find()` → first match wins. Do NOT duplicate these entries — the existing values are authoritative. Only add 39 NEW caps entries.
+- **Gemini `usageMetadata` appears on every chunk.** Zen's Gemini stream emits `{"usageMetadata":{}}` (empty object) on intermediate chunks. The parse logic must gate on `promptTokenCount` being present, not on `usageMetadata` existing — otherwise it emits premature `Usage` + `Done` and kills the stream after the first delta.
+- **Zen Responses rejects small `max_output_tokens` with streaming.** The Zen `/v1/responses` endpoint returns 400 when `max_output_tokens < ~50` and `stream: true`. The agent loop always sends `max_tokens >= 4096`, so this is not a production issue. Unit tests use smaller values but hit `TcpListener` stubs, not the real API. Documented in the spike; no code change needed.
 - **Known follow-up (out of this plan's scope): key-prompt gate label.** When a key-requiring provider is selected without a key, the gate prompt (`render.rs:1206`, `Enter {env}`) shows the raw env-var name (e.g. `OPENCODE_GO_API_KEY`), while the Secrets *rows* now show the friendly name (`opencode`). This is a cosmetic inconsistency in a transient prompt, scoped out per the spec (which limits prettification to Secrets rows). Closing it requires extracting `friendly_secret_label` to a public helper and wiring `render.rs` to it — a small but separate change, deferred to a follow-up so this plan doesn't expand into the render layer.
 - Commit frequently (every task or sub-step).
 
@@ -47,7 +49,7 @@
 - Test: same file (`#[cfg(test)]`)
 
 **Interfaces:**
-- Produces: `ProviderEntry { id: "opencode-zen", family: "opencode-zen", display: "opencode · zen", transport: Http { default_base_url: "https://opencode.ai/zen" }, models: ZEN_MODEL_IDS, status: Available }` where `ZEN_MODEL_IDS` is a static array of all 52 model ids (first = `claude-sonnet-4-5`, the default). Also `MODEL_CAPS` entries for all 52 ids.
+- Produces: `ProviderEntry { id: "opencode-zen", family: "opencode-zen", display: "opencode · zen", transport: Http { default_base_url: "https://opencode.ai/zen" }, models: ZEN_MODEL_IDS, status: Available }` where `ZEN_MODEL_IDS` is a static array of all 52 model ids (first = `claude-sonnet-4-5`, the default). Also 39 NEW `MODEL_CAPS` entries (13 of the 52 Zen models already have caps from the Go provider — do NOT duplicate).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -93,7 +95,7 @@ mod opencode_zen_tests {
     fn opencode_zen_model_caps_present() {
         for id in entry("opencode-zen").unwrap().models {
             let info = model_info(id);
-            // conservative but non-default: ensure each placeholder has an
+            // conservative but non-default: ensure each model has an
             // explicit entry (not the 32k DEFAULT_MODEL_INFO floor).
             assert!(
                 info.context_window >= 128_000,
@@ -209,44 +211,62 @@ pub static ZEN_MODEL_IDS: &[&str] = &[
 ];
 ```
 
-Append 52 `MODEL_CAPS` entries to `MODEL_CAPS`. Conservative caps per
-family (researched from the Zen docs; confirm against published specs):
+Append `MODEL_CAPS` entries for the **39 genuinely-new Zen models** that
+don't already have entries. **13 Zen models already have `MODEL_CAPS` entries
+from the Go provider** (carefully researched from upstream docs): `glm-5.2`,
+`glm-5.1`, `deepseek-v4-pro`, `deepseek-v4-flash`, `kimi-k2.6`, `kimi-k2.7-code`,
+`minimax-m3`, `minimax-m2.7`, `minimax-m2.5`, `qwen3.7-max`, `qwen3.7-plus`,
+`claude-sonnet-4-6`, `claude-opus-4-8`. `model_info()` uses `.find()` which
+returns the FIRST match — appending duplicates after existing entries means
+the existing (correct, researched) values win. Do NOT add duplicate entries
+for these 13; their existing caps are the authoritative values. The 39 new
+models get conservative caps per family:
 
 ```rust
-    // --- OpenCode Zen models ---
-    // Anthropic Messages models: 200k context, tools=false (P1b text-only,
-    // matching Go's Anthropic-shape models), prompt_cache=true.
+    // --- OpenCode Zen models (39 NEW entries; 13 overlap with Go & keep
+    // their existing researched MODEL_CAPS entries — do NOT duplicate) ---
+    // Anthropic Messages models (NEW, not in Go): 200k context, tools=false
+    // (P1b text-only, matching Go's Anthropic-shape models), prompt_cache=true.
     (
         "claude-sonnet-4-5",
         ModelInfo { context_window: 200_000, max_output: 0, tools: false, prompt_cache: true, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
     ),
-    // ... (repeat for each claude-* and qwen* model with the same caps)
+    // ... (repeat for each NEW claude-* and qwen* model: claude-fable-5,
+    // claude-opus-4-5/4-6/4-7, claude-sonnet-5, claude-sonnet-4-6 is EXISTING,
+    // claude-haiku-4-5, qwen3.6-plus, qwen3.5-plus — qwen3.7-* are EXISTING)
     // OpenAI Responses models: 200k context, tools=true, prompt_cache=false,
     // thinking=ToggleWithEffort (OpenAI reasoning).
     (
         "gpt-5.4",
         ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::ToggleWithEffort, thinking_wire: ThinkingWireShape::OpenAI },
     ),
-    // ... (repeat for each gpt-* model with the same caps)
-    // OpenAI Chat Completions models: 128k context, tools=true, prompt_cache=false.
+    // ... (repeat for each gpt-* model — all 17 are NEW)
+    // OpenAI Chat Completions models (NEW only): 128k context, tools=true,
+    // prompt_cache=false.
+    // glm-5.2, glm-5.1, deepseek-v4-pro/flash, kimi-k2.6/k2.7-code,
+    // minimax-m3/m2.7/m2.5 are EXISTING — skip them.
     (
-        "glm-5.2",
+        "grok-4.5",
         ModelInfo { context_window: 128_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
     ),
-    // ... (repeat for each chat-completions model with the same caps)
+    // ... (repeat for each NEW chat-completions model: grok-4.5, grok-build-0.1,
+    // kimi-k2.5, deepseek-v4-flash-free, glm-5, big-pickle, hy3-free,
+    // mimo-v2.5-free, north-mini-code-free, nemotron-3-ultra-free)
     // Google Gemini models: 1M context, tools=true, prompt_cache=false,
     // thinking=Toggle.
     (
         "gemini-3-flash",
         ModelInfo { context_window: 1_000_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::Toggle, thinking_wire: ThinkingWireShape::None },
     ),
-    // ... (repeat for each gemini-* model with the same caps)
+    // ... (repeat for each gemini-* model — all 3 are NEW)
 ```
 
-The implementer should generate all 52 entries (not just the examples
-above) by applying the family-level caps template to each model id.
-The `opencode_zen_placeholder_caps_match_table` test in Task 10 will
-lock the exact values.
+The implementer should generate all 39 NEW entries (not just the examples
+above) by applying the family-level caps template to each NEW model id.
+The `opencode_zen_caps_match_table` test in Task 10 will lock the exact
+values. **Do NOT add entries for the 13 models that already exist** —
+`model_info` returns the first match, so duplicates are dead code, and the
+existing entries are the carefully-researched truth.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1384,6 +1404,18 @@ Append to the `tests` module in `google_gemini.rs`:
     }
 
     #[test]
+    fn parse_empty_usage_metadata_yields_nothing() {
+        // Zen emits `{"usageMetadata":{}}` on intermediate chunks — must NOT
+        // emit Usage or Done (H1 bug guard: premature Done kills the stream).
+        let chunk = json!({
+            "candidates": [{ "content": { "role": "model", "parts": [{ "text": "hi" }] } }],
+            "usageMetadata": {}
+        });
+        let out = parse_chunk(&chunk);
+        assert_eq!(out, vec![ProviderEvent::TextDelta("hi".into())]);
+    }
+
+    #[test]
     fn parse_empty_candidates_yields_nothing() {
         let chunk = json!({ "candidates": [] });
         assert!(parse_chunk(&chunk).is_empty());
@@ -1444,18 +1476,30 @@ pub fn parse_chunk(obj: &Value) -> Vec<ProviderEvent> {
             }
         }
     }
+    // Zen's Gemini stream emits `usageMetadata` on EVERY chunk — intermediate
+    // chunks carry `"usageMetadata":{}` (empty object). An empty object is
+    // `Some`, not `None`, so a naive `if let Some(usage) = obj.get(...)` check
+    // matches every chunk and emits premature `Usage{0,0,0,0}` + `Done`, killing
+    // the stream after the first text delta. Gate on `promptTokenCount` being
+    // present (only the final frame carries real counts). This is the
+    // confirmed Zen behavior (see spike research, 2026-07-10).
     if let Some(usage) = obj.get("usageMetadata") {
-        let input = usage.get("promptTokenCount").and_then(|n| n.as_u64()).unwrap_or(0);
-        let output = usage.get("candidatesTokenCount").and_then(|n| n.as_u64()).unwrap_or(0);
-        let cached = usage.get("cachedContentTokenCount").and_then(|n| n.as_u64()).unwrap_or(0);
-        let thinking = usage.get("thoughtsTokenCount").and_then(|n| n.as_u64()).unwrap_or(0);
-        out.push(ProviderEvent::Usage(Usage {
-            input_tokens: input,
-            output_tokens: output,
-            cached,
-            thinking_tokens: thinking,
-        }));
-        out.push(ProviderEvent::Done);
+        let input = usage.get("promptTokenCount").and_then(|n| n.as_u64());
+        if input.is_some() {
+            let output = usage.get("candidatesTokenCount").and_then(|n| n.as_u64()).unwrap_or(0);
+            // Zen's Gemini `usageMetadata` does NOT surface `cachedContentTokenCount`
+            // (confirmed via curl, 2026-07-10). The field is absent, not zero.
+            // `unwrap_or(0)` is safe but cached reads will always report 0.
+            let cached = usage.get("cachedContentTokenCount").and_then(|n| n.as_u64()).unwrap_or(0);
+            let thinking = usage.get("thoughtsTokenCount").and_then(|n| n.as_u64()).unwrap_or(0);
+            out.push(ProviderEvent::Usage(Usage {
+                input_tokens: input.unwrap(),
+                output_tokens: output,
+                cached,
+                thinking_tokens: thinking,
+            }));
+            out.push(ProviderEvent::Done);
+        }
     }
     out
 }
@@ -1498,7 +1542,10 @@ Append to the `tests` module:
                 let req_text = String::from_utf8_lossy(&buf[..n]);
                 let first_line = req_text.lines().next().unwrap_or("").to_string();
                 *recorded_clone.lock().await = Some(first_line);
-                let body = "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"hi\"}]}}]}\r\n\r\n\
+                // Two chunks: first has text + empty usageMetadata (the H1
+                // guard — empty {} must NOT emit premature Done); second has
+                // finishReason + real usageMetadata (emits Done).
+                let body = "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"hi\"}]}}],\"usageMetadata\":{}}\r\n\r\n\
                             data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":1,\"candidatesTokenCount\":1}}\r\n\r\n";
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{}",
@@ -2401,7 +2448,7 @@ git commit -m "feat(bin): wire opencode-zen provider arms (shared OPENCODE_GO_AP
 ## Task 10: Spec-driven regression lock + final verification
 
 **Files:**
-- Modify: none (verification only); optionally add a regression test to `crates/zoid-model/src/lib.rs` for the placeholder caps table.
+- Modify: none (verification only); optionally add a regression test to `crates/zoid-model/src/lib.rs` for the caps table.
 
 - [ ] **Step 1: Add a table-driven caps regression lock**
 
@@ -2410,17 +2457,20 @@ In `crates/zoid-model/src/lib.rs`, add to `opencode_zen_tests`:
 ```rust
     #[test]
     fn opencode_zen_caps_match_table() {
-        // Spot-check one model per wire shape (full table locked by
+        // Spot-check one NEW model per wire shape (full table locked by
         // opencode_zen_model_caps_present which iterates all 52 ids).
+        // NOTE: use only NEW models here — 13 Zen models overlap with Go and
+        // keep their existing (different) caps. e.g. `glm-5.2` has
+        // context_window=1_000_000 from the Go provider, NOT 128_000.
         let cases: &[(&str, u64, u64, bool, bool)] = &[
             // (id, context_window, max_output, tools, prompt_cache)
-            // Anthropic Messages
+            // Anthropic Messages (NEW — claude-sonnet-4-5 is new, Go has 4-6)
             ("claude-sonnet-4-5", 200_000, 0, false, true),
-            // OpenAI Responses
+            // OpenAI Responses (all 17 gpt-* are NEW)
             ("gpt-5.4", 200_000, 0, true, false),
-            // OpenAI Chat Completions
-            ("glm-5.2", 128_000, 0, true, false),
-            // Google Gemini
+            // OpenAI Chat Completions (NEW — grok-4.5; glm-5.2 is EXISTING)
+            ("grok-4.5", 128_000, 0, true, false),
+            // Google Gemini (all 3 are NEW)
             ("gemini-3-flash", 1_000_000, 0, true, false),
         ];
         for (id, ctx, max_out, tools, pc) in cases {
