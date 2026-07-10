@@ -213,11 +213,11 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
         "glm-5.2",
         ModelInfo {
             context_window: 1_000_000,
-            max_output: 0,
+            max_output: 131_072,
             tools: true,
             prompt_cache: true,
-            thinking: ThinkingSupport::None,
-            thinking_wire: ThinkingWireShape::None,
+            thinking: ThinkingSupport::ToggleWithEffort,
+            thinking_wire: ThinkingWireShape::DeepSeek,
         },
     ),
     // glm-5.1: inferred from glm-5.2:cloud sibling (same GLM-5.x family, 1M window).
@@ -565,10 +565,20 @@ mod thinking_tests {
     }
 
     #[test]
-    fn glm_models_have_no_thinking() {
+    fn glm_5_2_has_thinking_with_effort() {
         let glm = model_info("glm-5.2");
-        assert_eq!(glm.thinking, ThinkingSupport::None);
-        assert_eq!(glm.thinking_wire, ThinkingWireShape::None);
+        assert_eq!(glm.thinking, ThinkingSupport::ToggleWithEffort);
+        assert_eq!(glm.thinking_wire, ThinkingWireShape::DeepSeek);
+        assert_eq!(glm.max_output, 131_072);
+    }
+
+    #[test]
+    fn glm_5_2_capabilities_locked() {
+        let info = model_info("glm-5.2");
+        assert_eq!(info.context_window, 1_000_000);
+        assert_eq!(info.max_output, 131_072);
+        assert_eq!(info.thinking, ThinkingSupport::ToggleWithEffort);
+        assert_eq!(info.thinking_wire, ThinkingWireShape::DeepSeek);
     }
 
     #[test]
@@ -612,7 +622,7 @@ mod opencode_go_tests {
     fn opencode_go_model_caps_match_reconciled_table() {
         let cases: &[(&str, u64, u64, bool, bool)] = &[
             // (id, context_window, max_output, tools, prompt_cache)
-            ("glm-5.2", 1_000_000, 0, true, true),
+            ("glm-5.2", 1_000_000, 131_072, true, true),
             ("glm-5.1", 1_000_000, 0, true, true),
             ("kimi-k2.7-code", 262_144, 0, true, true),
             ("kimi-k2.6", 262_144, 0, true, true),
