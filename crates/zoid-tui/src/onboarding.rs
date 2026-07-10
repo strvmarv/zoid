@@ -23,7 +23,7 @@ const RETURNING_HINT: &str =
 /// The instructional line offering the Superpowers skill set install, shown
 /// to first-time users who haven't installed it yet.
 const SUPERPOWERS_OFFER: &str =
-    "Run :mode install superpowers to install the Superpowers skill set (brainstorming, TDD, systematic debugging, code review, planning…)";
+    "Run :plugin install superpowers to install the Superpowers skill set (structured TDD, debugging, planning, and review workflows).";
 
 /// Build the empty-state lines for the conversation pane. `first_time_user`
 /// selects onboarding copy (new user) vs. a welcome-back hint (returning user).
@@ -202,7 +202,7 @@ mod tests {
             .collect::<String>();
         let with = empty_state_lines(true, true, 80);
         let without = empty_state_lines(true, false, 80);
-        assert!(joined(&with).contains(":mode install superpowers"));
+        assert!(joined(&with).contains(":plugin install superpowers"));
         assert!(!joined(&without).contains("Superpowers"));
     }
 }
