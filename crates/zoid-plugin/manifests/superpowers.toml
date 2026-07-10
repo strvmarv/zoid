@@ -1,0 +1,24 @@
+[plugin]
+id = "superpowers"
+schema = 1
+kind = ["mode"]
+name = "Superpowers"
+description = "A curated skill set for structured software engineering workflows."
+
+[source]
+repo = "obra/superpowers"
+ref = "d884ae04edebef577e82ff7c4e143debd0bbec99"
+subtree = "skills"
+
+[mode]
+loader = "using-superpowers/SKILL.md"
+strip_prefix = "skills/"
+body = "from-skill-frontmatter"
+description = "Superpowers — a curated skill set for structured software engineering workflows (TDD, debugging, code review, planning, parallel agents, git worktrees, verification), imported from obra/superpowers."
+
+[[install]]
+effect = "activate"
+
+[[install]]
+effect = "onboarding_hint"
+text = "Superpowers mode installed and active."

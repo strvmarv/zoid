@@ -188,4 +188,12 @@ mod tests {
         m.mode = None;
         assert!(build_plan(&m, &scan()).is_err());
     }
+
+    #[test]
+    fn mode_body_matches_golden_snapshot() {
+        let plan = build_plan(&manifest(), &scan()).unwrap();
+        let golden = include_str!("../tests/superpowers_body_golden.txt");
+        assert_eq!(plan.mapping.mode_body, golden,
+            "body generator drifted; if intentional, regenerate the golden file");
+    }
 }

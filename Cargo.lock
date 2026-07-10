@@ -4651,6 +4651,7 @@ dependencies = [
  "zoid-core",
  "zoid-embed",
  "zoid-mcp",
+ "zoid-plugin",
  "zoid-provider",
  "zoid-testkit",
  "zoid-tools",

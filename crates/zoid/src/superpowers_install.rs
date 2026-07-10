@@ -210,4 +210,16 @@ mod tests {
         assert!(!dest.join("STALE.md").exists(), "clean-slate wipes stale files");
         assert!(dest.join("mode.md").is_file());
     }
+
+    #[test]
+    fn generic_plan_matches_bespoke_mapping_byte_for_byte() {
+        let scan = fixture();
+        let bespoke = superpowers_mapping(&scan).unwrap();
+        let manifest = zoid_plugin::bundled::bundled_manifest("superpowers").unwrap();
+        let generic = zoid_plugin::plan::build_plan(&manifest, &scan).unwrap();
+        assert_eq!(generic.mapping.mode_name, bespoke.mode_name);
+        assert_eq!(generic.mapping.mode_description, bespoke.mode_description);
+        assert_eq!(generic.mapping.mode_body, bespoke.mode_body);
+        assert_eq!(generic.mapping.entries, bespoke.entries);
+    }
 }
