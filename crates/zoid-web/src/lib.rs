@@ -61,14 +61,58 @@ pub async fn search(query: &str) -> anyhow::Result<Vec<SearchResult>> {
 }
 
 /// Fetch a URL, extract readable content, convert to markdown, page by char
-/// offset/limit. Stub here; Task 3 fills it.
-pub async fn fetch(_url: &str, _offset: usize, _limit: usize) -> anyhow::Result<FetchResult> {
-    Err(anyhow::anyhow!("fetch not yet implemented"))
+/// offset/limit.
+pub async fn fetch(url: &str, offset: usize, limit: usize) -> anyhow::Result<FetchResult> {
+    use anyhow::anyhow;
+
+    // URL-scheme guard: http/https only (no file:///data: exfiltration).
+    let parsed = url::Url::parse(url).map_err(|e| anyhow!("bad url: {e}"))?;
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" {
+        return Err(anyhow!("web_fetch supports http/https only (got {scheme})"));
+    }
+
+    let client = http_client();
+    let resp = client.get(url).send().await?;
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        let snippet: String = text.chars().take(200).collect();
+        return Err(anyhow!("HTTP {status}: {snippet}"));
+    }
+    let body = resp.text().await?;
+    let (title, markdown) = extract::extract_markdown(&body, url)?;
+    let total_chars = markdown.chars().count();
+    let window = extract::page(&markdown, offset, limit)
+        .ok_or_else(|| anyhow!("offset {offset} past end (total {total_chars})"))?;
+    let outline = if offset == 0 {
+        extract::build_outline(&markdown)
+    } else {
+        Vec::new()
+    };
+    Ok(FetchResult {
+        url: url.to_string(),
+        title,
+        content: window,
+        total_chars,
+        offset,
+        limit,
+        outline,
+        content_type,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncWriteExt;
+    use tokio::io::AsyncReadExt;
 
     #[test]
     fn http_client_builds_with_user_agent() {
@@ -84,9 +128,93 @@ mod tests {
         assert!(r.is_err());
     }
 
+    async fn spawn_html_server(html: &'static str) -> std::net::SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
+                    html.len(), html
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+            }
+        });
+        addr
+    }
+
+    // Rich enough for readability to reliably extract the article (the short
+    // version can flake — see FIXTURE_HTML note in extract.rs). The title is
+    // asserted; the outline is asserted non-empty but NOT asserted to contain a
+    // specific heading (readability's exact output isn't a contract).
+    const ARTICLE_HTML: &str = r#"<!DOCTYPE html>
+<html><head><title>Test Page</title></head>
+<body>
+<nav>nav links here</nav>
+<article>
+<h1>Top Heading</h1>
+<p>First paragraph with enough text content that readability scores it highly
+and reliably extracts the article rather than the navigation. The arc90
+algorithm weighs text density, so a single short sentence can flake.</p>
+<h2>Second Section</h2>
+<p>Second paragraph continues the article body with more text content to
+ensure the article node wins the readability scoring against the nav.</p>
+</article>
+<footer>footer text</footer>
+</body></html>"#;
+
     #[tokio::test]
-    async fn fetch_stub_returns_not_yet_implemented() {
-        let r = fetch("https://example.com", 0, 1000).await;
+    async fn fetch_returns_markdown_with_outline_on_first_page() {
+        let addr = spawn_html_server(ARTICLE_HTML).await;
+        let r = fetch(&format!("http://{addr}"), 0, 100_000).await.unwrap();
+        assert_eq!(r.title, "Test Page");
+        assert!(!r.content.trim().is_empty(), "content should be extracted markdown");
+        assert!(!r.outline.is_empty(), "first fetch (offset 0) includes outline");
+        assert_eq!(r.offset, 0);
+    }
+
+    #[tokio::test]
+    async fn fetch_omits_outline_on_nonzero_offset() {
+        let addr = spawn_html_server(ARTICLE_HTML).await;
+        let r = fetch(&format!("http://{addr}"), 1, 100_000).await.unwrap();
+        assert!(r.outline.is_empty(), "non-zero offset omits outline");
+        assert_eq!(r.offset, 1);
+    }
+
+    #[tokio::test]
+    async fn fetch_offset_past_end_returns_err() {
+        let addr = spawn_html_server(ARTICLE_HTML).await;
+        let r = fetch(&format!("http://{addr}"), 9_999_999, 1000).await;
         assert!(r.is_err());
+        let e = r.unwrap_err().to_string();
+        assert!(e.contains("past end"), "got: {e}");
+    }
+
+    #[tokio::test]
+    async fn fetch_rejects_non_http_scheme() {
+        let r = fetch("file:///etc/passwd", 0, 1000).await;
+        assert!(r.is_err());
+        let e = r.unwrap_err().to_string();
+        assert!(e.contains("http/https only"), "got: {e}");
+    }
+
+    #[tokio::test]
+    async fn fetch_non_2xx_returns_err_with_status() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock
+                    .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found")
+                    .await;
+            }
+        });
+        let r = fetch(&format!("http://{addr}"), 0, 1000).await;
+        assert!(r.is_err());
+        assert!(r.unwrap_err().to_string().contains("404"));
     }
 }
