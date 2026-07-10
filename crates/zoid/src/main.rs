@@ -868,6 +868,7 @@ fn key_env_for(id: &str) -> Option<&'static str> {
     match zoid_provider::model::entry(id).map(|e| e.family) {
         Some("opencode-go") => Some("OPENCODE_GO_API_KEY"),
         Some("anthropic") => Some("ANTHROPIC_API_KEY"),
+        Some("zai") => Some("ZAI_API_KEY"),
         _ => Some("OLLAMA_API_KEY"),
     }
 }
@@ -929,6 +930,16 @@ fn select_provider(
                 true,
             ),
             None => (default_provider(), "anthropic", false),
+        },
+        "zai" => match key_for("ZAI_API_KEY") {
+            Some(k) => (
+                Arc::new(
+                    zoid_provider::zai::ZaiProvider::new(k).with_base_url(base_url),
+                ),
+                "zai",
+                true,
+            ),
+            None => (default_provider(), "zai", false),
         },
         _ => match key_for("OLLAMA_API_KEY") {
             Some(k) => (
@@ -1020,6 +1031,10 @@ fn provider_for_id(
         }),
         "anthropic" => key_for("ANTHROPIC_API_KEY").map(|k| {
             Arc::new(zoid_provider::anthropic::AnthropicProvider::new(k).with_base_url(base_url))
+                as Arc<dyn Provider>
+        }),
+        "zai" => key_for("ZAI_API_KEY").map(|k| {
+            Arc::new(zoid_provider::zai::ZaiProvider::new(k).with_base_url(base_url))
                 as Arc<dyn Provider>
         }),
         _ => key_for("OLLAMA_API_KEY").map(|k| {
@@ -3141,6 +3156,7 @@ fn refresh_config_sections(app: &mut App) {
         ("OLLAMA_API_KEY", status("OLLAMA_API_KEY")),
         ("ANTHROPIC_API_KEY", status("ANTHROPIC_API_KEY")),
         ("OPENCODE_GO_API_KEY", status("OPENCODE_GO_API_KEY")),
+        ("ZAI_API_KEY", status("ZAI_API_KEY")),
     ];
     app.shell.config_sections =
         zoid_tui::config_view::build_sections(&app.config, &app.prov, &key_status);
@@ -6800,6 +6816,16 @@ mod tests {
     #[test]
     fn key_env_for_opencode_go_is_opencode_go_api_key() {
         assert_eq!(key_env_for("opencode-go"), Some("OPENCODE_GO_API_KEY"));
+    }
+
+    #[test]
+    fn key_env_for_zai_coding_plan_is_zai_api_key() {
+        assert_eq!(key_env_for("zai-coding-plan"), Some("ZAI_API_KEY"));
+    }
+
+    #[test]
+    fn entry_requires_key_zai_coding_plan_is_true() {
+        assert!(entry_requires_key("zai-coding-plan"));
     }
 
     #[test]
