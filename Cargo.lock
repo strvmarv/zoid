@@ -4723,6 +4723,16 @@ name = "zoid-model"
 version = "0.3.1"
 
 [[package]]
+name = "zoid-plugin"
+version = "0.3.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "toml",
+ "zoid-core",
+]
+
+[[package]]
 name = "zoid-provider"
 version = "0.3.1"
 dependencies = [
