@@ -624,7 +624,7 @@ In `crates/zoid-tui/src/chat.rs`:
                 let rows = crate::text::wrap_content(&line.spans, content_w);
 ```
 
-3. Remove the now-unused imports that `wrap_content` was the sole user of. Check whether `UnicodeWidthChar` / `UnicodeWidthStr` are still referenced elsewhere in `chat.rs` (grep `UnicodeWidth` in the file). If `UnicodeWidthStr` was only used by the deleted function, remove it from the `use unicode_width::...` line. Keep any imports still referenced by other code (e.g. `indent_w` uses `width()` via the `UnicodeWidthStr` trait — verify before removing).
+3. Update the imports. After deleting `wrap_content`, `UnicodeWidthChar` is no longer used in `chat.rs` (it was the sole user — the hard-split path). `UnicodeWidthStr` MUST stay: `push_message` computes `indent_w` via `s.content.width()` (the `UnicodeWidthStr` trait), and `code_line` does the same for code-line padding. So change the import line from `use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};` to `use unicode_width::UnicodeWidthStr;`. Verify with `cargo build -p zoid-tui` after the edit — a wrong guess surfaces as an "unused import" warning or a "method not found" error.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -681,14 +681,16 @@ Add to the `#[cfg(test)] mod tests` block:
     fn header_cells_are_accent_bold() {
         let md = "| H | \n| --- |\n| x |\n";
         let body = render_body(md);
-        // Find a span containing "H" — it must be a header cell.
-        let header_span = body
+        // A header cell span: fg == TABLE_HEADER AND bold. Filter by the style
+        // invariant directly (not span ordering) so the test doesn't rely on
+        // "the first H-containing span happens to be the cell text."
+        let header_ok = body
             .iter()
             .flat_map(|b| b.line.spans.iter())
-            .find(|s| s.content.contains('H'))
-            .expect("header text not found");
-        assert_eq!(header_span.style.fg, Some(color::TABLE_HEADER));
-        assert!(header_span.style.add_modifier.contains(Modifier::BOLD));
+            .any(|s| s.content.contains('H')
+                && s.style.fg == Some(color::TABLE_HEADER)
+                && s.style.add_modifier.contains(Modifier::BOLD));
+        assert!(header_ok, "header cell text must be TABLE_HEADER + bold");
         // A body cell with "x" must be TXT, not accent.
         let body_span = body
             .iter()
@@ -738,22 +740,24 @@ Add to the `#[cfg(test)] mod tests` block:
 
     #[test]
     fn column_width_is_widest_cell_capped_at_30() {
-        // The widest cell is 40 chars; the column must cap at 30. A border
-        // segment under a single column is at most 30 dashes wide. Build the
-        // table and check no single span of dashes exceeds 30 chars.
+        // The 40-char cell wraps at the 30 cap: no single CONTENT span in a
+        // body row exceeds 30 display columns. (Border spans are ─/│ runs and
+        // are excluded — they are deliberately wider than the content column
+        // because border_line adds +2 padding dashes per column, so measuring
+        // them would test the border, not the cap.)
         let long = "a".repeat(40);
-        let md = format!("| {} |\n| --- |\n", long);
-        let lines = render_markdown(&md);
-        let max_dash_run = lines
+        let md = format!("| {} |\n| --- |\n| {} |\n", long, long);
+        let body = render_body(&md);
+        let max_content_w = body
             .iter()
-            .flat_map(|l| l.spans.iter())
-            .filter(|s| s.content.chars().all(|c| c == '─'))
-            .map(|s| s.content.chars().count())
+            .flat_map(|b| b.line.spans.iter())
+            .filter(|s| !s.content.chars().all(|c| c == '─') && !s.content.chars().all(|c| c == '│'))
+            .map(|s| s.content.width())
             .max()
             .unwrap_or(0);
         assert!(
-            max_dash_run <= 30,
-            "column width exceeded cap: max dash run = {max_dash_run}"
+            max_content_w <= 30,
+            "cell content exceeded the 30 cap: {max_content_w}"
         );
     }
 ```
@@ -851,10 +855,13 @@ Add a `render_table` method to `Builder`. It takes the accumulated `TableAccum` 
                 for c in 0..ncols {
                     let cell_rows = &cells[c];
                     let row_spans = cell_rows.get(vh).cloned().unwrap_or_else(|| {
-                        // blank padding row: spaces of width widths[c]
+                        // blank padding row: spaces of width widths[c]. No fg
+                        // color — this is whitespace fill, not a border glyph
+                        // (TABLE_BORDER on a space is visually identical but
+                        // semantically wrong; plain Style::new() is correct).
                         vec![Span::styled(
                             " ".repeat(widths[c]),
-                            Style::new().fg(color::TABLE_BORDER),
+                            Style::new(),
                         )]
                     });
                     spans.push(Span::styled(" ", Style::new()));
