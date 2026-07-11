@@ -16,6 +16,7 @@ pub mod eviction;
 pub mod hybrid;
 pub mod mode;
 pub mod projection;
+pub mod reassert;
 pub mod retrieval;
 pub mod secret;
 pub mod session;
