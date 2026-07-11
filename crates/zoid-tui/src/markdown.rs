@@ -10,10 +10,15 @@ use crate::tokens::{color, glyph};
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthStr;
 use zoid_syntax::Language;
 
 /// Max container nesting (lists + blockquotes) before we bail to plain text.
 const MAX_DEPTH: usize = 8;
+
+/// Maximum display width of a single table column (spec §2 step 2). Cells
+/// exceeding this wrap to multiple visual rows within the column.
+const MAX_COL_W: usize = 30;
 
 /// What a rendered body line is, so downstream layout can treat it correctly:
 /// prose word-wraps with a hanging indent; code lines never word-wrap (their
@@ -72,6 +77,74 @@ fn plain_lines(source: &str) -> Vec<BodyLine> {
             line: Line::from(Span::styled(l.to_string(), Style::new().fg(color::TXT))),
             kind: BodyKind::Prose,
             source: None,
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy)]
+enum BorderKind {
+    Top,
+    Mid,
+    Bottom,
+}
+
+/// Build a horizontal border line: corner + (─×(w+2)) + tee/corner, joined.
+/// Each column segment is `width+2` dashes (1 pad each side of the content
+/// width). Returns styled spans (TABLE_BORDER).
+fn border_line(widths: &[usize], kind: BorderKind) -> Vec<Span<'static>> {
+    let (left, cross, right) = match kind {
+        BorderKind::Top => (glyph::TABLE_TL, glyph::TABLE_TT, glyph::TABLE_TR),
+        BorderKind::Mid => (glyph::TABLE_LT, glyph::TABLE_CR, glyph::TABLE_RT),
+        BorderKind::Bottom => (glyph::TABLE_BL, glyph::TABLE_BT, glyph::TABLE_BR),
+    };
+    let dim = Style::new().fg(color::TABLE_BORDER);
+    let mut spans = Vec::new();
+    spans.push(Span::styled(left.to_string(), dim));
+    for (i, &w) in widths.iter().enumerate() {
+        let seg = std::iter::repeat(glyph::TABLE_H)
+            .take(w + 2)
+            .collect::<String>();
+        spans.push(Span::styled(seg, dim));
+        if i + 1 < widths.len() {
+            spans.push(Span::styled(cross.to_string(), dim));
+        }
+    }
+    spans.push(Span::styled(right.to_string(), dim));
+    spans
+}
+
+/// Pad each visual row of `rows` to `width`, honoring alignment. Returns the
+/// same number of rows, each exactly `width` display columns of styled spans.
+fn align_rows(
+    rows: Vec<Vec<Span<'static>>>,
+    width: usize,
+    align: Option<Alignment>,
+) -> Vec<Vec<Span<'static>>> {
+    rows.into_iter()
+        .map(|row| {
+            let content_w: usize = row.iter().map(|s| s.content.width()).sum();
+            let pad = width.saturating_sub(content_w);
+            match align {
+                Some(Alignment::Right) => {
+                    let mut v = vec![Span::styled(" ".repeat(pad), Style::new())];
+                    v.extend(row);
+                    v
+                }
+                Some(Alignment::Center) => {
+                    let left = pad / 2;
+                    let right = pad - left;
+                    let mut v = vec![Span::styled(" ".repeat(left), Style::new())];
+                    v.extend(row);
+                    v.push(Span::styled(" ".repeat(right), Style::new()));
+                    v
+                }
+                _ => {
+                    // Left / None: pad right
+                    let mut v = row;
+                    v.push(Span::styled(" ".repeat(pad), Style::new()));
+                    v
+                }
+            }
         })
         .collect()
 }
@@ -516,12 +589,141 @@ impl Builder {
                 }
             }
             TagEnd::Table => {
-                // Task 4 will replace this drop with the layout/emit call.
-                // For now: discard the accumulated table (renders nothing).
-                self.table = None;
+                if let Some(t) = self.table.take() {
+                    self.render_table(t);
+                }
             }
             _ => {}
         }
+    }
+
+    /// Layout a finished table grid into bordered `BodyKind::Table` lines and
+    /// push them onto `self.lines` (spec §2). Called from `end(TagEnd::Table)`.
+    /// `table` is the fully-accumulated grid (moved out of `self.table`).
+    fn render_table(&mut self, table: TableAccum) {
+        let ncols = table.alignments.len();
+        if ncols == 0 {
+            return; // degenerate: no columns, emit nothing
+        }
+        // All rows, with an is_header flag (header rows first, then body).
+        let mut all_rows: Vec<(TableRowData, bool)> = Vec::new();
+        for r in table.header_rows {
+            all_rows.push((r, true));
+        }
+        for r in table.body_rows {
+            all_rows.push((r, false));
+        }
+        if all_rows.iter().all(|(r, _)| r.cells.is_empty()) {
+            return; // degenerate: no cells anywhere
+        }
+
+        // --- Step 1: measure natural column widths ---
+        let mut natural = vec![0usize; ncols];
+        for (row, _is_header) in &all_rows {
+            for c in 0..ncols {
+                let cell_w: usize = row
+                    .cells
+                    .get(c)
+                    .map(|cell| cell.iter().map(|s| s.content.width()).sum())
+                    .unwrap_or(0);
+                natural[c] = natural[c].max(cell_w);
+            }
+        }
+        // --- Step 2: cap ---
+        let cap = MAX_COL_W;
+        let widths: Vec<usize> = natural.iter().map(|&w| w.min(cap)).collect();
+
+        // --- Step 3: wrap + pad every cell into Vec<Vec<Span>> of width widths[c] ---
+        // wrapped_rows[ri] = (wrapped_cells, is_header) where wrapped_cells[ci]
+        // = Vec of visual rows (each a Vec<Span> already padded to widths[ci])
+        let mut wrapped_rows: Vec<(Vec<Vec<Vec<Span<'static>>>>, bool)> = Vec::new();
+        for (row, is_header) in &all_rows {
+            let mut wrapped_cells: Vec<Vec<Vec<Span<'static>>>> = Vec::new();
+            for c in 0..ncols {
+                let cell = row.cells.get(c).cloned().unwrap_or_default();
+                // restyle for header/body: header spans → TABLE_HEADER+bold base
+                let base_spans: Vec<Span<'static>> = if *is_header {
+                    cell.into_iter()
+                        .map(|mut s| {
+                            s.style = s.style.fg(color::TABLE_HEADER).add_modifier(Modifier::BOLD);
+                            s
+                        })
+                        .collect()
+                } else {
+                    cell
+                };
+                let wrapped = crate::text::wrap_content(&base_spans, widths[c]);
+                // pad each visual row to the column width with alignment
+                let aligned = align_rows(wrapped, widths[c], table.alignments.get(c).copied());
+                wrapped_cells.push(aligned);
+            }
+            wrapped_rows.push((wrapped_cells, *is_header));
+        }
+
+        // --- Steps 4+5+6: emit border + cell lines ---
+        let border_top = border_line(&widths, BorderKind::Top);
+        let border_mid = border_line(&widths, BorderKind::Mid);
+        let border_bot = border_line(&widths, BorderKind::Bottom);
+
+        self.lines.push(BodyLine {
+            line: Line::from(border_top),
+            kind: BodyKind::Table,
+            source: None,
+        });
+        for (ri, (cells, _is_header)) in wrapped_rows.iter().enumerate() {
+            let row_h = cells.iter().map(|c| c.len()).max().unwrap_or(1).max(1);
+            for vh in 0..row_h {
+                let mut spans: Vec<Span<'static>> = Vec::new();
+                spans.push(Span::styled(
+                    glyph::TABLE_V.to_string(),
+                    Style::new().fg(color::TABLE_BORDER),
+                ));
+                for c in 0..ncols {
+                    let cell_rows = &cells[c];
+                    let row_spans = cell_rows.get(vh).cloned().unwrap_or_else(|| {
+                        // blank padding row: spaces of width widths[c]. No fg
+                        // color — this is whitespace fill, not a border glyph
+                        // (TABLE_BORDER on a space is visually identical but
+                        // semantically wrong; plain Style::new() is correct).
+                        vec![Span::styled(" ".repeat(widths[c]), Style::new())]
+                    });
+                    spans.push(Span::styled(" ", Style::new()));
+                    spans.extend(row_spans);
+                    spans.push(Span::styled(" ", Style::new()));
+                    if c + 1 < ncols {
+                        spans.push(Span::styled(
+                            glyph::TABLE_V.to_string(),
+                            Style::new().fg(color::TABLE_BORDER),
+                        ));
+                    }
+                }
+                spans.push(Span::styled(
+                    glyph::TABLE_V.to_string(),
+                    Style::new().fg(color::TABLE_BORDER),
+                ));
+                self.lines.push(BodyLine {
+                    line: Line::from(spans),
+                    kind: BodyKind::Table,
+                    source: None,
+                });
+            }
+            // Insert the header separator after the LAST header row, before the
+            // first body row. Detect: this row is header, and the next is body.
+            let is_last_header = wrapped_rows[ri].1
+                && wrapped_rows.get(ri + 1).map(|(_, ih)| !*ih).unwrap_or(false);
+            if is_last_header {
+                self.lines.push(BodyLine {
+                    line: Line::from(border_mid.clone()),
+                    kind: BodyKind::Table,
+                    source: None,
+                });
+            }
+        }
+        self.lines.push(BodyLine {
+            line: Line::from(border_bot),
+            kind: BodyKind::Table,
+            source: None,
+        });
     }
 
     fn finish(mut self) -> Vec<BodyLine> {
@@ -534,6 +736,7 @@ impl Builder {
 mod tests {
     use super::*;
     use ratatui::style::Modifier;
+    use unicode_width::UnicodeWidthStr;
 
     fn spans(lines: &[ratatui::text::Line<'static>]) -> Vec<(String, ratatui::style::Style)> {
         lines
@@ -738,20 +941,22 @@ mod tests {
 
     #[test]
     fn table_cell_text_does_not_leak_as_prose() {
-        // The accumulator must actually CAPTURE cell text into the grid, not
-        // drop it into the prose `cur` buffer. If routing is broken (the C1
-        // bug: event() early-returns and Start/End never reach start()/end()),
-        // the cell text "H1"/"H2" would leak as stray prose lines. This test
-        // fails in that case — it is NOT vacuous like empty_table_emits_nothing.
-        // (Task 2 renders nothing for the table, so the cell text must be
-        // absent entirely — neither as a table nor as prose.)
-        let lines = render_markdown("| H1 | H2 |\n| --- | --- |\n");
-        let joined: String = lines
-            .iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
-            .collect();
-        assert!(!joined.contains("H1"), "cell text leaked as prose (grid not capturing): {joined:?}");
-        assert!(!joined.contains("H2"), "cell text leaked as prose (grid not capturing): {joined:?}");
+        // The accumulator must CAPTURE cell text into the grid (rendered as
+        // BodyKind::Table), not drop it into the prose `cur` buffer (which
+        // would emit it as BodyKind::Prose). Before Task 4's layout landed this
+        // asserted the text was absent entirely; now the table renders, so the
+        // invariant is "captured as Table, NOT leaked as Prose."
+        let body = render_body("| H1 | H2 |\n| --- | --- |\n");
+        let (in_table, in_prose) = body.iter().fold((false, false), |(tbl, prose), b| {
+            let has_h = b.line.spans.iter().any(|s| s.content.contains("H1") || s.content.contains("H2"));
+            match b.kind {
+                BodyKind::Table => (tbl || has_h, prose),
+                BodyKind::Prose => (tbl, prose || has_h),
+                _ => (tbl, prose),
+            }
+        });
+        assert!(in_table, "cell text must appear in a Table line (rendered): captured+emitted");
+        assert!(!in_prose, "cell text must NOT leak into a Prose line: bad routing");
     }
 
     #[test]
@@ -765,5 +970,105 @@ mod tests {
             .collect::<String>();
         assert!(joined.contains("before"), "prose before table lost: {joined:?}");
         assert!(joined.contains("after"), "prose after table lost: {joined:?}");
+    }
+
+    #[test]
+    fn simple_two_by_two_table_renders_bordered_grid() {
+        let md = "| H1 | H2 |\n| --- | --- |\n| a | b |\n";
+        let lines = render_markdown(md);
+        let joined: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(joined.contains('┌'), "missing top border: {joined}");
+        assert!(joined.contains('└'), "missing bottom border: {joined}");
+        assert!(joined.contains('├'), "missing header separator: {joined}");
+        assert!(joined.contains('│'), "missing vertical border: {joined}");
+        assert!(joined.contains("H1") && joined.contains("H2"), "header text lost: {joined}");
+        assert!(joined.contains('a') && joined.contains('b'), "body text lost: {joined}");
+    }
+
+    #[test]
+    fn header_cells_are_accent_bold() {
+        let md = "| H | \n| --- |\n| x |\n";
+        let body = render_body(md);
+        // A header cell span: fg == TABLE_HEADER AND bold. Filter by the style
+        // invariant directly (not span ordering) so the test doesn't rely on
+        // "the first H-containing span happens to be the cell text."
+        let header_ok = body
+            .iter()
+            .flat_map(|b| b.line.spans.iter())
+            .any(|s| s.content.contains('H')
+                && s.style.fg == Some(color::TABLE_HEADER)
+                && s.style.add_modifier.contains(Modifier::BOLD));
+        assert!(header_ok, "header cell text must be TABLE_HEADER + bold");
+        // A body cell with "x" must be TXT, not accent.
+        let body_span = body
+            .iter()
+            .flat_map(|b| b.line.spans.iter())
+            .find(|s| s.content.contains('x'))
+            .expect("body text not found");
+        assert_eq!(body_span.style.fg, Some(color::TXT));
+    }
+
+    #[test]
+    fn inline_bold_and_code_in_cells_are_styled() {
+        let md = "| c |\n| --- |\n| **k** `v` |\n";
+        let body = render_body(md);
+        let spans: Vec<&Span> = body.iter().flat_map(|b| b.line.spans.iter()).collect();
+        // "k" must be bold (in a body cell).
+        assert!(
+            spans.iter().any(|s| s.content.contains('k')
+                && s.style.add_modifier.contains(Modifier::BOLD)),
+            "bold not applied in cell: {spans:?}"
+        );
+        // "v" must be MD_CODE.
+        assert!(
+            spans.iter().any(|s| s.content.contains('v')
+                && s.style.fg == Some(color::MD_CODE)),
+            "inline code color not applied in cell: {spans:?}"
+        );
+    }
+
+    #[test]
+    fn wide_cell_wraps_within_column_cap() {
+        // A single 40-char cell — wider than the 30 cap — must wrap.
+        let long = "x".repeat(40);
+        let md = format!("| {} |\n| --- |\n| {} |\n", long, long);
+        let lines = render_markdown(&md);
+        // The header row and the body row each must have wrapped (height >= 2).
+        // Count rows that contain content lines (not borders): a wrapped table
+        // is taller than an unwrapped one. We assert there are >= 2 non-border
+        // lines containing 'x' beyond the first.
+        let x_rows: Vec<&ratatui::text::Line> = lines
+            .iter()
+            .filter(|l| {
+                l.spans.iter().any(|s| s.content.contains('x'))
+            })
+            .collect();
+        assert!(x_rows.len() >= 2, "expected wrapping (>=2 x-rows), got {}: {x_rows:?}", x_rows.len());
+    }
+
+    #[test]
+    fn column_width_is_widest_cell_capped_at_30() {
+        // The 40-char cell wraps at the 30 cap: no single CONTENT span in a
+        // body row exceeds 30 display columns. (Border spans are ─/│ runs and
+        // are excluded — they are deliberately wider than the content column
+        // because border_line adds +2 padding dashes per column, so measuring
+        // them would test the border, not the cap.)
+        let long = "a".repeat(40);
+        let md = format!("| {} |\n| --- |\n| {} |\n", long, long);
+        let body = render_body(&md);
+        let max_content_w = body
+            .iter()
+            .flat_map(|b| b.line.spans.iter())
+            .filter(|s| !s.content.chars().all(|c| c == '─') && !s.content.chars().all(|c| c == '│'))
+            .map(|s| s.content.width())
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_content_w <= 30,
+            "cell content exceeded the 30 cap: {max_content_w}"
+        );
     }
 }
