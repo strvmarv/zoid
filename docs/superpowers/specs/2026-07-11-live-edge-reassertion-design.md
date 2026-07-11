@@ -48,7 +48,7 @@ is decided centrally; placement (where at the tail) is per-adapter.
 | Aspect | Decision |
 |---|---|
 | Mechanism | Interval-gated tail injection; front/system copy unchanged |
-| Trigger | **Cumulative estimated *appended* tokens** (monotonic; see Component B) ≥ `interval` since last re-floor. NOT the eviction-bounded `context_window` total. |
+| Trigger | **Cumulative estimated *appended* tokens** (monotonic, compaction-aware; see Component B) ≥ `interval` since last re-floor. NOT the eviction-bounded `context_window` total, and NOT a naive re-sum of live bodies (compaction empties those). |
 | State | Persisted weightless `DirectiveReasserted { at_cumulative }` marker; reminder text itself is ephemeral (request-only) |
 | Content | Full `config.system` (prompt + skill menu) verbatim, wrapped in a "standing reminder, not a completion signal" bookend |
 | Placement | Neutral `CompletionRequest.reassert` field; **per-adapter** rendering (Anthropic vs openai-compat/ollama differ — see Component A) |
@@ -102,21 +102,38 @@ delta saturates below the interval and the trigger **goes dormant for the rest o
 a long session** — the exact regime it exists to serve. The trigger must key on a
 monotonic quantity eviction cannot claw back.
 
-**Chosen quantity: cumulative estimated *appended* tokens.** Sum of
-`estimate_tokens` over every `UserMessage` / `AssistantMessage` / `ToolResult`
-(and file-read output) event in the **raw** log — *without* the evicted-filter.
-Each event is counted once, at append time, so:
+**Chosen quantity: cumulative estimated *appended* tokens (compaction-aware).**
+Sum of `estimate_tokens` over every content-bearing event in the **raw** log —
+`UserMessage`, assistant text (`ModelDelta` / `AssistantMessage`), and
+`ToolResult` (incl. file-read output) — *without* the evicted-filter. This
+quantity is:
 
-- It is **monotonic** — eviction marks events evicted but leaves them in the log,
-  so the sum never decreases.
-- It counts only **novel content** (cached prefix re-reads are never re-counted),
-  making it the provider-independent realization of "cumulative non-cached
-  tokens." It works identically on zai (good cache reporting) and GLM-via-Ollama
-  (reports 0 input on cached prompts — the `calibration_ratio` problem — which
-  would make a provider-reported-uncached trigger unreliable there).
-- Units are **estimated** tokens (`estimate_tokens` is chars/4, ~5–7× under real
-  for code/tool output). The interval is therefore denominated in estimated
-  tokens; the default is chosen accordingly (Component D).
+- **Monotonic**, but this requires care against BOTH context levers, not just
+  eviction:
+  - *Eviction* marks events evicted (`evicted_ids`) but never deletes them — the
+    log is append-only (`eventlog.rs`), so evicted events still count. ✅
+  - *Compaction (#6b)* is the trap: `EventLog::clear_tool_output`
+    (`eventlog.rs:50-58`) **empties a compacted `ToolResult`'s `output` in
+    place**, fired live on every compaction (`main.rs:2643`) and on resume via
+    `clear_compacted_bodies` (`main.rs:1810`, `:3639`). A naive re-sum of live
+    bodies would therefore *drop* on compaction — resurrecting B1 via compaction.
+  - **Fix:** the sum is *compaction-aware*. For any `ToolResult` that has a
+    matching `ToolResultCompacted`, count its preserved `original_tokens`
+    (`compaction.rs:206` = `it.tokens`, the exact pre-clear `estimate_tokens`
+    value) instead of the live (possibly-emptied) body. Clearing is *always*
+    paired with a `ToolResultCompacted`, so before clear a `ToolResult`
+    contributes `estimate_tokens(body)` and after clear it contributes
+    `original_tokens` — the same number. The sum never decreases, across live
+    compaction *and* resume, with **no new persistence** (still a pure function
+    of the append-only log).
+- **Novel content only** (cached prefix re-reads are never re-counted) — the
+  provider-independent realization of "cumulative non-cached tokens." Works
+  identically on zai and GLM-via-Ollama (which reports 0 input on cached prompts
+  — the `calibration_ratio` problem — making a provider-reported-uncached trigger
+  unreliable there).
+- **Estimated units** (`estimate_tokens` is `chars/3`, `economy.rs:43`). The
+  interval is denominated in these estimated tokens; the default is chosen
+  empirically (Component D).
 
 New event (weightless):
 
@@ -136,7 +153,23 @@ Pure decision helper (`zoid-core`):
 
 ```rust
 /// Cumulative estimated tokens of appended (novel) content in the raw log.
-pub fn cumulative_appended(events: impl IntoIterator<Item = &Event>) -> u64 { /* sum */ }
+/// Compaction-aware: a ToolResult whose body was cleared by #6b is counted at
+/// its preserved `original_tokens`, so the total never decreases.
+pub fn cumulative_appended(events: impl IntoIterator<Item = &Event> + Clone) -> u64 {
+    // First pass: id -> original_tokens for every compacted tool result.
+    let orig: HashMap<&str, u64> = events.clone().into_iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::ToolResultCompacted { id, original_tokens, .. } => Some((id.as_str(), *original_tokens)),
+            _ => None,
+        }).collect();
+    events.into_iter().map(|e| match &e.kind {
+        EventKind::UserMessage { text } | EventKind::AssistantMessage { text }
+            | EventKind::ModelDelta { text } => estimate_tokens(text),
+        EventKind::ToolResult { id, output, .. } =>
+            orig.get(id.as_str()).copied().unwrap_or_else(|| estimate_tokens(output)),
+        _ => 0, // DirectiveReasserted, Usage, markers, etc. contribute nothing
+    }).sum()
+}
 
 /// True when >= `interval` estimated-appended tokens have accrued since the last
 /// re-assertion (or since session start if none). `interval == 0` disables.
@@ -161,10 +194,12 @@ let will_reassert = config.reassert_interval > 0
 let reassert_text = will_reassert.then(|| wrap_reassertion(&config.system));
 
 // S2: size the request honestly — fold the reminder into overhead for THIS turn.
-let overhead_now = if will_reassert {
-    overhead + estimate_tokens(reassert_text.as_ref().unwrap())
-} else { overhead };
-preflight_gate(..., overhead_now).await?;
+// `overhead` is a ContextOverhead struct, so add into a field (not the struct).
+let mut overhead_now = overhead.clone();
+if will_reassert {
+    overhead_now.system_tokens += estimate_tokens(reassert_text.as_ref().unwrap());
+}
+preflight_gate(..., &overhead_now).await?;
 
 let req = build_request_with_thinking(&events, ..., reassert_text.clone());
 // ... stream ...
@@ -225,9 +260,8 @@ Fold into `[economy]`, reusing the "0 disables" convention:
 pub struct EconomyConfig {
     // ... existing ...
     /// Re-assert the system prompt at the live edge every N estimated-appended
-    /// tokens of novel content. 0 disables. Default 100_000. (Estimated units:
-    /// estimate_tokens undercounts real tokens ~5-7x, so 100k ≈ ~600k real
-    /// novel tokens between re-floors.)
+    /// tokens of novel content. 0 disables. Default 100_000. Units are
+    /// estimate_tokens (chars/3, economy.rs); tune empirically per model.
     pub reassert_interval_tokens: u64,
 }
 // Default → reassert_interval_tokens: 100_000
@@ -239,11 +273,12 @@ pub struct EconomyConfig {
 
 Defaults & rationale:
 
-- **100_000 estimated-appended tokens.** Calibrated against a real long session
-  (~22M real uncached tokens → ~3.7M estimated-appended): ~37 re-floors across
-  that whole session, ~one refresh per ~600k real novel tokens. Frequent enough
-  to counter drift, rare enough that the amortized cost of the full-prompt copy
-  is negligible.
+- **100_000 estimated-appended tokens.** Chosen empirically: on a very long real
+  session (user observed ~22M real uncached tokens) this yields on the order of
+  tens of re-floors — frequent enough to counter drift, rare enough that the
+  amortized cost of the full-prompt copy is negligible. The exact estimated↔real
+  ratio is model-dependent (`estimate_tokens` is `chars/3`); treat the default as
+  a starting point and tune via the transcript markers (Observability).
 - **Enabled by default** (non-zero): drift is observed on the primary models.
 - **Global, not per-provider.** Anthropic benefits least (privileged cached
   system block) but re-flooring fires rarely and is harmless there; per-provider
@@ -261,15 +296,20 @@ can't tell whether it's firing:
 
 ## Testing
 
-1. **Pure trigger (`zoid-core`):** `cumulative_appended` is monotonic across a
-   log that includes `TurnsEvicted` (evicted events still counted); it ignores
-   `DirectiveReasserted`. `reassertion_due` false when `interval == 0`, false
+1. **Pure trigger (`zoid-core`):** `cumulative_appended` ignores
+   `DirectiveReasserted`; `reassertion_due` false when `interval == 0`, false
    below threshold, true at `>= interval`; a marker resets the baseline (next
    fire only after another `interval` of appended tokens); uses the *last* marker.
-2. **Steady-state liveness (the B1 regression guard):** over a synthetic log that
-   grows well past `context_target` with eviction markers folded in,
-   `reassertion_due` continues to return true at each interval — proving the
-   trigger does *not* saturate the way a window-based trigger would.
+2. **Monotonicity under BOTH context levers (the real B1 regression guard):**
+   `cumulative_appended` must never decrease when
+   (a) `TurnsEvicted` markers are folded in (evicted events still counted), AND
+   (b) a `ToolResult` is compacted and its body cleared — i.e. run the log
+   through `clear_tool_output` / `clear_compacted_bodies` and assert the total is
+   unchanged (the cleared body is counted at its `ToolResultCompacted`'s
+   `original_tokens`). This is the case that eviction-only tests miss and that
+   reopened B1; it must exercise the *cleared* log, not just eviction markers.
+   Then assert `reassertion_due` keeps firing at each interval as the log grows
+   well past `context_target` — proving no window/compaction-driven dormancy.
 3. **Weightless/inert marker:** `context_window` total unchanged by a
    `DirectiveReasserted` event; `eviction::is_inert()` returns true for it;
    `group_turns` does not attach it to a turn's id-set.
