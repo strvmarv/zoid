@@ -4955,6 +4955,22 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             app.shell.status_hint = Some("delegation is temporarily disabled".into());
             Ok(false)
         }
+        Command::Worktree(name) => {
+            if name.trim().is_empty() {
+                app.shell.status_hint =
+                    Some("usage: :worktree <name> · :worktree exit".into());
+                return Ok(false);
+            }
+            // Call the handler directly — NOT via the ui_tx channel.
+            // exec_command runs on the main loop task that also recv()s
+            // from ui_rx; sending via the bounded channel can deadlock.
+            handle_worktree_request(app, zoid::agent::WorktreeAction::Enter { name });
+            Ok(false)
+        }
+        Command::WorktreeExit => {
+            handle_worktree_request(app, zoid::agent::WorktreeAction::Exit);
+            Ok(false)
+        }
         Command::OpenConfig => {
             app.shell.overlay = zoid_tui::Overlay::Config;
             app.shell.config_section = 0;

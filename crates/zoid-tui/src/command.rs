@@ -48,6 +48,10 @@ pub enum Command {
     Feedback,
     /// Open the keyboard-shortcuts help overlay (`:help`).
     OpenHelp,
+    /// Enter a git worktree (`:worktree <name>`). Empty string = usage hint.
+    Worktree(String),
+    /// Exit the current worktree (`:worktree exit`).
+    WorktreeExit,
     Unknown(String),
 }
 
@@ -98,6 +102,11 @@ pub fn parse_command(raw: &str) -> Command {
         rest if rest == "delegate" || rest.starts_with("delegate ") => {
             Command::Delegate(rest.strip_prefix("delegate").unwrap().trim().to_string())
         }
+        "worktree exit" => Command::WorktreeExit,
+        s if s.starts_with("worktree ") => {
+            Command::Worktree(s["worktree ".len()..].trim().to_string())
+        }
+        "worktree" => Command::Worktree(String::new()),
         // --- bare namespaces (session, drawer, companion) fall through to Unknown.
         other => Command::Unknown(other.to_string()),
     }
@@ -299,6 +308,27 @@ mod tests {
         assert_eq!(
             parse_command(":plugin install"),
             Command::PluginInstall(String::new())
+        );
+    }
+
+    #[test]
+    fn worktree_enter_parses_name() {
+        assert_eq!(
+            parse_command(":worktree feature-x"),
+            Command::Worktree("feature-x".into())
+        );
+    }
+
+    #[test]
+    fn worktree_exit_parses() {
+        assert_eq!(parse_command(":worktree exit"), Command::WorktreeExit);
+    }
+
+    #[test]
+    fn worktree_no_arg_is_empty() {
+        assert_eq!(
+            parse_command(":worktree"),
+            Command::Worktree(String::new())
         );
     }
 }

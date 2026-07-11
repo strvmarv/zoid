@@ -919,6 +919,8 @@ fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
                     Command::CompactNow => "→ Compact context now".to_string(),
                     Command::Feedback => "→ Submit feedback".to_string(),
                     Command::OpenHelp => "→ Keyboard shortcuts".to_string(),
+                    Command::Worktree(name) => format!("→ Enter worktree: {name}"),
+                    Command::WorktreeExit => "→ Exit worktree".to_string(),
                 };
                 lines.push(Line::styled(preview, Style::new().fg(color::DIM)));
             }
