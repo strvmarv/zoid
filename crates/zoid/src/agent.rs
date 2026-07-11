@@ -1350,6 +1350,90 @@ async fn run_turn_inner(
                         "subagent dispatched"
                     );
                 }
+                Some(zoid_tools::ToolKind::Emitting) if tc.name == "enter_worktree" => {
+                    let name = tc
+                        .args
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if name.trim().is_empty() {
+                        emit(
+                            &session,
+                            &mut events,
+                            ui,
+                            &config.branch,
+                            EventKind::ToolResult {
+                                id: tc.id,
+                                name: tc.name,
+                                output: "enter_worktree: 'name' is required".into(),
+                                is_error: true,
+                            },
+                            session_id,
+                            now,
+                        )
+                        .await?;
+                        continue;
+                    }
+                    // Send the relocation request to the main loop.
+                    let _ = ui
+                        .send(AgentUpdate::WorktreeRequested {
+                            action: WorktreeAction::Enter { name: name.clone() },
+                        })
+                        .await;
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::ToolResult {
+                            id: tc.id,
+                            name: tc.name,
+                            output: format!("{{\"worktree\": \"{name}\"}}"),
+                            is_error: false,
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                    tracing::info!(
+                        kind = "tool",
+                        name = "enter_worktree",
+                        ms = tool_start.elapsed().as_millis() as u64,
+                        ok = true,
+                        "worktree enter requested"
+                    );
+                }
+                Some(zoid_tools::ToolKind::Emitting) if tc.name == "exit_worktree" => {
+                    // Send the exit request to the main loop.
+                    let _ = ui
+                        .send(AgentUpdate::WorktreeRequested {
+                            action: WorktreeAction::Exit,
+                        })
+                        .await;
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::ToolResult {
+                            id: tc.id,
+                            name: tc.name,
+                            output: "exiting worktree".into(),
+                            is_error: false,
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                    tracing::info!(
+                        kind = "tool",
+                        name = "exit_worktree",
+                        ms = tool_start.elapsed().as_millis() as u64,
+                        ok = true,
+                        "worktree exit requested"
+                    );
+                }
                 Some(zoid_tools::ToolKind::Interactive)
                     if tc.name == "ask_user"
                         || tc.name == "apply_mode_mapping"
