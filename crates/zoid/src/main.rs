@@ -2592,9 +2592,7 @@ where
                         if let EventKind::DelegationResult { subagent_id, .. } = &ev.kind {
                             app.in_flight_subagents.retain(|s| s.id != *subagent_id);
                             app.in_flight.lock().unwrap().remove(subagent_id);
-                            if app.in_flight_subagents.is_empty() {
-                                app.shell.status_hint = None;
-                            }
+                            app.shell.subagent_rows.retain(|s| s.id != *subagent_id);
                         }
                         // A tool result ends the in-flight indicator for that tool.
                         // Don't clear immediately — set tool_complete for the 2s
@@ -2840,12 +2838,12 @@ where
                         }
                     }
                     AgentUpdate::SubagentStarted { id, task } => {
-                        app.in_flight_subagents.push(SubagentInfo { id, task });
-                        app.shell.status_hint = Some(format!(
-                            "{} {} subagent running…",
-                            zoid_tui::tokens::glyph::RUNNING,
-                            app.in_flight_subagents.len()
-                        ));
+                        app.in_flight_subagents.push(SubagentInfo { id: id.clone(), task: task.clone() });
+                        app.shell.subagent_rows.push(zoid_tui::state::SubagentRow { id, task });
+                        // Subagent status belongs in the right-rail Subagents
+                        // drawer, NOT the bottom status bar. Do NOT set
+                        // status_hint here — it would render on the bottom bar
+                        // and overlap the layout.
                     }
                     AgentUpdate::CompactionStarted => {
                         app.shell.compacting = true;

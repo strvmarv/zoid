@@ -252,6 +252,10 @@ pub struct ShellState {
     /// a longer list (rehydrate-safe: this is a layout hint, not the task list —
     /// the rendered content still comes from the event log). Default 0 ("no tasks").
     pub tasks_len: u16,
+    /// In-flight subagent rows for the Subagents drawer (right rail). Populated
+    /// by the bin from `in_flight_subagents`. Cleared when a DelegationResult
+    /// arrives. NOT on the bottom status bar — subagent status belongs here.
+    pub subagent_rows: Vec<SubagentRow>,
     /// Display rows for the resume-session picker (bin-formatted, most-recent-first).
     pub sessions: Vec<String>,
     /// Per-row "in use" flags for the resume-session picker, index-aligned with
@@ -391,6 +395,11 @@ impl ShellState {
                 title: "tasks".into(),
                 open: true,
             },
+            Drawer {
+                id: DrawerId::Subagents,
+                title: "subagents".into(),
+                open: true,
+            },
         ];
         Self {
             active_mode: "Chat".to_string(),
@@ -422,6 +431,7 @@ impl ShellState {
             input_empty: true,
             colon_trigger_hinted: false,
             tasks_len: 0,
+            subagent_rows: Vec::new(),
             sessions: Vec::new(),
             sessions_live: Vec::new(),
             session_selected: 0,
@@ -617,7 +627,8 @@ mod tests {
                 DrawerId::Repo,
                 DrawerId::Session,
                 DrawerId::Context,
-                DrawerId::Tasks
+                DrawerId::Tasks,
+                DrawerId::Subagents
             ]
         );
         // All four expanded (mockup shows repo/session/context all `on`; tasks joins them).
@@ -625,8 +636,8 @@ mod tests {
         assert!(s.drawer(DrawerId::Session).unwrap().open);
         assert!(s.drawer(DrawerId::Context).unwrap().open);
         assert!(s.drawer(DrawerId::Tasks).unwrap().open);
-        // Subagents drawer is hidden from the default rail.
-        assert!(s.drawer(DrawerId::Subagents).is_none());
+        // Subagents drawer is in the default rail (re-enabled).
+        assert!(s.drawer(DrawerId::Subagents).unwrap().open);
     }
 
     #[test]
@@ -636,19 +647,24 @@ mod tests {
         let ids: Vec<DrawerId> = s.drawers.iter().map(|d| d.id).collect();
         assert_eq!(
             ids,
-            vec![DrawerId::Session, DrawerId::Context, DrawerId::Tasks]
+            vec![
+                DrawerId::Session,
+                DrawerId::Context,
+                DrawerId::Tasks,
+                DrawerId::Subagents
+            ]
         );
         assert!(s.drawer(DrawerId::Repo).is_none());
         // Removing an absent drawer is a no-op (idempotent).
         s.remove_drawer(DrawerId::Repo);
-        assert_eq!(s.drawers.len(), 3);
+        assert_eq!(s.drawers.len(), 4);
     }
 
     #[test]
-    fn tasks_drawer_is_last_and_open() {
+    fn subagents_drawer_is_last_and_open() {
         let s = ShellState::new();
         let last = s.drawers.last().unwrap();
-        assert_eq!(last.id, DrawerId::Tasks);
+        assert_eq!(last.id, DrawerId::Subagents);
         assert!(last.open);
     }
 

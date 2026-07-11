@@ -4,22 +4,22 @@ expression: "draw(&s, &seeded(), 100, 24)"
 ---
 "v0.3.2                                          zoid          Esc interrupt · : command · ^P palette"
 "┌ : ──────────────────────────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
-"│ session                                             │ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
-"│ drawer                                              │ ╰─────────────────────────────────────────╯ "
-"│ mode                                                │                                             "
-"│ companion                                           │ ╭ ▾ session ──────────────────────────────╮ "
-"│ compact                                             │ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
-"│ delegate                                            │ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
-"│ config                                              │ │⌚ tok 0  tps 0                          │ " Hidden by multi-width symbols: [(58, " ")]
-"│ help                                                │ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
+"│ session                                             │ ╰─────────────────────────────────────────╯ "
+"│ drawer                                              │                                             "
+"│ mode                                                │ ╭ ▾ session ──────────────────────────────╮ "
+"│ companion                                           │ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
+"│ compact                                             │ ╰─────────────────────────────────────────╯ "
+"│ delegate                                            │                                             "
+"│ config                                              │ ╭ ▾ context · tokens ─────────────────────╮ "
+"│ help                                                │ │churn                              cache │ "
 "│ q                                                   │ ╰─────────────────────────────────────────╯ "
 "│ quit                                                │                                             "
-"│↑↓ move · ⏎ select · esc close · type to filter      │ ╭ ▾ context · tokens ─────────────────────╮ "
-"│                                                     │ │churn                              cache │ "
+"│↑↓ move · ⏎ select · esc close · type to filter      │ ╭ ▾ tasks ────────────────────────────────╮ "
+"│                                                     │ │no tasks                                 │ "
 "│                                                     │ ╰─────────────────────────────────────────╯ "
 "│                                                     │                                             "
-"│                                                     │ ╭ ▾ tasks ────────────────────────────────╮ "
-"│                                                     │ │no tasks                                 │ "
+"│                                                     │ ╭ ▾ subagents ────────────────────────────╮ "
+"│                                                     │ │none                                     │ "
 "└─────────────────────────────────────────────────────┘ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"

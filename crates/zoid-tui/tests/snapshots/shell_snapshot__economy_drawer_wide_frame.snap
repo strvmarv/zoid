@@ -4,14 +4,10 @@ expression: "draw_econ(&s, &seeded_economy(), &seeded(), 140, 24)"
 ---
 "v0.3.2                                                              zoid                              Esc interrupt · : command · ^P palette"
 "  00:00 › what's causing the 500?                                                             █ ╭ ▾ repo ─────────────────────────────────╮ "
-"                                                                                              █ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(98, " ")]
-"  00:00 zoid an unwrapped lookup in the handler.                                              █ ╰─────────────────────────────────────────╯ "
-"                                                                                              █                                             "
+"                                                                                              █ ╰─────────────────────────────────────────╯ "
+"  00:00 zoid an unwrapped lookup in the handler.                                              █                                             "
 "                                                                                              █ ╭ ▾ session ──────────────────────────────╮ "
 "                                                                                              █ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(98, " ")]
-"                                                                                              █ │🤖  ·                                    │ " Hidden by multi-width symbols: [(98, " ")]
-"                                                                                              █ │⌚ tok 0  tps 0                          │ " Hidden by multi-width symbols: [(98, " ")]
-"                                                                                              █ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(98, " ")]
 "                                                                                              █ ╰─────────────────────────────────────────╯ "
 "                                                                                              █                                             "
 "                                                                                              █ ╭ ▾ context · tokens ─────────────────────╮ "
@@ -20,6 +16,10 @@ expression: "draw_econ(&s, &seeded_economy(), &seeded(), 140, 24)"
 "                                                                                              █                                             "
 "                                                                                              █ ╭ ▾ tasks ────────────────────────────────╮ "
 "                                                                                              █ │no tasks                                 │ "
+"                                                                                              █ ╰─────────────────────────────────────────╯ "
+"                                                                                              █                                             "
+"                                                                                              █ ╭ ▾ subagents ────────────────────────────╮ "
+"                                                                                              █ │none                                     │ "
 "                                                                                              █ ╰─────────────────────────────────────────╯ "
 "                                                                                              █                                             "
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"

@@ -4,22 +4,22 @@ expression: "draw(&s, &seeded(), 100, 24)"
 ---
 "v0.3.2                                          zoid          Esc interrupt · : command · ^P palette"
 "┌ ›  ─────────────────────────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
-"│ New session                                         │ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
-"│ Resume session…                                     │ ╰─────────────────────────────────────────╯ "
-"│ Rename session…                                     │                                             "
-"│ Delegate task…                                      │ ╭ ▾ session ──────────────────────────────╮ "
-"│ Import mode from URL…                               │ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
-"│ Update mode…                                        │ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
-"│ Switch to Build                                     │ │⌚ tok 0  tps 0                          │ " Hidden by multi-width symbols: [(58, " ")]
-"│ Reload modes                                        │ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
+"│ New session                                         │ ╰─────────────────────────────────────────╯ "
+"│ Resume session…                                     │                                             "
+"│ Rename session…                                     │ ╭ ▾ session ──────────────────────────────╮ "
+"│ Delegate task…                                      │ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
+"│ Import mode from URL…                               │ ╰─────────────────────────────────────────╯ "
+"│ Update mode…                                        │                                             "
+"│ Switch to Build                                     │ ╭ ▾ context · tokens ─────────────────────╮ "
+"│ Reload modes                                        │ │churn                              cache │ "
 "│ Toggle repo drawer                                  │ ╰─────────────────────────────────────────╯ "
 "│ Toggle session drawer                               │                                             "
-"│ Toggle context drawer                               │ ╭ ▾ context · tokens ─────────────────────╮ "
-"│ Open settings                                       │ │churn                              cache │ "
+"│ Toggle context drawer                               │ ╭ ▾ tasks ────────────────────────────────╮ "
+"│ Open settings                                       │ │no tasks                                 │ "
 "│ MCP servers…                                        │ ╰─────────────────────────────────────────╯ "
 "│ Keyboard shortcuts…                                 │                                             "
-"│ Submit feedback…                                    │ ╭ ▾ tasks ────────────────────────────────╮ "
-"│ Enable companion                                    │ │no tasks                                 │ "
+"│ Submit feedback…                                    │ ╭ ▾ subagents ────────────────────────────╮ "
+"│ Enable companion                                    │ │none                                     │ "
 "└─────────────────────────────────────────────────────┘ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"

@@ -4,14 +4,10 @@ expression: "draw(&s, &seeded(), 100, 24)"
 ---
 "v0.3.2                                          zoid          Esc interrupt · : command · ^P palette"
 "┌ :session rename  ───────────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
-"│→ Rename session:                                    │ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(58, " ")]
-"│ fix 500                                             │ ╰─────────────────────────────────────────╯ "
-"│ add auth                                            │                                             "
-"│↑↓ move · ⏎ select · esc close · type to filter      │ ╭ ▾ session ──────────────────────────────╮ "
-"│                                                     │ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
-"│                                                     │ │🤖  ·                                    │ " Hidden by multi-width symbols: [(58, " ")]
-"│                                                     │ │⌚ tok 0  tps 0                          │ " Hidden by multi-width symbols: [(58, " ")]
-"│                                                     │ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(58, " ")]
+"│→ Rename session:                                    │ ╰─────────────────────────────────────────╯ "
+"│ fix 500                                             │                                             "
+"│ add auth                                            │ ╭ ▾ session ──────────────────────────────╮ "
+"│↑↓ move · ⏎ select · esc close · type to filter      │ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(58, " ")]
 "│                                                     │ ╰─────────────────────────────────────────╯ "
 "│                                                     │                                             "
 "│                                                     │ ╭ ▾ context · tokens ─────────────────────╮ "
@@ -20,6 +16,10 @@ expression: "draw(&s, &seeded(), 100, 24)"
 "│                                                     │                                             "
 "│                                                     │ ╭ ▾ tasks ────────────────────────────────╮ "
 "│                                                     │ │no tasks                                 │ "
+"│                                                     │ ╰─────────────────────────────────────────╯ "
+"│                                                     │                                             "
+"│                                                     │ ╭ ▾ subagents ────────────────────────────╮ "
+"│                                                     │ │none                                     │ "
 "└─────────────────────────────────────────────────────┘ ╰─────────────────────────────────────────╯ "
 "                                                      █                                             "
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────┐"

@@ -431,14 +431,14 @@ mod tests {
     #[test]
     fn wide_shows_rail_and_drawer_headers() {
         let s = ShellState::new();
-        let l = compute(area(100, 24), &s);
-        let rail = l.rail.expect("rail visible at 100 cols");
+        let l = compute(area(160, 40), &s);
+        let rail = l.rail.expect("rail visible at 160 cols");
         assert_eq!(rail.width, RAIL_WIDTH);
         // At 100×24 the rail has ~19 inner rows. The fit allocator guarantees
         // every open drawer at least a header, so ALL FOUR now appear — the
         // Tasks drawer no longer silently vanishes when the rail is short
         // (the pre-allocator behavior dropped it here). This is the T8 fix.
-        assert_eq!(l.drawer_headers.len(), 4); // repo/session/context/tasks all visible
+        assert_eq!(l.drawer_headers.len(), 5); // repo/session/context/tasks/subagents all visible
                                                // headers stack downward
         assert!(l.drawer_headers[1].1.y > l.drawer_headers[0].1.y);
     }
@@ -513,9 +513,10 @@ mod tests {
 
     #[test]
     fn open_drawer_gets_a_body_rect_sized_by_kind() {
-        let mut s = ShellState::new(); // all four open by default
+        let mut s = ShellState::new(); // all five open by default
         s.toggle_drawer(DrawerId::Repo); // Repo now closed
-        let l = compute(area(100, 32), &s);
+        s.toggle_drawer(DrawerId::Subagents); // Subagents closed (test focuses Context/Session)
+        let l = compute(area(160, 40), &s);
         let context = l
             .drawer_bodies
             .iter()
