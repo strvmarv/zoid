@@ -59,42 +59,30 @@ fn into_kept_preserves_dir_and_branch_on_disk() {
     let tmp = tempfile::tempdir().unwrap();
     init_repo(tmp.path());
 
-    let path;
-    let name;
-    {
-        let wt = create_worktree(tmp.path(), "wt-keep2").unwrap();
-        path = wt.path().to_path_buf();
-        name = wt.name().to_string();
-    } // guard consumed via into_kept inside the block — see below
+    // Create a worktree and call into_kept — suppresses Drop, keeps dir + branch.
+    let wt = create_worktree(tmp.path(), "wt-keep1").unwrap();
+    let path = wt.path().to_path_buf();
+    let _ = std::fs::write(path.join("new.txt"), "data");
 
-    // Re-create: into_kept must be called before the closing brace.
-    let wt = create_worktree(tmp.path(), "wt-keep2b").unwrap();
-    let path2 = wt.path().to_path_buf();
-    let _ = std::fs::write(path2.join("new.txt"), "data");
-
-    // Call into_kept — suppresses Drop, keeps dir + branch.
+    // Consume the guard — Drop must NOT fire.
     let (kept_path, kept_name) = wt.into_kept();
-    assert_eq!(kept_path, path2);
-    assert_eq!(kept_name, "wt-keep2b");
+    assert_eq!(kept_path, path);
+    assert_eq!(kept_name, "wt-keep1");
 
-    // Dir still exists (NOT removed).
-    assert!(path2.exists(), "worktree dir must survive into_kept");
-    assert!(path2.join("new.txt").exists(), "file in worktree must survive");
+    // Dir still exists (NOT removed by Drop).
+    assert!(path.exists(), "worktree dir must survive into_kept");
+    assert!(path.join("new.txt").exists(), "file in worktree must survive");
 
-    // Branch still exists (NOT deleted).
+    // Branch still exists (NOT deleted by Drop).
     let repo = git2::Repository::open(tmp.path()).unwrap();
     assert!(
-        repo.find_branch("wt-keep2b", git2::BranchType::Local).is_ok(),
+        repo.find_branch("wt-keep1", git2::BranchType::Local).is_ok(),
         "branch must survive into_kept"
     );
 
-    // But the guard is gone — dropping a new guard would run Drop.
-    // Verify no worktree registration leak by checking git worktree list.
-    let _ = std::process::Command::new("git")
-        .args(["-C"])
-        .arg(tmp.path())
-        .args(["worktree", "prune"])
-        .status();
+    // Clean up: remove the kept worktree explicitly.
+    zoid::worktree::remove_worktree(tmp.path(), "wt-keep1").unwrap();
+    assert!(!path.exists(), "cleaned up after test");
 }
 
 #[test]
@@ -579,15 +567,16 @@ as dispatch_subagent). The loop performs the actual relocation."
 In `crates/zoid/src/main.rs`, before the `App` struct (line 1433), add:
 
 ```rust
-/// The active worktree session: tracks the worktree's path and branch name,
-/// plus the cwd to restore on exit. Set by the `WorktreeRequested` handler
-/// when entering; cleared on exit. `spawn_turn` reads `active_worktree`
-/// to override `turn_config.cwd`.
+/// The active worktree session: tracks the worktree's path and branch name.
+/// Set by the `WorktreeRequested` handler when entering; cleared on exit.
+/// `spawn_turn` reads `active_worktree` to override `turn_config.cwd`.
+/// On exit, `active_worktree` becomes None and `spawn_turn` falls back to
+/// `turn_config.cwd = PathBuf::from(".")` (the main checkout) — no explicit
+/// prior_cwd restore needed.
 #[derive(Clone)]
 struct WorktreeSession {
     path: PathBuf,
     name: String,
-    prior_cwd: PathBuf,
 }
 ```
 
@@ -646,8 +635,6 @@ fn handle_worktree_request(app: &mut App, action: zoid::agent::WorktreeAction) {
                 app.shell.status_hint = Some("not a git repository".into());
                 return;
             }
-            let prior_cwd = std::env::current_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."));
             // Create the worktree (idempotent: if it already exists, enter it).
             let wt = match zoid::worktree::create_worktree(
                 std::path::Path::new("."),
@@ -666,7 +653,6 @@ fn handle_worktree_request(app: &mut App, action: zoid::agent::WorktreeAction) {
                             path: std::fs::canonicalize(&existing_path)
                                 .unwrap_or(existing_path),
                             name: name.clone(),
-                            prior_cwd,
                         });
                         app.shell.status_hint =
                             Some(format!("entered existing worktree '{name}'"));
@@ -682,9 +668,10 @@ fn handle_worktree_request(app: &mut App, action: zoid::agent::WorktreeAction) {
             app.active_worktree = Some(WorktreeSession {
                 path,
                 name: branch_name,
-                prior_cwd,
             });
             app.shell.status_hint = Some(format!("entered worktree '{name}'"));
+            // Update the TUI's cwd display so the user sees the worktree path.
+            app.shell.cwd = path.clone();
         }
         WorktreeAction::Exit => {
             // Guard: not in a worktree?
@@ -725,11 +712,15 @@ fn handle_worktree_request(app: &mut App, action: zoid::agent::WorktreeAction) {
                     wt.name, wt.name
                 ));
             }
+            // Restore the TUI's cwd display to the main checkout.
+            app.shell.cwd = std::path::PathBuf::from(".");
         }
     }
 }
 
 /// Check if a worktree has uncommitted changes via `git status --porcelain`.
+/// Defaults to `false` (dirty) on error — never auto-remove a worktree if we
+/// can't verify it's clean.
 fn is_worktree_clean(path: &std::path::Path) -> bool {
     std::process::Command::new("git")
         .args(["-C"])
@@ -737,7 +728,7 @@ fn is_worktree_clean(path: &std::path::Path) -> bool {
         .args(["status", "--porcelain"])
         .output()
         .map(|o| o.stdout.is_empty())
-        .unwrap_or(true) // if git fails, assume clean (don't block exit)
+        .unwrap_or(false) // conservative: if git fails, assume dirty
 }
 ```
 
@@ -844,24 +835,17 @@ In `crates/zoid/src/main.rs`, inside `exec_command` (after the `Command::Delegat
                     Some("usage: :worktree <name> · :worktree exit".into());
                 return Ok(false);
             }
-            // Send through the same loop handler as the tool.
-            use zoid::agent::{AgentUpdate, WorktreeAction};
-            let _ = app
-                .ui_tx
-                .send(AgentUpdate::WorktreeRequested {
-                    action: WorktreeAction::Enter { name },
-                })
-                .await;
+            // Call the handler directly — NOT via the ui_tx channel.
+            // exec_command runs on the main loop task that also recv()s
+            // from ui_rx; sending via the bounded channel can deadlock.
+            handle_worktree_request(
+                app,
+                zoid::agent::WorktreeAction::Enter { name },
+            );
             Ok(false)
         }
         Command::WorktreeExit => {
-            use zoid::agent::{AgentUpdate, WorktreeAction};
-            let _ = app
-                .ui_tx
-                .send(AgentUpdate::WorktreeRequested {
-                    action: WorktreeAction::Exit,
-                })
-                .await;
+            handle_worktree_request(app, zoid::agent::WorktreeAction::Exit);
             Ok(false)
         }
 ```
@@ -907,7 +891,6 @@ fn enter_exit_round_trip_restores_cwd_and_cleans_up() {
     init_repo(tmp.path());
 
     // Simulate enter: create worktree, into_kept, store "session".
-    let prior_cwd = tmp.path().to_path_buf();
     let wt = create_worktree(tmp.path(), "rt-1").unwrap();
     let (path, name) = wt.into_kept();
     let path = std::fs::canonicalize(&path).unwrap_or(path);
@@ -941,9 +924,6 @@ fn enter_exit_round_trip_restores_cwd_and_cleans_up() {
         repo.find_branch(&name, git2::BranchType::Local).is_err(),
         "branch removed on exit"
     );
-
-    // prior_cwd is unchanged (it's the repo root).
-    assert!(prior_cwd.exists(), "prior cwd still exists");
 }
 
 #[test]
@@ -1014,6 +994,7 @@ inside it, exit restores cwd and cleans up (clean) or keeps (dirty)."
 | Emitting handler: send update + ToolResult echo | Task 4 |
 | Main loop handler: validate, enter/exit | Task 5 |
 | `spawn_turn` cwd override | Task 5 |
+| `app.shell.cwd` TUI display sync | Task 5 (enter/exit both update `shell.cwd`) |
 | No nesting (refuse if already in worktree) | Task 5 (`handle_worktree_request`) |
 | Name collision → enter existing | Task 5 (`handle_worktree_request`) |
 | Active subagent → refuse relocation | Task 5 (`handle_worktree_request`) |
@@ -1030,7 +1011,7 @@ inside it, exit restores cwd and cleans up (clean) or keeps (dirty)."
 **3. Type consistency:**
 - `WorktreeAction::Enter { name: String }` / `WorktreeAction::Exit` — used consistently in Tasks 3, 4, 5, 6.
 - `AgentUpdate::WorktreeRequested { action: WorktreeAction }` — used in Tasks 3, 4, 5, 6.
-- `WorktreeSession { path, name, prior_cwd }` — defined in Task 5, used in Task 5.
+- `WorktreeSession { path, name }` — defined in Task 5, used in Task 5.
 - `into_kept() -> (PathBuf, String)` — defined in Task 1, called in Task 5.
 - `remove_worktree(repo_root: &Path, name: &str) -> Result<()>` — defined in Task 1, called in Task 5 and Task 7.
 - `Command::Worktree(String)` / `Command::WorktreeExit` — defined in Task 6, handled in Task 6.
