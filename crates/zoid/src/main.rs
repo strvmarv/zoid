@@ -1430,6 +1430,18 @@ struct SubagentInfo {
     task: String,
 }
 
+/// The active worktree session: tracks the worktree's path and branch name.
+/// Set by the `WorktreeRequested` handler when entering; cleared on exit.
+/// `spawn_turn` reads `active_worktree` to override `turn_config.cwd`.
+/// On exit, `active_worktree` becomes None and `spawn_turn` falls back to
+/// `turn_config.cwd = PathBuf::from(".")` (the main checkout) — no explicit
+/// prior_cwd restore needed.
+#[derive(Clone)]
+struct WorktreeSession {
+    path: PathBuf,
+    name: String,
+}
+
 struct App {
     session: SessionHandle,
     session_id: Ulid,
@@ -1516,6 +1528,8 @@ struct App {
     session_ids: Vec<Ulid>,
     /// In-flight subagents, tracked for the Subagents drawer + busy guard.
     in_flight_subagents: Vec<SubagentInfo>,
+    /// The active worktree session (None when in the main checkout).
+    active_worktree: Option<WorktreeSession>,
     /// Shared in-flight subagent ID set, threaded into TurnConfig so the
     /// Emitting handler can enforce sequential dispatch (Gap 3). The spawned
     /// subagent's DelegationResult removes the ID.
@@ -2014,6 +2028,7 @@ async fn main() -> Result<()> {
         session_started_ms,
         session_ids: Vec::new(),
         in_flight_subagents: Vec::new(),
+        active_worktree: None,
         in_flight: std::sync::Arc::new(std::sync::Mutex::new(
             std::collections::HashSet::new(),
         )),
@@ -2903,6 +2918,9 @@ where
                         if apply_plugin_scan(app, id, origin, res) {
                             persist_active_mode(app).await;
                         }
+                    }
+                    zoid::agent::AgentUpdate::WorktreeRequested { action } => {
+                        handle_worktree_request(app, action);
                     }
                 }
             }
@@ -5266,6 +5284,117 @@ fn parse_thinking_env(val: &str) -> Option<zoid_core::config::PartialThinking> {
     Some(pt)
 }
 
+/// Process a `WorktreeRequested` signal from the agent loop or `:worktree`
+/// command. Performs the actual worktree enter/exit between turns.
+fn handle_worktree_request(app: &mut App, action: zoid::agent::WorktreeAction) {
+    use zoid::agent::WorktreeAction;
+    match action {
+        WorktreeAction::Enter { name } => {
+            // Guard: already inside a worktree?
+            if app.active_worktree.is_some() {
+                app.shell.status_hint = Some(
+                    "already in a worktree — exit with :worktree exit first".into(),
+                );
+                return;
+            }
+            // Guard: subagent running?
+            if !app.in_flight_subagents.is_empty() {
+                app.shell.status_hint =
+                    Some("cannot enter worktree while a subagent is running".into());
+                return;
+            }
+            // Guard: git repo?
+            if !std::path::Path::new(".git").exists() {
+                app.shell.status_hint = Some("not a git repository".into());
+                return;
+            }
+            // Create the worktree (idempotent: if it already exists, enter it).
+            let wt = match zoid::worktree::create_worktree(std::path::Path::new("."), &name)
+            {
+                Ok(guard) => guard,
+                Err(_e) => {
+                    // Name collision: the worktree may already exist from a
+                    // prior enter that was kept. Enter it directly.
+                    let existing_path =
+                        std::path::Path::new(".zoid").join("worktrees").join(&name);
+                    if existing_path.exists() {
+                        let path =
+                            std::fs::canonicalize(&existing_path).unwrap_or(existing_path);
+                        app.active_worktree = Some(WorktreeSession {
+                            path: path.clone(),
+                            name: name.clone(),
+                        });
+                        app.shell.cwd = path.display().to_string();
+                        app.shell.status_hint =
+                            Some(format!("entered existing worktree '{name}'"));
+                        return;
+                    }
+                    app.shell.status_hint =
+                        Some(format!("enter_worktree failed: {_e}"));
+                    return;
+                }
+            };
+            let (path, branch_name) = wt.into_kept();
+            let path = std::fs::canonicalize(&path).unwrap_or(path);
+            app.active_worktree = Some(WorktreeSession {
+                path: path.clone(),
+                name: branch_name,
+            });
+            app.shell.cwd = path.display().to_string();
+            app.shell.status_hint = Some(format!("entered worktree '{name}'"));
+        }
+        WorktreeAction::Exit => {
+            // Guard: not in a worktree?
+            let wt = match app.active_worktree.take() {
+                Some(wt) => wt,
+                None => {
+                    app.shell.status_hint = Some("not in a worktree".into());
+                    return;
+                }
+            };
+            // Guard: subagent running?
+            if !app.in_flight_subagents.is_empty() {
+                app.shell.status_hint = Some(
+                    "cannot exit worktree while a subagent is running".into(),
+                );
+                // Put it back — exit refused.
+                app.active_worktree = Some(wt);
+                return;
+            }
+            // Check if the worktree is clean (no uncommitted changes).
+            let is_clean = is_worktree_clean(&wt.path);
+            if is_clean {
+                // Auto-remove: dir + prune + branch.
+                let _ =
+                    zoid::worktree::remove_worktree(std::path::Path::new("."), &wt.name);
+                app.shell.status_hint =
+                    Some(format!("exited and removed worktree '{}'", wt.name));
+            } else {
+                // Dirty: keep the worktree on disk, just restore cwd.
+                app.shell.status_hint = Some(format!(
+                    "exited worktree '{}' (kept — has uncommitted changes; remove manually with: git worktree remove .zoid/worktrees/{})",
+                    wt.name, wt.name
+                ));
+            }
+            // Restore the TUI's cwd display to the main checkout.
+            app.shell.cwd = ".".to_string();
+        }
+    }
+}
+
+/// Check if a worktree has uncommitted changes via `git status --porcelain`.
+/// Defaults to `false` (dirty) on error — never auto-remove a worktree if we
+/// can't verify it's clean.
+fn is_worktree_clean(path: &std::path::Path) -> bool {
+    std::process::Command::new("git")
+        .args(["-C"])
+        .arg(path)
+        .args(["status", "--porcelain"])
+        .output()
+        .map(|o| o.stdout.is_empty())
+        .unwrap_or(false) // conservative: if git fails, assume dirty
+}
+
 fn spawn_turn(app: &mut App) {
     let provider = app.provider.clone();
     let session = app.session.clone();
@@ -5293,6 +5422,13 @@ fn spawn_turn(app: &mut App) {
     }
     let tools = std::sync::Arc::new(tools);
     let mut turn_config = zoid::agent::chat_turn_config_with(&profile, &menu);
+    // If the session is inside a worktree, override the turn's cwd to the
+    // worktree's path. This is the seam: `TurnConfig.cwd` is built fresh
+    // each turn from `App` state, so a session-level field is how the new
+    // cwd reaches every subsequent turn and every tool call within it.
+    if let Some(wt) = &app.active_worktree {
+        turn_config.cwd = wt.path.clone();
+    }
     turn_config.mcp = app.mcp.clone();
     turn_config.embed = app.embed_index.clone();
     turn_config.embedder = app.embedder.clone();
@@ -6120,6 +6256,7 @@ mod tests {
             session_started_ms: 0,
             session_ids: Vec::new(),
             in_flight_subagents: Vec::new(),
+            active_worktree: None,
         in_flight: std::sync::Arc::new(std::sync::Mutex::new(
             std::collections::HashSet::new(),
         )),

@@ -178,6 +178,20 @@ pub enum Answer {
     Feedback(zoid_core::feedback::FeedbackReport),
 }
 
+/// A request from the `enter_worktree` / `exit_worktree` Emitting tools (or
+/// the `:worktree` user commands) to relocate the session cwd. Ephemeral —
+/// travels via `AgentUpdate`, never persisted to SQLite (spec: chat-worktree-
+/// design, "Signal type").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorktreeAction {
+    /// Create and enter a worktree named `name`.
+    Enter {
+        name: String,
+    },
+    /// Exit the current worktree, restoring the prior cwd.
+    Exit,
+}
+
 /// UI-facing updates emitted as the turn progresses.
 pub enum AgentUpdate {
     /// A new event was persisted; the UI should cache it and redraw.
@@ -227,6 +241,11 @@ pub enum AgentUpdate {
         id: String,
         origin: String,
         res: Result<zoid_core::wizard::UpstreamScan, String>,
+    },
+    /// The agent (or user via `:worktree`) requested a worktree relocation.
+    /// The main `run()` loop performs the actual enter/exit between turns.
+    WorktreeRequested {
+        action: WorktreeAction,
     },
 }
 
