@@ -287,7 +287,7 @@ fn seeded_economy() -> EconomyView {
 #[test]
 fn chat_with_rail_frame() {
     let s = ShellState::new();
-    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+    insta::assert_snapshot!(draw(&s, &seeded(), 160, 40));
 }
 
 /// In-flight tool indicator: a dim spinner line below the last message while a
@@ -296,7 +296,7 @@ fn chat_with_rail_frame() {
 fn active_tool_spinner_frame() {
     let mut s = ShellState::new();
     s.set_active_tool("shell");
-    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+    insta::assert_snapshot!(draw(&s, &seeded(), 160, 40));
 }
 
 /// Mode-chip fidelity (Task 7): the status bar's chip shows the active mode
@@ -306,7 +306,7 @@ fn status_chip_shows_active_mode() {
     let mut s = ShellState::new();
     s.active_mode = "Superpowers".into();
     s.mode_names = vec!["Chat".into(), "Superpowers".into()];
-    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+    insta::assert_snapshot!(draw(&s, &seeded(), 160, 40));
 }
 
 /// Broken-mode fidelity (Task 7): when the active mode failed to load, the
@@ -319,14 +319,14 @@ fn broken_mode_shows_warn_chip_and_error_card() {
     s.active_mode = "Superpowers".into();
     s.mode_names = vec!["Chat".into(), "Superpowers".into()];
     s.active_mode_broken = true;
-    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+    insta::assert_snapshot!(draw(&s, &seeded(), 160, 40));
 }
 
 /// Rail drawer headers show title + chevron only — no keybind labels (spec §2.1).
 #[test]
 fn rail_headers_have_no_keybind_labels() {
     let s = ShellState::new();
-    let out = draw(&s, &seeded(), 100, 24);
+    let out = draw(&s, &seeded(), 160, 40);
     assert!(!out.contains("^5"), "economy keybind label must be gone");
     assert!(!out.contains("^F"), "files keybind label must be gone");
     assert!(!out.contains("^B"), "branch keybind label must be gone");
@@ -360,7 +360,7 @@ fn long_turn_wraps_instead_of_clipping() {
 
     let s = ShellState::new();
     let input = TextArea::default();
-    let backend = TestBackend::new(100, 24);
+    let backend = TestBackend::new(160, 40);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|f| {
@@ -399,7 +399,7 @@ fn long_turn_wraps_instead_of_clipping() {
 fn session_drawer_open_frame() {
     let mut s = ShellState::new();
     s.toggle_drawer(DrawerId::Session);
-    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+    insta::assert_snapshot!(draw(&s, &seeded(), 160, 40));
 }
 
 #[test]
@@ -408,7 +408,7 @@ fn palette_overlay_frame() {
     s.mode_names = vec!["Chat".into(), "Build".into()];
     s.overlay = Overlay::Palette;
     s.palette.query = "build".into();
-    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+    insta::assert_snapshot!(draw(&s, &seeded(), 160, 40));
 }
 
 #[test]
@@ -422,7 +422,7 @@ fn palette_overlay_empty_query_frame() {
     s.mode_names = vec!["Chat".into(), "Build".into()];
     s.overlay = Overlay::Palette;
     s.palette.query = String::new();
-    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+    insta::assert_snapshot!(draw(&s, &seeded(), 160, 40));
 }
 
 #[test]
@@ -431,7 +431,7 @@ fn palette_direct_phase_frame() {
     s.mode_names = vec!["Chat".into(), "Build".into()];
     s.overlay = Overlay::Palette;
     s.palette.query = ":mode Build".into();
-    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+    insta::assert_snapshot!(draw(&s, &seeded(), 160, 40));
 }
 
 #[test]
@@ -441,7 +441,7 @@ fn palette_direct_stage1_frame() {
     s.sessions = vec!["fix 500".into(), "add auth".into()];
     s.overlay = Overlay::Palette;
     s.palette.query = ":".into();
-    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+    insta::assert_snapshot!(draw(&s, &seeded(), 160, 40));
 }
 
 #[test]
@@ -450,7 +450,7 @@ fn palette_direct_stage2_frame() {
     s.mode_names = vec!["Chat".into(), "Build".into()];
     s.overlay = Overlay::Palette;
     s.palette.query = ":session ".into();
-    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+    insta::assert_snapshot!(draw(&s, &seeded(), 160, 40));
 }
 
 #[test]
@@ -460,7 +460,7 @@ fn palette_direct_stage3_frame() {
     s.sessions = vec!["fix 500".into(), "add auth".into()];
     s.overlay = Overlay::Palette;
     s.palette.query = ":session rename ".into();
-    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+    insta::assert_snapshot!(draw(&s, &seeded(), 160, 40));
 }
 
 #[test]
@@ -471,13 +471,13 @@ fn palette_arg_stage_frame() {
         kind: zoid_tui::palette::ArgKind::Rename,
         input: "my-feature".into(),
     };
-    insta::assert_snapshot!(draw(&s, &seeded(), 100, 24));
+    insta::assert_snapshot!(draw(&s, &seeded(), 160, 40));
 }
 
 #[test]
 fn economy_drawer_frame() {
     let s = ShellState::new(); // economy open by default
-    insta::assert_snapshot!(draw_econ(&s, &seeded_economy(), &seeded(), 100, 24));
+    insta::assert_snapshot!(draw_econ(&s, &seeded_economy(), &seeded(), 160, 40));
 }
 
 #[test]
@@ -501,7 +501,7 @@ fn economy_drawer_selection_highlights_only_when_rail_focused() {
         let input = TextArea::default();
         // Tall enough that the Context drawer opens fully (it yields to Session
         // on a short rail); this test is about the selection highlight, not fit.
-        let backend = TestBackend::new(100, 40);
+        let backend = TestBackend::new(160, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
@@ -564,7 +564,7 @@ fn long_economy_label_truncates_with_ellipsis() {
     let s = ShellState::new(); // economy drawer open by default
                                // Tall enough that the Context drawer opens fully (it yields to Session on a
                                // short rail); this test is about horizontal label truncation, not fit.
-    let out = draw_econ(&s, &econ, &seeded(), 100, 40);
+    let out = draw_econ(&s, &econ, &seeded(), 160, 40);
 
     assert!(
         out.contains(glyph::ELLIPSIS),
@@ -652,7 +652,7 @@ fn draw_zoom(zoom: Zoom, w: u16, h: u16) -> String {
 
 #[test]
 fn zoom_summary_frame() {
-    insta::assert_snapshot!(draw_zoom(Zoom::Summary, 100, 24));
+    insta::assert_snapshot!(draw_zoom(Zoom::Summary, 160, 40));
 }
 
 #[test]
@@ -662,7 +662,7 @@ fn zoom_summary_wide_frame() {
 
 #[test]
 fn zoom_detail_frame() {
-    insta::assert_snapshot!(draw_zoom(Zoom::Detail, 100, 24));
+    insta::assert_snapshot!(draw_zoom(Zoom::Detail, 160, 40));
 }
 
 #[test]
@@ -733,7 +733,7 @@ fn draw_overlay(overlay: Overlay, w: u16, h: u16) -> String {
 
 #[test]
 fn object_overlay_frame() {
-    insta::assert_snapshot!(draw_overlay(Overlay::Objects, 100, 24));
+    insta::assert_snapshot!(draw_overlay(Overlay::Objects, 160, 40));
 }
 
 #[test]
@@ -743,7 +743,7 @@ fn object_overlay_wide_frame() {
 
 #[test]
 fn verb_overlay_frame() {
-    insta::assert_snapshot!(draw_overlay(Overlay::Verbs, 100, 24));
+    insta::assert_snapshot!(draw_overlay(Overlay::Verbs, 160, 40));
 }
 
 #[test]
@@ -756,7 +756,7 @@ fn verb_overlay_wide_frame() {
 /// invisibly rather than failing to compile — is caught.
 #[test]
 fn help_overlay_frame_dispatches_from_render_shell() {
-    let frame = draw_overlay(Overlay::Help, 100, 24);
+    let frame = draw_overlay(Overlay::Help, 160, 40);
     assert!(
         frame.contains("keyboard shortcuts"),
         "help overlay must render via render_shell's overlay dispatch: {frame}"
@@ -775,7 +775,7 @@ fn growing_message_box_frame() {
         "line two".to_string(),
         "line three".to_string(),
     ]);
-    let backend = TestBackend::new(100, 24);
+    let backend = TestBackend::new(160, 40);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|f| {
@@ -813,7 +813,7 @@ fn seeded_markdown() -> Vec<ChatMsg> {
 fn markdown_message_frame() {
     let s = ShellState::new();
     let input = TextArea::default();
-    let backend = TestBackend::new(100, 24);
+    let backend = TestBackend::new(160, 40);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|f| {
@@ -843,7 +843,7 @@ fn running_title_frame() {
     let mut s = ShellState::new();
     s.busy = true;
     let input = TextArea::default();
-    let backend = TestBackend::new(100, 24);
+    let backend = TestBackend::new(160, 40);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|f| {
@@ -902,7 +902,7 @@ fn draw_delegated(w: u16, h: u16) -> String {
 
 #[test]
 fn delegated_card_frame() {
-    insta::assert_snapshot!(draw_delegated(100, 24));
+    insta::assert_snapshot!(draw_delegated(160, 40));
 }
 #[test]
 fn delegated_card_wide_frame() {
@@ -939,7 +939,7 @@ fn config_overlay_frame() {
         ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
     ];
     let sections = build_sections(&cfg, &prov, &ks);
-    insta::assert_snapshot!(draw_config(&s, &sections, 100, 24));
+    insta::assert_snapshot!(draw_config(&s, &sections, 160, 40));
 }
 
 /// API-key gate (Task 15): while `config_key_prompt` is set, the fields

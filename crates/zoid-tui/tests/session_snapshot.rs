@@ -51,7 +51,7 @@ fn resume_session_overlay_frame() {
         "fix 500 on GET /users  ·  12m ago  ·  58k".into(),
         "rail restructure       ·  3h ago   ·  120k".into(),
     ];
-    insta::assert_snapshot!(draw(&s, &[], 100, 24));
+    insta::assert_snapshot!(draw(&s, &[], 160, 40));
 }
 
 #[test]
@@ -62,7 +62,7 @@ fn repo_drawer_frame() {
     s.changes_added = 128;
     s.changes_removed = 34;
     s.changes_files = 7;
-    insta::assert_snapshot!(draw(&s, &[], 100, 24));
+    insta::assert_snapshot!(draw(&s, &[], 160, 40));
 }
 
 #[test]
@@ -79,7 +79,7 @@ fn session_drawer_truncates_long_cwd() {
     // Tall enough that the Session drawer opens fully and renders its cwd row
     // (the fit allocator squeezes lower-priority drawers on a short rail); the
     // narrow 100-col width is what forces the horizontal cwd truncation tested.
-    let out = draw(&s, &[], 100, 52);
+    let out = draw(&s, &[], 160, 52);
     // The cwd never wraps — it is truncated with the §16 ellipsis.
     assert!(
         out.contains('\u{2026}'),

@@ -1032,8 +1032,8 @@ mod tests {
             Rect {
                 x: 0,
                 y: 0,
-                width: 100,
-                height: 24,
+                width: 160,
+                height: 40,
             },
             &s,
         );
@@ -1057,8 +1057,8 @@ mod tests {
             Rect {
                 x: 0,
                 y: 0,
-                width: 100,
-                height: 24,
+                width: 160,
+                height: 40,
             },
             &s,
         );
@@ -1106,7 +1106,7 @@ mod tests {
 
     #[test]
     fn hit_test_detects_scrollbar_column() {
-        let layout = test_layout(100, 24);
+        let layout = test_layout(160, 40);
         let conv = layout.conversation;
         let bar_x = conv.right() - 1;
         assert_eq!(hit_test(&layout, bar_x, conv.y + 1), Target::Scrollbar);
@@ -1120,7 +1120,7 @@ mod tests {
     #[test]
     fn scrollbar_grab_then_drag_then_release() {
         let mut s = ShellState::new();
-        let layout = test_layout(100, 24);
+        let layout = test_layout(160, 40);
         let bar_x = layout.conversation.right() - 1;
         let row = layout.conversation.y + 5;
         // grab on the bar
@@ -1167,8 +1167,8 @@ mod tests {
             Rect {
                 x: 0,
                 y: 0,
-                width: 100,
-                height: 24,
+                width: 160,
+                height: 40,
             },
             &s,
         );
@@ -1189,8 +1189,8 @@ mod tests {
             Rect {
                 x: 0,
                 y: 0,
-                width: 100,
-                height: 24,
+                width: 160,
+                height: 40,
             },
             &s,
         );
@@ -1263,8 +1263,8 @@ mod tests {
             Rect {
                 x: 0,
                 y: 0,
-                width: 100,
-                height: 24,
+                width: 160,
+                height: 40,
             },
             &s,
         );
@@ -1483,8 +1483,8 @@ mod tests {
             Rect {
                 x: 0,
                 y: 0,
-                width: 100,
-                height: 24,
+                width: 160,
+                height: 40,
             },
             &s,
         );

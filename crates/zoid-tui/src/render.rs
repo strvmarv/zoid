@@ -25,6 +25,30 @@ use ratatui_textarea::TextArea;
 use unicode_width::UnicodeWidthStr;
 use zoid_core::projection::ChatMsg;
 
+/// Rendered when the terminal is smaller than the 160×40 hard minimum.
+/// Full-screen centered message — no partial layout.
+fn render_too_small(frame: &mut Frame, area: Rect) {
+    let msg = format!(
+        "⚠ Terminal too small — resize to at least {}×{}",
+        crate::layout::MIN_WIDTH,
+        crate::layout::MIN_HEIGHT
+    );
+    let w = msg.width() as u16;
+    let h = 1u16;
+    let rect = Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + (area.height.saturating_sub(h)) / 2,
+        width: w.min(area.width),
+        height: h,
+    };
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(msg, Style::new().fg(color::WARN))))
+            .alignment(ratatui::layout::Alignment::Center),
+        rect,
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn render_shell(
     frame: &mut Frame,
@@ -43,6 +67,13 @@ pub fn render_shell(
     view: &ChatView,
 ) -> u16 {
     let layout = compute(frame.area(), state);
+
+    // Hard minimum: below 160×40, render only the "too small" message.
+    if layout.rail.is_none() && frame.area().width < crate::layout::MIN_WIDTH {
+        render_too_small(frame, layout.body);
+        return 0;
+    }
+
     // The max conversation scroll offset at the current altitude, returned so the
     // bin can clamp the STORED offset (not just the drawn one) and avoid a silent
     // dead-scroll-up zone. 0 unless the Chat conversation is drawn this frame.

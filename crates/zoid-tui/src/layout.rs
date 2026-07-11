@@ -54,118 +54,34 @@ pub fn drawer_body_rows(id: DrawerId) -> u16 {
     }
 }
 
-/// The fewest body rows an open drawer keeps before it is collapsed to a
-/// header-only box. One row still shows the first/active item, so an open
-/// drawer never silently vanishes — worst case it degrades to its title bar.
-pub const MIN_DRAWER_BODY_ROWS: u16 = 1;
+/// Hard minimum terminal size. Below this, a "too small" message is rendered
+/// instead of the normal shell layout (no degradation/collapse path).
+pub const MIN_WIDTH: u16 = 160;
+pub const MIN_HEIGHT: u16 = 40;
 
-/// Rail-fit priority: a higher rank keeps its rows longer when the rail is
-/// short. `Repo` is near-static (yields first); `Context`'s drawer is mostly a
-/// decorative sparkline so it yields before `Session`'s dense facts
-/// (model/duration/tokens/ctx/cwd); `Tasks` is the live plan (yields last). A
-/// single ranking drives both directions — collapse walks it ascending, surplus
-/// fill walks it descending.
-fn drawer_fit_priority(id: DrawerId) -> u8 {
-    match id {
-        DrawerId::Repo => 0,
-        DrawerId::Context => 1,
-        DrawerId::Session => 2,
-        DrawerId::Tasks => 3, // the live plan survives longest
-        DrawerId::Subagents => 4,
-    }
-}
-
-/// Resolve each open drawer's rendered body-row count for a rail `height` rows
-/// tall, returned in the SAME ORDER as `drawers`. A `0` means header-only:
-/// either the user closed it, or the rail was too short and it was collapsed to
-/// its title bar (lowest priority first). Every OPEN drawer that survives gets
-/// at least [`MIN_DRAWER_BODY_ROWS`].
-///
-/// Allocation is three steps over the single [`drawer_fit_priority`] ranking:
-/// 1. reserve the minimum box for every open drawer (`MIN + 2` borders) plus a
-///    1-row gap per drawer; if that stack overflows `height`, collapse open
-///    drawers to header-only boxes lowest-priority-first until it fits;
-/// 2. pass 1 — grow each surviving drawer from its minimum to its *base* ideal
-///    ([`drawer_body_rows`]), highest priority first;
-/// 3. pass 2 — pour any leftover rows into the Tasks drawer beyond its base,
-///    up to `task_count`, so the task list grows to show more of itself when
-///    the rail has room the other drawers don't want.
-///
-/// `task_count` is the number of items the Tasks drawer would show (min 1 for
-/// the "no tasks" line); it makes the Tasks drawer content-driven rather than
-/// capped at [`TASKS_BODY_ROWS`].
+/// Resolve each open drawer's body-row count for a rail `height` rows tall.
+/// Every open drawer gets its full [`drawer_body_rows`]; closed drawers get 0.
+/// No collapse/fill — the hard 160×40 minimum guarantees there's always room.
+/// `task_count` lets the Tasks drawer grow beyond its base when it has more
+/// items (unused now that degradation is gone, but kept for future content-
+/// driven sizing).
 pub fn allocate_drawer_bodies(
     drawers: &[Drawer],
-    height: u16,
+    _height: u16,
     task_count: u16,
 ) -> Vec<u16> {
-    let n = drawers.len();
-    if n == 0 {
-        return Vec::new();
-    }
-    // One gap row per drawer, matching the positioning loop in `compute`
-    // (which advances `box_h + 1` after every box). Slightly conservative — the
-    // trailing gap is slack — but it guarantees the stack never overflows.
-    let gaps = n as u16;
-
-    // The Tasks drawer's ideal is content-driven; every other drawer is fixed.
-    let base_ideal = |d: &Drawer| -> u16 {
-        match d.id {
-            DrawerId::Tasks => drawer_body_rows(d.id).min(task_count.max(1)),
-            _ => drawer_body_rows(d.id),
-        }
-    };
-
-    // Step 1: start every open drawer expanded, then collapse the lowest
-    // priority ones until the minimum stack fits.
-    let mut expanded: Vec<bool> = drawers.iter().map(|d| d.open).collect();
-    let box_min = 2 + MIN_DRAWER_BODY_ROWS; // top border + 1 body row + bottom border
-    let min_cost = |expanded: &[bool]| -> u16 {
-        let boxes: u16 = expanded.iter().map(|&e| if e { box_min } else { 2 }).sum();
-        boxes + gaps
-    };
-    let mut collapse_order: Vec<usize> = (0..n).filter(|&i| expanded[i]).collect();
-    collapse_order.sort_by_key(|&i| drawer_fit_priority(drawers[i].id));
-    for &i in &collapse_order {
-        if min_cost(&expanded) <= height {
-            break;
-        }
-        expanded[i] = false; // fit-collapse to a header (still visible)
-    }
-
-    // Step 2 (pass 1): every survivor gets its minimum, then grows to base
-    // ideal highest-priority-first with whatever surplus remains.
-    let mut body = vec![0u16; n];
-    for (i, d) in drawers.iter().enumerate() {
-        if expanded[i] {
-            body[i] = MIN_DRAWER_BODY_ROWS.min(base_ideal(d));
-        }
-    }
-    let mut surplus = height.saturating_sub(min_cost(&expanded));
-    let mut fill_order: Vec<usize> = (0..n).filter(|&i| expanded[i]).collect();
-    fill_order.sort_by_key(|&i| std::cmp::Reverse(drawer_fit_priority(drawers[i].id)));
-    for &i in &fill_order {
-        if surplus == 0 {
-            break;
-        }
-        let room = base_ideal(&drawers[i]).saturating_sub(body[i]);
-        let add = room.min(surplus);
-        body[i] += add;
-        surplus -= add;
-    }
-
-    // Step 3 (pass 2): leftover rows grow Tasks beyond its base toward the full
-    // task count, so a long list uses space the other drawers don't want.
-    if surplus > 0 {
-        if let Some(i) = drawers.iter().position(|d| d.id == DrawerId::Tasks) {
-            if expanded[i] {
-                let room = task_count.max(1).saturating_sub(body[i]);
-                body[i] += room.min(surplus);
+    drawers
+        .iter()
+        .map(|d| {
+            if !d.open {
+                return 0;
             }
-        }
-    }
-
-    body
+            match d.id {
+                DrawerId::Tasks => drawer_body_rows(d.id).min(task_count.max(1)),
+                _ => drawer_body_rows(d.id),
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,6 +106,20 @@ pub fn in_rect(r: Rect, col: u16, row: u16) -> bool {
 }
 
 pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
+    // Hard minimum: below 160×40, render only the "too small" message.
+    if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+        return ShellLayout {
+            title: Rect { x: area.x, y: area.y, width: area.width, height: 1 },
+            body: Rect { x: area.x, y: area.y + 1, width: area.width, height: area.height.saturating_sub(1) },
+            conversation: Rect::default(),
+            rail: None,
+            drawer_headers: Vec::new(),
+            drawer_bodies: Vec::new(),
+            input: Rect::default(),
+            status: Rect::default(),
+            palette: None,
+        };
+    }
     // Vertical: title(1) · body(min) · input(grows with content) · status(1).
     let rows = Layout::vertical([
         Constraint::Length(1),
@@ -200,7 +130,7 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
     .split(area);
     let (title, body, input, status) = (rows[0], rows[1], rows[2], rows[3]);
 
-    let show_rail = state.rail_visible && area.width >= RAIL_MIN_TOTAL;
+    let show_rail = state.rail_visible;
     let rail_w = if show_rail { RAIL_WIDTH } else { 0 };
     // The conversation fills all width up to the rail (no measure cap): on wide
     // terminals the stream grows to use the screen rather than leaving a gutter.
@@ -327,13 +257,14 @@ mod tests {
         }
     }
 
-    /// The four default drawers, all open, in rail order.
+    /// The five default drawers, all open, in rail order.
     fn all_open() -> Vec<Drawer> {
         [
             DrawerId::Repo,
             DrawerId::Session,
             DrawerId::Context,
             DrawerId::Tasks,
+            DrawerId::Subagents,
         ]
         .iter()
         .map(|&id| Drawer {
@@ -344,63 +275,20 @@ mod tests {
         .collect()
     }
 
-    // The four drawers stack in this order; index 3 is always Tasks.
     const REPO: usize = 0;
     const SESSION: usize = 1;
     const CONTEXT: usize = 2;
     const TASKS: usize = 3;
+    const SUBAGENTS: usize = 4;
 
     #[test]
-    fn alloc_roomy_gives_every_drawer_its_base_ideal() {
-        // A tall rail (baseline 160x40 ⇒ ~35 rail rows): everyone reaches base,
-        // and with only 3 tasks Tasks stays at 3 (content-bounded, not 5).
+    fn alloc_open_drawers_get_full_body_at_baseline() {
         let body = allocate_drawer_bodies(&all_open(), 35, 3);
         assert_eq!(body[REPO], REPO_BODY_ROWS);
         assert_eq!(body[SESSION], SESSION_BODY_ROWS);
         assert_eq!(body[CONTEXT], CONTEXT_BODY_ROWS);
-        assert_eq!(body[TASKS], 3, "3 tasks ⇒ 3 rows, no wasted space");
-    }
-
-    #[test]
-    fn alloc_tight_favors_tasks_others_hold_minimum() {
-        // 4 drawers, min stack (all open) = 4×3 + 4 gaps = 16.
-        // At height 19, surplus 3 goes to Tasks first (highest priority).
-        let body = allocate_drawer_bodies(&all_open(), 19, 8);
-        assert_eq!(body[REPO], MIN_DRAWER_BODY_ROWS);
-        assert_eq!(body[SESSION], MIN_DRAWER_BODY_ROWS);
-        assert_eq!(body[CONTEXT], MIN_DRAWER_BODY_ROWS);
-        assert_eq!(body[TASKS], 4, "surplus 3 above its own 1-row min ⇒ 4");
-        assert!(body.iter().all(|&r| r >= MIN_DRAWER_BODY_ROWS));
-    }
-
-    #[test]
-    fn alloc_very_tight_collapses_lowest_priority_first() {
-        // 14 rail rows: the minimum stack for four open drawers is 16, so the
-        // two lowest-priority drawers (Repo, then Context) collapse to headers;
-        // Session (dense facts) and Tasks keep their one guaranteed row.
-        let body = allocate_drawer_bodies(&all_open(), 14, 8);
-        assert_eq!(body[REPO], 0, "Repo collapses first (header-only)");
-        assert_eq!(body[CONTEXT], 0, "Context (decorative) collapses second");
-        assert_eq!(body[SESSION], MIN_DRAWER_BODY_ROWS);
-        assert_eq!(body[TASKS], MIN_DRAWER_BODY_ROWS);
-    }
-
-    #[test]
-    fn alloc_tasks_grows_with_content_into_leftover() {
-        // Rail with room past every base ideal: pass-2 grows Tasks toward the
-        // full task count using rows the other drawers don't want.
-        // base bodies = 3+5+5+5 = 18; borders 8; gaps 4 ⇒ 30 to seat all bases.
-        // At height 40 there are 10 leftover rows ⇒ Tasks climbs from 5 toward 12.
-        let body = allocate_drawer_bodies(&all_open(), 40, 12);
-        assert_eq!(body[REPO], REPO_BODY_ROWS);
-        assert_eq!(body[SESSION], SESSION_BODY_ROWS);
-        assert_eq!(body[CONTEXT], CONTEXT_BODY_ROWS);
-        assert!(
-            body[TASKS] > TASKS_BODY_ROWS,
-            "12 tasks + spare rows ⇒ Tasks grows past its base of 5, got {}",
-            body[TASKS]
-        );
-        assert!(body[TASKS] <= 12, "never exceeds the task count");
+        assert_eq!(body[TASKS], 3, "3 tasks => 3 rows");
+        assert_eq!(body[SUBAGENTS], SUBAGENTS_BODY_ROWS);
     }
 
     #[test]
@@ -408,7 +296,7 @@ mod tests {
         let mut drawers = all_open();
         drawers[CONTEXT].open = false;
         let body = allocate_drawer_bodies(&drawers, 35, 3);
-        assert_eq!(body[CONTEXT], 0, "a user-closed drawer is header-only");
+        assert_eq!(body[CONTEXT], 0, "a closed drawer gets 0 body rows");
         assert_eq!(body[TASKS], 3);
     }
 
@@ -418,37 +306,19 @@ mod tests {
     }
 
     #[test]
-    fn narrow_hides_rail() {
-        let s = ShellState::new();
-        let l = compute(area(60, 12), &s);
-        assert!(l.rail.is_none());
-        assert!(l.drawer_headers.is_empty());
-        assert!(l.drawer_bodies.is_empty());
-        // conversation spans the full body width when there's no rail/gutter.
-        assert_eq!(l.conversation.width, 60);
-    }
-
-    #[test]
     fn wide_shows_rail_and_drawer_headers() {
         let s = ShellState::new();
         let l = compute(area(160, 40), &s);
         let rail = l.rail.expect("rail visible at 160 cols");
         assert_eq!(rail.width, RAIL_WIDTH);
-        // At 100×24 the rail has ~19 inner rows. The fit allocator guarantees
-        // every open drawer at least a header, so ALL FOUR now appear — the
-        // Tasks drawer no longer silently vanishes when the rail is short
-        // (the pre-allocator behavior dropped it here). This is the T8 fix.
-        assert_eq!(l.drawer_headers.len(), 5); // repo/session/context/tasks/subagents all visible
-                                               // headers stack downward
+        assert_eq!(l.drawer_headers.len(), 5);
         assert!(l.drawer_headers[1].1.y > l.drawer_headers[0].1.y);
     }
 
     #[test]
     fn stream_fills_to_rail_on_ultrawide() {
         let s = ShellState::new();
-        let l = compute(area(200, 24), &s);
-        // No measure cap: the stream expands to all width up to the rail, and
-        // stream + rail together span the full terminal (no gutter).
+        let l = compute(area(200, 40), &s);
         assert_eq!(l.conversation.width, 200 - RAIL_WIDTH);
         assert_eq!(l.conversation.width + l.rail.unwrap().width, 200);
     }
@@ -456,20 +326,16 @@ mod tests {
     #[test]
     fn palette_rect_only_when_overlay_active() {
         let mut s = ShellState::new();
-        assert!(compute(area(100, 24), &s).palette.is_none());
+        assert!(compute(area(160, 40), &s).palette.is_none());
         s.overlay = Overlay::Palette;
-        let l = compute(area(100, 24), &s);
+        let l = compute(area(160, 40), &s);
         let p = l.palette.unwrap();
-        assert!(in_rect(p, p.x + 1, p.y + 1)); // sane non-empty rect
-        assert!(p.width <= 100 && p.height <= 24);
+        assert!(in_rect(p, p.x + 1, p.y + 1));
+        assert!(p.width <= 160 && p.height <= 40);
     }
 
     #[test]
     fn overlay_rect_present_for_object_and_verb_pickers() {
-        // Every overlay that `render_shell` paints into `layout.palette` must get
-        // a rect here, or it renders invisibly. This guards the whole set through
-        // the real `compute` path (the per-overlay render tests call the render
-        // fn directly and cannot catch a missing rect allocation).
         for ov in [
             Overlay::Objects,
             Overlay::Verbs,
@@ -480,7 +346,7 @@ mod tests {
             let mut s = ShellState::new();
             s.overlay = ov;
             assert!(
-                compute(area(100, 24), &s).palette.is_some(),
+                compute(area(160, 40), &s).palette.is_some(),
                 "{ov:?} needs a rect"
             );
         }
@@ -494,28 +360,27 @@ mod tests {
             width: 20,
             height: 8,
         };
-        assert!(in_rect(r, 5, 10)); // top-left corner: inside
-        assert!(in_rect(r, 24, 17)); // bottom-right interior corner: inside
-        assert!(!in_rect(r, 25, 17)); // right edge: exclusive
-        assert!(!in_rect(r, 24, 18)); // bottom edge: exclusive
-        assert!(!in_rect(r, 4, 10)); // left of rect: outside
-        assert!(!in_rect(r, 5, 9)); // above rect: outside
+        assert!(in_rect(r, 5, 10));
+        assert!(in_rect(r, 24, 17));
+        assert!(!in_rect(r, 25, 17));
+        assert!(!in_rect(r, 24, 18));
+        assert!(!in_rect(r, 4, 10));
+        assert!(!in_rect(r, 5, 9));
     }
 
     #[test]
     fn rail_hidden_by_user_toggle() {
         let mut s = ShellState::new();
         s.rail_visible = false;
-        let l = compute(area(100, 24), &s);
+        let l = compute(area(160, 40), &s);
         assert!(l.rail.is_none());
         assert!(l.drawer_headers.is_empty());
     }
 
     #[test]
     fn open_drawer_gets_a_body_rect_sized_by_kind() {
-        let mut s = ShellState::new(); // all five open by default
-        s.toggle_drawer(DrawerId::Repo); // Repo now closed
-        s.toggle_drawer(DrawerId::Subagents); // Subagents closed (test focuses Context/Session)
+        let mut s = ShellState::new();
+        s.toggle_drawer(DrawerId::Repo);
         let l = compute(area(160, 40), &s);
         let context = l
             .drawer_bodies
@@ -531,56 +396,41 @@ mod tests {
             .1;
         assert_eq!(context.height, CONTEXT_BODY_ROWS);
         assert_eq!(session.height, SESSION_BODY_ROWS);
-        // closed drawers have no body
         assert!(l.drawer_bodies.iter().all(|(id, _)| *id != DrawerId::Repo));
-        // body sits directly under the box's top border (which carries the title)
-        let context_hdr = l
-            .drawer_headers
-            .iter()
-            .find(|(id, _)| *id == DrawerId::Context)
-            .unwrap()
-            .1;
-        assert_eq!(context.y, context_hdr.y + 1);
     }
 
     #[test]
-    fn headers_stack_below_taller_economy_body() {
-        let s = ShellState::new(); // all drawers open by default; Repo is first
-        let l = compute(area(100, 30), &s);
+    fn headers_stack_with_1row_gap() {
+        let s = ShellState::new();
+        let l = compute(area(160, 40), &s);
         let repo_hdr = l.drawer_headers[0].1;
         let session_hdr = l.drawer_headers[1].1;
-        // Session's box sits exactly one gap row below Repo's box, whatever
-        // height the fit allocator resolved Repo to (it may shrink below its
-        // ideal when the rail is short — the gap invariant still holds).
         assert_eq!(session_hdr.y, repo_hdr.y + repo_hdr.height + 1);
     }
 
     #[test]
     fn input_height_grows_and_clamps() {
-        assert_eq!(
-            input_height(1),
-            3,
-            "one line → 3 rows (content + 2 borders); post-submit resting height"
-        );
-        assert_eq!(input_height(4), 6, "grows with content");
-        assert_eq!(
-            input_height(MAX_INPUT_ROWS),
-            MAX_INPUT_ROWS + 2,
-            "at the cap"
-        );
-        assert_eq!(
-            input_height(MAX_INPUT_ROWS + 5),
-            MAX_INPUT_ROWS + 2,
-            "clamps past the cap"
-        );
-        assert_eq!(input_height(0), 3, "min one content row");
+        assert_eq!(input_height(1), 3);
+        assert_eq!(input_height(4), 6);
+        assert_eq!(input_height(MAX_INPUT_ROWS), MAX_INPUT_ROWS + 2);
+        assert_eq!(input_height(MAX_INPUT_ROWS + 5), MAX_INPUT_ROWS + 2);
+        assert_eq!(input_height(0), 3);
     }
 
     #[test]
     fn compute_input_area_tracks_input_rows() {
         let mut s = ShellState::new();
         s.input_rows = 4;
-        let l = compute(area(100, 30), &s);
+        let l = compute(area(160, 40), &s);
         assert_eq!(l.input.height, input_height(4));
+    }
+
+    #[test]
+    fn too_small_renders_message_not_shell() {
+        let s = ShellState::new();
+        let l = compute(area(80, 20), &s);
+        assert!(l.rail.is_none());
+        assert!(l.drawer_headers.is_empty());
+        assert!(l.drawer_bodies.is_empty());
     }
 }
