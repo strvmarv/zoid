@@ -166,6 +166,19 @@ pub const MAX_TOOL_ITERATIONS: u32 = 1000;
 /// re-sending, so this also bounds the number of forced eviction waves per turn.
 pub const MAX_CONTEXT_RETRIES: u32 = 3;
 
+/// Ensure a tool call has a stable, unique internal id. Some providers
+/// (Ollama native) emit tool calls with an empty id; propagating "" would make
+/// every tool result share one id and collide in id-keyed machinery
+/// (cumulative_appended, projection, compaction, eviction). Synthesize a unique
+/// Ulid when empty; internal only — not sent on the provider wire.
+pub(crate) fn ensure_tool_call_id(id: String) -> String {
+    if id.is_empty() {
+        Ulid::new().to_string()
+    } else {
+        id
+    }
+}
+
 /// The user's answer to an `ask_user` prompt.
 pub enum Answer {
     Choice(String),
@@ -598,7 +611,8 @@ async fn run_turn_inner(
                     )
                     .await?;
                 }
-                ProviderEvent::ToolCall(tc) => {
+                ProviderEvent::ToolCall(mut tc) => {
+                    tc.id = ensure_tool_call_id(std::mem::take(&mut tc.id));
                     turn_produced_content = true;
                     emit(
                         &session,
@@ -3709,5 +3723,16 @@ mod tool_call_id_threading_tests {
             .find(|m| m.role == MsgRole::Tool)
             .expect("tool message should be present");
         assert_eq!(tool_msg.tool_call_id.as_deref(), Some("call-7"));
+    }
+
+    #[test]
+    fn ensure_tool_call_id_fills_empty_and_preserves_present() {
+        // Present id is preserved verbatim.
+        assert_eq!(ensure_tool_call_id("call_abc".to_string()), "call_abc");
+        // Empty id becomes a non-empty, unique value each call.
+        let a = ensure_tool_call_id(String::new());
+        let b = ensure_tool_call_id(String::new());
+        assert!(!a.is_empty() && !b.is_empty(), "empty id must be filled");
+        assert_ne!(a, b, "two empty ids must not collide");
     }
 }
