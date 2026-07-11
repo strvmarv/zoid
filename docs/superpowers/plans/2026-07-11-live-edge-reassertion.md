@@ -692,13 +692,37 @@ async fn re_floor_keeps_firing_in_steady_state_with_compaction() {
 }
 ```
 
-- [ ] **Step 2: Run to verify** — Run: `cargo test -p zoid re_floor_keeps_firing_in_steady_state`
-  Expected: PASS (FAIL first if any wiring gap remains; fix, then pass).
+- [ ] **Step 1b: Negative-path coverage (folds in the Task 9 review's Important finding)** — the retry-safety property was verified by inspection at Task 9 but not test-pinned. Add tests proving the re-floor does NOT fire/persist when it must not:
 
-- [ ] **Step 3: Full workspace green**
+```rust
+#[tokio::test]
+async fn re_floor_does_not_fire_below_interval() {
+    // Seed a log whose cumulative_appended is BELOW reassert_interval; run one
+    // turn with a recording provider. Assert the request had reassert == None
+    // AND no DirectiveReasserted event was persisted.
+}
 
-Run: `cargo test --workspace && cargo clippy --workspace`
-Expected: PASS + no warnings.
+#[tokio::test]
+async fn re_floor_marker_not_persisted_when_turn_errors() {
+    // cumulative_appended above interval, but the fake provider emits a
+    // ProviderEvent::Error (or a context-length error) instead of a clean Done.
+    // Assert NO DirectiveReasserted event is persisted (the interval is not
+    // burned) — this pins the S2 retry-safety property that Task 9 only proved
+    // by control-flow inspection.
+}
+```
+
+(For the context-length variant, use `zoid_provider::is_context_length_error`-matching error text with `eviction.enabled = true` so the loop takes the `continue 'turn` retry path; assert the marker is absent after the turn.)
+
+- [ ] **Step 2: Run to verify** — Run: `cargo test -p zoid re_floor`
+  Expected: all three PASS (FAIL first if any wiring gap remains; fix, then pass).
+
+- [ ] **Step 3: Full workspace tests green + scoped clippy**
+
+Run: `cargo test --workspace`
+Expected: PASS (compare count to the pre-work baseline: only re-floor tests added).
+Then: `cargo clippy -p zoid-core -p zoid-provider -p zoid` (the packages this feature changed).
+Expected: no NEW warnings from re-floor code. NOTE: workspace-wide `cargo clippy --workspace -D warnings` is NOT a clean gate here — `zoid-core`/`zoid-mcp` carry pre-existing clippy issues that predate this branch (documented in the SDD ledger); do not attempt to fix those under this task.
 
 - [ ] **Step 4: Commit**
 
