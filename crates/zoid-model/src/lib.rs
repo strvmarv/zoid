@@ -146,7 +146,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         transport: Transport::Http {
             default_base_url: "https://api.z.ai/api/coding/paas/v4",
         },
-        models: &["glm-5.2"],
+        models: &["glm-5.2", "glm-5-turbo", "glm-4.7"],
         status: Status::Available,
     },
 ];
@@ -212,6 +212,30 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
         "glm-5.2",
         ModelInfo {
             context_window: 1_000_000,
+            max_output: 131_072,
+            tools: true,
+            prompt_cache: true,
+            thinking: ThinkingSupport::ToggleWithEffort,
+            thinking_wire: ThinkingWireShape::DeepSeek,
+        },
+    ),
+    // glm-5-turbo: GLM-5 family fast variant, ZAI Coding Plan model.
+    (
+        "glm-5-turbo",
+        ModelInfo {
+            context_window: 262_144,
+            max_output: 131_072,
+            tools: true,
+            prompt_cache: true,
+            thinking: ThinkingSupport::ToggleWithEffort,
+            thinking_wire: ThinkingWireShape::DeepSeek,
+        },
+    ),
+    // glm-4.7: Sonnet-level model, ZAI Coding Plan model.
+    (
+        "glm-4.7",
+        ModelInfo {
+            context_window: 200_000,
             max_output: 131_072,
             tools: true,
             prompt_cache: true,
@@ -523,7 +547,8 @@ mod tests {
                 default_base_url: "https://api.z.ai/api/coding/paas/v4"
             }
         );
-        assert_eq!(e.models, &["glm-5.2"]);
+        assert_eq!(e.models, &["glm-5.2", "glm-5-turbo", "glm-4.7"]);
+        assert_eq!(e.models.len(), 3);
         let ids: Vec<&str> = selectable().map(|e| e.id).collect();
         assert!(ids.contains(&"zai-coding-plan"));
     }
@@ -575,6 +600,24 @@ mod thinking_tests {
     fn glm_5_2_capabilities_locked() {
         let info = model_info("glm-5.2");
         assert_eq!(info.context_window, 1_000_000);
+        assert_eq!(info.max_output, 131_072);
+        assert_eq!(info.thinking, ThinkingSupport::ToggleWithEffort);
+        assert_eq!(info.thinking_wire, ThinkingWireShape::DeepSeek);
+    }
+
+    #[test]
+    fn glm_5_turbo_capabilities_locked() {
+        let info = model_info("glm-5-turbo");
+        assert_eq!(info.context_window, 262_144);
+        assert_eq!(info.max_output, 131_072);
+        assert_eq!(info.thinking, ThinkingSupport::ToggleWithEffort);
+        assert_eq!(info.thinking_wire, ThinkingWireShape::DeepSeek);
+    }
+
+    #[test]
+    fn glm_4_7_capabilities_locked() {
+        let info = model_info("glm-4.7");
+        assert_eq!(info.context_window, 200_000);
         assert_eq!(info.max_output, 131_072);
         assert_eq!(info.thinking, ThinkingSupport::ToggleWithEffort);
         assert_eq!(info.thinking_wire, ThinkingWireShape::DeepSeek);
