@@ -42,6 +42,9 @@ pub fn request_body(req: &CompletionRequest) -> Value {
             })),
         }
     }
+    if let Some(text) = &req.reassert {
+        messages.push(json!({ "role": "system", "content": text }));
+    }
     // Only emit `think` for models that support thinking. The capability gate
     // in resolve_thinking should have caught unsupported models, but this is
     // defensive — never send `think: true` to a model that might not handle it.
@@ -675,6 +678,19 @@ mod tests {
         };
         let body = request_body(&req);
         assert_eq!(body["think"], json!(false), "non-thinking model must get think=false even when ThinkingMode::Auto");
+    }
+
+    #[test]
+    fn reassert_pushes_trailing_system_message_ollama() {
+        let mut req = CompletionRequest {
+            model: "m".into(), system: None, messages: vec![Message::user("hi")],
+            max_tokens: 16, tools: vec![], thinking: crate::ThinkingMode::Off, reassert: None,
+        };
+        req.reassert = Some("STANDING REMINDER".into());
+        let body = request_body(&req);
+        let last = body["messages"].as_array().unwrap().last().unwrap();
+        assert_eq!(last["role"], "system");
+        assert_eq!(last["content"], "STANDING REMINDER");
     }
 
     #[test]
