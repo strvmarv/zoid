@@ -99,6 +99,9 @@ pub fn request_body(req: &CompletionRequest) -> Value {
             })),
         }
     }
+    if let Some(text) = &req.reassert {
+        messages.push(json!({ "role": "system", "content": text }));
+    }
     let mut body = json!({
         "model": req.model,
         "stream": true,
@@ -1035,6 +1038,19 @@ mod tests {
         let body = request_body(&req);
         assert!(body.get("thinking").is_none());
         assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn reassert_pushes_trailing_system_message_openai() {
+        let mut req = CompletionRequest {
+            model: "m".into(), system: None, messages: vec![Message::user("hi")],
+            max_tokens: 16, tools: vec![], thinking: crate::ThinkingMode::Off, reassert: None,
+        };
+        req.reassert = Some("STANDING REMINDER".into());
+        let body = request_body(&req);
+        let last = body["messages"].as_array().unwrap().last().unwrap();
+        assert_eq!(last["role"], "system");
+        assert_eq!(last["content"], "STANDING REMINDER");
     }
 
     #[test]
