@@ -802,6 +802,96 @@ mod tests {
     }
 
     #[test]
+    fn glm_5_turbo_thinking_off_emits_disabled_no_effort() {
+        let req = CompletionRequest {
+            model: "glm-5-turbo".into(),
+            system: None,
+            messages: vec![Message::user("hi")],
+            max_tokens: 16,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Off,
+        };
+        let body = request_body(&req);
+        assert_eq!(body["thinking"]["type"], json!("disabled"));
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn glm_5_turbo_thinking_auto_emits_enabled_high() {
+        let req = CompletionRequest {
+            model: "glm-5-turbo".into(),
+            system: None,
+            messages: vec![Message::user("hi")],
+            max_tokens: 16,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Auto,
+        };
+        let body = request_body(&req);
+        assert_eq!(body["thinking"]["type"], json!("enabled"));
+        assert_eq!(body["reasoning_effort"], json!("high"));
+    }
+
+    #[test]
+    fn glm_5_turbo_thinking_max_emits_enabled_max() {
+        let req = CompletionRequest {
+            model: "glm-5-turbo".into(),
+            system: None,
+            messages: vec![Message::user("hi")],
+            max_tokens: 16,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Effort(crate::EffortLevel::Max),
+        };
+        let body = request_body(&req);
+        assert_eq!(body["thinking"]["type"], json!("enabled"));
+        assert_eq!(body["reasoning_effort"], json!("max"));
+    }
+
+    #[test]
+    fn glm_4_7_thinking_off_emits_disabled_no_effort() {
+        let req = CompletionRequest {
+            model: "glm-4.7".into(),
+            system: None,
+            messages: vec![Message::user("hi")],
+            max_tokens: 16,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Off,
+        };
+        let body = request_body(&req);
+        assert_eq!(body["thinking"]["type"], json!("disabled"));
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn glm_4_7_thinking_auto_emits_enabled_high() {
+        let req = CompletionRequest {
+            model: "glm-4.7".into(),
+            system: None,
+            messages: vec![Message::user("hi")],
+            max_tokens: 16,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Auto,
+        };
+        let body = request_body(&req);
+        assert_eq!(body["thinking"]["type"], json!("enabled"));
+        assert_eq!(body["reasoning_effort"], json!("high"));
+    }
+
+    #[test]
+    fn glm_4_7_thinking_max_emits_enabled_max() {
+        let req = CompletionRequest {
+            model: "glm-4.7".into(),
+            system: None,
+            messages: vec![Message::user("hi")],
+            max_tokens: 16,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Effort(crate::EffortLevel::Max),
+        };
+        let body = request_body(&req);
+        assert_eq!(body["thinking"]["type"], json!("enabled"));
+        assert_eq!(body["reasoning_effort"], json!("max"));
+    }
+
+    #[test]
     fn deepseek_body_emits_disabled_when_off() {
         let req = CompletionRequest {
             model: "deepseek-v4-flash".into(),
