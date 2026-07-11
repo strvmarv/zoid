@@ -287,12 +287,23 @@ Defaults & rationale:
 ## Observability (N1)
 
 Because acceptance is manual/empirical, each re-floor must be visible or you
-can't tell whether it's firing:
+can't tell whether it's firing. The transcript is projected from `ChatMsg`, and
+`DirectiveReasserted` is deliberately inert in `conversation()` (never a
+`ChatMsg`) — so observability follows the codebase's existing **bookkeeping-status
+idiom** (how `CompactionStarted`/`CompactionComplete` surface), NOT a transcript
+line:
 
-- New `AgentUpdate::DirectiveReasserted { at_cumulative }` emitted when a re-floor
-  fires; the TUI renders a subtle transcript marker (e.g. a dim system line
-  "↻ re-asserted operating instructions"). This also lets the manual GLM
-  acceptance test correlate behavior changes with fires.
+- `agent.rs` emits `tracing::info!(kind = "reassert", at = at_cumulative, …)` at
+  each fire — the primary greppable signal for manual acceptance/tuning.
+- A new `AgentUpdate::DirectiveReasserted { at_cumulative }` is emitted and
+  handled in the bin's `AgentUpdate` match (which is exhaustive — the handler
+  MUST land in the same task as the variant), mirroring the compaction handlers:
+  it bumps a lightweight session counter / transient indicator, not a bottom-bar
+  `status_hint` (which the `SubagentStarted` handler warns overlaps the layout).
+- The persisted `DirectiveReasserted` events are themselves the durable record of
+  when/where fires happened (inspectable in the session log).
+
+A richer economy-view indicator is possible later but is out of scope here.
 
 ## Testing
 

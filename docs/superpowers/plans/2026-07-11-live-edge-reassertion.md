@@ -13,23 +13,26 @@
 ## Global Constraints
 
 - No co-author trailer in commit messages (repo policy).
+- Execution runs on branch `subagent-reliability`, **no worktree**. Before any edit/commit assert `git branch --show-current` == `subagent-reliability`; use absolute paths under `/home/gomanjoe/source/zoid`.
 - `estimate_tokens` is `chars/3` (`crates/zoid-core/src/economy.rs:41`). All token math uses it.
 - The reminder text is **ephemeral** — never persisted as an event. Only `DirectiveReasserted { at_cumulative: u64 }` persists.
 - Subagents and tests pass `reassert_interval = 0` (feature off), consistent with `eviction: disabled()`.
 - `reassert = None` MUST produce a request body byte-identical to today (explicit early-return in each adapter).
-- Run `cargo build` and `cargo clippy --workspace` clean before each commit.
+- Locate edit points **by symbol, not line number** (anchors drift as earlier tasks edit files).
+- Run `cargo build --workspace` clean before each commit (every task must compile independently).
 
 ---
 
-### Task 1: `DirectiveReasserted` event kind (inert everywhere)
+### Task 1: `DirectiveReasserted` event kind (inert everywhere, incl. the one exhaustive match)
 
 **Files:**
-- Modify: `crates/zoid-core/src/event.rs` (EventKind enum, near `Tasks`/`TurnsEvicted`)
-- Modify: `crates/zoid-core/src/eviction.rs:220-231` (`is_inert`)
-- Test: `crates/zoid-core/src/eviction.rs` (inline `#[cfg(test)]`), `crates/zoid-core/src/context.rs` (inline test)
+- Modify: `crates/zoid-core/src/event.rs` (EventKind enum, near `Tasks`/`Usage`)
+- Modify: `crates/zoid-core/src/eviction.rs` (`is_inert`)
+- Modify: `crates/zoid-core/src/projection.rs` (`conversation()` — the ONLY exhaustive `EventKind` match in the workspace; no wildcard, so this MUST get an arm or the crate won't compile)
+- Test: inline in `eviction.rs` and `context.rs`
 
 **Interfaces:**
-- Produces: `EventKind::DirectiveReasserted { at_cumulative: u64 }` — a weightless marker recording the cumulative-appended value at a re-floor fire.
+- Produces: `EventKind::DirectiveReasserted { at_cumulative: u64 }` — weightless marker recording the cumulative-appended value at a re-floor fire.
 
 - [ ] **Step 1: Write the failing test** (append to `eviction.rs` tests module)
 
@@ -47,35 +50,34 @@ fn directive_reasserted_is_inert() {
 Run: `cargo test -p zoid-core directive_reasserted_is_inert`
 Expected: FAIL — `no variant named DirectiveReasserted`.
 
-- [ ] **Step 3: Add the variant** (in `event.rs`, alongside the other bookkeeping kinds like `Tasks`/`Usage`)
+- [ ] **Step 3: Add the variant** (`event.rs`, alongside `Tasks`/`Usage`)
 
 ```rust
     /// Live-edge re-assertion marker (spec: re-floor). Records the
     /// cumulative-appended token value at the moment a re-floor fired, so the
     /// interval spans the whole session. Weightless: inert for eviction and
-    /// context_window; never rendered as conversation.
+    /// context_window; never projected into a ChatMsg.
     DirectiveReasserted {
         at_cumulative: u64,
     },
 ```
 
-- [ ] **Step 4: Add it to `is_inert`** (`eviction.rs:221`)
+- [ ] **Step 4: Add it to `is_inert`** (`eviction.rs`, extend the `matches!` list)
 
 ```rust
-    matches!(
-        kind,
-        EventKind::Usage
-            | EventKind::ContextMutation { .. }
-            | EventKind::ToolResultCompacted { .. }
-            | EventKind::Tasks { .. }
-            | EventKind::TurnsDropped { .. }
-            | EventKind::TurnsEvicted { .. }
             | EventKind::TurnsReadmitted { .. }
             | EventKind::DirectiveReasserted { .. }
-    )
 ```
 
-- [ ] **Step 5: Add a context_window weightless test** (append to `context.rs` tests module)
+- [ ] **Step 5: Add the required arm to `conversation()`** (`projection.rs`) — the main fold `match &e.kind` ends with `EventKind::TurnsEvicted { .. } | EventKind::TurnsReadmitted { .. } => {}` and has NO wildcard. Extend that ignore arm:
+
+```rust
+            EventKind::TurnsEvicted { .. }
+            | EventKind::TurnsReadmitted { .. }
+            | EventKind::DirectiveReasserted { .. } => {}
+```
+
+- [ ] **Step 6: Add a context_window weightless test** (append to `context.rs` tests module)
 
 ```rust
 #[test]
@@ -91,17 +93,17 @@ fn context_window_ignores_directive_reasserted() {
 }
 ```
 
-- [ ] **Step 6: Run tests to verify they pass**
+(`context_window`'s fold has a `_ => {}` arm, so no change is needed there — this test proves it.)
 
-Run: `cargo test -p zoid-core directive_reasserted_is_inert context_window_ignores_directive_reasserted`
-Expected: PASS (the `_ => {}` arm in `context_window` already ignores unknown kinds; no change needed there).
+- [ ] **Step 7: Build + run tests**
 
-- [ ] **Step 7: Confirm projection ignores it** — verify `conversation()` in `crates/zoid-core/src/projection.rs` has a catch-all `_ => {}` in its event match (it does). No code change; note it in the commit body.
+Run: `cargo build -p zoid-core && cargo test -p zoid-core directive_reasserted_is_inert context_window_ignores_directive_reasserted`
+Expected: clean build + PASS. (If `projection.rs` was missed, the build fails with a non-exhaustive `match` error — that is the B1 guard.)
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add crates/zoid-core/src/event.rs crates/zoid-core/src/eviction.rs crates/zoid-core/src/context.rs
+git add crates/zoid-core/src/event.rs crates/zoid-core/src/eviction.rs crates/zoid-core/src/projection.rs crates/zoid-core/src/context.rs
 git commit -m "feat(core): add weightless DirectiveReasserted event kind"
 ```
 
@@ -111,8 +113,8 @@ git commit -m "feat(core): add weightless DirectiveReasserted event kind"
 
 **Files:**
 - Create: `crates/zoid-core/src/reassert.rs`
-- Modify: `crates/zoid-core/src/lib.rs` (add `pub mod reassert;`)
-- Test: inline `#[cfg(test)]` in `reassert.rs`
+- Modify: `crates/zoid-core/src/lib.rs` (`pub mod reassert;`)
+- Test: inline in `reassert.rs`
 
 **Interfaces:**
 - Consumes: `EventKind::{UserMessage,AssistantMessage,ModelDelta,ToolResult,ToolResultCompacted,DirectiveReasserted}`, `economy::estimate_tokens`.
@@ -120,7 +122,7 @@ git commit -m "feat(core): add weightless DirectiveReasserted event kind"
   - `pub fn cumulative_appended<'a>(events: impl IntoIterator<Item = &'a Event> + Clone) -> u64`
   - `pub fn reassertion_due<'a>(events: impl IntoIterator<Item = &'a Event> + Clone, interval: u64) -> bool`
 
-- [ ] **Step 1: Write the failing tests** (`reassert.rs`)
+- [ ] **Step 1: Write the module + failing tests** (`reassert.rs`)
 
 ```rust
 //! Live-edge re-assertion policy (spec: re-floor). Pure functions over the
@@ -179,9 +181,7 @@ mod tests {
     use crate::event::{Event, EventKind, EvictionMarker};
     use ulid::Ulid;
 
-    fn ev(kind: EventKind) -> Event {
-        Event::new(Ulid::new(), None, 0, kind)
-    }
+    fn ev(kind: EventKind) -> Event { Event::new(Ulid::new(), None, 0, kind) }
     fn user(t: &str) -> Event { ev(EventKind::UserMessage { text: t.into() }) }
     fn tool(id: &str, out: &str) -> Event {
         ev(EventKind::ToolResult { id: id.into(), name: "shell".into(), output: out.into(), is_error: false })
@@ -197,12 +197,10 @@ mod tests {
 
     #[test]
     fn fires_at_threshold_and_marker_resets_baseline() {
-        // ~1000 estimated tokens (3000 chars / 3).
-        let big = user(&"x".repeat(3000));
+        let big = user(&"x".repeat(3000)); // 3000 chars / 3 = 1000 est tokens
         let log = vec![big.clone()];
         assert!(reassertion_due(&log, 1000));
         assert!(!reassertion_due(&log, 1001));
-        // Fire recorded at 1000 → needs another 1000 before next fire.
         let mut log2 = log.clone();
         log2.push(ev(EventKind::DirectiveReasserted { at_cumulative: 1000 }));
         assert!(!reassertion_due(&log2, 1000));
@@ -212,20 +210,12 @@ mod tests {
 
     #[test]
     fn monotonic_under_compaction_body_clear() {
-        // A tool result contributing ~1000 est tokens, later compacted+cleared.
         let before = vec![tool("t1", &"z".repeat(3000))];
-        let full = cumulative_appended(&before);
-        assert_eq!(full, 1000);
-        // Simulate #6b: body emptied, ToolResultCompacted preserves original_tokens.
-        let after = vec![
-            tool("t1", ""), // cleared body
-            compacted("t1", 1000),
-        ];
-        assert_eq!(
-            cumulative_appended(&after),
-            full,
-            "compacted+cleared result must still count at original_tokens (monotonic)"
-        );
+        assert_eq!(cumulative_appended(&before), 1000);
+        // Simulate #6b: body emptied; ToolResultCompacted preserves original_tokens.
+        let after = vec![tool("t1", ""), compacted("t1", 1000)];
+        assert_eq!(cumulative_appended(&after), 1000,
+            "compacted+cleared result must still count at original_tokens (monotonic)");
     }
 
     #[test]
@@ -242,21 +232,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **Step 2: Run to verify it fails** — Run: `cargo test -p zoid-core reassert`
+  Expected: FAIL — `module reassert not found`.
 
-Run: `cargo test -p zoid-core reassert`
-Expected: FAIL — `module reassert not found` until `lib.rs` is wired.
+- [ ] **Step 3: Wire the module** — add `pub mod reassert;` to `crates/zoid-core/src/lib.rs`.
 
-- [ ] **Step 3: Wire the module** — add to `crates/zoid-core/src/lib.rs`:
-
-```rust
-pub mod reassert;
-```
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run: `cargo test -p zoid-core reassert`
-Expected: PASS (all four).
+- [ ] **Step 4: Run to verify pass** — Run: `cargo test -p zoid-core reassert` → PASS (all four).
 
 - [ ] **Step 5: Commit**
 
@@ -270,47 +251,33 @@ git commit -m "feat(core): monotonic compaction-aware re-floor trigger (cumulati
 ### Task 3: `CompletionRequest.reassert` field (all constructors updated)
 
 **Files:**
-- Modify: `crates/zoid-provider/src/lib.rs:214-221` (struct)
-- Modify: every `CompletionRequest { .. }` literal: `crates/zoid-provider/src/{openai_compat.rs,ollama.rs,zai.rs}` tests, `crates/zoid-provider/src/anthropic/request.rs` tests, `crates/zoid/src/agent.rs` (`build_request_with_thinking`), and any other call sites surfaced by the compiler.
+- Modify: `crates/zoid-provider/src/lib.rs` (`CompletionRequest` struct)
+- Modify: every `CompletionRequest { .. }` literal (compiler-driven; includes `openai_compat.rs`, `ollama.rs`, `zai.rs`, `opencode_go.rs`, `anthropic/*` tests, `zoid/src/agent.rs`).
 
 **Interfaces:**
-- Produces: `CompletionRequest.reassert: Option<String>` — fully-wrapped reminder text, or `None`.
+- Produces: `CompletionRequest.reassert: Option<String>`.
 
-- [ ] **Step 1: Add the field** (`lib.rs:220`, after `thinking`)
+- [ ] **Step 1: Add the field** (`lib.rs`, after `thinking`)
 
 ```rust
-pub struct CompletionRequest {
-    pub model: String,
-    pub system: Option<String>,
-    pub messages: Vec<Message>,
-    pub max_tokens: u32,
-    pub tools: Vec<ToolSpec>,
     pub thinking: ThinkingMode,
     /// Live-edge re-assertion text (spec: re-floor). `None` = no reminder this
     /// request (body byte-identical to pre-feature). `Some` = adapters render it
     /// at the tail (per-adapter placement).
     pub reassert: Option<String>,
-}
 ```
 
-- [ ] **Step 2: Run the build to enumerate broken constructors**
-
-Run: `cargo build -p zoid-provider 2>&1 | rg "missing field .reassert"`
-Expected: a list of every struct-literal site. Add `reassert: None,` to each.
-
-- [ ] **Step 3: Update `build_request_with_thinking`** in `agent.rs` to set `reassert: None` for now (threaded properly in Task 8). Locate the `CompletionRequest { .. }` at ~agent.rs:348 and add `reassert: None,`.
-
-- [ ] **Step 4: Run the full build**
+- [ ] **Step 2: Enumerate + fix broken constructors**
 
 Run: `cargo build --workspace 2>&1 | rg "missing field .reassert"`
-Expected: no output (all sites fixed).
+Add `reassert: None,` to every reported struct-literal site (including `build_request_with_thinking` in `agent.rs`).
 
-- [ ] **Step 5: Verify no behavior change**
+- [ ] **Step 3: Verify build + tests**
 
-Run: `cargo test -p zoid-provider`
-Expected: PASS (field is unused so far; bodies unchanged).
+Run: `cargo build --workspace 2>&1 | rg "missing field" ; cargo test -p zoid-provider`
+Expected: no missing-field output; PASS (bodies unchanged — field unused).
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add crates/zoid-provider/src crates/zoid/src/agent.rs
@@ -319,72 +286,71 @@ git commit -m "feat(provider): add neutral CompletionRequest.reassert field (unu
 
 ---
 
-### Task 4: Anthropic rendering — append reminder to last user message
+### Task 4: Anthropic rendering — append reminder as a text block on the last message
 
 **Files:**
-- Modify: `crates/zoid-provider/src/anthropic/request.rs` (body builder)
-- Test: inline test in `anthropic/request.rs`
+- Modify: `crates/zoid-provider/src/anthropic/request.rs` (`build`)
+- Test: inline in `anthropic/request.rs` (use the module's real `req(messages, tools, system)` helper + `serde_json::to_value(build(&r))`)
 
 **Interfaces:**
-- Consumes: `CompletionRequest.reassert`.
+- Consumes: `CompletionRequest.reassert`. Uses `MessageContent::{Text(String), Blocks(Vec<ContentBlock>)}` and `ContentBlock::Text { text, cache_control }` (`anthropic/types.rs`).
 
 - [ ] **Step 1: Write the failing test**
 
 ```rust
 #[test]
-fn reassert_appends_text_block_to_last_user_message() {
-    let mut req = sample_request(); // existing test helper; tail is a user message
-    req.reassert = Some("STANDING REMINDER".to_string());
-    let body = build_body(&req);
+fn reassert_rides_on_last_message_as_user_role() {
+    // req(messages, tools, system): tail is a plain user message (MessageContent::Text).
+    let mut r = req(vec![Message::user("do the thing")], vec![], None);
+    r.reassert = Some("STANDING REMINDER".to_string());
+    let body = serde_json::to_value(build(&r)).unwrap();
     let msgs = body["messages"].as_array().unwrap();
     let last = msgs.last().unwrap();
     assert_eq!(last["role"], "user", "tail stays user-role (alternation preserved)");
-    // The reminder rides inside the last user message's content.
-    let content = serde_json::to_string(&last["content"]).unwrap();
-    assert!(content.contains("STANDING REMINDER"));
-    // No new trailing message was added.
-    assert_eq!(msgs.len(), sample_request_message_count());
+    assert!(serde_json::to_string(&last["content"]).unwrap().contains("STANDING REMINDER"));
+    assert_eq!(msgs.len(), 1, "no new trailing message added");
 }
 
 #[test]
-fn reassert_none_is_byte_identical() {
-    let req = sample_request();
-    let mut req2 = req.clone();
-    req2.reassert = None;
-    assert_eq!(build_body(&req), build_body(&req2));
+fn reassert_none_is_byte_identical_anthropic() {
+    let r = req(vec![Message::user("hi")], vec![], None);
+    let mut r2 = r.clone();
+    r2.reassert = None;
+    assert_eq!(serde_json::to_value(build(&r)).unwrap(), serde_json::to_value(build(&r2)).unwrap());
 }
 ```
 
-(If `sample_request`/`build_body` helpers don't exist under those names, adapt to the module's existing test scaffolding — mirror the neighboring `#[test] fn` that asserts body shape.)
+- [ ] **Step 2: Run to verify it fails** — Run: `cargo test -p zoid-provider reassert_rides_on_last_message`
+  Expected: FAIL — reminder absent.
 
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `cargo test -p zoid-provider reassert_appends_text_block`
-Expected: FAIL — reminder not present in body.
-
-- [ ] **Step 3: Implement** — in the Anthropic body builder, after the messages array is assembled and before serialization, if `req.reassert` is `Some(text)`, append a text block to the **last** message's content array:
+- [ ] **Step 3: Implement** — in `build`, AFTER the messages vec is assembled and BEFORE `place_breakpoints(&mut out)`, fold the reminder onto the last message. `MessageContent` is an enum (not a Vec), so handle both variants:
 
 ```rust
-if let Some(text) = &req.reassert {
-    if let Some(last) = messages.last_mut() {
-        // Anthropic content is an array of blocks; push a text block.
-        last.content.push(ContentBlock::text(format!("\n\n{text}")));
+    if let Some(text) = &req.reassert {
+        if let Some(last) = out.messages.last_mut() {
+            let block = ContentBlock::Text { text: format!("\n\n{text}"), cache_control: None };
+            match &mut last.content {
+                MessageContent::Text(s) => {
+                    last.content = MessageContent::Blocks(vec![
+                        ContentBlock::Text { text: std::mem::take(s), cache_control: None },
+                        block,
+                    ]);
+                }
+                MessageContent::Blocks(blocks) => blocks.push(block),
+            }
+        }
     }
-}
 ```
 
-(Use the module's actual content-block type/constructor. The tail at build time is always a `User` message per the spec, so this preserves alternation.)
+(Placing it before `place_breakpoints` lets the 1h breakpoint re-home onto the reminder block — acceptable; the reminder turn's cache write is ephemeral. Import `MessageContent`/`ContentBlock` in scope if not already.)
 
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run: `cargo test -p zoid-provider reassert`
-Expected: PASS (both).
+- [ ] **Step 4: Run to verify pass** — Run: `cargo test -p zoid-provider reassert` → PASS (both).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add crates/zoid-provider/src/anthropic/request.rs
-git commit -m "feat(provider): render reassert as trailing text block on last user message (anthropic)"
+git commit -m "feat(provider): render reassert as trailing text block on last message (anthropic)"
 ```
 
 ---
@@ -392,50 +358,41 @@ git commit -m "feat(provider): render reassert as trailing text block on last us
 ### Task 5: openai-compat rendering — trailing system message
 
 **Files:**
-- Modify: `crates/zoid-provider/src/openai_compat.rs:66-101` (body builder)
-- Test: inline
+- Modify: `crates/zoid-provider/src/openai_compat.rs` (`request_body`)
+- Test: inline (construct `CompletionRequest { .. }` literally, as the module's existing tests do)
 
 **Interfaces:**
-- Consumes: `CompletionRequest.reassert`.
+- Consumes: `CompletionRequest.reassert`. Entry point: `pub fn request_body(req: &CompletionRequest) -> Value`.
 
 - [ ] **Step 1: Write the failing test**
 
 ```rust
 #[test]
-fn reassert_pushes_trailing_system_message() {
-    let mut req = CompletionRequest { /* minimal: model, system:None, one user message, ... */ reassert: Some("STANDING REMINDER".into()), ..sample() };
-    let body = build_body(&req);
-    let msgs = body["messages"].as_array().unwrap();
-    let last = msgs.last().unwrap();
+fn reassert_pushes_trailing_system_message_openai() {
+    let mut req = CompletionRequest {
+        model: "m".into(), system: None, messages: vec![Message::user("hi")],
+        max_tokens: 16, tools: vec![], thinking: ThinkingMode::Off, reassert: None,
+    };
+    req.reassert = Some("STANDING REMINDER".into());
+    let body = request_body(&req);
+    let last = body["messages"].as_array().unwrap().last().unwrap();
     assert_eq!(last["role"], "system");
     assert_eq!(last["content"], "STANDING REMINDER");
 }
-
-#[test]
-fn reassert_none_body_unchanged_openai() {
-    let mut a = sample(); a.reassert = None;
-    let b = a.clone();
-    assert_eq!(build_body(&a), build_body(&b));
-}
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run to verify it fails** — Run: `cargo test -p zoid-provider reassert_pushes_trailing_system_message_openai`
+  Expected: FAIL.
 
-Run: `cargo test -p zoid-provider reassert_pushes_trailing_system_message`
-Expected: FAIL.
-
-- [ ] **Step 3: Implement** — after the loop that maps conversation messages (openai_compat.rs ~101), before finalizing the JSON:
+- [ ] **Step 3: Implement** — in `request_body`, after the conversation messages are pushed and before building the final `json!({... "messages": messages ...})`:
 
 ```rust
-if let Some(text) = &req.reassert {
-    messages.push(json!({ "role": "system", "content": text }));
-}
+    if let Some(text) = &req.reassert {
+        messages.push(json!({ "role": "system", "content": text }));
+    }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run: `cargo test -p zoid-provider reassert`
-Expected: PASS.
+- [ ] **Step 4: Run to verify pass** — Run: `cargo test -p zoid-provider reassert` → PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -449,43 +406,41 @@ git commit -m "feat(provider): render reassert as trailing system message (opena
 ### Task 6: Ollama-native rendering — trailing system message
 
 **Files:**
-- Modify: `crates/zoid-provider/src/ollama.rs:16-44` (native body builder)
+- Modify: `crates/zoid-provider/src/ollama.rs` (`request_body`)
 - Test: inline
 
 **Interfaces:**
-- Consumes: `CompletionRequest.reassert`.
+- Consumes: `CompletionRequest.reassert`. Entry point: `pub fn request_body(req: &CompletionRequest) -> Value`.
 
 - [ ] **Step 1: Write the failing test**
 
 ```rust
 #[test]
-fn native_reassert_pushes_trailing_system_message() {
-    let mut req = sample_native();
+fn reassert_pushes_trailing_system_message_ollama() {
+    let mut req = CompletionRequest {
+        model: "m".into(), system: None, messages: vec![Message::user("hi")],
+        max_tokens: 16, tools: vec![], thinking: ThinkingMode::Off, reassert: None,
+    };
     req.reassert = Some("STANDING REMINDER".into());
-    let body = build_native_body(&req);
-    let msgs = body["messages"].as_array().unwrap();
-    assert_eq!(msgs.last().unwrap()["role"], "system");
-    assert_eq!(msgs.last().unwrap()["content"], "STANDING REMINDER");
+    let body = request_body(&req);
+    let last = body["messages"].as_array().unwrap().last().unwrap();
+    assert_eq!(last["role"], "system");
+    assert_eq!(last["content"], "STANDING REMINDER");
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run to verify it fails** — Run: `cargo test -p zoid-provider reassert_pushes_trailing_system_message_ollama`
+  Expected: FAIL.
 
-Run: `cargo test -p zoid-provider native_reassert_pushes_trailing_system_message`
-Expected: FAIL.
-
-- [ ] **Step 3: Implement** — after the role-mapping loop in the native body builder (ollama.rs ~44):
+- [ ] **Step 3: Implement** — in `request_body`, after the role-mapping loop pushes conversation messages:
 
 ```rust
-if let Some(text) = &req.reassert {
-    messages.push(json!({ "role": "system", "content": text }));
-}
+    if let Some(text) = &req.reassert {
+        messages.push(json!({ "role": "system", "content": text }));
+    }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run: `cargo test -p zoid-provider reassert`
-Expected: PASS. Then `cargo test -p zoid-provider` (all adapters) — PASS.
+- [ ] **Step 4: Run to verify pass** — Run: `cargo test -p zoid-provider reassert && cargo test -p zoid-provider` → PASS (all adapters).
 
 - [ ] **Step 5: Commit**
 
@@ -496,17 +451,21 @@ git commit -m "feat(provider): render reassert as trailing system message (ollam
 
 ---
 
-### Task 7: Config — `reassert_interval_tokens`
+### Task 7: Config — `reassert_interval_tokens` (partial + merge + resolved default)
 
 **Files:**
-- Modify: `crates/zoid-core/src/config.rs` (`EconomyConfig` struct + `Default`; `PartialConfig`/`parse_toml` economy parsing)
-- Modify: `crates/zoid/src/main.rs:5299-5307` (resolve into `TurnConfig`; done in Task 8 — here just resolve the value onto `app.economy`)
+- Modify: `crates/zoid-core/src/config.rs` — `EconomyConfig` (+`Default`), `PartialEconomy`, the economy merge block, and the `Source`/provenance plumbing. **Mirror `compact_threshold_pct` at EVERY site it appears** (grep it first).
 - Test: inline in `config.rs`
 
 **Interfaces:**
-- Produces: `EconomyConfig.reassert_interval_tokens: u64` (default `100_000`, `0` disables).
+- Produces: `EconomyConfig.reassert_interval_tokens: u64` (default `100_000`, `0` disables); `PartialEconomy.reassert_interval_tokens: Option<u64>`.
 
-- [ ] **Step 1: Write the failing test** (`config.rs` tests)
+- [ ] **Step 1: Grep the pattern to replicate**
+
+Run: `rg -n "compact_threshold_pct" crates/zoid-core/src/config.rs`
+This lists every site (struct, Default, PartialEconomy, merge, Source/provenance). The new field mirrors each.
+
+- [ ] **Step 2: Write the failing tests**
 
 ```rust
 #[test]
@@ -515,24 +474,16 @@ fn economy_default_reassert_interval_is_100k() {
 }
 
 #[test]
-fn parse_reassert_interval_from_toml() {
-    let c = parse_toml("[economy]\nreassert_interval_tokens = 250000").unwrap();
-    assert_eq!(c.economy.reassert_interval_tokens, 250_000);
-}
-
-#[test]
-fn parse_reassert_interval_zero_disables() {
-    let c = parse_toml("[economy]\nreassert_interval_tokens = 0").unwrap();
-    assert_eq!(c.economy.reassert_interval_tokens, 0);
+fn parse_reassert_interval_into_partial() {
+    let (pc, _unknown) = parse_toml("[economy]\nreassert_interval_tokens = 250000").unwrap();
+    assert_eq!(pc.economy.reassert_interval_tokens, Some(250_000));
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **Step 3: Run to verify they fail** — Run: `cargo test -p zoid-core reassert_interval`
+  Expected: FAIL — no such field.
 
-Run: `cargo test -p zoid-core reassert_interval`
-Expected: FAIL — no such field.
-
-- [ ] **Step 3: Add the field** to `EconomyConfig`:
+- [ ] **Step 4: Add to `EconomyConfig`**
 
 ```rust
     /// Re-assert the system prompt at the live edge every N estimated-appended
@@ -540,20 +491,18 @@ Expected: FAIL — no such field.
     pub reassert_interval_tokens: u64,
 ```
 
-- [ ] **Step 4: Add to `Default for EconomyConfig`**:
+- [ ] **Step 5: Add to `Default for EconomyConfig`**: `reassert_interval_tokens: 100_000,`
 
-```rust
-            reassert_interval_tokens: 100_000,
-```
+- [ ] **Step 6: Add to `PartialEconomy`**: `pub reassert_interval_tokens: Option<u64>,`
 
-- [ ] **Step 5: Wire TOML parsing** — mirror how `compact_threshold_pct` is read in `PartialConfig` merge / `parse_toml` (find the `economy` field reads and add `reassert_interval_tokens` with the same pattern; default applied when absent).
+- [ ] **Step 7: Wire the merge + provenance** — at each site the Step-1 grep reported for `compact_threshold_pct` (the `PartialEconomy → EconomyConfig` merge, and any `Source`/provenance struct + assignment), add the matching `reassert_interval_tokens` line, using `unwrap_or(100_000)` (or the crate's default-fallback idiom) in the merge.
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [ ] **Step 8: Run to verify pass + build**
 
-Run: `cargo test -p zoid-core reassert_interval`
-Expected: PASS.
+Run: `cargo test -p zoid-core reassert_interval && cargo build -p zoid-core`
+Expected: PASS + clean.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add crates/zoid-core/src/config.rs
@@ -565,16 +514,12 @@ git commit -m "feat(config): add [economy].reassert_interval_tokens (default 100
 ### Task 8: `wrap_reassertion` + `TurnConfig.reassert_interval` + thread `reassert` through `build_request`
 
 **Files:**
-- Modify: `crates/zoid/src/agent.rs` (add `wrap_reassertion`, `TurnConfig.reassert_interval` field + Debug + `chat_turn_config_with` default 0, `build_request_with_thinking` new param)
-- Modify: `crates/zoid/src/main.rs:5299` (set `turn_config.reassert_interval = app.economy.reassert_interval_tokens`)
+- Modify: `crates/zoid/src/agent.rs` (`wrap_reassertion`; `TurnConfig.reassert_interval` + its manual `Debug`; default `0` in `chat_turn_config_with`; new `reassert` param on `build_request_with_thinking` + `build_request` wrapper)
+- Modify: `crates/zoid/src/main.rs` (set `turn_config.reassert_interval = app.economy.reassert_interval_tokens` where the other economy-derived `TurnConfig` fields are set)
 - Test: inline in `agent.rs`
 
 **Interfaces:**
-- Consumes: `config.system`.
-- Produces:
-  - `pub fn wrap_reassertion(system: &str) -> String`
-  - `TurnConfig.reassert_interval: u64` (Chat: from config; subagents/tests: `0`)
-  - `build_request_with_thinking(events, model, tools, system, thinking, reassert: Option<String>)`
+- Produces: `pub fn wrap_reassertion(system: &str) -> String`; `TurnConfig.reassert_interval: u64`; `build_request_with_thinking(events, model, tools, system, thinking, reassert: Option<String>)`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -588,12 +533,10 @@ fn wrap_reassertion_frames_prompt_as_standing_reminder() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run to verify it fails** — Run: `cargo test -p zoid wrap_reassertion_frames`
+  Expected: FAIL — not defined.
 
-Run: `cargo test -p zoid wrap_reassertion_frames`
-Expected: FAIL — not defined.
-
-- [ ] **Step 3: Implement `wrap_reassertion`** (near `SYSTEM_PROMPT`):
+- [ ] **Step 3: Implement `wrap_reassertion`** (near `SYSTEM_PROMPT`)
 
 ```rust
 /// Wrap the system prompt as a standing, tail-injected reminder. The pre/post
@@ -611,20 +554,17 @@ pub fn wrap_reassertion(system: &str) -> String {
 }
 ```
 
-- [ ] **Step 4: Add `reassert_interval` to `TurnConfig`** — add field `pub reassert_interval: u64,`, add it to the manual `Debug` impl, and set `reassert_interval: 0` in `chat_turn_config_with` (subagents/tests default off).
+- [ ] **Step 4: Add `TurnConfig.reassert_interval`** — add `pub reassert_interval: u64,` to the struct, a `.field("reassert_interval", &self.reassert_interval)` line in the manual `Debug` impl, and `reassert_interval: 0,` in `chat_turn_config_with` (subagents/tests default off).
 
-- [ ] **Step 5: Add the new `build_request_with_thinking` param** — extend the signature with `reassert: Option<String>` and set `reassert` on the `CompletionRequest` literal. Update the thin `build_request` wrapper and all call sites (the eviction-breadcrumb system-append logic stays as-is). Existing callers pass `None`.
+- [ ] **Step 5: Thread `reassert` through `build_request_with_thinking`** — add `reassert: Option<String>` as the last param; set `reassert` on the `CompletionRequest` literal (replacing the `reassert: None` from Task 3). Update the `build_request` convenience wrapper to accept + forward `None`. Fix all callers (they pass `None` for now; Task 9 changes the loop caller).
 
-- [ ] **Step 6: Set the interval in the bin** — `crates/zoid/src/main.rs` after line 5299:
+- [ ] **Step 6: Set the interval in the bin** — in `main.rs`, next to `turn_config.policy = …` / `turn_config.eviction = …`:
 
 ```rust
     turn_config.reassert_interval = app.economy.reassert_interval_tokens;
 ```
 
-- [ ] **Step 7: Run tests to verify they pass + build**
-
-Run: `cargo test -p zoid wrap_reassertion_frames && cargo build --workspace`
-Expected: PASS + clean build.
+- [ ] **Step 7: Run tests + build** — Run: `cargo test -p zoid wrap_reassertion_frames && cargo build --workspace` → PASS + clean.
 
 - [ ] **Step 8: Commit**
 
@@ -635,180 +575,132 @@ git commit -m "feat(agent): wrap_reassertion + TurnConfig.reassert_interval + bu
 
 ---
 
-### Task 9: Loop wiring — fire the re-floor (preflight, marker-after-send, calibration skip)
+### Task 9: Fire the re-floor in the turn loop (+ AgentUpdate variant & handler, preflight, calibration, observability)
 
 **Files:**
-- Modify: `crates/zoid/src/agent.rs` (`run_turn_inner` turn loop; `record_compactions` calibration skip; `AgentUpdate` enum)
-- Test: inline integration-style test in `agent.rs` (fake provider)
+- Modify: `crates/zoid/src/agent.rs` (`run_turn_inner` loop; `AgentUpdate` enum; `record_compactions` calibration skip)
+- Modify: `crates/zoid/src/main.rs` (`AgentUpdate` match arm — **exhaustive, no wildcard**, so the handler MUST land in THIS task or the bin won't compile)
+- Test: inline turn-loop test in `agent.rs` (fake provider)
 
 **Interfaces:**
-- Consumes: `reassert::reassertion_due`, `reassert::cumulative_appended`, `wrap_reassertion`, `config.reassert_interval`, `ContextOverhead`.
+- Consumes: `reassert::{reassertion_due, cumulative_appended}`, `wrap_reassertion`, `config.reassert_interval`, `ContextOverhead` (derives `Clone`, has `pub system_tokens`).
 - Produces: `AgentUpdate::DirectiveReasserted { at_cumulative: u64 }`; a persisted `EventKind::DirectiveReasserted` per fire.
 
-- [ ] **Step 1: Add the UI update variant** to `AgentUpdate`:
+- [ ] **Step 1: Add the UI variant + its bin handler together (B2)**
+
+In `agent.rs` `AgentUpdate`:
 
 ```rust
     /// A re-floor fired: the system prompt was re-asserted at the live edge.
     DirectiveReasserted { at_cumulative: u64 },
 ```
 
-- [ ] **Step 2: Write the failing test** — drive `run_turn_inner` (or the cancellable wrapper) with a fake provider over a seed log whose `cumulative_appended` already exceeds the interval; assert (a) the built request carried `reassert = Some(..)`, and (b) a `DirectiveReasserted` event was persisted after a successful (non-error) stream. Use the existing fake-provider test harness in `agent.rs` tests; capture the request via a provider double that records `req.reassert.is_some()`.
+In `main.rs` `AgentUpdate` match (mirror the `CompactionComplete` arm — a lightweight, non-transcript status surface; do NOT set the bottom-bar `status_hint`):
+
+```rust
+                    AgentUpdate::DirectiveReasserted { at_cumulative } => {
+                        app.reassert_count = app.reassert_count.saturating_add(1);
+                        tracing::info!(kind = "reassert", at = at_cumulative, "re-floor surfaced");
+                    }
+```
+
+Add `reassert_count: u64` (default 0) to the bin's `App` struct next to the other counters.
+
+- [ ] **Step 2: Write the failing test** — drive `run_turn_inner` (or `run_agent_turn`) with a fake provider that (a) records whether the request it received had `reassert.is_some()`, and (b) returns a final text answer. Seed a log whose `cumulative_appended` already exceeds a small `reassert_interval`. Assert the recorded request had `reassert = Some`, and the resulting log contains a `DirectiveReasserted` event. Mirror the existing fake-provider tests in `agent.rs`.
 
 ```rust
 #[tokio::test]
 async fn re_floor_fires_and_persists_marker_on_success() {
-    // Seed a log with ~interval+ estimated-appended tokens; interval small.
-    // Fake provider returns a final text answer (no tool calls), records the
-    // request it saw. Assert the request had reassert=Some and a
-    // DirectiveReasserted event is in the resulting log.
-    // (Mirror the structure of the existing run_turn_inner tests.)
+    // (Mirror the structure of existing run_turn_inner tests: a recording fake
+    // provider, a seed log with > interval estimated-appended tokens, small
+    // reassert_interval in TurnConfig. Assert request.reassert.is_some() and a
+    // persisted EventKind::DirectiveReasserted.)
 }
 ```
 
-- [ ] **Step 3: Run test to verify it fails**
+- [ ] **Step 3: Run to verify it fails** — Run: `cargo test -p zoid re_floor_fires_and_persists_marker`
+  Expected: FAIL — no reassert injected, no marker.
 
-Run: `cargo test -p zoid re_floor_fires_and_persists_marker`
-Expected: FAIL — no reassert injected, no marker.
-
-- [ ] **Step 4: Implement the trigger in the turn loop** — at the top of `'turn: loop`, after `preflight_gate` but before `build_request_with_thinking` (agent.rs ~528-540):
+- [ ] **Step 4: Implement the trigger — compute BEFORE preflight (S2/S3 ordering)** — at the top of `'turn: loop`, replacing the existing `preflight_gate(...)` + `build_request_with_thinking(...)` sequence. Order is mandatory: decide → size → preflight → build.
 
 ```rust
-    let will_reassert = config.reassert_interval > 0
-        && zoid_core::reassert::reassertion_due(events.iter(), config.reassert_interval);
-    let reassert_text = will_reassert.then(|| wrap_reassertion(&config.system));
+        // Decide re-floor FIRST so its ephemeral tokens are in the preflight size.
+        let will_reassert = config.reassert_interval > 0
+            && zoid_core::reassert::reassertion_due(events.iter(), config.reassert_interval);
+        let reassert_text = will_reassert.then(|| wrap_reassertion(&config.system));
 
-    // S2: size the request honestly — the ephemeral reminder is not in the
-    // event log, so add its tokens to overhead for THIS turn's preflight.
-    let mut overhead_now = overhead.clone();
-    if let Some(t) = &reassert_text {
-        overhead_now.system_tokens += zoid_core::economy::estimate_tokens(t);
-    }
-    // (Pass &overhead_now into preflight_gate instead of `overhead`.)
+        let mut overhead_now = overhead.clone();
+        if let Some(t) = &reassert_text {
+            overhead_now.system_tokens += zoid_core::economy::estimate_tokens(t);
+        }
 
-    let req = build_request_with_thinking(
-        &events, &model, &tools, &config.system, config.thinking, reassert_text.clone(),
-    );
+        preflight_gate(&session, &mut events, ui, config, session_id, now,
+                       &*calibration_ratio, &overhead_now).await?;
+
+        let req = build_request_with_thinking(
+            &events, &model, &tools, &config.system, config.thinking, reassert_text.clone(),
+        );
 ```
 
-- [ ] **Step 5: Emit the marker after a successful stream** — after the streaming inner loop completes normally and `stream_task.await` returns (agent.rs ~701, before/after the usage-recording block), guarded so it does NOT run on the `continue 'turn` (context-length) or `break 'turn` (error) paths (both leave before this point):
+(Pass `&overhead_now` to `preflight_gate` in place of the previous `overhead`. The rest of `preflight_gate`'s call args stay as they are today.)
+
+- [ ] **Step 5: Emit the marker only after a successful stream** — after the streaming inner loop and `let _ = stream_task.await;` (the post-stream point, reached ONLY on clean `Done`/close — the context-length `continue 'turn`, the error `break 'turn`, and the abort `break 'turn` all exit before it), add:
 
 ```rust
-    if will_reassert {
-        let at = zoid_core::reassert::cumulative_appended(events.iter());
-        emit(&session, &mut events, ui, &config.branch,
-             EventKind::DirectiveReasserted { at_cumulative: at }, session_id, now).await?;
-        let _ = ui.send(AgentUpdate::DirectiveReasserted { at_cumulative: at }).await;
-    }
+        if will_reassert {
+            let at = zoid_core::reassert::cumulative_appended(events.iter());
+            emit(&session, &mut events, ui, &config.branch,
+                 EventKind::DirectiveReasserted { at_cumulative: at }, session_id, now).await?;
+            let _ = ui.send(AgentUpdate::DirectiveReasserted { at_cumulative: at }).await;
+            tracing::info!(kind = "reassert", at, "re-floor fired");
+        }
 ```
 
-- [ ] **Step 6: Skip calibration on re-floor sub-turns (S3)** — thread `will_reassert` into the `record_compactions` call (or guard the `calibration_ratio` update) so the ratio is not updated when the request carried an extra ephemeral system copy. Add a `skip_calibration: bool` param to `record_compactions` and pass `will_reassert`.
+- [ ] **Step 6: Skip calibration on re-floor sub-turns (S3)** — thread `will_reassert` into `record_compactions` (add a `skip_calibration: bool` param) and guard the `calibration_ratio` update so it is NOT updated when the request carried the extra ephemeral system copy.
 
-- [ ] **Step 7: Run tests to verify they pass**
+- [ ] **Step 7: Run tests + full build**
 
-Run: `cargo test -p zoid re_floor_fires_and_persists_marker && cargo test -p zoid`
-Expected: PASS.
+Run: `cargo test -p zoid re_floor_fires_and_persists_marker && cargo build --workspace && cargo test -p zoid`
+Expected: PASS + clean (bin compiles because the `AgentUpdate` handler landed in Step 1).
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add crates/zoid/src/agent.rs
-git commit -m "feat(agent): fire re-floor in turn loop (preflight-accounted, marker-after-send, calibration-safe)"
+git add crates/zoid/src/agent.rs crates/zoid/src/main.rs
+git commit -m "feat(agent): fire re-floor in turn loop (preflight-accounted, marker-after-send, calibration-safe, observable)"
 ```
 
 ---
 
-### Task 10: TUI observability — transcript marker
+### Task 10: End-to-end integration + steady-state liveness guard (B1 regression)
 
 **Files:**
-- Modify: `crates/zoid/src/main.rs` (handle `AgentUpdate::DirectiveReasserted`)
-- Modify: `crates/zoid-tui/src/render.rs` (render `EventKind::DirectiveReasserted` as a subtle system line)
-- Test: inline render test in `render.rs`
+- Test: `crates/zoid/tests/` (new integration test, or extend an existing turn test)
 
 **Interfaces:**
-- Consumes: `EventKind::DirectiveReasserted`, `AgentUpdate::DirectiveReasserted`.
+- Consumes: the full stack (config → loop → fake provider).
 
-- [ ] **Step 1: Write the failing test** (`render.rs`)
-
-```rust
-#[test]
-fn directive_reasserted_renders_subtle_marker() {
-    let line = render_event(&EventKind::DirectiveReasserted { at_cumulative: 42 });
-    assert!(line.contains("re-asserted") || line.contains("↻"));
-}
-```
-
-(Adapt to the module's actual render entry point — mirror how another bookkeeping event, e.g. a compaction notice, is rendered.)
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `cargo test -p zoid-tui directive_reasserted_renders`
-Expected: FAIL.
-
-- [ ] **Step 3: Implement the render arm** — in the event-to-line match, add:
+- [ ] **Step 1: Write the integration test** — a long synthetic session that exceeds `context_target` with eviction AND compaction (body-clear) active, small `reassert_interval`. Assert re-floors keep firing PAST `context_target` (no dormancy) and each fired request carried the reminder. It MUST run the log through `clear_compacted_bodies` (not just eviction) — that is the case that reopened B1.
 
 ```rust
-    EventKind::DirectiveReasserted { .. } => dim_system_line("↻ re-asserted operating instructions"),
-```
-
-(Use the module's existing dim/system styling helper.)
-
-- [ ] **Step 4: Handle the AgentUpdate in the bin** — in `main.rs`'s `AgentUpdate` match, add an arm for `DirectiveReasserted { .. }` (the persisted event drives the transcript; the update can just trigger a redraw / no-op if the event already renders). Ensure the match stays exhaustive.
-
-- [ ] **Step 5: Run tests + build**
-
-Run: `cargo test -p zoid-tui directive_reasserted_renders && cargo build --workspace`
-Expected: PASS + clean.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add crates/zoid-tui/src/render.rs crates/zoid/src/main.rs
-git commit -m "feat(tui): show a subtle transcript marker when a re-floor fires"
-```
-
----
-
-### Task 11: End-to-end integration + steady-state liveness guard
-
-**Files:**
-- Test: `crates/zoid/tests/` (new integration test file, or extend an existing turn test)
-
-**Interfaces:**
-- Consumes: the full stack (config → loop → provider double).
-
-- [ ] **Step 1: Write the integration test**
-
-```rust
-// Long synthetic session: many turns of tool output that exceed context_target
-// with eviction + compaction (body-clear) active, interval small.
-// Assert: DirectiveReasserted fires repeatedly PAST context_target (no dormancy),
-// and each fired request carried the reminder. This is the B1 regression guard —
-// it must exercise a log that has been through clear_compacted_bodies, not just
-// eviction markers.
 #[tokio::test]
 async fn re_floor_keeps_firing_in_steady_state_with_compaction() {
-    // Build the app/turn stack with reassert_interval small, eviction+compaction on.
-    // Run N turns feeding large tool outputs; count DirectiveReasserted events.
-    // assert!(fires >= expected_many, "re-floor must not go dormant past context_target");
+    // Build the turn stack with reassert_interval small; feed many turns of
+    // large tool output; apply compaction body-clears between turns; count
+    // DirectiveReasserted events. assert!(fires >= expected_many,
+    // "re-floor must not go dormant past context_target under compaction").
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails** (before Task 9 wiring it would fail; here it validates the whole path)
+- [ ] **Step 2: Run to verify** — Run: `cargo test -p zoid re_floor_keeps_firing_in_steady_state`
+  Expected: PASS (FAIL first if any wiring gap remains; fix, then pass).
 
-Run: `cargo test -p zoid re_floor_keeps_firing_in_steady_state`
-Expected: initially FAIL if any wiring gap remains.
-
-- [ ] **Step 3: Fix any gaps surfaced, then verify pass**
-
-Run: `cargo test -p zoid re_floor_keeps_firing_in_steady_state`
-Expected: PASS.
-
-- [ ] **Step 4: Full workspace green**
+- [ ] **Step 3: Full workspace green**
 
 Run: `cargo test --workspace && cargo clippy --workspace`
 Expected: PASS + no warnings.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add crates/zoid/tests
@@ -819,4 +711,4 @@ git commit -m "test(agent): steady-state re-floor liveness under eviction+compac
 
 ## Manual acceptance (post-implementation, not a task)
 
-Unit tests cannot prove drift is reduced or that GLM won't wrap up early. Run a long real zai / glm-5.2 session with the transcript re-floor markers visible; confirm the reminder fires at the expected cadence, watch for early-termination regressions, and tune `[economy].reassert_interval_tokens`.
+Unit tests cannot prove drift is reduced or that GLM won't wrap up early. Run a long real zai / glm-5.2 session; watch `tracing` for `kind="reassert"` fires (and/or `app.reassert_count`), confirm the cadence, watch for early-termination regressions, and tune `[economy].reassert_interval_tokens`.
