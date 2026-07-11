@@ -2,67 +2,63 @@
 
 > **Status:** design (ready for implementation planning). Adds an interval-gated
 > re-injection of the system prompt at the *live edge* of the request to counter
-> observed instruction-drift in long sessions. Builds on the request-assembly
-> path in `crates/zoid/src/agent.rs` (`build_request_with_thinking`,
-> `run_turn_inner`), the context projection in
-> `crates/zoid-core/src/context.rs`, the eviction-breadcrumb pattern in
+> observed instruction-drift in long sessions. Revised after a technical review
+> (2026-07-11) that caught a blocking trigger defect (B1) and a per-provider
+> placement defect (S1); both are resolved below.
+>
+> Builds on the request-assembly path in `crates/zoid/src/agent.rs`
+> (`build_request_with_thinking`, `run_turn_inner`, `preflight_gate`,
+> `record_compactions`), the context projection in
+> `crates/zoid-core/src/context.rs`, the eviction machinery in
 > `crates/zoid-core/src/eviction.rs`, and the per-adapter request builders in
 > `crates/zoid-provider/src/{anthropic,openai_compat,ollama}.rs`.
 
 ## Goal
 
 In long sessions the agent measurably drifts from its initial system-prompt
-instructions (observed behavior, not just theoretical — e.g. the "close with a
-short recap, don't re-explain the whole effort" directive decays). Re-assert the
-operating instructions near the generation point at a controlled cadence, so
-adherence is restored without materially inflating token cost, and portably
-across all providers (Anthropic, zai / OpenAI-compat, Ollama-native).
+instructions (observed, not theoretical — e.g. the "close with a short recap,
+don't re-explain the whole effort" directive decays). Re-assert the operating
+instructions near the generation point at a controlled cadence, so adherence is
+restored without materially inflating token cost, portably across all providers
+(Anthropic, zai / OpenAI-compat, Ollama-native), and — critically — **continuing
+to fire in steady state**, not just during session warm-up.
 
 ## Background — why the front copy is not enough
 
-The Chat system prompt is a compile-time constant (`SYSTEM_PROMPT`, `agent.rs`)
-wrapped into `TurnConfig.system` once per turn. It is **already re-sent verbatim
-on every provider request**, but always at the *front*:
+The Chat system prompt (`SYSTEM_PROMPT`, wrapped into `TurnConfig.system`) is
+**already re-sent verbatim on every request**, but always at the *front*:
+Anthropic's top-level `system` block (1h cache breakpoint, `anthropic/cache.rs`);
+`messages[0] = {"role":"system"}` on openai-compat (`openai_compat.rs:71`) and
+ollama (`ollama.rs:21`). Re-injecting *there* is a no-op. Only the **tail (live
+edge)** affects recency. On zai/GLM the drift is worse than on Anthropic: those
+models weight a `role:"system"` message less than Anthropic weights its dedicated
+`system` param, and open models decay instruction-following faster over context.
 
-- **Anthropic** — top-level `system` param (`Vec<SystemBlock>`), with a 1h
-  ephemeral cache breakpoint (`anthropic/cache.rs`).
-- **zai (OpenAI-compat)** and **glm-5.2 (Ollama-native)** — a leading
-  `{"role":"system"}` message at `messages[0]` (`openai_compat.rs:71`,
-  `ollama.rs:21`).
-
-Because it is always present at the front, re-injecting it *there* is a no-op.
-The only position that affects recency/salience is the **tail (live edge)**.
-Drift is driven by how many tokens accumulate *between* the front instruction and
-the generation point; on zai/GLM the effect is worse than on Anthropic because
-those models weight the `role:"system"` message less than Anthropic weights its
-dedicated `system` param, chat templates may collapse system into the first user
-turn, and open models decay instruction-following faster over context.
-
-zoid currently has **no** live-edge re-assertion path. The eviction breadcrumb
-(`eviction.rs:89`) is appended to the *system field* (front) and only advertises
-`recall()`; the `recall` tool is model-pull, not system-push. Neither restates
-behavioral directives near the live edge.
+zoid has **no** live-edge re-assertion today. The eviction breadcrumb
+(`eviction.rs:89`) is front-only and only advertises `recall()`; `recall` is
+model-pull, not system-push.
 
 ## Design overview
 
-An interval-gated **tail injection** ("re-floor"): every *N tokens of context
-growth*, append the full system prompt — verbatim, wrapped as a "standing
-reminder" — onto the live edge of the next request. Policy (whether/what) is
-decided centrally; placement (where at the tail) is per-adapter.
+An interval-gated **tail injection** ("re-floor"): every *N estimated tokens of
+novel content processed*, append the full system prompt — verbatim, wrapped as a
+"standing reminder" — at the live edge of the next request. Policy (whether/what)
+is decided centrally; placement (where at the tail) is per-adapter.
 
 | Aspect | Decision |
 |---|---|
 | Mechanism | Interval-gated tail injection; front/system copy unchanged |
-| Trigger | Token-distance ≥ `interval` since last re-floor, measured on post-preflight `context_window(...).total_tokens` |
-| State | Persisted weightless `DirectiveReasserted { at_tokens }` marker; reminder text itself is ephemeral (request-only) |
+| Trigger | **Cumulative estimated *appended* tokens** (monotonic; see Component B) ≥ `interval` since last re-floor. NOT the eviction-bounded `context_window` total. |
+| State | Persisted weightless `DirectiveReasserted { at_cumulative }` marker; reminder text itself is ephemeral (request-only) |
 | Content | Full `config.system` (prompt + skill menu) verbatim, wrapped in a "standing reminder, not a completion signal" bookend |
-| Placement | Neutral `CompletionRequest.reassert` field; each adapter renders onto the tail message's content (alternation-safe) |
-| Config | `[economy].reassert_interval_tokens`, default `50_000`, `0` disables, global, off for subagents |
+| Placement | Neutral `CompletionRequest.reassert` field; **per-adapter** rendering (Anthropic vs openai-compat/ollama differ — see Component A) |
+| Config | `[economy].reassert_interval_tokens`, default **100_000** (estimated-appended units), `0` disables, global, off for subagents |
+| Cost/preflight | Reminder tokens folded into the turn's overhead so `preflight_gate` sizes the real request; marker emitted **after** a successful send |
+| Observability | Re-floor fires surfaced in the transcript (acceptance is manual/empirical) |
 
-## Component A — Policy/rendering boundary
+## Component A — Policy/rendering boundary (per-adapter)
 
-`CompletionRequest` gains one provider-neutral field carrying *intent*, not
-mechanism:
+`CompletionRequest` gains one provider-neutral field carrying *intent*:
 
 ```rust
 pub struct CompletionRequest {
@@ -73,84 +69,134 @@ pub struct CompletionRequest {
 }
 ```
 
-- **Policy (central, `agent.rs`)** decides *whether* to re-floor and *what* the
-  text is; sets `req.reassert`. Single source of the trigger — mirrors how the
-  eviction breadcrumb is computed once in `build_request_with_thinking`.
-- **Rendering (per-adapter `build_body`)** decides *where* `reassert` lands,
-  respecting that provider's message-role rules. All three currently render the
-  same way — append onto the **last message's content** — but the field lets a
-  future adapter with a genuinely distinct slot diverge without touching policy.
+- **Policy (central, `agent.rs`)** decides *whether* to re-floor and *what* text;
+  sets `req.reassert`. Single source of the trigger.
+- **Rendering (per-adapter `build_body`)** decides *where* `reassert` lands.
+  **This differs by provider** — the review (S1) established that "append to the
+  last message content" is an Anthropic-specific constraint that would bury the
+  reminder inside a `role:"tool"` payload (weakest salience) on exactly the
+  providers this targets:
+  - **Anthropic** (`anthropic/request.rs`): append the wrapped reminder as a
+    trailing text block onto the **last message's content**. The tail at build
+    time is always a `User` message (a `UserMessage` or tool-results ridden
+    inside a `User` message, `request.rs:142-159`) — never an assistant-final —
+    so this preserves strict alternation and adds no consecutive same-role turn.
+  - **openai-compat (zai)** (`openai_compat.rs`) and **Ollama-native**
+    (`ollama.rs`): push a **trailing `{"role":"system"}` message**. Neither
+    enforces alternation and both accept a system message at any position, where
+    it is weighted as instruction rather than as tool output.
+  - `reassert = None` → each adapter early-returns to today's exact body
+    (byte-identical; regression-tested).
 
-Rationale: keeps `CompletionRequest` honest as the provider-neutral contract and
-avoids duplicating the token-distance math into each adapter (which would drift).
+Rationale: `req.reassert` keeps `CompletionRequest` a provider-neutral contract
+carrying intent, while the placement mechanism that maximizes salience lives in
+each adapter (and is unit-tested there).
 
-## Component B — Trigger & marker
+## Component B — Trigger & marker (the B1 fix)
 
-New event (metadata, weightless):
+**Why not the context window.** The original design keyed on
+`context_window(...).total_tokens`. Production Chat runs eviction **enabled**
+(`main.rs:5300`: `enabled = compact_threshold_pct > 0`, default 80), and eviction
+bounds that quantity in a band around `context_target`. So in steady state the
+delta saturates below the interval and the trigger **goes dormant for the rest of
+a long session** — the exact regime it exists to serve. The trigger must key on a
+monotonic quantity eviction cannot claw back.
+
+**Chosen quantity: cumulative estimated *appended* tokens.** Sum of
+`estimate_tokens` over every `UserMessage` / `AssistantMessage` / `ToolResult`
+(and file-read output) event in the **raw** log — *without* the evicted-filter.
+Each event is counted once, at append time, so:
+
+- It is **monotonic** — eviction marks events evicted but leaves them in the log,
+  so the sum never decreases.
+- It counts only **novel content** (cached prefix re-reads are never re-counted),
+  making it the provider-independent realization of "cumulative non-cached
+  tokens." It works identically on zai (good cache reporting) and GLM-via-Ollama
+  (reports 0 input on cached prompts — the `calibration_ratio` problem — which
+  would make a provider-reported-uncached trigger unreliable there).
+- Units are **estimated** tokens (`estimate_tokens` is chars/4, ~5–7× under real
+  for code/tool output). The interval is therefore denominated in estimated
+  tokens; the default is chosen accordingly (Component D).
+
+New event (weightless):
 
 ```rust
 // zoid-core::event::EventKind
-DirectiveReasserted { at_tokens: u64 },
+DirectiveReasserted { at_cumulative: u64 },
 ```
 
-`context_window` counts only `Message`/`ToolResult`/`File` kinds, so this marker
-falls into the existing `_ => {}` arm and **never inflates the window it
-measures** — the invariant that keeps the trigger from feeding back on itself.
+It is **not** a message/tool/file event, so it is invisible to both
+`context_window` (`_ => {}` arm, context.rs:295) *and* to the cumulative-appended
+sum — self-consistent. Per review S4 it must **also** be added to
+`eviction::is_inert()` (eviction.rs:220-231) so it does not join a turn's
+evictable id-set in `group_turns`, and `projection::conversation` + the TUI
+render must ignore it via their `_` arms.
 
 Pure decision helper (`zoid-core`):
 
 ```rust
-/// True when context has grown >= `interval` tokens since the last
+/// Cumulative estimated tokens of appended (novel) content in the raw log.
+pub fn cumulative_appended(events: impl IntoIterator<Item = &Event>) -> u64 { /* sum */ }
+
+/// True when >= `interval` estimated-appended tokens have accrued since the last
 /// re-assertion (or since session start if none). `interval == 0` disables.
-pub fn reassertion_due(
-    events: impl IntoIterator<Item = &Event>,
-    current_total: u64,
-    interval: u64,
-) -> bool {
-    let last_floor = events.into_iter()
+pub fn reassertion_due(events: impl IntoIterator<Item = &Event> + Clone, interval: u64) -> bool {
+    if interval == 0 { return false; }
+    let last = events.clone().into_iter()
         .filter_map(|e| match &e.kind {
-            EventKind::DirectiveReasserted { at_tokens } => Some(*at_tokens),
+            EventKind::DirectiveReasserted { at_cumulative } => Some(*at_cumulative),
             _ => None,
         })
-        .last()                // most recent marker; 0 if none
-        .unwrap_or(0);
-    interval > 0 && current_total.saturating_sub(last_floor) >= interval
+        .last().unwrap_or(0);
+    cumulative_appended(events).saturating_sub(last) >= interval
 }
 ```
 
-Loop wiring in `run_turn_inner`, ordered against existing gates:
+Loop wiring in `run_turn_inner`, ordered so cost is accounted and the marker is
+honest under the retry path:
 
 ```
-preflight_gate(...)                       // may evict → changes total
-  ↓
-let total = context_window_with(events, overhead).total_tokens;
-let reassert = if config.reassert_interval > 0
-    && reassertion_due(events.iter(), total, config.reassert_interval) {
-        emit(DirectiveReasserted { at_tokens: total })   // advance the floor
-        Some(wrap_reassertion(&config.system))           // Component C
-    } else { None };
-  ↓
-build_request_with_thinking(&events, ..., reassert)      // → req.reassert
+let will_reassert = config.reassert_interval > 0
+    && reassertion_due(events.iter(), config.reassert_interval);
+let reassert_text = will_reassert.then(|| wrap_reassertion(&config.system));
+
+// S2: size the request honestly — fold the reminder into overhead for THIS turn.
+let overhead_now = if will_reassert {
+    overhead + estimate_tokens(reassert_text.as_ref().unwrap())
+} else { overhead };
+preflight_gate(..., overhead_now).await?;
+
+let req = build_request_with_thinking(&events, ..., reassert_text.clone());
+// ... stream ...
+
+// S2: emit the marker only AFTER a successful send (not on the context-length
+// retry path, so a rejected re-floor re-fires next attempt instead of silently
+// burning its interval). S3: skip the calibration_ratio update on this sub-turn.
+if will_reassert && send_succeeded {
+    emit(DirectiveReasserted { at_cumulative: cumulative_appended(events.iter()) });
+    ui.send(AgentUpdate::DirectiveReasserted { .. }); // N1 observability
+}
 ```
 
 Properties:
 
-- **Runs after `preflight_gate`**, so `total` is post-eviction; if eviction just
-  reclaimed space, the delta shrinks and re-flooring is naturally deferred. The
-  two context mechanisms compose rather than fight.
-- **"Every N tokens of growth," not "once per turn."** A tool-heavy turn adding
-  40k tokens with a 50k interval may fire mid-turn; each fire emits a marker that
-  advances the floor, so the cadence self-paces and spans the whole session.
-- **Marker emitted before the request**, so a mid-turn crash/abort leaves an
-  honest floor — on resume we wait for the next interval of growth rather than
-  re-firing immediately.
+- **Fires in steady state**, because the trigger clock is monotonic and
+  independent of eviction. Self-paces on real throughput of novel content.
+- **Retry-safe (S2):** the marker is emitted post-send, so a re-floored request
+  that trips `is_context_length_error` → forced-eviction retry
+  (agent.rs:605-628) does not consume its interval; it re-fires on the rebuild.
+- **Preflight-honest (S2):** the ephemeral reminder's tokens are added to the
+  turn's overhead estimate, so `preflight_gate` won't under-size a re-floor turn
+  and push a "safe" request over the real ceiling.
+- **Calibration-clean (S3):** the `calibration_ratio` update in
+  `record_compactions` is skipped on re-floor sub-turns (numerator would include
+  the extra copy, denominator would not — a transient ~5% over-scale otherwise).
 
 ## Component C — The wrapper
 
 The raw prompt contains "when a task is done… close with a short recap." Injected
-mid-tool-loop that can read as "the task is done *now*," nudging the model to
-wrap up early. The wrapper is fixed framing (the only added text); the payload is
-`config.system` verbatim (zero drift):
+mid-tool-loop that can read as "the task is done *now*." The wrapper is fixed
+framing (the only added text); the payload is `config.system` verbatim:
 
 ```rust
 fn wrap_reassertion(system: &str) -> String {
@@ -166,24 +212,25 @@ fn wrap_reassertion(system: &str) -> String {
 }
 ```
 
-Wraps `config.system` (prompt **plus** the appended skill menu from
-`chat_turn_config_with`), so skill availability — a real forgetting surface — is
-re-asserted too. If a mode swaps the system prompt via `AgentProfile`, the
-reminder swaps with it for free.
+Wraps `config.system` (prompt **plus** the appended skill menu), so skill
+availability is re-asserted too; a mode-swapped `AgentProfile` prompt swaps with
+it for free. The early-termination mitigation is a genuine but unproven gamble —
+hence the observability in N1/Component B and manual acceptance below.
 
 ## Component D — Config
 
-Fold into `[economy]` (sibling of eviction/compaction), reusing the existing
-"0 disables" convention (`compact_threshold_pct`):
+Fold into `[economy]`, reusing the "0 disables" convention:
 
 ```rust
 pub struct EconomyConfig {
     // ... existing ...
-    /// Re-assert the system prompt at the live edge every N tokens of context
-    /// growth. 0 disables. Default 50_000.
+    /// Re-assert the system prompt at the live edge every N estimated-appended
+    /// tokens of novel content. 0 disables. Default 100_000. (Estimated units:
+    /// estimate_tokens undercounts real tokens ~5-7x, so 100k ≈ ~600k real
+    /// novel tokens between re-floors.)
     pub reassert_interval_tokens: u64,
 }
-// Default → reassert_interval_tokens: 50_000
+// Default → reassert_interval_tokens: 100_000
 ```
 
 `TurnConfig` carries the resolved `reassert_interval: u64` (Chat from
@@ -192,50 +239,67 @@ pub struct EconomyConfig {
 
 Defaults & rationale:
 
-- **50_000 tokens.** Against the default `context_target` of 300k, ~6 re-floors
-  across a full window — frequent enough to counter drift, rare enough that the
-  amortized cost of the full-prompt copy is negligible.
-- **Enabled by default** (non-zero): drift is observed on the primary models, so
-  opt-out rather than opt-in.
+- **100_000 estimated-appended tokens.** Calibrated against a real long session
+  (~22M real uncached tokens → ~3.7M estimated-appended): ~37 re-floors across
+  that whole session, ~one refresh per ~600k real novel tokens. Frequent enough
+  to counter drift, rare enough that the amortized cost of the full-prompt copy
+  is negligible.
+- **Enabled by default** (non-zero): drift is observed on the primary models.
 - **Global, not per-provider.** Anthropic benefits least (privileged cached
   system block) but re-flooring fires rarely and is harmless there; per-provider
-  branching adds cost for no real gain (YAGNI). Tunable/disable-able via config.
+  defaults add cost for no real gain (YAGNI).
 
-Known limitation (documented, not solved): on a small-window model (e.g. 32k) a
-50k absolute interval never fires. Acceptable — short-window sessions can't drift
-as far — but noted as the one case the absolute default is "wrong."
+## Observability (N1)
+
+Because acceptance is manual/empirical, each re-floor must be visible or you
+can't tell whether it's firing:
+
+- New `AgentUpdate::DirectiveReasserted { at_cumulative }` emitted when a re-floor
+  fires; the TUI renders a subtle transcript marker (e.g. a dim system line
+  "↻ re-asserted operating instructions"). This also lets the manual GLM
+  acceptance test correlate behavior changes with fires.
 
 ## Testing
 
-1. **Pure trigger (`zoid-core`):** `reassertion_due` false when `interval == 0`,
-   false below threshold, true at `>= interval`; a `DirectiveReasserted` marker
-   resets the baseline (next fire only at `2×interval`); uses the *last* marker
-   with multiple present.
-2. **Weightless-marker invariant:** `context_window` over a log with a
-   `DirectiveReasserted` event yields identical `total_tokens` to without it.
-   Guards the self-reference (trigger must not inflate its own measurement).
-3. **Per-adapter rendering (`zoid-provider`, mirrors `body_has_*` tests):** one
-   per adapter (Anthropic, openai_compat, ollama) asserting that with
-   `req.reassert = Some(..)` the reminder appears at the **tail** and alternation
-   stays valid (no second consecutive user turn after a tool-result). Symmetric
-   test: `reassert = None` → body byte-identical to today.
-4. **Loop integration (`zoid`):** drive `run_turn_inner` with a fake provider
-   over a long log; assert `DirectiveReasserted` emitted ~once per interval of
-   growth and that the fired request carried the reminder.
-5. **Wrapper framing:** unit-assert `wrap_reassertion` output contains the "not a
-   completion signal / resume the task" framing around the verbatim system
-   prompt.
+1. **Pure trigger (`zoid-core`):** `cumulative_appended` is monotonic across a
+   log that includes `TurnsEvicted` (evicted events still counted); it ignores
+   `DirectiveReasserted`. `reassertion_due` false when `interval == 0`, false
+   below threshold, true at `>= interval`; a marker resets the baseline (next
+   fire only after another `interval` of appended tokens); uses the *last* marker.
+2. **Steady-state liveness (the B1 regression guard):** over a synthetic log that
+   grows well past `context_target` with eviction markers folded in,
+   `reassertion_due` continues to return true at each interval — proving the
+   trigger does *not* saturate the way a window-based trigger would.
+3. **Weightless/inert marker:** `context_window` total unchanged by a
+   `DirectiveReasserted` event; `eviction::is_inert()` returns true for it;
+   `group_turns` does not attach it to a turn's id-set.
+4. **Per-adapter rendering (`zoid-provider`, mirrors `body_has_*` tests):**
+   - Anthropic: with `reassert = Some(..)` the reminder is a trailing text block
+     on the last **user** message; alternation stays valid after a tool-result
+     tail; no consecutive same-role turn.
+   - openai-compat & ollama: the reminder is a trailing `{"role":"system"}`
+     message (not merged into a `role:"tool"` payload).
+   - all three: `reassert = None` → body byte-identical to today (explicit
+     early-return).
+5. **Preflight accounting (S2):** on a re-floor turn, the size handed to
+   `preflight_gate` includes the reminder tokens.
+6. **Loop integration (`zoid`):** drive `run_turn_inner` with a fake provider
+   over a long log; assert a `DirectiveReasserted` is emitted ~once per interval
+   of appended growth, that the fired request carried the reminder, and that a
+   context-length error on a re-floor turn does **not** emit the marker (re-fires).
+7. **Wrapper framing:** `wrap_reassertion` output contains the "not a completion
+   signal / resume the task" framing around the verbatim system prompt.
 
-**Acceptance is empirical.** Unit tests cannot prove drift is reduced or that
-GLM won't terminate early — the real acceptance test is manual validation on a
-long zai / glm-5.2 session, with `reassert_interval_tokens` as the tuning knob.
+**Acceptance is empirical.** Unit tests cannot prove drift is reduced or that GLM
+won't wrap up early. Real acceptance: a long zai / glm-5.2 session with the
+transcript re-floor markers (N1) visible, tuning `reassert_interval_tokens`.
 
 ## Non-goals
 
-- Distilled/hand-maintained directive subsets (chose full-prompt verbatim, zero
-  maintenance).
-- Persisting the reminder text into history (chose ephemeral to avoid pile-up /
-  duplicate-block contradiction).
-- Fraction-of-window or turn-count triggers (chose absolute token-distance).
-- Per-provider interval defaults or clamping for small-window models.
+- Distilled/hand-maintained directive subsets (chose full-prompt verbatim).
+- Persisting the reminder text into history (chose ephemeral to avoid pile-up).
+- Provider-reported-uncached or context-window-growth triggers (chose
+  provider-independent estimated-appended; see Component B).
+- Turn/sub-turn-count triggers (decouples from token pressure).
+- Per-provider interval defaults; clamping for small-window models.
 - Re-asserting anything for subagents.
