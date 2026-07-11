@@ -11,7 +11,7 @@ use ratatui::{
     Frame,
 };
 use ratatui_textarea::TextArea;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 use zoid_core::economy::tool_path;
 use zoid_core::projection::ChatMsg;
 use zoid_core::zoom::{digests, TurnDigest};
@@ -514,7 +514,7 @@ fn push_message(
         match kind {
             BodyKind::Prose => {
                 open = None; // a prose line closes any open code block
-                let rows = wrap_content(&line.spans, content_w);
+                let rows = crate::text::wrap_content(&line.spans, content_w);
                 for (r, row) in rows.into_iter().enumerate() {
                     let mut spans: Vec<Span<'static>> = if r == 0 {
                         lead.clone()
@@ -568,96 +568,6 @@ fn code_line(
         ));
     }
     Line::from(spans)
-}
-
-/// Break styled `content` into rows no wider than `width`, preserving each
-/// span's style, breaking on spaces (dropping the break's whitespace), and
-/// hard-splitting any single token longer than `width`. Returns at least one
-/// (possibly empty) row.
-fn wrap_content(content: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
-    let width = width.max(1);
-    // Tokenize into (text, style, is_space) runs, split at whitespace boundaries.
-    let mut toks: Vec<(String, Style, bool)> = Vec::new();
-    for s in content {
-        let mut chars = s.content.chars().peekable();
-        while let Some(&c) = chars.peek() {
-            let is_space = c == ' ';
-            let mut t = String::new();
-            while let Some(&c2) = chars.peek() {
-                if (c2 == ' ') != is_space {
-                    break;
-                }
-                t.push(c2);
-                chars.next();
-            }
-            toks.push((t, s.style, is_space));
-        }
-    }
-
-    let mut rows: Vec<Vec<Span<'static>>> = Vec::new();
-    let mut cur: Vec<Span<'static>> = Vec::new();
-    let mut cur_w = 0usize;
-    for (text, style, is_space) in toks {
-        let w = text.width();
-        if is_space {
-            if cur.is_empty() {
-                continue; // no leading spaces at the start of a wrapped row
-            }
-            if cur_w + w > width {
-                rows.push(std::mem::take(&mut cur));
-                cur_w = 0;
-            } else {
-                cur.push(Span::styled(text, style));
-                cur_w += w;
-            }
-            continue;
-        }
-        if cur_w + w > width && !cur.is_empty() {
-            // trim any trailing spaces before wrapping the row (cur_w resets to 0
-            // right after, so no need to track its decrement here)
-            while cur
-                .last()
-                .map(|s| s.content.chars().all(|c| c == ' '))
-                .unwrap_or(false)
-            {
-                cur.pop();
-            }
-            rows.push(std::mem::take(&mut cur));
-            cur_w = 0;
-        }
-        if w > width {
-            // Token longer than the column — hard-split by DISPLAY WIDTH, not char
-            // count, so wide (CJK/emoji) glyphs never overflow the column and force
-            // a widget re-wrap. Accumulate chars until the next one would exceed the
-            // remaining width, then flush the row (always at least one char/row).
-            let mut piece = String::new();
-            let mut piece_w = 0usize;
-            for ch in text.chars() {
-                let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
-                if cur_w + piece_w + cw > width && cur_w + piece_w > 0 {
-                    if !piece.is_empty() {
-                        cur.push(Span::styled(std::mem::take(&mut piece), style));
-                    }
-                    piece_w = 0;
-                    rows.push(std::mem::take(&mut cur));
-                    cur_w = 0;
-                }
-                piece.push(ch);
-                piece_w += cw;
-            }
-            if !piece.is_empty() {
-                cur.push(Span::styled(piece, style));
-                cur_w += piece_w;
-            }
-        } else {
-            cur.push(Span::styled(text, style));
-            cur_w += w;
-        }
-    }
-    if !cur.is_empty() || rows.is_empty() {
-        rows.push(cur);
-    }
-    rows
 }
 
 /// Per-frame conversation view-model the bin assembles: altitude + caret blink

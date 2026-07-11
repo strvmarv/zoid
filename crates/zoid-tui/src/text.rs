@@ -4,6 +4,8 @@
 //! and lets a row we believe fits get clipped by ratatui at render time.
 
 use crate::tokens::glyph;
+use ratatui::style::Style;
+use ratatui::text::Span;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Truncate `s` to at most `max` display columns, marking the cut with the §16
@@ -91,6 +93,97 @@ pub(crate) fn pad_to(s: &str, width: usize) -> String {
     } else {
         format!("{s}{}", " ".repeat(width - w))
     }
+}
+
+/// Break styled `content` into rows no wider than `width` (display columns),
+/// preserving each span's style, breaking on spaces (dropping the break's
+/// whitespace), and hard-splitting any single token longer than `width`.
+/// Returns at least one (possibly empty) row. Used by `push_message` (prose
+/// wrapping) and the GFM table cell-wrapping path (spec §2 step 3).
+pub(crate) fn wrap_content(content: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
+    let width = width.max(1);
+    // Tokenize into (text, style, is_space) runs, split at whitespace boundaries.
+    let mut toks: Vec<(String, Style, bool)> = Vec::new();
+    for s in content {
+        let mut chars = s.content.chars().peekable();
+        while let Some(&c) = chars.peek() {
+            let is_space = c == ' ';
+            let mut t = String::new();
+            while let Some(&c2) = chars.peek() {
+                if (c2 == ' ') != is_space {
+                    break;
+                }
+                t.push(c2);
+                chars.next();
+            }
+            toks.push((t, s.style, is_space));
+        }
+    }
+
+    let mut rows: Vec<Vec<Span<'static>>> = Vec::new();
+    let mut cur: Vec<Span<'static>> = Vec::new();
+    let mut cur_w = 0usize;
+    for (text, style, is_space) in toks {
+        let w = text.width();
+        if is_space {
+            if cur.is_empty() {
+                continue; // no leading spaces at the start of a wrapped row
+            }
+            if cur_w + w > width {
+                rows.push(std::mem::take(&mut cur));
+                cur_w = 0;
+            } else {
+                cur.push(Span::styled(text, style));
+                cur_w += w;
+            }
+            continue;
+        }
+        if cur_w + w > width && !cur.is_empty() {
+            // trim any trailing spaces before wrapping the row (cur_w resets to 0
+            // right after, so no need to track its decrement here)
+            while cur
+                .last()
+                .map(|s| s.content.chars().all(|c| c == ' '))
+                .unwrap_or(false)
+            {
+                cur.pop();
+            }
+            rows.push(std::mem::take(&mut cur));
+            cur_w = 0;
+        }
+        if w > width {
+            // Token longer than the column — hard-split by DISPLAY WIDTH, not char
+            // count, so wide (CJK/emoji) glyphs never overflow the column and force
+            // a widget re-wrap. Accumulate chars until the next one would exceed the
+            // remaining width, then flush the row (always at least one char/row).
+            let mut piece = String::new();
+            let mut piece_w = 0usize;
+            for ch in text.chars() {
+                let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+                if cur_w + piece_w + cw > width && cur_w + piece_w > 0 {
+                    if !piece.is_empty() {
+                        cur.push(Span::styled(std::mem::take(&mut piece), style));
+                    }
+                    piece_w = 0;
+                    rows.push(std::mem::take(&mut cur));
+                    cur_w = 0;
+                }
+                piece.push(ch);
+                piece_w += cw;
+            }
+            if !piece.is_empty() {
+                cur.push(Span::styled(piece, style));
+                cur_w += piece_w;
+            }
+        } else {
+            cur.push(Span::styled(text, style));
+            cur_w += w;
+        }
+    }
+    if !cur.is_empty() || rows.is_empty() {
+        rows.push(cur);
+    }
+    rows
 }
 
 #[cfg(test)]
@@ -196,5 +289,38 @@ mod tests {
         // "😀" is 2 cols, so pad_to width 5 adds 3 spaces, not 4.
         assert_eq!(pad_to("😀", 5), "😀   ");
         assert_eq!(UnicodeWidthStr::width(pad_to("😀", 5).as_str()), 5);
+    }
+
+    use ratatui::text::Span;
+
+    #[test]
+    fn wrap_content_short_content_is_one_row() {
+        let rows = wrap_content(&[Span::raw("hello world")], 30);
+        assert_eq!(rows.len(), 1);
+        let joined: String = rows[0].iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(joined, "hello world");
+    }
+
+    #[test]
+    fn wrap_content_breaks_at_word_boundary() {
+        // "alpha bravo" is 11 cols; at width 12 it fits on row 0, and
+        // "alpha bravo charlie" (19 cols) overflows → "charlie" wraps to row 1.
+        // (Width 10 would be wrong: 11 > 10 means "alpha bravo" itself overflows.)
+        let rows = wrap_content(&[Span::raw("alpha bravo charlie")], 12);
+        assert_eq!(rows.len(), 2, "should wrap into 2 rows");
+        let r0: String = rows[0].iter().map(|s| s.content.to_string()).collect();
+        let r1: String = rows[1].iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(r0, "alpha bravo");
+        assert_eq!(r1, "charlie");
+    }
+
+    #[test]
+    fn wrap_content_hard_splits_overlong_token() {
+        // A single 20-char word wider than width 8 must hard-split, not overflow.
+        let rows = wrap_content(&[Span::raw("abcdefghijklmnopqrst")], 8);
+        assert!(rows.len() >= 3, "a 20-char word at width 8 needs >=3 rows");
+        // total content preserved
+        let total: String = rows.iter().flat_map(|r| r.iter().map(|s| s.content.to_string())).collect();
+        assert_eq!(total, "abcdefghijklmnopqrst");
     }
 }
