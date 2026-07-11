@@ -2887,6 +2887,275 @@ mod tests {
         );
     }
 
+    /// Task 10 / B1 regression guard: a long synthetic session that grows PAST
+    /// `context_target` with BOTH eviction (marks-but-keeps) and compaction
+    /// body-clears (#6b, `clear_compacted_bodies` — the case that reopened B1;
+    /// eviction markers alone are not enough to prove liveness) active, and a
+    /// small `reassert_interval`. Drives many turns of large tool output and
+    /// asserts the re-floor keeps firing well past the point the context
+    /// target is first exceeded — never going dormant — and that every fired
+    /// request actually carried the reminder.
+    #[tokio::test]
+    async fn re_floor_keeps_firing_in_steady_state_with_compaction() {
+        use ulid::Ulid;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::ProviderEvent;
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let mut events = crate::eventlog::EventLog::new();
+
+        let mut cfg = chat_turn_config();
+        cfg.reassert_interval = 2_000; // small: fires often relative to per-turn growth
+        cfg.eviction = zoid_core::eviction::EvictionPolicy {
+            enabled: true,
+            capacity: 1_000_000,
+            context_target: 8_000, // small: exceeded within a handful of turns
+            band_headroom_pct: 20,
+            recent_n: 4,
+            max_output: None,
+        };
+
+        let provider = std::sync::Arc::new(RecordingProvider::new(vec![
+            ProviderEvent::TextDelta("ok".into()),
+            ProviderEvent::Done,
+        ]));
+
+        const N_TURNS: usize = 24;
+        let mut fires = 0usize;
+        let mut fires_after_target_exceeded = 0usize;
+        let mut past_target_seen = false;
+
+        for i in 0..N_TURNS {
+            let seq = (i as i64) * 2 + 1;
+            // A big user message plus a big tool-result each turn — the tool
+            // result is what compaction (largest-first, ToolResult-only)
+            // actually targets.
+            let user_ev = Event::new(
+                Ulid::new(),
+                None,
+                seq,
+                EventKind::UserMessage {
+                    text: format!("turn {i}: {}", "u".repeat(1500)),
+                },
+            );
+            let tool_ev = Event::new(
+                Ulid::new(),
+                None,
+                seq + 1,
+                EventKind::ToolResult {
+                    id: format!("tool-{i}"),
+                    name: "bash".into(),
+                    output: "t".repeat(3000),
+                    is_error: false,
+                },
+            );
+            session.append(user_ev.clone()).await.unwrap();
+            session.append(tool_ev.clone()).await.unwrap();
+            events.push(user_ev);
+            events.push(tool_ev);
+
+            let out = run_agent_turn(
+                cfg.clone(),
+                provider.clone(),
+                std::sync::Arc::new(zoid_tools::registry()),
+                std::sync::Arc::new(zoid_tools::AllowAll),
+                session.clone(),
+                events.clone(),
+                "m".into(),
+                {
+                    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+                    tokio::spawn(async move { while rx.recv().await.is_some() {} });
+                    tx
+                },
+                Ulid::new(),
+                zoid_companion::CompanionHub::new(),
+                || 0,
+            )
+            .await
+            .unwrap();
+
+            let turn_fires = out
+                .iter()
+                .filter(|e| matches!(&e.kind, EventKind::DirectiveReasserted { .. }))
+                .count();
+            fires += turn_fires;
+
+            let over_target = zoid_core::reassert::cumulative_appended(out.iter())
+                >= cfg.eviction.context_target;
+            if over_target {
+                past_target_seen = true;
+            }
+            if past_target_seen {
+                fires_after_target_exceeded += turn_fires;
+            }
+
+            events = out;
+            // Simulate a mid-session resume (main.rs's #6b path): body-clear
+            // every compacted tool result, not just leave the eviction/compaction
+            // markers in place. This is the exact case that reopened B1.
+            events.clear_compacted_bodies();
+        }
+
+        assert!(
+            fires >= 4,
+            "re-floor must fire repeatedly over a long session (fired {fires} times)"
+        );
+        assert!(
+            fires_after_target_exceeded >= 2,
+            "re-floor must keep firing PAST context_target under eviction+compaction, \
+             not go dormant (fired {fires_after_target_exceeded} times after target exceeded)"
+        );
+        assert!(
+            out_carried_reminder(&provider),
+            "every fired re-floor request must have carried the reassert reminder"
+        );
+    }
+
+    /// Helper: true iff at least one request the provider saw actually carried
+    /// a non-empty reassert reminder (mirrors the assertion already proven in
+    /// `re_floor_fires_and_persists_marker_on_success`, factored out for reuse).
+    fn out_carried_reminder(provider: &RecordingProvider) -> bool {
+        provider
+            .seen_reassert
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.as_deref().is_some_and(|s| !s.is_empty()))
+    }
+
+    /// Negative path (Task 10 step 1b): cumulative_appended is below the
+    /// configured interval, so the re-floor must not fire — the request must
+    /// carry no reminder, and no `DirectiveReasserted` marker may be persisted.
+    #[tokio::test]
+    async fn re_floor_does_not_fire_below_interval() {
+        use ulid::Ulid;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::ProviderEvent;
+        // A short user message: well under any reasonable interval.
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "hi there".into(),
+            },
+        )];
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+        let provider = std::sync::Arc::new(RecordingProvider::new(vec![
+            ProviderEvent::TextDelta("done".into()),
+            ProviderEvent::Done,
+        ]));
+        let mut cfg = chat_turn_config();
+        cfg.reassert_interval = 5_000; // far above the ~3-token seeded message
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let out = run_agent_turn(
+            cfg,
+            provider.clone(),
+            std::sync::Arc::new(zoid_tools::registry()),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::new(),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let seen = provider.seen_reassert.lock().unwrap();
+        assert!(
+            seen.iter().all(|r| r.is_none()),
+            "below the interval, no request may carry a reassert reminder"
+        );
+        drop(seen);
+        assert!(
+            !out.iter()
+                .any(|e| matches!(&e.kind, EventKind::DirectiveReasserted { .. })),
+            "below the interval, no DirectiveReasserted marker may be persisted"
+        );
+    }
+
+    /// Negative path (Task 10 step 1b, S2 retry-safety pin): cumulative_appended
+    /// is ABOVE the interval, but the provider's stream errors with a
+    /// context-length message and eviction is enabled, so the turn loop takes
+    /// the `continue 'turn` retry path instead of a clean Done. The marker must
+    /// NOT be persisted — a rejected re-floor sub-turn must not burn the
+    /// interval, or a real re-floor could permanently starve behind a retry
+    /// loop. Task 9 proved this only by control-flow inspection; this pins it.
+    #[tokio::test]
+    async fn re_floor_marker_not_persisted_when_turn_errors() {
+        use ulid::Ulid;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::ProviderEvent;
+
+        let big = "x".repeat(3000); // ~1000 estimated tokens, above the interval below
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage { text: big },
+        )];
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+        assert!(zoid_provider::is_context_length_error(
+            "prompt is too long: exceeds context window"
+        ));
+        // Every scripted stream (initial send + every retry) errors with a
+        // context-length message: eviction is enabled, so the loop keeps
+        // taking the `continue 'turn` retry path and never reaches a clean
+        // Done. This isolates "the turn never cleanly completes" without
+        // relying on a bounded retry count.
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![ProviderEvent::Error(
+                "prompt is too long: exceeds context window".into(),
+            )];
+            8
+        ]));
+        let mut cfg = chat_turn_config();
+        cfg.reassert_interval = 500; // well under the seeded ~1000 estimated tokens
+        cfg.eviction = zoid_core::eviction::EvictionPolicy {
+            enabled: true,
+            capacity: 1_000_000,
+            context_target: 900_000,
+            band_headroom_pct: 20,
+            recent_n: 4,
+            max_output: None,
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let out = run_agent_turn(
+            cfg,
+            provider,
+            std::sync::Arc::new(zoid_tools::registry()),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::new(),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !out.iter()
+                .any(|e| matches!(&e.kind, EventKind::DirectiveReasserted { .. })),
+            "a turn that never cleanly completes must not persist a DirectiveReasserted \
+             marker — the retry-safety property (interval must not be burned by a \
+             rejected sub-turn)"
+        );
+    }
+
     #[tokio::test]
     async fn context_length_error_is_retried_not_surfaced() {
         use ulid::Ulid;
