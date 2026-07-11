@@ -94,11 +94,10 @@ pub fn chat_tools(skills: Arc<SkillRegistry>, kill: zoid_tools::KillSlot) -> Vec
     // `show` renders an HTML card in the companion browser view. Chat-only (it
     // needs the companion hub); never in the subagent registry.
     tools.push(Box::new(zoid_tools::show::Show));
-    // Subagent dispatch is disabled pending a reliability fix (model override
-    // 404 + worktree lifecycle). The tools remain in the crate but are not
-    // advertised to the model, so it can't call them.
-    // tools.push(Box::new(zoid_tools::subagent_dispatch::DispatchSubagent));
-    // tools.push(Box::new(zoid_tools::subagent_diff::SubagentDiff));
+    // Subagent dispatch + diff: isolated subagent execution for SDD and
+    // parallel delegation. Chat-only (not in the base subagent registry).
+    tools.push(Box::new(zoid_tools::subagent_dispatch::DispatchSubagent));
+    tools.push(Box::new(zoid_tools::subagent_diff::SubagentDiff));
     tools
 }
 
@@ -177,18 +176,18 @@ mod tests {
     }
 
     #[test]
-    fn chat_tools_excludes_dispatch_and_diff() {
+    fn chat_tools_includes_dispatch_and_diff() {
         let tools = chat_tools(
             std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
             zoid_tools::KillSlot::new(),
         );
         assert!(
-            !tools.iter().any(|t| t.name() == "dispatch_subagent"),
-            "dispatch_subagent must not be in chat_tools (disabled)"
+            tools.iter().any(|t| t.name() == "dispatch_subagent"),
+            "dispatch_subagent must be in chat_tools"
         );
         assert!(
-            !tools.iter().any(|t| t.name() == "subagent_diff"),
-            "subagent_diff must not be in chat_tools (disabled)"
+            tools.iter().any(|t| t.name() == "subagent_diff"),
+            "subagent_diff must be in chat_tools"
         );
     }
 }

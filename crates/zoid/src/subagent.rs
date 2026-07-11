@@ -23,6 +23,11 @@ use crate::agent::{run_agent_turn, tool_specs, AgentUpdate, TurnConfig, WARN_GLY
 /// Per-subagent max output tokens (mirrors the Chat loop's budget).
 const SUBAGENT_MAX_TOKENS: u32 = 4096;
 
+/// Hard cap on a subagent's tool-call iterations. 25 covers a realistic
+/// read-edit-test-debug cycle with 2–3 retries; beyond that the subagent is
+/// almost certainly stuck in a loop.
+const SUBAGENT_MAX_ITERATIONS: u32 = 25;
+
 /// Token ceiling for a subagent's constructed context (≈ half a 64k window,
 /// leaving room for the task, tool round-trips, and output).
 const SUBAGENT_CONTEXT_CEILING: u64 = 32_000;
@@ -160,6 +165,8 @@ pub async fn run_subagent(
         thinking: zoid_provider::ThinkingMode::Off,
         approval: approval.clone(),
         kill: zoid_tools::KillSlot::new(),
+        max_iterations: Some(SUBAGENT_MAX_ITERATIONS),
+        in_flight: None,
     };
     // Subagents have no session-scoped companion (the `show` tool is chat-only
     // and is never in the subagent tool registry), so this hub is never
@@ -203,15 +210,7 @@ pub async fn run_subagent(
     for e in &mut branch_events {
         e.branch = BranchId::default();
     }
-    let summary = conversation(&branch_events)
-        .iter()
-        .rev()
-        .find_map(|m| match m {
-            ChatMsg::Assistant { text, .. } if !text.is_empty() => Some(text.clone()),
-            _ => None,
-        })
-        .unwrap_or_default();
-    let ok = !summary.starts_with(WARN_GLYPH);
+    let (summary, ok) = distill(&branch_events);
 
     Ok(SubagentResult {
         id,
@@ -219,6 +218,33 @@ pub async fn run_subagent(
         summary,
         ok,
     })
+}
+
+/// Distill a subagent's branch events into a summary + ok flag.
+/// - summary = last non-empty assistant text, or a warn-glyph placeholder.
+/// - ok = summary doesn't start with warn glyph AND no errored tool results.
+fn distill(branch_events: &[Event]) -> (String, bool) {
+    let summary = conversation(branch_events)
+        .iter()
+        .rev()
+        .find_map(|m| match m {
+            ChatMsg::Assistant { text, .. } if !text.is_empty() => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| format!("{WARN_GLYPH} subagent produced no output"));
+
+    let has_errors = branch_events
+        .iter()
+        .any(|e| matches!(&e.kind, EventKind::ToolResult { is_error: true, .. }));
+
+    let ok = !summary.starts_with(WARN_GLYPH) && !has_errors;
+
+    let summary = if has_errors && !summary.starts_with(WARN_GLYPH) {
+        format!("{summary}\n\n{WARN_GLYPH} one or more tool calls errored")
+    } else {
+        summary
+    };
+    (summary, ok)
 }
 
 #[cfg(test)]
@@ -352,6 +378,54 @@ mod tests {
             p.token_ceiling.is_some(),
             "subagent context is token-bounded"
         );
+    }
+
+    #[test]
+    fn distill_empty_summary_is_failure() {
+        // No non-empty assistant text → summary has warn glyph, ok = false.
+        let evs = vec![
+            ev(EventKind::ToolResult {
+                id: "t1".into(),
+                name: "read".into(),
+                output: "some output".into(),
+                is_error: false,
+            }),
+        ];
+        let (summary, ok) = distill(&evs);
+        assert!(!ok, "empty summary must be failure");
+        assert!(summary.starts_with(WARN_GLYPH), "summary must have warn glyph");
+        assert!(summary.contains("no output"), "summary must explain: {summary}");
+    }
+
+    #[test]
+    fn distill_errored_tool_is_failure() {
+        // A summary exists but a tool result errored → ok = false.
+        let evs = vec![
+            ev(EventKind::AssistantMessage {
+                text: "done".into(),
+            }),
+            ev(EventKind::ToolResult {
+                id: "t1".into(),
+                name: "write".into(),
+                output: "permission denied".into(),
+                is_error: true,
+            }),
+        ];
+        let (summary, ok) = distill(&evs);
+        assert!(!ok, "errored tool must be failure");
+        assert!(summary.contains("errored"), "summary must note the error: {summary}");
+    }
+
+    #[test]
+    fn distill_normal_output_is_success() {
+        let evs = vec![
+            ev(EventKind::AssistantMessage {
+                text: "refactored successfully".into(),
+            }),
+        ];
+        let (summary, ok) = distill(&evs);
+        assert!(ok, "normal output must be success");
+        assert_eq!(summary, "refactored successfully");
     }
 
     #[tokio::test]

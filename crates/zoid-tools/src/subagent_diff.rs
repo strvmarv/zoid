@@ -34,10 +34,11 @@ impl Tool for SubagentDiff {
             Ok(s) => s,
             Err(e) => return e,
         };
-        // The subagent ID is "sub-<ULID>"; the branch is "subagent:<ULID>".
-        // Strip the "sub-" prefix and build the branch ref.
-        let ulid = id.strip_prefix("sub-").unwrap_or(&id);
-        let branch = format!("subagent:{ulid}");
+        // The git branch is named after the worktree: "sub-<ULID>" (the name
+        // passed to create_worktree in the Emitting handler). The zoid
+        // event-log BranchId is "subagent:<ULID>" — that's NOT a git ref.
+        // subagent_diff operates on git refs, so it uses the worktree name.
+        let branch = id.clone();
 
         // Verify the branch exists.
         let verify = Command::new("git")

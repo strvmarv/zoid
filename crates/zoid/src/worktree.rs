@@ -21,6 +21,31 @@ impl WorktreeGuard {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Remove the worktree dir + prune the registration. Does NOT delete the
+    /// branch ref. Shared by `Drop` (then deletes the branch) and
+    /// `into_kept_branch` (keeps the branch).
+    fn prune_dir(&self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+        if let Ok(repo) = Repository::open(&self.repo_root) {
+            if let Ok(wt) = repo.find_worktree(&self.name) {
+                let mut po = WorktreePruneOptions::new();
+                po.valid(true).working_tree(true);
+                let _ = wt.prune(Some(&mut po));
+            }
+        }
+    }
+
+    /// Consume the guard, removing the worktree DIR but KEEPING the branch
+    /// (with the subagent's commits) so `subagent_diff` can retrieve it.
+    /// Returns (path, branch_name) for the caller. Suppresses `Drop`.
+    pub fn into_kept_branch(self) -> (PathBuf, String) {
+        let path = self.path.clone();
+        let name = self.name.clone();
+        self.prune_dir();
+        std::mem::forget(self);
+        (path, name)
+    }
 }
 
 /// Create a worktree named `name` for the repo at `repo_root`, checked out at
@@ -43,17 +68,11 @@ pub fn create_worktree(repo_root: &Path, name: &str) -> Result<WorktreeGuard> {
 
 impl Drop for WorktreeGuard {
     fn drop(&mut self) {
-        // Remove the working dir first, then prune the registration. Best-effort:
-        // Drop can't surface errors, and a leaked worktree is recoverable.
-        let _ = std::fs::remove_dir_all(&self.path);
+        self.prune_dir();
+        // The worktree add created a local branch named after the worktree;
+        // prune leaves it behind. Delete it too so delegations don't
+        // accumulate refs.
         if let Ok(repo) = Repository::open(&self.repo_root) {
-            if let Ok(wt) = repo.find_worktree(&self.name) {
-                let mut po = WorktreePruneOptions::new();
-                po.valid(true).working_tree(true);
-                let _ = wt.prune(Some(&mut po));
-            }
-            // The worktree add created a local branch named after the worktree; prune
-            // leaves it behind. Delete it too so delegations don't accumulate refs.
             if let Ok(mut branch) = repo.find_branch(&self.name, git2::BranchType::Local) {
                 let _ = branch.delete();
             }

@@ -1516,6 +1516,10 @@ struct App {
     session_ids: Vec<Ulid>,
     /// In-flight subagents, tracked for the Subagents drawer + busy guard.
     in_flight_subagents: Vec<SubagentInfo>,
+    /// Shared in-flight subagent ID set, threaded into TurnConfig so the
+    /// Emitting handler can enforce sequential dispatch (Gap 3). The spawned
+    /// subagent's DelegationResult removes the ID.
+    in_flight: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     /// The reply channel for an in-flight `ask_user` question (Task 11): `Some`
     /// while the question overlay is up. Dropping it (Esc-abort) makes the
     /// agent loop record a balanced "[user aborted]" result and end the turn.
@@ -2010,6 +2014,9 @@ async fn main() -> Result<()> {
         session_started_ms,
         session_ids: Vec::new(),
         in_flight_subagents: Vec::new(),
+        in_flight: std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashSet::new(),
+        )),
         pending_answer: None,
         turn_cancel: None,
         turn_hard: None,
@@ -2584,6 +2591,7 @@ where
                     AgentUpdate::Appended(ev) => {
                         if let EventKind::DelegationResult { subagent_id, .. } = &ev.kind {
                             app.in_flight_subagents.retain(|s| s.id != *subagent_id);
+                            app.in_flight.lock().unwrap().remove(subagent_id);
                             if app.in_flight_subagents.is_empty() {
                                 app.shell.status_hint = None;
                             }
@@ -5301,6 +5309,7 @@ fn spawn_turn(app: &mut App) {
     turn_config.thinking = resolve_thinking(&app.config.thinking, model_support);
     turn_config.approval = app.config.approval.clone();
     turn_config.kill = kill.clone();
+    turn_config.in_flight = Some(app.in_flight.clone());
     // Mint fresh cancellation tokens for this turn and keep clones so
     // `Action::CancelTurn` (Esc/Ctrl-C) can fire them. Cleared on `TurnComplete`.
     let cancel = tokio_util::sync::CancellationToken::new();
@@ -6107,6 +6116,9 @@ mod tests {
             session_started_ms: 0,
             session_ids: Vec::new(),
             in_flight_subagents: Vec::new(),
+        in_flight: std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashSet::new(),
+        )),
             pending_answer: None,
             turn_cancel: None,
             turn_hard: None,

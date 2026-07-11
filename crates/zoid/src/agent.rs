@@ -89,6 +89,13 @@ pub struct TurnConfig {
     /// fresh (unshared) slot for subagents/tests; the chat turn shares the same
     /// slot given to the chat tool list (see spawn_turn).
     pub kill: zoid_tools::KillSlot,
+    /// Hard cap on tool-call sub-turns. The main chat loop uses
+    /// MAX_TOOL_ITERATIONS (1000); subagents override this to a tighter bound
+    /// so a confused headless agent stops fast. None = MAX_TOOL_ITERATIONS.
+    pub max_iterations: Option<u32>,
+    /// Shared in-flight subagent ID set for the sequential-dispatch guard.
+    /// None when dispatch_subagent is disabled or for subagent turns.
+    pub in_flight: Option<std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>>,
 }
 
 // Manual `Debug`: `embed`/`embedder` hold a trait object (`dyn Embedder`) and
@@ -109,6 +116,8 @@ impl std::fmt::Debug for TurnConfig {
             .field("thinking", &self.thinking)
             .field("approval", &self.approval)
             .field("kill", &self.kill)
+            .field("max_iterations", &self.max_iterations)
+            .field("in_flight", &self.in_flight.is_some())
             .finish()
     }
 }
@@ -137,6 +146,8 @@ pub fn chat_turn_config_with(profile: &AgentProfile, skill_menu: &str) -> TurnCo
         thinking: ThinkingMode::Off,
         approval: zoid_core::config::ApprovalConfig::default(),
         kill: zoid_tools::KillSlot::new(),
+        max_iterations: None,
+        in_flight: None,
     }
 }
 
@@ -769,7 +780,8 @@ async fn run_turn_inner(
         thinking_buf.clear();
 
         iterations += 1;
-        if iterations > MAX_TOOL_ITERATIONS {
+        let cap = config.max_iterations.unwrap_or(MAX_TOOL_ITERATIONS);
+        if iterations > cap {
             emit(
                 &session,
                 &mut events,
@@ -1192,6 +1204,30 @@ async fn run_turn_inner(
                     );
                 }
                 Some(zoid_tools::ToolKind::Emitting) if tc.name == "dispatch_subagent" => {
+                    // v1: sequential dispatch. Refuse if a subagent is in flight.
+                    if let Some(set) = &config.in_flight {
+                        if !set.lock().unwrap().is_empty() {
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::ToolResult {
+                                    id: tc.id.clone(),
+                                    name: tc.name.clone(),
+                                    output: "dispatch_subagent: a subagent is already \
+                                             running. Wait for its DelegationResult before \
+                                             dispatching another."
+                                        .into(),
+                                    is_error: true,
+                                },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                            continue;
+                        }
+                    }
                     let task = tc
                         .args
                         .get("task")
@@ -1248,6 +1284,13 @@ async fn run_turn_inner(
                                 .unwrap_or_else(|_| w.path().to_path_buf())
                         })
                         .unwrap_or_else(|| config.cwd.clone());
+
+                    // Track the in-flight subagent BEFORE spawning, so a
+                    // fast-completing subagent can't emit DelegationResult
+                    // (which removes the ID) before we insert it.
+                    if let Some(set) = &config.in_flight {
+                        set.lock().unwrap().insert(sub_id.clone());
+                    }
 
                     crate::spawn_subagent::spawn_subagent(
                         task,
@@ -3132,7 +3175,6 @@ mod tests {
         assert!(out2.iter().any(|e| matches!(&e.kind, EventKind::ToolResult { name, output, .. } if name == "recall" && output.contains("zephyrbackend"))), "recall result carries content");
     }
     #[tokio::test]
-    #[ignore = "dispatch_subagent is temporarily disabled"]
     async fn dispatch_subagent_returns_id_as_tool_result() {
         use serde_json::json;
         use zoid_core::event::{Event, EventKind};
@@ -3208,8 +3250,7 @@ mod tests {
         }
     }
     #[tokio::test]
-    #[ignore = "dispatch_subagent is temporarily disabled"]
-    async fn dispatch_two_subagents_concurrently() {
+    async fn dispatch_two_subagents_second_is_rejected() {
         use serde_json::json;
         use zoid_core::event::{Event, EventKind};
         use zoid_provider::{ProviderEvent, ToolCall};
@@ -3252,8 +3293,16 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
+        let mut config = chat_turn_config();
+        let shared: std::sync::Arc<
+            std::sync::Mutex<std::collections::HashSet<String>>,
+        > = std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashSet::new(),
+        ));
+        config.in_flight = Some(shared.clone());
+
         let out = run_agent_turn(
-            chat_turn_config(),
+            config,
             provider,
             tools,
             std::sync::Arc::new(zoid_tools::AllowAll),
@@ -3268,17 +3317,26 @@ mod tests {
         .await
         .unwrap();
 
-        let ids: Vec<String> = out
+        let results: Vec<(String, bool)> = out
             .iter()
             .filter_map(|e| match &e.kind {
-                EventKind::ToolResult { name, output, .. } if name == "dispatch_subagent" => {
-                    Some(output.clone())
-                }
+                EventKind::ToolResult {
+                    name, output, is_error, ..
+                } if name == "dispatch_subagent" => Some((output.clone(), *is_error)),
                 _ => None,
             })
             .collect();
-        assert_eq!(ids.len(), 2, "two dispatch tool results");
-        assert_ne!(ids[0], ids[1], "distinct subagent IDs");
+        assert_eq!(results.len(), 2, "two dispatch tool results");
+        assert!(
+            !results[0].1,
+            "first dispatch should succeed: {:?}",
+            results[0]
+        );
+        assert!(
+            results[1].1,
+            "second dispatch should be rejected (sequential guard): {:?}",
+            results[1]
+        );
     }
 
     #[tokio::test]

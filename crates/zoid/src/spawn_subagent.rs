@@ -41,11 +41,36 @@ pub fn spawn_subagent(
             session_id,
             ui.clone(),
             now,
-            sub_id,
+            sub_id.clone(),
             approval,
         )
         .await;
-        drop(wt);
+
+        // Commit the subagent's working-tree changes on the success path,
+        // then retain the branch (with commits) for subagent_diff retrieval.
+        // On error, drop the guard (full cleanup discards partial work).
+        match &res {
+            Ok(_) => {
+                if let Some(wt) = &wt {
+                    let _ = std::process::Command::new("git")
+                        .args(["-C"])
+                        .arg(wt.path())
+                        .args(["add", "-A"])
+                        .status();
+                    let _ = std::process::Command::new("git")
+                        .args(["-C"])
+                        .arg(wt.path())
+                        .args(["commit", "-m", &format!("subagent {sub_id}")])
+                        .status();
+                }
+                if let Some(wt) = wt {
+                    let _ = wt.into_kept_branch();
+                }
+            }
+            Err(_) => {
+                drop(wt);
+            }
+        }
 
         let (subagent_id, branch, summary, ok) = match res {
             Ok(r) => (r.id, r.branch, r.summary, r.ok),
