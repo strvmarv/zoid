@@ -539,6 +539,12 @@ fn push_message(
                     code_ranges[o].1 = ln;
                 }
             }
+            BodyKind::Table => {
+                open = None;
+                let mut spans = lead;
+                spans.extend(line.spans);
+                out.push(Line::from(spans));
+            }
         }
     }
 }

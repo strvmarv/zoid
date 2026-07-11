@@ -7,7 +7,7 @@
 
 use crate::syntax_view::highlight_lines;
 use crate::tokens::{color, glyph};
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use zoid_syntax::Language;
@@ -24,6 +24,7 @@ pub enum BodyKind {
     Prose,
     CodeHead,
     Code,
+    Table,
 }
 
 /// A rendered body line plus its kind. `render_body` is the real builder;
@@ -49,7 +50,7 @@ pub struct BodyLine {
 /// `push_message` — handles an empty body by emitting the prefix alone).
 pub fn render_body(source: &str) -> Vec<BodyLine> {
     let mut b = Builder::default();
-    for ev in Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH) {
+    for ev in Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES) {
         b.event(ev);
         if b.bail {
             return plain_lines(source);
@@ -153,6 +154,43 @@ fn lang_from_fence(info: &str) -> Language {
     }
 }
 
+/// One collected table cell: its styled spans (full inline formatting).
+type Cell = Vec<Span<'static>>;
+/// One table row: its cells in column order.
+#[derive(Default, Clone)]
+struct TableRowData {
+    cells: Vec<Cell>,
+}
+
+/// Accumulated table during parsing, between `Start(Table)` and `End(Table)`.
+struct TableAccum {
+    /// One `Alignment` per column, in source order (from `Start(Table)`).
+    alignments: Vec<Alignment>,
+    /// Rows collected inside `TableHead` (rendered accent+bold).
+    header_rows: Vec<TableRowData>,
+    /// Rows collected inside `TableRow` (rendered TXT).
+    body_rows: Vec<TableRowData>,
+    /// The row currently being filled (header or body, whichever was last opened).
+    cur_row: TableRowData,
+    /// The cell currently being filled (pushed onto cur_row.cells at End(TableCell)).
+    cur_cell: Cell,
+    /// True while inside `TableHead` (so End(TableCell) knows which bucket).
+    in_header: bool,
+}
+
+impl TableAccum {
+    fn new(alignments: Vec<Alignment>) -> Self {
+        TableAccum {
+            alignments,
+            header_rows: Vec::new(),
+            body_rows: Vec::new(),
+            cur_row: TableRowData::default(),
+            cur_cell: Vec::new(),
+            in_header: false,
+        }
+    }
+}
+
 #[derive(Default)]
 struct Builder {
     lines: Vec<BodyLine>,
@@ -168,6 +206,7 @@ struct Builder {
     fence: Option<Language>,
     code_buf: String,
     bail: bool,
+    table: Option<TableAccum>,
 }
 
 impl Builder {
@@ -187,6 +226,33 @@ impl Builder {
         }
         let mut m = Modifier::empty();
         if self.bold > 0 || self.heading {
+            m |= Modifier::BOLD;
+        }
+        if self.italic > 0 {
+            m |= Modifier::ITALIC;
+        }
+        if self.link {
+            m |= Modifier::UNDERLINED;
+        }
+        if self.strike {
+            m |= Modifier::CROSSED_OUT;
+        }
+        Style::new().fg(fg).add_modifier(m)
+    }
+
+    /// Style for text inside a table cell. Same as `style()` but ignores
+    /// `heading`/`quote` so cell text is never heading-accented or quote-dimmed
+    /// (spec §4). Bold/italic/code/link/strike still apply.
+    fn cell_style(&self) -> Style {
+        let mut fg = color::TXT;
+        if self.link {
+            fg = color::MD_LINK;
+        }
+        if self.code {
+            fg = color::MD_CODE;
+        }
+        let mut m = Modifier::empty();
+        if self.bold > 0 {
             m |= Modifier::BOLD;
         }
         if self.italic > 0 {
@@ -225,6 +291,39 @@ impl Builder {
     }
 
     fn event(&mut self, ev: Event) {
+        // In table mode, leaf text events feed the current cell. Start/End
+        // events still dispatch to start()/end() unconditionally — the
+        // TableHead/TableRow/TableCell tags MUST reach those handlers or the
+        // grid never accumulates (the inline-formatting flags they toggle are
+        // shared state, consumed here via cell_style()).
+        if self.table.is_some() {
+            match ev {
+                Event::Text(t) => {
+                    let st = self.cell_style();
+                    if let Some(tbl) = self.table.as_mut() {
+                        tbl.cur_cell.push(Span::styled(t.to_string(), st));
+                    }
+                    return;
+                }
+                Event::Code(c) => {
+                    self.code = true;
+                    let st = self.cell_style();
+                    if let Some(tbl) = self.table.as_mut() {
+                        tbl.cur_cell.push(Span::styled(c.to_string(), st));
+                    }
+                    self.code = false;
+                    return;
+                }
+                Event::SoftBreak | Event::HardBreak => {
+                    let st = self.cell_style();
+                    if let Some(tbl) = self.table.as_mut() {
+                        tbl.cur_cell.push(Span::styled(" ", st));
+                    }
+                    return;
+                }
+                _ => {} // Start/End fall through to the normal dispatch below
+            }
+        }
         match ev {
             Event::Start(tag) => self.start(tag),
             Event::End(end) => self.end(end),
@@ -318,6 +417,28 @@ impl Builder {
                     CodeBlockKind::Indented => Language::PlainText,
                 });
             }
+            Tag::Table(alns) => {
+                self.block_sep();
+                self.flush();
+                self.table = Some(TableAccum::new(alns));
+            }
+            Tag::TableHead => {
+                if let Some(t) = self.table.as_mut() {
+                    t.in_header = true;
+                    t.cur_row = TableRowData::default();
+                }
+            }
+            Tag::TableRow => {
+                if let Some(t) = self.table.as_mut() {
+                    t.in_header = false;
+                    t.cur_row = TableRowData::default();
+                }
+            }
+            Tag::TableCell => {
+                if let Some(t) = self.table.as_mut() {
+                    t.cur_cell = Vec::new();
+                }
+            }
             _ => {}
         }
     }
@@ -374,6 +495,30 @@ impl Builder {
                         });
                     }
                 }
+            }
+            TagEnd::TableCell => {
+                if let Some(t) = self.table.as_mut() {
+                    let cell = std::mem::take(&mut t.cur_cell);
+                    t.cur_row.cells.push(cell);
+                }
+            }
+            TagEnd::TableHead => {
+                if let Some(t) = self.table.as_mut() {
+                    let row = std::mem::take(&mut t.cur_row);
+                    t.header_rows.push(row);
+                    t.in_header = false;
+                }
+            }
+            TagEnd::TableRow => {
+                if let Some(t) = self.table.as_mut() {
+                    let row = std::mem::take(&mut t.cur_row);
+                    t.body_rows.push(row);
+                }
+            }
+            TagEnd::Table => {
+                // Task 4 will replace this drop with the layout/emit call.
+                // For now: discard the accumulated table (renders nothing).
+                self.table = None;
             }
             _ => {}
         }
@@ -575,5 +720,50 @@ mod tests {
                 .any(|(t, st)| t == "struck" && st.add_modifier.contains(Modifier::CROSSED_OUT)),
             "strikethrough text must carry CROSSED_OUT"
         );
+    }
+
+    #[test]
+    fn empty_table_emits_nothing() {
+        // A degenerate table (header only, no body) still parses as a table
+        // (ENABLE_TABLES), but until the layout/emit lands it renders zero
+        // lines — and crucially does NOT panic or emit raw pipe text.
+        let lines = render_markdown("| H1 | H2 |\n| --- | --- |\n");
+        let joined: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(!joined.contains('|'), "raw pipe chars must not leak: {joined:?}");
+        assert!(!joined.contains("---"), "separator must not leak: {joined:?}");
+    }
+
+    #[test]
+    fn table_cell_text_does_not_leak_as_prose() {
+        // The accumulator must actually CAPTURE cell text into the grid, not
+        // drop it into the prose `cur` buffer. If routing is broken (the C1
+        // bug: event() early-returns and Start/End never reach start()/end()),
+        // the cell text "H1"/"H2" would leak as stray prose lines. This test
+        // fails in that case — it is NOT vacuous like empty_table_emits_nothing.
+        // (Task 2 renders nothing for the table, so the cell text must be
+        // absent entirely — neither as a table nor as prose.)
+        let lines = render_markdown("| H1 | H2 |\n| --- | --- |\n");
+        let joined: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(!joined.contains("H1"), "cell text leaked as prose (grid not capturing): {joined:?}");
+        assert!(!joined.contains("H2"), "cell text leaked as prose (grid not capturing): {joined:?}");
+    }
+
+    #[test]
+    fn plain_text_outside_table_still_renders() {
+        // Prose before and after a table must render normally — proves the
+        // table-mode enter/exit does not corrupt the prose path.
+        let lines = render_markdown("before\n\n| a | b |\n| --- | --- |\n\nafter");
+        let joined: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect::<String>();
+        assert!(joined.contains("before"), "prose before table lost: {joined:?}");
+        assert!(joined.contains("after"), "prose after table lost: {joined:?}");
     }
 }
