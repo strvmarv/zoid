@@ -5079,6 +5079,11 @@ fn start_delegation(app: &mut App, task: String) {
     let model = app.model.clone();
     let ui = app.ui_tx.clone();
     let approval_config = app.config.approval.clone();
+    let model_support = app
+        .fetched_model_info
+        .map(|info| info.thinking)
+        .unwrap_or_else(|| zoid_provider::model::model_info(&app.model).thinking);
+    let app_thinking = resolve_thinking(&app.config.thinking, model_support);
     tokio::spawn(async move {
         let res = zoid::subagent::run_subagent(
             &task,
@@ -5087,6 +5092,7 @@ fn start_delegation(app: &mut App, task: String) {
             provider,
             cwd,
             model,
+            app_thinking,
             session.clone(),
             session_id,
             ui.clone(),

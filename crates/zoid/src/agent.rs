@@ -1298,6 +1298,7 @@ async fn run_turn_inner(
                         provider.clone(),
                         cwd,
                         model.clone(),
+                        config.thinking.clone(),
                         session.clone(),
                         session_id,
                         ui.clone(),

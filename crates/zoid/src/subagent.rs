@@ -53,6 +53,7 @@ pub fn build_subagent_request(
     profile: &AgentProfile,
     model: &str,
     tools: &[Box<dyn Tool>],
+    thinking: zoid_provider::ThinkingMode,
 ) -> CompletionRequest {
     let window = context_window(events.iter());
     let selection = assemble_context(&window, policy);
@@ -81,7 +82,7 @@ pub fn build_subagent_request(
         messages: vec![Message::user(user)],
         max_tokens: SUBAGENT_MAX_TOKENS,
         tools: tool_specs(tools),
-        thinking: zoid_provider::ThinkingMode::Off,
+        thinking,
     }
 }
 
@@ -113,6 +114,7 @@ pub async fn run_subagent(
     provider: Arc<dyn Provider>,
     cwd: PathBuf,
     default_model: String,
+    thinking: zoid_provider::ThinkingMode,
     session: SessionHandle,
     session_id: Ulid,
     ui: mpsc::Sender<AgentUpdate>,
@@ -141,6 +143,7 @@ pub async fn run_subagent(
         profile,
         &model,
         &tools,
+        thinking,
     );
     let prompt = req.messages[0].content.clone();
     let mut seed = Event::new(
@@ -162,7 +165,7 @@ pub async fn run_subagent(
         mcp: None,
         embed: None,
         embedder: None,
-        thinking: zoid_provider::ThinkingMode::Off,
+        thinking,
         approval: approval.clone(),
         kill: zoid_tools::KillSlot::new(),
         max_iterations: Some(SUBAGENT_MAX_ITERATIONS),
@@ -291,6 +294,7 @@ mod tests {
             &profile,
             "glm",
             &tools,
+            zoid_provider::ThinkingMode::Off,
         );
 
         assert_eq!(req.model, "glm");
@@ -343,6 +347,7 @@ mod tests {
             &profile,
             "glm",
             &tools,
+            zoid_provider::ThinkingMode::Off,
         );
         assert!(
             !req.tools.iter().any(|s| s.name == "ask_user"),
@@ -363,6 +368,7 @@ mod tests {
             &AgentProfile::builtin(),
             "glm",
             &zoid_tools::registry(),
+            zoid_provider::ThinkingMode::Off,
         );
         assert!(req.messages[0].content.contains("do a thing"));
     }
@@ -456,6 +462,7 @@ mod tests {
             provider,
             std::path::PathBuf::from("."),
             "glm".into(),
+            zoid_provider::ThinkingMode::Off,
             session.clone(),
             Ulid::new(),
             tx,

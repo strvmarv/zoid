@@ -96,6 +96,7 @@ async fn subagent_writes_inside_its_worktree_not_the_main_copy() {
             provider,
             wt.path().to_path_buf(), // subagent cwd = the worktree (B1 seam)
             "glm".into(),
+            zoid_provider::ThinkingMode::Off,
             session,
             ulid::Ulid::new(), // session_id (B4)
             tx,
