@@ -13,6 +13,8 @@ pub mod read;
 pub mod recall;
 pub mod search;
 pub mod subagent_dispatch;
+pub mod worktree_enter;
+pub mod worktree_exit;
 pub mod shell;
 pub mod show;
 pub mod tasks;
