@@ -23,6 +23,20 @@ pub fn build(req: &CompletionRequest) -> AnthropicRequest {
         tools: req.tools.iter().map(tool_def).collect(),
         thinking,
     };
+    if let Some(text) = &req.reassert {
+        if let Some(last) = out.messages.last_mut() {
+            let block = ContentBlock::Text { text: format!("\n\n{text}"), cache_control: None };
+            match &mut last.content {
+                MessageContent::Text(s) => {
+                    last.content = MessageContent::Blocks(vec![
+                        ContentBlock::Text { text: std::mem::take(s), cache_control: None },
+                        block,
+                    ]);
+                }
+                MessageContent::Blocks(blocks) => blocks.push(block),
+            }
+        }
+    }
     place_breakpoints(&mut out);
     out
 }
@@ -512,6 +526,27 @@ mod tests {
             reassert: None,
         };
         assert!(thinking_betas(&req).is_empty());
+    }
+
+    #[test]
+    fn reassert_rides_on_last_message_as_user_role() {
+        // req(messages, tools, system): tail is a plain user message (MessageContent::Text).
+        let mut r = req(vec![Message::user("do the thing")], vec![], None);
+        r.reassert = Some("STANDING REMINDER".to_string());
+        let body = serde_json::to_value(build(&r)).unwrap();
+        let msgs = body["messages"].as_array().unwrap();
+        let last = msgs.last().unwrap();
+        assert_eq!(last["role"], "user", "tail stays user-role (alternation preserved)");
+        assert!(serde_json::to_string(&last["content"]).unwrap().contains("STANDING REMINDER"));
+        assert_eq!(msgs.len(), 1, "no new trailing message added");
+    }
+
+    #[test]
+    fn reassert_none_is_byte_identical_anthropic() {
+        let r = req(vec![Message::user("hi")], vec![], None);
+        let mut r2 = r.clone();
+        r2.reassert = None;
+        assert_eq!(serde_json::to_value(build(&r)).unwrap(), serde_json::to_value(build(&r2)).unwrap());
     }
 
 }
