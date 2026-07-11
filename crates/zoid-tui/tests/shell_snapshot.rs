@@ -1259,3 +1259,17 @@ fn provider_switch_card() {
         .unwrap();
     insta::assert_snapshot!(terminal.backend().to_string());
 }
+
+#[test]
+fn table_basic() {
+    use zoid_core::projection::ChatMsg;
+    let state = ShellState::default();
+    let msgs = vec![ChatMsg::Assistant {
+        text: "| Name | Kind | Note |\n| :--- | :---: | ---: |\n| alpha | code | long enough to maybe wrap if narrow |\n| **bold** | `x` | short |\n".to_string(),
+        tool_calls: vec![],
+        ts: 0,
+        thinking: None,
+    }];
+    let rendered = draw(&state, &msgs, 60, 18);
+    insta::assert_snapshot!(rendered);
+}
