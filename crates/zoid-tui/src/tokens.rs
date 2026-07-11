@@ -52,6 +52,19 @@ pub mod glyph {
     /// Purple (color::BRANCH). Only shown while automated compaction is running.
     pub const COMPACT_SPINNER: [char; 6] = ['⊟', '⊞', '⊟', '⊕', '⊞', '⊕'];
 
+    // GFM table box-drawing borders (§3.5 tables reuse the box-drawing set).
+    pub const TABLE_H: char = '─';   // horizontal border
+    pub const TABLE_V: char = '│';   // vertical separator
+    pub const TABLE_TL: char = '┌';  // top-left corner
+    pub const TABLE_TR: char = '┐';  // top-right corner
+    pub const TABLE_BL: char = '└';  // bottom-left corner
+    pub const TABLE_BR: char = '┘';  // bottom-right corner
+    pub const TABLE_LT: char = '├';  // left tee
+    pub const TABLE_RT: char = '┤';  // right tee
+    pub const TABLE_TT: char = '┬';  // top tee
+    pub const TABLE_BT: char = '┴';  // bottom tee
+    pub const TABLE_CR: char = '┼';  // cross
+
     // Repo drawer line-prefix emojis (§16) — visual markers for at-a-glance scanning.
     pub const REPO_NAME: char = '📦';
     pub const REPO_WORKTREE: char = '🔧';
@@ -107,6 +120,10 @@ pub mod color {
     // Fenced-code container panel background (§3.5) — a subtly elevated dark so a
     // code block reads as a contained artifact against the pane, without a border.
     pub const CODE_BG: Color = Color::Rgb(0x16, 0x1b, 0x22);
+
+    // GFM table (spec GFM-table §3): border = DIM, header = the Chat accent.
+    pub const TABLE_BORDER: Color = DIM;
+    pub const TABLE_HEADER: Color = CHAT_ACCENT;
 
     pub const DELEGATE_BG: Color = Color::Rgb(0x15, 0x10, 0x1f); // ▸ delegated card bg (chat-mode.html .chip)
 }
@@ -181,6 +198,23 @@ mod tests {
         assert_eq!(glyph::CODE_BAR, '▏'); // fenced-code left rule
         assert_eq!(glyph::COPY, '⧉'); // copy affordance
         assert_eq!(color::CODE_BG, Color::Rgb(0x16, 0x1b, 0x22));
+    }
+
+    #[test]
+    fn table_tokens_present() {
+        assert_eq!(glyph::TABLE_H, '─');
+        assert_eq!(glyph::TABLE_V, '│');
+        assert_eq!(glyph::TABLE_TL, '┌');
+        assert_eq!(glyph::TABLE_TR, '┐');
+        assert_eq!(glyph::TABLE_BL, '└');
+        assert_eq!(glyph::TABLE_BR, '┘');
+        assert_eq!(glyph::TABLE_LT, '├');
+        assert_eq!(glyph::TABLE_RT, '┤');
+        assert_eq!(glyph::TABLE_TT, '┬');
+        assert_eq!(glyph::TABLE_BT, '┴');
+        assert_eq!(glyph::TABLE_CR, '┼');
+        assert_eq!(color::TABLE_BORDER, color::DIM);
+        assert_eq!(color::TABLE_HEADER, color::CHAT_ACCENT);
     }
 
     #[test]
