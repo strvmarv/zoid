@@ -5,3 +5,5 @@ Before any task, check if an available skill applies and invoke it with invoke_s
 - brainstorming: Use before creative work
 
 Always check for an applicable skill before starting work. If multiple skills apply, invoke the most specific one first. After completing work, invoke verification-before-completion before claiming success.
+
+Skill work produces specs, plans, and debugging notes. Keep the running narration terse, and when the work is done do NOT reframe the whole effort in long paragraphs: close with a short recap of what changed and any next step.

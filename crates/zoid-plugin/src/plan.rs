@@ -107,6 +107,11 @@ invoke_skill. The skills are:\n\n",
 skills apply, invoke the most specific one first. After completing work, invoke \
 verification-before-completion before claiming success.\n",
     );
+    body.push_str(
+        "\nSkill work produces specs, plans, and debugging notes. Keep the running \
+narration terse, and when the work is done do NOT reframe the whole effort in \
+long paragraphs: close with a short recap of what changed and any next step.\n",
+    );
     body
 }
 
