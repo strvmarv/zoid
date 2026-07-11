@@ -78,3 +78,56 @@ fn into_kept_branch_removes_dir_but_retains_branch() {
         .unwrap()
         .delete();
 }
+
+#[test]
+fn into_kept_preserves_dir_and_branch_on_disk() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo(tmp.path());
+
+    // Create a worktree and call into_kept — suppresses Drop, keeps dir + branch.
+    let wt = create_worktree(tmp.path(), "wt-keep1").unwrap();
+    let path = wt.path().to_path_buf();
+    let _ = std::fs::write(path.join("new.txt"), "data");
+
+    // Consume the guard — Drop must NOT fire.
+    let (kept_path, kept_name) = wt.into_kept();
+    assert_eq!(kept_path, path);
+    assert_eq!(kept_name, "wt-keep1");
+
+    // Dir still exists (NOT removed by Drop).
+    assert!(path.exists(), "worktree dir must survive into_kept");
+    assert!(path.join("new.txt").exists(), "file in worktree must survive");
+
+    // Branch still exists (NOT deleted by Drop).
+    let repo = git2::Repository::open(tmp.path()).unwrap();
+    assert!(
+        repo.find_branch("wt-keep1", git2::BranchType::Local).is_ok(),
+        "branch must survive into_kept"
+    );
+
+    // Clean up: remove the kept worktree explicitly.
+    zoid::worktree::remove_worktree(tmp.path(), "wt-keep1").unwrap();
+    assert!(!path.exists(), "cleaned up after test");
+}
+
+#[test]
+fn remove_worktree_deletes_dir_prunes_and_deletes_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo(tmp.path());
+
+    let wt = create_worktree(tmp.path(), "wt-rm1").unwrap();
+    let path = wt.path().to_path_buf();
+    // Consume guard without removal, keeping dir + branch on disk.
+    let (_kept_path, kept_name) = wt.into_kept();
+    assert!(path.exists(), "dir exists after into_kept");
+
+    // Now explicitly remove.
+    zoid::worktree::remove_worktree(tmp.path(), &kept_name).unwrap();
+
+    assert!(!path.exists(), "dir removed by remove_worktree");
+    let repo = git2::Repository::open(tmp.path()).unwrap();
+    assert!(
+        repo.find_branch("wt-rm1", git2::BranchType::Local).is_err(),
+        "branch removed by remove_worktree"
+    );
+}

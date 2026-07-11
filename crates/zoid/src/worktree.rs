@@ -22,6 +22,11 @@ impl WorktreeGuard {
         &self.path
     }
 
+    /// The worktree's branch name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     /// Remove the worktree dir + prune the registration. Does NOT delete the
     /// branch ref. Shared by `Drop` (then deletes the branch) and
     /// `into_kept_branch` (keeps the branch).
@@ -44,6 +49,19 @@ impl WorktreeGuard {
         let name = self.name.clone();
         self.prune_dir();
         std::mem::forget(self);
+        (path, name)
+    }
+
+    /// Consume the guard WITHOUT removing anything — the worktree dir AND
+    /// the branch persist on disk. Used by `WorktreeSession` to take
+    /// ownership of a persistent (Chat-agent) worktree: the guard is moved
+    /// into session state and held until an explicit exit decision, so its
+    /// `Drop` never fires while the session owns it.
+    /// Returns (path, branch_name) for the session to remember.
+    pub fn into_kept(self) -> (PathBuf, String) {
+        let path = self.path.clone();
+        let name = self.name.clone();
+        std::mem::forget(self); // suppress Drop's removal entirely
         (path, name)
     }
 }
@@ -78,4 +96,24 @@ impl Drop for WorktreeGuard {
             }
         }
     }
+}
+
+/// Explicitly remove a worktree by name: remove the dir, prune the
+/// registration, and delete the branch. This is the same logic `Drop`
+/// performs, factored out so the Chat-agent exit path can call it directly
+/// on a worktree that was previously `into_kept()`'d.
+pub fn remove_worktree(repo_root: &Path, name: &str) -> Result<()> {
+    let path = repo_root.join(".zoid").join("worktrees").join(name);
+    let _ = std::fs::remove_dir_all(&path);
+    if let Ok(repo) = Repository::open(repo_root) {
+        if let Ok(wt) = repo.find_worktree(name) {
+            let mut po = WorktreePruneOptions::new();
+            po.valid(true).working_tree(true);
+            let _ = wt.prune(Some(&mut po));
+        }
+        if let Ok(mut branch) = repo.find_branch(name, git2::BranchType::Local) {
+            let _ = branch.delete();
+        }
+    }
+    Ok(())
 }
