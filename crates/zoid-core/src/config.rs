@@ -87,6 +87,9 @@ pub struct EconomyConfig {
     pub band_headroom_pct: u8,
     /// Most-recent turns never evictable (default 4).
     pub recent_n: usize,
+    /// Re-assert the system prompt at the live edge every N estimated-appended
+    /// tokens of novel content. 0 disables. Default 100_000. Units: estimate_tokens (chars/3).
+    pub reassert_interval_tokens: u64,
 }
 
 impl Default for EconomyConfig {
@@ -97,6 +100,7 @@ impl Default for EconomyConfig {
             compact_threshold_pct: 80,
             band_headroom_pct: 20,
             recent_n: 4,
+            reassert_interval_tokens: 100_000,
         }
     }
 }
@@ -204,6 +208,7 @@ pub struct Provenance {
     pub compact_threshold_pct: Source,
     pub band_headroom_pct: Source,
     pub recent_n: Source,
+    pub reassert_interval_tokens: Source,
     pub reduced_motion: Source,
     pub thinking_enabled: Source,
     pub thinking_effort: Source,
@@ -218,6 +223,7 @@ pub struct PartialEconomy {
     pub compact_threshold_pct: Option<u8>,
     pub band_headroom_pct: Option<u8>,
     pub recent_n: Option<usize>,
+    pub reassert_interval_tokens: Option<u64>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -303,6 +309,7 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         compact_threshold_pct: Source::Default,
         band_headroom_pct: Source::Default,
         recent_n: Source::Default,
+        reassert_interval_tokens: Source::Default,
         reduced_motion: Source::Default,
         thinking_enabled: Source::Default,
         thinking_effort: Source::Default,
@@ -344,6 +351,10 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         if let Some(v) = p.economy.recent_n {
             cfg.economy.recent_n = v;
             prov.recent_n = *src;
+        }
+        if let Some(v) = p.economy.reassert_interval_tokens {
+            cfg.economy.reassert_interval_tokens = v;
+            prov.reassert_interval_tokens = *src;
         }
         if let Some(dirs) = &p.skills.source_dirs {
             for d in dirs {
@@ -678,5 +689,21 @@ mod approval_config_tests {
         let (proj, _) = parse_toml("[approval]\nyolo = false").unwrap();
         let (cfg, _) = merge(&[(Source::UserGlobal, user), (Source::Project, proj)]);
         assert!(!cfg.approval.yolo, "project layer overrides user-global");
+    }
+}
+
+#[cfg(test)]
+mod reassert_interval_tests {
+    use super::*;
+
+    #[test]
+    fn economy_default_reassert_interval_is_100k() {
+        assert_eq!(EconomyConfig::default().reassert_interval_tokens, 100_000);
+    }
+
+    #[test]
+    fn parse_reassert_interval_into_partial() {
+        let (pc, _unknown) = parse_toml("[economy]\nreassert_interval_tokens = 250000").unwrap();
+        assert_eq!(pc.economy.reassert_interval_tokens, Some(250_000));
     }
 }
