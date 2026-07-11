@@ -1163,4 +1163,12 @@ mod tests {
             .collect();
         assert!(shallow_joined.contains('┌'), "shallow-nested table must render borders (control): {shallow_joined:?}");
     }
+
+    #[test]
+    fn table_lines_are_bodykind_table() {
+        let md = "| H |\n| --- |\n| x |\n";
+        let body = render_body(md);
+        let has_table_kind = body.iter().any(|b| b.kind == BodyKind::Table);
+        assert!(has_table_kind, "table lines must be BodyKind::Table: {body:?}");
+    }
 }
