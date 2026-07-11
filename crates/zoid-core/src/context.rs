@@ -838,4 +838,16 @@ mod tests {
             "evicted event's tokens must be excluded from the window"
         );
     }
+
+    #[test]
+    fn context_window_ignores_directive_reasserted() {
+        let base = vec![u("hello world this is content")];
+        let mut with_marker = base.clone();
+        with_marker.push(ev(EventKind::DirectiveReasserted { at_cumulative: 999 }));
+        assert_eq!(
+            context_window(&base).total_tokens,
+            context_window(&with_marker).total_tokens,
+            "re-floor marker must not change the context window total"
+        );
+    }
 }

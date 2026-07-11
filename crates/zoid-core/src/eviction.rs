@@ -122,6 +122,18 @@ pub fn eviction_breadcrumb<'a>(events: impl IntoIterator<Item = &'a Event>) -> O
 }
 
 #[cfg(test)]
+mod directive_reasserted_test {
+    use super::*;
+
+    #[test]
+    fn directive_reasserted_is_inert() {
+        let k = EventKind::DirectiveReasserted { at_cumulative: 123 };
+        assert!(is_inert(&k), "re-floor marker must not join evictable turn groups");
+        assert_eq!(event_tokens(&k), 0, "marker is weightless");
+    }
+}
+
+#[cfg(test)]
 mod fold_tests {
     use super::*;
     use crate::event::EvictionMarker;
@@ -227,6 +239,7 @@ fn is_inert(kind: &EventKind) -> bool {
             | EventKind::TurnsDropped { .. }
             | EventKind::TurnsEvicted { .. }
             | EventKind::TurnsReadmitted { .. }
+            | EventKind::DirectiveReasserted { .. }
     )
 }
 

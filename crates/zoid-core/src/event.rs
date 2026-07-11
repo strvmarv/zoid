@@ -132,6 +132,13 @@ pub enum EventKind {
     Tasks {
         items: Vec<crate::tasks::TaskItem>,
     },
+    /// Live-edge re-assertion marker (spec: re-floor). Records the
+    /// cumulative-appended token value at the moment a re-floor fired, so the
+    /// interval spans the whole session. Weightless: inert for eviction and
+    /// context_window; never projected into a ChatMsg.
+    DirectiveReasserted {
+        at_cumulative: u64,
+    },
     /// **Inert.** Marks a prior layer-4 turn-drop compaction. Layer 4
     /// (turn-dropping) was removed — it cascaded and wiped history because the
     /// model's `real_input_tokens` never decreased while the conversation

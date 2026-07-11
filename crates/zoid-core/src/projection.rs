@@ -260,7 +260,9 @@ pub fn conversation<'a>(events: impl IntoIterator<Item = &'a Event>) -> Vec<Chat
             EventKind::TurnsDropped { .. } => {
                 // Metadata marker; not a conversation item.
             }
-            EventKind::TurnsEvicted { .. } | EventKind::TurnsReadmitted { .. } => {
+            EventKind::TurnsEvicted { .. }
+            | EventKind::TurnsReadmitted { .. }
+            | EventKind::DirectiveReasserted { .. } => {
                 // Metadata marker; not a conversation item. (Out of scope: rendering
                 // the in-context breadcrumb / recall filtering is a later slice.)
             }
