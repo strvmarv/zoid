@@ -69,7 +69,11 @@ pub fn render_shell(
     let layout = compute(frame.area(), state);
 
     // Hard minimum: below 160×40, render only the "too small" message.
-    if layout.rail.is_none() && frame.area().width < crate::layout::MIN_WIDTH {
+    // Check the raw area dimensions — not layout.rail.is_none() — because
+    // rail.is_none() is also true when the user toggles the rail off.
+    if frame.area().width < crate::layout::MIN_WIDTH
+        || frame.area().height < crate::layout::MIN_HEIGHT
+    {
         render_too_small(frame, layout.body);
         return 0;
     }

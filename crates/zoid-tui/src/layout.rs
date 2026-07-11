@@ -8,9 +8,6 @@ use ratatui::layout::{Constraint, Layout, Rect};
 /// Rail width in columns. Widened ~50% from the mockup's ≈30 so context labels,
 /// churn, and branch/file drawers have breathing room (spec min ≈ 28).
 pub const RAIL_WIDTH: u16 = 45;
-/// Minimum total width before the rail is shown: keep a usable stream (≥ ~50)
-/// alongside the wider rail, so the rail only appears once both fit (spec §6.2).
-pub const RAIL_MIN_TOTAL: u16 = 95;
 /// Left/right breathing pad inside the conversation column (spec §3.5). The
 /// stream's text is inset by this many columns on each side so turns don't sit
 /// flush against the frame edge.
@@ -155,10 +152,9 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
             width: rr.width.saturating_sub(2),
             height: rr.height,
         };
-        // Resolve every open drawer's body rows up front so a short rail never
-        // silently starves the last drawer: minimums are guaranteed, the lowest
-        // priority drawers collapse to headers first, and leftover rows grow the
-        // Tasks list to fit its content (see `allocate_drawer_bodies`).
+        // Resolve each open drawer's body rows: every open drawer gets its
+        // full body height (no collapse/fill — the 160×40 minimum guarantees
+        // the rail has room for all drawers).
         let bodies = allocate_drawer_bodies(&state.drawers, inner.height, state.tasks_len);
         let mut y = inner.y;
         let bottom = inner.y.saturating_add(inner.height);
@@ -167,7 +163,7 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
             if avail < 2 {
                 break; // no room for even an empty box (top+bottom border)
             }
-            // `body == 0` renders a header-only box (user-closed or fit-collapsed).
+            // `body == 0` renders a header-only box (user-closed drawer).
             let want = if body > 0 { body + 2 } else { 2 };
             let box_h = want.min(avail); // final safety clamp against the rail bottom
             drawer_headers.push((
