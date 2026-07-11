@@ -83,6 +83,7 @@ pub fn build_subagent_request(
         max_tokens: SUBAGENT_MAX_TOKENS,
         tools: tool_specs(tools),
         thinking,
+        reassert: None,
     }
 }
 

@@ -374,6 +374,7 @@ pub fn build_request_with_thinking(
         max_tokens,
         tools: tool_specs(tools),
         thinking,
+        reassert: None,
     }
 }
 

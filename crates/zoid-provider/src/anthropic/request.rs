@@ -186,6 +186,7 @@ mod tests {
             max_tokens: 1024,
             tools,
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         }
     }
 
@@ -426,6 +427,7 @@ mod tests {
             max_tokens: 16000,
             tools: vec![],
             thinking: crate::ThinkingMode::Auto,
+            reassert: None,
         };
         let body = serde_json::to_value(build(&r)).unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
@@ -443,6 +445,7 @@ mod tests {
             max_tokens: 16000,
             tools: vec![],
             thinking: crate::ThinkingMode::Auto,
+            reassert: None,
         };
         let body = serde_json::to_value(build(&r)).unwrap();
         assert_eq!(body["thinking"]["type"], "adaptive");
@@ -458,6 +461,7 @@ mod tests {
             max_tokens: 10000,
             tools: vec![],
             thinking: crate::ThinkingMode::Effort(crate::EffortLevel::High),
+            reassert: None,
         };
         let body = serde_json::to_value(build(&r)).unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
@@ -474,6 +478,7 @@ mod tests {
             max_tokens: 16000,
             tools: vec![],
             thinking: crate::ThinkingMode::Effort(crate::EffortLevel::Max),
+            reassert: None,
         };
         let body = serde_json::to_value(build(&r)).unwrap();
         assert_eq!(body["thinking"]["type"], "adaptive");
@@ -489,6 +494,7 @@ mod tests {
             max_tokens: 16000,
             tools: vec![],
             thinking: crate::ThinkingMode::Auto,
+            reassert: None,
         };
         let betas = thinking_betas(&req);
         assert_eq!(betas, vec!["extended-thinking-2025-05-14".to_string()]);
@@ -503,6 +509,7 @@ mod tests {
             max_tokens: 16000,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         assert!(thinking_betas(&req).is_empty());
     }

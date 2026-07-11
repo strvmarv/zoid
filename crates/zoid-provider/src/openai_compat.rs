@@ -478,6 +478,7 @@ mod tests {
             max_tokens: 1024,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["model"], "glm-5.2");
@@ -502,6 +503,7 @@ mod tests {
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         assert_eq!(
             request_body(&req)["messages"],
@@ -528,6 +530,7 @@ mod tests {
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let body = request_body(&req);
         let tc = &body["messages"][0]["tool_calls"][0];
@@ -550,6 +553,7 @@ mod tests {
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(
@@ -571,6 +575,7 @@ mod tests {
                 parameters: json!({"type": "object"}),
             }],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(
@@ -591,6 +596,7 @@ mod tests {
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         assert!(request_body(&req).get("tools").is_none());
     }
@@ -750,6 +756,7 @@ mod tests {
             max_tokens: 4096,
             tools: vec![],
             thinking: crate::ThinkingMode::Auto,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["thinking"]["type"], json!("enabled"));
@@ -765,6 +772,7 @@ mod tests {
             max_tokens: 16,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["thinking"]["type"], json!("disabled"));
@@ -780,6 +788,7 @@ mod tests {
             max_tokens: 16,
             tools: vec![],
             thinking: crate::ThinkingMode::Auto,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["thinking"]["type"], json!("enabled"));
@@ -795,6 +804,7 @@ mod tests {
             max_tokens: 16,
             tools: vec![],
             thinking: crate::ThinkingMode::Effort(crate::EffortLevel::Max),
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["thinking"]["type"], json!("enabled"));
@@ -810,6 +820,7 @@ mod tests {
             max_tokens: 16,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["thinking"]["type"], json!("disabled"));
@@ -825,6 +836,7 @@ mod tests {
             max_tokens: 16,
             tools: vec![],
             thinking: crate::ThinkingMode::Auto,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["thinking"]["type"], json!("enabled"));
@@ -840,6 +852,7 @@ mod tests {
             max_tokens: 16,
             tools: vec![],
             thinking: crate::ThinkingMode::Effort(crate::EffortLevel::Max),
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["thinking"]["type"], json!("enabled"));
@@ -855,6 +868,7 @@ mod tests {
             max_tokens: 16,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["thinking"]["type"], json!("disabled"));
@@ -870,6 +884,7 @@ mod tests {
             max_tokens: 16,
             tools: vec![],
             thinking: crate::ThinkingMode::Auto,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["thinking"]["type"], json!("enabled"));
@@ -885,6 +900,7 @@ mod tests {
             max_tokens: 16,
             tools: vec![],
             thinking: crate::ThinkingMode::Effort(crate::EffortLevel::Max),
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["thinking"]["type"], json!("enabled"));
@@ -900,6 +916,7 @@ mod tests {
             max_tokens: 4096,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["thinking"]["type"], json!("disabled"));
@@ -915,6 +932,7 @@ mod tests {
             max_tokens: 4096,
             tools: vec![],
             thinking: crate::ThinkingMode::Effort(crate::EffortLevel::Max),
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["thinking"]["type"], json!("enabled"));
@@ -930,6 +948,7 @@ mod tests {
             max_tokens: 4096,
             tools: vec![],
             thinking: crate::ThinkingMode::Effort(crate::EffortLevel::Low),
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["reasoning_effort"], json!("high"));
@@ -944,6 +963,7 @@ mod tests {
             max_tokens: 4096,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let body = request_body(&req);
         // v4-pro is thinking-only: Off → Auto → enabled + high
@@ -960,6 +980,7 @@ mod tests {
             max_tokens: 4096,
             tools: vec![],
             thinking: crate::ThinkingMode::Auto,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["reasoning_effort"], json!("medium"));
@@ -978,6 +999,7 @@ mod tests {
             max_tokens: 4096,
             tools: vec![],
             thinking: crate::ThinkingMode::Effort(crate::EffortLevel::Max),
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["reasoning_effort"], json!("xhigh"));
@@ -992,6 +1014,7 @@ mod tests {
             max_tokens: 4096,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let body = request_body(&req);
         assert!(body.get("thinking").is_none());
@@ -1007,6 +1030,7 @@ mod tests {
             max_tokens: 4096,
             tools: vec![],
             thinking: crate::ThinkingMode::Auto,
+            reassert: None,
         };
         let body = request_body(&req);
         assert!(body.get("thinking").is_none());
@@ -1074,6 +1098,7 @@ mod tests {
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         }
     }
 
@@ -1236,6 +1261,7 @@ mod tests {
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let (tx, _rx) = tokio::sync::mpsc::channel(16);
         let _ = provider.stream(&req, tx).await;

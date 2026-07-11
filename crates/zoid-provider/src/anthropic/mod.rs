@@ -434,6 +434,7 @@ mod tests {
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         }
     }
 

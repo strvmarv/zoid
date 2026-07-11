@@ -527,6 +527,7 @@ mod tests {
             max_tokens: 1024,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(
@@ -559,6 +560,7 @@ mod tests {
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         assert_eq!(
             request_body(&req)["messages"],
@@ -593,6 +595,7 @@ mod tests {
                 parameters: json!({"type": "object"}),
             }],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(
@@ -621,6 +624,7 @@ mod tests {
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         assert!(request_body(&req).get("tools").is_none());
     }
@@ -636,6 +640,7 @@ mod tests {
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Auto,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["think"], json!(false), "unknown model with ThinkingSupport::None must get think=false");
@@ -650,6 +655,7 @@ mod tests {
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["think"], json!(false));
@@ -665,6 +671,7 @@ mod tests {
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Auto,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["think"], json!(false), "non-thinking model must get think=false even when ThinkingMode::Auto");
@@ -931,6 +938,7 @@ mod tests {
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         }
     }
 

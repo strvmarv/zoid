@@ -218,6 +218,10 @@ pub struct CompletionRequest {
     pub max_tokens: u32,
     pub tools: Vec<ToolSpec>,
     pub thinking: ThinkingMode,
+    /// Live-edge re-assertion text (spec: re-floor). `None` = no reminder this
+    /// request (body byte-identical to pre-feature). `Some` = adapters render it
+    /// at the tail (per-adapter placement).
+    pub reassert: Option<String>,
 }
 
 #[async_trait]
@@ -399,6 +403,7 @@ mod tests {
             max_tokens: 64,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let (tx, mut rx) = mpsc::channel(16);
         provider.stream(&req, tx).await.unwrap();
@@ -459,6 +464,7 @@ mod tool_types_tests {
             max_tokens: 8,
             tools: vec![spec.clone()],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         assert_eq!(req.tools, vec![spec]);
 
@@ -530,6 +536,7 @@ mod thinking_mode_tests {
             max_tokens: 8,
             tools: vec![],
             thinking: ThinkingMode::Off,
+            reassert: None,
         };
         assert_eq!(req.thinking, ThinkingMode::Off);
     }
