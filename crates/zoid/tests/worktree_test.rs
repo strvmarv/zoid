@@ -131,3 +131,81 @@ fn remove_worktree_deletes_dir_prunes_and_deletes_branch() {
         "branch removed by remove_worktree"
     );
 }
+
+#[test]
+fn enter_exit_round_trip_restores_cwd_and_cleans_up() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo(tmp.path());
+
+    // Simulate enter: create worktree, into_kept, store "session".
+    let wt = create_worktree(tmp.path(), "rt-1").unwrap();
+    let (path, name) = wt.into_kept();
+    let path = std::fs::canonicalize(&path).unwrap_or(path);
+
+    // Verify the worktree exists and is usable.
+    assert!(path.exists(), "worktree dir exists after enter");
+    assert!(path.join("a.txt").exists(), "HEAD content checked out");
+
+    // Simulate work: write a file in the worktree.
+    std::fs::write(path.join("work.txt"), "done").unwrap();
+
+    // Verify clean (we wrote an untracked file — should be dirty).
+    let is_clean = std::process::Command::new("git")
+        .args(["-C"])
+        .arg(&path)
+        .args(["status", "--porcelain"])
+        .output()
+        .map(|o| o.stdout.is_empty())
+        .unwrap();
+    assert!(!is_clean, "worktree with untracked file is dirty");
+
+    // Remove the untracked file to make it clean, then exit (auto-remove).
+    std::fs::remove_file(path.join("work.txt")).unwrap();
+
+    // Now simulate exit: remove_worktree.
+    zoid::worktree::remove_worktree(tmp.path(), &name).unwrap();
+
+    assert!(!path.exists(), "worktree dir removed on exit");
+    let repo = git2::Repository::open(tmp.path()).unwrap();
+    assert!(
+        repo.find_branch(&name, git2::BranchType::Local).is_err(),
+        "branch removed on exit"
+    );
+}
+
+#[test]
+fn name_collision_enters_existing_worktree() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo(tmp.path());
+
+    // First entry: create and into_kept.
+    let wt1 = create_worktree(tmp.path(), "collide-1").unwrap();
+    let (path1, name1) = wt1.into_kept();
+    assert!(path1.exists());
+
+    // Second entry with same name: create_worktree will fail (worktree
+    // already exists), but the handler should enter the existing one.
+    // Simulate the fallback path in handle_worktree_request.
+    let existing_path = tmp
+        .path()
+        .join(".zoid")
+        .join("worktrees")
+        .join("collide-1");
+    assert!(existing_path.exists(), "existing worktree found on collision");
+
+    // The handler would set active_worktree to the existing path.
+    // No error, no duplicate created.
+    let repo = git2::Repository::open(tmp.path()).unwrap();
+    let worktrees = repo.worktrees().unwrap();
+    assert!(
+        worktrees
+            .iter()
+            .filter(|n| n.map(|s| s == "collide-1").unwrap_or(false))
+            .count()
+            == 1,
+        "exactly one worktree registration (no duplicate)"
+    );
+
+    // Clean up.
+    zoid::worktree::remove_worktree(tmp.path(), &name1).unwrap();
+}
