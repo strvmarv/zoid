@@ -493,6 +493,10 @@ impl Builder {
             Tag::Table(alns) => {
                 self.block_sep();
                 self.flush();
+                if self.quote as usize + self.list.len() > MAX_DEPTH {
+                    self.bail = true;
+                    return;
+                }
                 self.table = Some(TableAccum::new(alns));
             }
             Tag::TableHead => {
@@ -1130,5 +1134,33 @@ mod tests {
             let lines = render_markdown(md);
             assert!(lines.len() >= 1, "malformed table {md:?} produced no lines");
         }
+    }
+
+    #[test]
+    fn deep_table_nesting_bails_to_plain_text() {
+        // MAX_DEPTH is 8. A table nested under 9 levels of blockquote must bail
+        // to plain_lines — no table borders. To make this test non-vacuous (a
+        // real guard, not a tautology), we ALSO assert that a shallow-nested
+        // table DOES render borders — proving pulldown-cmark emits a table at
+        // blockquote-nesting depth at all. If the shallow case didn't render,
+        // the deep case's "no borders" assertion would pass for the wrong
+        // reason (parser never made a table). Both halves together pin the
+        // bail behavior specifically.
+        let deep = format!("{}| H |\n{}| --- |\n{}| x |\n", "> ".repeat(9), "> ".repeat(9), "> ".repeat(9));
+        let deep_lines = render_markdown(&deep);
+        let deep_joined: String = deep_lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(!deep_joined.contains('┌'), "deep-nested table must bail (no borders): {deep_joined:?}");
+
+        // Shallow control: a 1-level quote table renders borders (proves the
+        // parser emits tables under quotes, so the deep assertion is meaningful).
+        let shallow = "> | H |\n> | --- |\n> | x |\n";
+        let shallow_joined: String = render_markdown(shallow)
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(shallow_joined.contains('┌'), "shallow-nested table must render borders (control): {shallow_joined:?}");
     }
 }
