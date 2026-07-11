@@ -2891,10 +2891,23 @@ mod tests {
     /// `context_target` with BOTH eviction (marks-but-keeps) and compaction
     /// body-clears (#6b, `clear_compacted_bodies` — the case that reopened B1;
     /// eviction markers alone are not enough to prove liveness) active, and a
-    /// small `reassert_interval`. Drives many turns of large tool output and
-    /// asserts the re-floor keeps firing well past the point the context
-    /// target is first exceeded — never going dormant — and that every fired
-    /// request actually carried the reminder.
+    /// small `reassert_interval`.
+    ///
+    /// The PRIMARY, mutation-sensitive assertion is monotonicity: at every
+    /// point where #6b clears compacted tool-result bodies, `cumulative_appended`
+    /// must NOT DECREASE (a body-clear empties the `ToolResult.output`, and the
+    /// `original_tokens` carried by the paired `ToolResultCompacted` is what
+    /// keeps the count from collapsing to 0). If `cumulative_appended` reverts
+    /// to the buggy pre-fix form that drops the `original_tokens` substitution,
+    /// clearing a compacted body drops the count and THIS assertion fails —
+    /// which is exactly the invariant that reopened B1. (Proven mutation-
+    /// sensitive: see the FIX section of task-10-report.md.)
+    ///
+    /// The liveness checks (re-floor keeps firing past `context_target`, every
+    /// fired request carried the reminder) are kept as SECONDARY assertions —
+    /// they alone are satisfied by each turn's own fresh user message + tool
+    /// result crossing the interval, so they do not by themselves pin
+    /// monotonicity of already-compacted history.
     #[tokio::test]
     async fn re_floor_keeps_firing_in_steady_state_with_compaction() {
         use ulid::Ulid;
@@ -2924,6 +2937,10 @@ mod tests {
         let mut fires = 0usize;
         let mut fires_after_target_exceeded = 0usize;
         let mut past_target_seen = false;
+        // True once at least one #6b body-clear actually emptied a compacted
+        // body during the run — proves the monotonicity assertion below is not
+        // vacuous (it exercised the ToolResultCompacted.original_tokens path).
+        let mut observed_a_body_clear = false;
 
         for i in 0..N_TURNS {
             let seq = (i as i64) * 2 + 1;
@@ -2938,6 +2955,15 @@ mod tests {
                     text: format!("turn {i}: {}", "u".repeat(1500)),
                 },
             );
+            // Multi-line output: compaction's `compact_tool_output` only shrinks
+            // bodies with more than COMPACT_HEAD_LINES (8) lines, so a single
+            // 3000-char line would never compact. ~200 lines forces a real
+            // ToolResultCompacted (with original_tokens) whose body the #6b
+            // clear below then empties — exercising the monotonicity path.
+            let tool_output: String = (0..200)
+                .map(|n| format!("line {n:03}: {}", "t".repeat(30)))
+                .collect::<Vec<_>>()
+                .join("\n");
             let tool_ev = Event::new(
                 Ulid::new(),
                 None,
@@ -2945,7 +2971,7 @@ mod tests {
                 EventKind::ToolResult {
                     id: format!("tool-{i}"),
                     name: "bash".into(),
-                    output: "t".repeat(3000),
+                    output: tool_output,
                     is_error: false,
                 },
             );
@@ -2990,12 +3016,52 @@ mod tests {
             }
 
             events = out;
+
+            // PRIMARY assertion — monotonicity across the #6b body-clear.
+            // Capture cumulative_appended immediately BEFORE and AFTER the
+            // resume-path body-clear. Emptying a compacted ToolResult.output
+            // must be fully offset by the paired ToolResultCompacted's
+            // original_tokens, so the count must NEVER DECREASE. Under the
+            // pre-fix bug (original_tokens substitution dropped), the cleared
+            // body counts as 0 and this fails — the exact regression B1.
+            let before = zoid_core::reassert::cumulative_appended(events.iter());
+            // Did any compacted-but-still-full body exist that this clear will empty?
+            let had_full_compacted_body = {
+                let compacted: std::collections::HashSet<&str> = events
+                    .iter()
+                    .filter_map(|e| match &e.kind {
+                        EventKind::ToolResultCompacted { id, .. } => Some(id.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                events.iter().any(|e| matches!(&e.kind,
+                    EventKind::ToolResult { id, output, .. }
+                        if compacted.contains(id.as_str()) && !output.is_empty()))
+            };
             // Simulate a mid-session resume (main.rs's #6b path): body-clear
             // every compacted tool result, not just leave the eviction/compaction
             // markers in place. This is the exact case that reopened B1.
             events.clear_compacted_bodies();
+            let after = zoid_core::reassert::cumulative_appended(events.iter());
+            assert!(
+                after >= before,
+                "cumulative_appended must NOT decrease across a #6b compaction \
+                 body-clear (turn {i}): before={before}, after={after} — a cleared \
+                 compacted body must still count at its original_tokens (B1 monotonicity)"
+            );
+            if had_full_compacted_body {
+                observed_a_body_clear = true;
+            }
         }
 
+        // The monotonicity assertion is only a real regression guard if a
+        // body-clear actually happened during the run.
+        assert!(
+            observed_a_body_clear,
+            "test is vacuous: no compacted tool-result body was ever cleared — \
+             compaction never fired, so monotonicity-across-body-clear was untested"
+        );
+        // Secondary (liveness) assertions.
         assert!(
             fires >= 4,
             "re-floor must fire repeatedly over a long session (fired {fires} times)"
