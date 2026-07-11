@@ -371,7 +371,7 @@ git commit -m "feat(provider): render reassert as trailing text block on last me
 fn reassert_pushes_trailing_system_message_openai() {
     let mut req = CompletionRequest {
         model: "m".into(), system: None, messages: vec![Message::user("hi")],
-        max_tokens: 16, tools: vec![], thinking: ThinkingMode::Off, reassert: None,
+        max_tokens: 16, tools: vec![], thinking: crate::ThinkingMode::Off, reassert: None,
     };
     req.reassert = Some("STANDING REMINDER".into());
     let body = request_body(&req);
@@ -419,7 +419,7 @@ git commit -m "feat(provider): render reassert as trailing system message (opena
 fn reassert_pushes_trailing_system_message_ollama() {
     let mut req = CompletionRequest {
         model: "m".into(), system: None, messages: vec![Message::user("hi")],
-        max_tokens: 16, tools: vec![], thinking: ThinkingMode::Off, reassert: None,
+        max_tokens: 16, tools: vec![], thinking: crate::ThinkingMode::Off, reassert: None,
     };
     req.reassert = Some("STANDING REMINDER".into());
     let body = request_body(&req);
@@ -604,7 +604,7 @@ In `main.rs` `AgentUpdate` match (mirror the `CompactionComplete` arm — a ligh
                     }
 ```
 
-Add `reassert_count: u64` (default 0) to the bin's `App` struct next to the other counters.
+Add `reassert_count: u64` to the bin's `App` struct next to the other counters, AND initialize `reassert_count: 0` at BOTH `App` struct-literal sites (the production constructor at ~main.rs:1996 and `test_app` at ~6222 — neither uses `..Default::default()`, so the compiler will flag "missing field `reassert_count`" until both are set).
 
 - [ ] **Step 2: Write the failing test** — drive `run_turn_inner` (or `run_agent_turn`) with a fake provider that (a) records whether the request it received had `reassert.is_some()`, and (b) returns a final text answer. Seed a log whose `cumulative_appended` already exceeds a small `reassert_interval`. Assert the recorded request had `reassert = Some`, and the resulting log contains a `DirectiveReasserted` event. Mirror the existing fake-provider tests in `agent.rs`.
 
