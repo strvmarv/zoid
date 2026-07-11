@@ -26,8 +26,9 @@
 - **Create:** none.
 - **Modify:**
   - `crates/zoid-tui/src/tokens.rs` — add `glyph::TABLE_*` and `color::TABLE_BORDER`/`TABLE_HEADER` constants + a test. (Task 1)
-  - `crates/zoid-tui/src/markdown.rs` — the bulk: `BodyKind::Table`, table accumulator state in `Builder`, tag handlers, the layout algorithm, a span-wrapping helper, tests. (Tasks 2–6)
-  - `crates/zoid-tui/src/chat.rs` — one new arm in `push_message` for `BodyKind::Table`. (Task 7)
+  - `crates/zoid-tui/src/markdown.rs` — the bulk: `BodyKind::Table`, table accumulator state in `Builder`, tag handlers, the layout algorithm, tests. (Tasks 2, 4–6)
+  - `crates/zoid-tui/src/text.rs` — receives the shared `wrap_content` function (moved from chat.rs) + tests. (Task 3)
+  - `crates/zoid-tui/src/chat.rs` — delete the local `wrap_content`, call `crate::text::wrap_content` (Task 3); add one new arm in `push_message` for `BodyKind::Table`. (Task 7)
   - `crates/zoid-tui/tests/shell_snapshot.rs` — one insta snapshot of a rendered table. (Task 8)
 
 ---
@@ -143,6 +144,24 @@ Add to the `#[cfg(test)] mod tests` block in `crates/zoid-tui/src/markdown.rs`:
     }
 
     #[test]
+    fn table_cell_text_does_not_leak_as_prose() {
+        // The accumulator must actually CAPTURE cell text into the grid, not
+        // drop it into the prose `cur` buffer. If routing is broken (the C1
+        // bug: event() early-returns and Start/End never reach start()/end()),
+        // the cell text "H1"/"H2" would leak as stray prose lines. This test
+        // fails in that case — it is NOT vacuous like empty_table_emits_nothing.
+        // (Task 2 renders nothing for the table, so the cell text must be
+        // absent entirely — neither as a table nor as prose.)
+        let lines = render_markdown("| H1 | H2 |\n| --- | --- |\n");
+        let joined: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(!joined.contains("H1"), "cell text leaked as prose (grid not capturing): {joined:?}");
+        assert!(!joined.contains("H2"), "cell text leaked as prose (grid not capturing): {joined:?}");
+    }
+
+    #[test]
     fn plain_text_outside_table_still_renders() {
         // Prose before and after a table must render normally — proves the
         // table-mode enter/exit does not corrupt the prose path.
@@ -158,8 +177,8 @@ Add to the `#[cfg(test)] mod tests` block in `crates/zoid-tui/src/markdown.rs`:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p zoid-tui empty_table_emits_nothing plain_text_outside_table_still_renders`
-Expected: FAIL — raw pipe chars leak (the current fallthrough drops tags but `Text` events for cell text still emit into `cur`).
+Run: `cargo test -p zoid-tui empty_table_emits_nothing table_cell_text_does_not_leak_as_prose plain_text_outside_table_still_renders`
+Expected: FAIL — currently `ENABLE_TABLES` is off, so pipes parse as plain text and cell content ("H1"/"H2") appears as prose; `table_cell_text_does_not_leak_as_prose` fails on that. (`empty_table_emits_nothing` may also fail if the separator `---` renders as a setext heading underline.)
 
 - [ ] **Step 3: Add the table data types and BodyKind::Table**
 
@@ -245,80 +264,45 @@ struct Builder {
 
 `Option<TableAccum>` derives `Default` (→ `None`), so `#[derive(Default)]` on `Builder` still compiles.
 
-- [ ] **Step 4: Add tag handlers (start/end) that route events but emit nothing yet**
+- [ ] **Step 4: Add tag handlers (start/end) and route cell text in table mode**
 
-In `Builder::start`, add a table guard at the very top of the function — when in table mode, inline events (`Strong`/`Emphasis`/etc.) must route to the cell accumulator, not the prose path. Add this as the first match arm inside `fn start`:
+**Design principle (critical):** `event()` must always dispatch `Event::Start` → `start()` and `Event::End` → `end()`. Only the text-bearing leaf events (`Text`/`Code`/`SoftBreak`/`HardBreak`) route to the cell accumulator when in table mode. If `event()` intercepts `Start`/`End` and returns early, then `Start(TableHead)`/`Start(TableRow)`/`Start(TableCell)` never reach `start()` — pulldown-cmark emits these as normal `Event::Start` events (confirmed: `pulldown-cmark/src/parse.rs:2238–2326`) — and the grid never accumulates. **Do not put an early-return table guard in `event()` for `Start`/`End`.**
 
-```rust
-    fn start(&mut self, tag: Tag) {
-        // --- table mode: route inline/container tags into the current cell ---
-        if let Some(t) = self.table.as_mut() {
-            match tag {
-                Tag::Strong => self.bold += 1,
-                Tag::Emphasis => self.italic += 1,
-                Tag::Strikethrough => self.strike = true,
-                Tag::Link { .. } => self.link = true,
-                Tag::Table(_) => {} // nested tables don't exist in GFM; ignore
-                _ => {}
-            }
-            return;
-        }
-        match tag {
-```
+**Step 4a: Rewrite `event()` — only leaf text routes to the cell.**
 
-Then, at the bottom of the existing `match tag { ... }` in `start` (replacing the `_ => {}` arm is not enough — table tags must be real arms). Add these arms before the closing `_ => {}`:
-
-```rust
-            Tag::Table(alns) => {
-                self.block_sep();
-                self.flush();
-                self.table = Some(TableAccum::new(alns));
-            }
-            Tag::TableHead => {
-                if let Some(t) = self.table.as_mut() {
-                    t.in_header = true;
-                    t.cur_row = TableRowData::default();
-                }
-            }
-            Tag::TableRow => {
-                if let Some(t) = self.table.as_mut() {
-                    t.in_header = false;
-                    t.cur_row = TableRowData::default();
-                }
-            }
-            Tag::TableCell => {
-                if let Some(t) = self.table.as_mut() {
-                    t.cur_cell = Vec::new();
-                }
-            }
-            _ => {}
-```
-
-In `Builder::event`, the `Text`/`Code`/`SoftBreak`/`HardBreak` arms must route into the cell when in table mode. Modify `event` to add a table guard at the top:
+Replace the existing `event` method entirely. The table-mode check routes *only* `Text`/`Code`/`SoftBreak`/`HardBreak` into `cur_cell`; every `Start`/`End` still dispatches normally:
 
 ```rust
     fn event(&mut self, ev: Event) {
-        // --- table mode: Text/Code/SoftBreak feed the current cell ---
-        if let Some(t) = self.table.as_mut() {
+        // In table mode, leaf text events feed the current cell. Start/End
+        // events still dispatch to start()/end() unconditionally — the
+        // TableHead/TableRow/TableCell tags MUST reach those handlers or the
+        // grid never accumulates (the inline-formatting flags they toggle are
+        // shared state, consumed here via cell_style()).
+        if self.table.is_some() {
             match ev {
-                Event::Text(tt) => t.cur_cell.push(Span::styled(tt.to_string(), self.style())),
+                Event::Text(t) => {
+                    if let Some(tbl) = self.table.as_mut() {
+                        tbl.cur_cell.push(Span::styled(t.to_string(), self.cell_style()));
+                    }
+                    return;
+                }
                 Event::Code(c) => {
                     self.code = true;
-                    t.cur_cell.push(Span::styled(c.to_string(), self.style()));
+                    if let Some(tbl) = self.table.as_mut() {
+                        tbl.cur_cell.push(Span::styled(c.to_string(), self.cell_style()));
+                    }
                     self.code = false;
+                    return;
                 }
-                Event::SoftBreak => t.cur_cell.push(Span::styled(" ", self.style())),
-                Event::HardBreak => t.cur_cell.push(Span::styled(" ", self.style())),
-                Event::Start(tag) => {
-                    // inline-formatting tags still toggle the shared flags via start()
-                    self.start_inline_for_table(tag);
+                Event::SoftBreak | Event::HardBreak => {
+                    if let Some(tbl) = self.table.as_mut() {
+                        tbl.cur_cell.push(Span::styled(" ", self.cell_style()));
+                    }
+                    return;
                 }
-                Event::End(end) => {
-                    self.end_inline_for_table(end);
-                }
-                _ => {}
+                _ => {} // Start/End fall through to the normal dispatch below
             }
-            return;
         }
         match ev {
             Event::Start(tag) => self.start(tag),
@@ -342,83 +326,13 @@ In `Builder::event`, the `Text`/`Code`/`SoftBreak`/`HardBreak` arms must route i
     }
 ```
 
-Wait — the table guard in `start()` already handles inline tags. But `event` calls `self.start(tag)` which would re-enter the table guard. To avoid double-handling and keep the separation clean, do NOT call `self.start()` from the table-mode branch of `event`. Instead, inline tags toggle flags directly here. Replace the `Event::Start(tag)` / `Event::End(end)` arms in the table-mode branch of `event` with direct flag toggling (no call to the table-guard helpers):
+Note: the inline-formatting `Start(Strong)`/`End(Strong)` etc. events (which pulldown-cmark emits *inside* cells) now flow through `start()`/`end()` normally. They toggle the shared `bold`/`italic`/`strike`/`link` flags via the existing arms — but **only if those arms are reachable**. The existing `start()` match has `Tag::Strong => self.bold += 1` etc. as top-level arms, so they already work. We must NOT add an early-return table guard at the top of `start()` that would swallow them — see Step 4b.
 
-```rust
-                Event::Start(tag) => match tag {
-                    Tag::Strong => self.bold += 1,
-                    Tag::Emphasis => self.italic += 1,
-                    Tag::Strikethrough => self.strike = true,
-                    Tag::Link { .. } => self.link = true,
-                    _ => {}
-                },
-                Event::End(end) => match end {
-                    TagEnd::Strong => self.bold = self.bold.saturating_sub(1),
-                    TagEnd::Emphasis => self.italic = self.italic.saturating_sub(1),
-                    TagEnd::Strikethrough => self.strike = false,
-                    TagEnd::Link => self.link = false,
-                    _ => {}
-                },
-```
+**Step 4b: Add the `cell_style()` method (no early-return guard in start()).**
 
-So the final `event` method is (replacing the existing one entirely):
+The existing `style()` applies `heading`/`quote` tinting. In table mode, `self.heading` is always `false` (we never enter a Heading inside a table) and `self.quote` holds the table's nesting depth. Per spec §4, cell text must be full `TXT` (not quote-dimmed) even inside a blockquote. So cell text uses a dedicated `cell_style()` that ignores `heading`/`quote`:
 
-```rust
-    fn event(&mut self, ev: Event) {
-        // --- table mode: Text/Code/inline-formatting feed the current cell ---
-        if let Some(t) = self.table.as_mut() {
-            match ev {
-                Event::Text(tt) => t.cur_cell.push(Span::styled(tt.to_string(), self.style())),
-                Event::Code(c) => {
-                    self.code = true;
-                    t.cur_cell.push(Span::styled(c.to_string(), self.style()));
-                    self.code = false;
-                }
-                Event::SoftBreak => t.cur_cell.push(Span::styled(" ", self.style())),
-                Event::HardBreak => t.cur_cell.push(Span::styled(" ", self.style())),
-                Event::Start(tag) => match tag {
-                    Tag::Strong => self.bold += 1,
-                    Tag::Emphasis => self.italic += 1,
-                    Tag::Strikethrough => self.strike = true,
-                    Tag::Link { .. } => self.link = true,
-                    _ => {}
-                },
-                Event::End(end) => match end {
-                    TagEnd::Strong => self.bold = self.bold.saturating_sub(1),
-                    TagEnd::Emphasis => self.italic = self.italic.saturating_sub(1),
-                    TagEnd::Strikethrough => self.strike = false,
-                    TagEnd::Link => self.link = false,
-                    _ => {}
-                },
-                _ => {}
-            }
-            return;
-        }
-        match ev {
-            Event::Start(tag) => self.start(tag),
-            Event::End(end) => self.end(end),
-            Event::Text(t) => {
-                if self.fence.is_some() {
-                    self.code_buf.push_str(&t);
-                } else {
-                    self.text(&t);
-                }
-            }
-            Event::Code(c) => {
-                self.code = true;
-                self.text(&c);
-                self.code = false;
-            }
-            Event::SoftBreak => self.text(" "),
-            Event::HardBreak => self.flush(),
-            _ => {}
-        }
-    }
-```
-
-Now the `style()` method must NOT apply `heading`/`quote` tinting in table mode (per spec §4: the cell path ignores `heading`/`quote`). But `style()` is also used by the prose path. Rather than branch inside `style()`, note that in table mode `self.heading` is always `false` (we never set it inside a table — `Start(Heading)` is not routed) and `self.quote` holds whatever depth the table is nested in. To keep cell text full `TXT`/accent even inside a blockquote, override in the cell push: change the two `self.style()` calls in the table-mode branch to a dedicated `cell_style()`:
-
-Add a new method to `Builder`:
+Add this method to `impl Builder`:
 
 ```rust
     /// Style for text inside a table cell. Same as `style()` but ignores
@@ -449,99 +363,84 @@ Add a new method to `Builder`:
     }
 ```
 
-And replace `self.style()` with `self.cell_style()` in BOTH the `Event::Text(tt)` and `Event::Code(c)` arms of the table-mode branch.
+**Do NOT add a table-mode early-return guard to the top of `start()`.** The inline-formatting arms (`Tag::Strong`, `Tag::Emphasis`, `Tag::Strikethrough`, `Tag::Link`) are already in the existing `start()` match and will toggle the shared flags correctly when reached normally. An early-return guard there is exactly the C1 bug — it would swallow `TableHead`/`TableRow`/`TableCell` (which fall into its `_ => {}`) before they reach their dedicated arms.
 
-Finally, in `Builder::end`, add table-tag handling. After the table-mode guard in `start()` (which returns early), `end` also needs the same treatment. Add to the top of `end`, and add the table-end arms. The final `end` method:
+**Step 4c: Add the table-structure arms to `start()`.**
+
+Add these arms to the existing `match tag { ... }` in `start()`, before the closing `_ => {}`:
 
 ```rust
-    fn end(&mut self, end: TagEnd) {
-        // --- table mode: handle table-structure ends; inline ends handled in event() ---
-        if self.table.is_some() {
-            match end {
-                TagEnd::TableCell => {
-                    if let Some(t) = self.table.as_mut() {
-                        let cell = std::mem::take(&mut t.cur_cell);
-                        t.cur_row.cells.push(cell);
-                    }
-                }
-                TagEnd::TableHead => {
-                    if let Some(t) = self.table.as_mut() {
-                        let row = std::mem::take(&mut t.cur_row);
-                        t.header_rows.push(row);
-                        t.in_header = false;
-                    }
-                }
-                TagEnd::TableRow => {
-                    if let Some(t) = self.table.as_mut() {
-                        let row = std::mem::take(&mut t.cur_row);
-                        t.body_rows.push(row);
-                    }
-                }
-                TagEnd::Table => {
-                    // Task 4 will replace this with the layout/emit call.
-                    // For now: drop the accumulated table (renders nothing).
-                    self.table = None;
-                }
-                _ => {}
-            }
-            return;
-        }
-        match end {
-            TagEnd::Paragraph => self.flush(),
-            TagEnd::Heading(_) => {
+            Tag::Table(alns) => {
+                self.block_sep();
                 self.flush();
-                self.heading = false;
+                self.table = Some(TableAccum::new(alns));
             }
-            TagEnd::Strong => self.bold = self.bold.saturating_sub(1),
-            TagEnd::Emphasis => self.italic = self.italic.saturating_sub(1),
-            TagEnd::Strikethrough => self.strike = false,
-            TagEnd::Link => self.link = false,
-            TagEnd::BlockQuote(_) => {
-                self.flush();
-                self.quote = self.quote.saturating_sub(1);
+            Tag::TableHead => {
+                if let Some(t) = self.table.as_mut() {
+                    t.in_header = true;
+                    t.cur_row = TableRowData::default();
+                }
             }
-            TagEnd::List(_) => {
-                self.list.pop();
+            Tag::TableRow => {
+                if let Some(t) = self.table.as_mut() {
+                    t.in_header = false;
+                    t.cur_row = TableRowData::default();
+                }
             }
-            TagEnd::Item => self.flush(),
-            TagEnd::CodeBlock => {
-                let lang = self.fence.take().unwrap_or(Language::PlainText);
-                let code = std::mem::take(&mut self.code_buf);
-                let hl = highlight_lines(&code, lang);
-                if self.quote == 0 && self.list.is_empty() {
-                    let raw = code.trim_end_matches('\n').to_string();
-                    self.lines.extend(code_panel(hl, lang, raw));
-                } else {
-                    let list_indent = "  ".repeat(self.list.len());
-                    for line in hl {
-                        let mut spans: Vec<Span<'static>> = Vec::new();
-                        for _ in 0..self.quote {
-                            spans.push(Span::styled(
-                                format!("{} ", glyph::QUOTE_BAR),
-                                Style::new().fg(color::DIM),
-                            ));
-                        }
-                        if !list_indent.is_empty() {
-                            spans.push(Span::styled(list_indent.clone(), Style::new()));
-                        }
-                        spans.extend(line.spans);
-                        self.lines.push(BodyLine {
-                            line: Line::from(spans),
-                            kind: BodyKind::Code,
-                            source: None,
-                        });
-                    }
+            Tag::TableCell => {
+                if let Some(t) = self.table.as_mut() {
+                    t.cur_cell = Vec::new();
                 }
             }
             _ => {}
-        }
-    }
 ```
+
+**Step 4d: Add the table-structure arms to `end()`.**
+
+Add these arms to the existing `match end { ... }` in `end()`, before the closing `_ => {}`. **Do NOT add an early-return table guard to the top of `end()`** — same reason as 4b; the inline-formatting `End` arms (`TagEnd::Strong` etc.) must remain reachable. The table-structure ends are distinct `TagEnd` variants that don't collide:
+
+```rust
+            TagEnd::TableCell => {
+                if let Some(t) = self.table.as_mut() {
+                    let cell = std::mem::take(&mut t.cur_cell);
+                    t.cur_row.cells.push(cell);
+                }
+            }
+            TagEnd::TableHead => {
+                if let Some(t) = self.table.as_mut() {
+                    let row = std::mem::take(&mut t.cur_row);
+                    t.header_rows.push(row);
+                    t.in_header = false;
+                }
+            }
+            TagEnd::TableRow => {
+                if let Some(t) = self.table.as_mut() {
+                    let row = std::mem::take(&mut t.cur_row);
+                    t.body_rows.push(row);
+                }
+            }
+            TagEnd::Table => {
+                // Task 4 will replace this drop with the layout/emit call.
+                // For now: discard the accumulated table (renders nothing).
+                self.table = None;
+            }
+            _ => {}
+```
+
+**Why this dispatch is correct:** The event stream for a 1×1 table is:
+`Start(Table) → Start(TableHead) → Start(TableCell) → Text("H") → End(TableCell) → End(TableHead) → ...`.
+- `Start(Table)` → `start()` → sets `self.table = Some(...)`.
+- `Start(TableHead)` → `start()` (no guard now) → `TableHead` arm resets `cur_row`, sets `in_header`.
+- `Start(TableCell)` → `start()` → `TableCell` arm resets `cur_cell`.
+- `Text("H")` → `event()` table-mode branch → pushes styled span into `cur_cell`.
+- `End(TableCell)` → `end()` → `TableCell` arm pushes `cur_cell` onto `cur_row.cells`.
+- `End(TableHead)` → `end()` → `TableHead` arm pushes `cur_row` onto `header_rows`.
+- `End(Table)` → `end()` → `Table` arm (Task 2: drops; Task 4: renders).
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `cargo test -p zoid-tui empty_table_emits_nothing plain_text_outside_table_still_renders`
-Expected: PASS — the table tags are consumed, no raw pipes leak, surrounding prose renders.
+Run: `cargo test -p zoid-tui empty_table_emits_nothing table_cell_text_does_not_leak_as_prose plain_text_outside_table_still_renders`
+Expected: PASS — the table tags are consumed into the grid accumulator, no raw pipes or cell text leaks, surrounding prose renders.
 
 Also run the full markdown test module to confirm nothing regressed:
 Run: `cargo test -p zoid-tui --lib markdown::`
@@ -556,37 +455,38 @@ git commit -m "feat(tui): enable table parsing and route events to a grid accumu
 
 ---
 
-### Task 3: Span-wrapping helper (width-only)
+### Task 3: Consolidate the span-wrapping helper into `text.rs`
 
-A standalone helper that wraps `Vec<Span>` to a given display width, returning `Vec<Vec<Span>>`. This mirrors the word-break + hard-split logic of `chat::wrap_content` but is self-contained in `markdown.rs` (it does not depend on `chat.rs` and does not touch the prose path). Used by the cell-wrapping step of layout in Task 4.
+There is already a `wrap_content(content: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>>` in `crates/zoid-tui/src/chat.rs:571` — a private `fn` doing exactly the word-break + hard-split span wrapping the table needs. Rather than duplicate ~60 lines of subtle width math in `markdown.rs` (where a future bug fix in one copy wouldn't propagate to the other), this task **moves** it to the shared `crate::text` module (already `pub(crate)`, already the home of display-column-aware text helpers like `truncate`/`pad_to`), makes it `pub(crate)`, and updates both callers.
 
 **Files:**
-- Modify: `crates/zoid-tui/src/markdown.rs`
-- Test: inline `#[cfg(test)] mod tests`.
+- Modify: `crates/zoid-tui/src/text.rs` (add the function + tests).
+- Modify: `crates/zoid-tui/src/chat.rs:571` (delete the local `wrap_content`, call `crate::text::wrap_content`).
+- Test: inline `#[cfg(test)] mod tests` in `text.rs`.
 
 **Interfaces:**
-- Consumes: nothing new (uses `unicode-width`, which is a workspace dep; add the import).
-- Produces: `fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>>`.
+- Consumes: `ratatui::text::Span` (add import to `text.rs`), `unicode-width` (already imported in `text.rs`).
+- Produces: `crate::text::wrap_content(content: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>>` (`pub(crate)`). Task 4 calls it as `crate::text::wrap_content`.
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to the `#[cfg(test)] mod tests` block:
+Add to the `#[cfg(test)] mod tests` block in `crates/zoid-tui/src/text.rs`:
 
 ```rust
+    use ratatui::text::Span;
+
     #[test]
-    fn wrap_spans_short_content_is_one_row() {
-        use ratatui::text::Span;
-        let rows = wrap_spans(&[Span::raw("hello world")], 30);
+    fn wrap_content_short_content_is_one_row() {
+        let rows = wrap_content(&[Span::raw("hello world")], 30);
         assert_eq!(rows.len(), 1);
         let joined: String = rows[0].iter().map(|s| s.content.to_string()).collect();
         assert_eq!(joined, "hello world");
     }
 
     #[test]
-    fn wrap_spans_breaks_at_word_boundary() {
-        use ratatui::text::Span;
+    fn wrap_content_breaks_at_word_boundary() {
         // 3 words of 5 chars each = 15 chars + 2 spaces = 17; wrap at width 10.
-        let rows = wrap_spans(&[Span::raw("alpha bravo charlie")], 10);
+        let rows = wrap_content(&[Span::raw("alpha bravo charlie")], 10);
         assert_eq!(rows.len(), 2, "should wrap into 2 rows");
         let r0: String = rows[0].iter().map(|s| s.content.to_string()).collect();
         let r1: String = rows[1].iter().map(|s| s.content.to_string()).collect();
@@ -595,10 +495,9 @@ Add to the `#[cfg(test)] mod tests` block:
     }
 
     #[test]
-    fn wrap_spans_hard_splits_overlong_token() {
-        use ratatui::text::Span;
+    fn wrap_content_hard_splits_overlong_token() {
         // A single 20-char word wider than width 8 must hard-split, not overflow.
-        let rows = wrap_spans(&[Span::raw("abcdefghijklmnopqrst")], 8);
+        let rows = wrap_content(&[Span::raw("abcdefghijklmnopqrst")], 8);
         assert!(rows.len() >= 3, "a 20-char word at width 8 needs >=3 rows");
         // total content preserved
         let total: String = rows.iter().flat_map(|r| r.iter().map(|s| s.content.to_string())).collect();
@@ -608,30 +507,31 @@ Add to the `#[cfg(test)] mod tests` block:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p zoid-tui wrap_spans`
-Expected: FAIL — `wrap_spans` not found.
+Run: `cargo test -p zoid-tui --lib text::`
+Expected: FAIL — `wrap_content` not found in `text` module.
 
-- [ ] **Step 3: Add the helper**
+- [ ] **Step 3: Move `wrap_content` into `text.rs`**
 
-Add the unicode-width import at the top of `crates/zoid-tui/src/markdown.rs`:
+In `crates/zoid-tui/src/text.rs`, add the `Span`/`Style` imports at the top (alongside the existing `use unicode_width::...` line):
 
 ```rust
-use unicode_width::UnicodeWidthStr;
+use ratatui::style::Style;
+use ratatui::text::Span;
 ```
 
-Add the helper as a free function (near `plain_lines`, before the `Builder` impl):
+Add the function (copied verbatim from `chat.rs:571`, renamed visibility to `pub(crate)`) after the existing `pad_to` function:
 
 ```rust
-/// Wrap styled `spans` into rows no wider than `width` (display width). Word-
-/// based (break on spaces), hard-splitting any single token longer than `width`.
-/// Sibling of `chat::wrap_content` but self-contained in the markdown crate so
-/// table cell-wrapping does not depend on the chat module. Returns at least one
-/// (possibly empty) row. Used only for table-cell wrapping (spec §2 step 3).
-fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
+/// Break styled `content` into rows no wider than `width` (display columns),
+/// preserving each span's style, breaking on spaces (dropping the break's
+/// whitespace), and hard-splitting any single token longer than `width`.
+/// Returns at least one (possibly empty) row. Used by `push_message` (prose
+/// wrapping) and the GFM table cell-wrapping path (spec §2 step 3).
+pub(crate) fn wrap_content(content: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
     let width = width.max(1);
-    // Tokenize into (text, style, is_space) runs at whitespace boundaries.
+    // Tokenize into (text, style, is_space) runs, split at whitespace boundaries.
     let mut toks: Vec<(String, Style, bool)> = Vec::new();
-    for s in spans {
+    for s in content {
         let mut chars = s.content.chars().peekable();
         while let Some(&c) = chars.peek() {
             let is_space = c == ' ';
@@ -654,7 +554,7 @@ fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> 
         let w = text.width();
         if is_space {
             if cur.is_empty() {
-                continue;
+                continue; // no leading spaces at the start of a wrapped row
             }
             if cur_w + w > width {
                 rows.push(std::mem::take(&mut cur));
@@ -666,6 +566,8 @@ fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> 
             continue;
         }
         if cur_w + w > width && !cur.is_empty() {
+            // trim any trailing spaces before wrapping the row (cur_w resets to 0
+            // right after, so no need to track its decrement here)
             while cur
                 .last()
                 .map(|s| s.content.chars().all(|c| c == ' '))
@@ -677,10 +579,14 @@ fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> 
             cur_w = 0;
         }
         if w > width {
+            // Token longer than the column — hard-split by DISPLAY WIDTH, not char
+            // count, so wide (CJK/emoji) glyphs never overflow the column and force
+            // a widget re-wrap. Accumulate chars until the next one would exceed the
+            // remaining width, then flush the row (always at least one char/row).
             let mut piece = String::new();
             let mut piece_w = 0usize;
             for ch in text.chars() {
-                let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
                 if cur_w + piece_w + cw > width && cur_w + piece_w > 0 {
                     if !piece.is_empty() {
                         cur.push(Span::styled(std::mem::take(&mut piece), style));
@@ -708,16 +614,32 @@ fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> 
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 4: Delete the `chat.rs` copy and point the caller at `text::wrap_content`**
 
-Run: `cargo test -p zoid-tui wrap_spans`
-Expected: PASS.
+In `crates/zoid-tui/src/chat.rs`:
+1. **Delete** the entire `fn wrap_content(...)` function (currently at line ~571, the ~85-line function ending with the `rows` return).
+2. At the call site in `push_message` (the `BodyKind::Prose` arm, `let rows = wrap_content(&line.spans, content_w);`), change it to call the moved function:
 
-- [ ] **Step 5: Commit**
+```rust
+                let rows = crate::text::wrap_content(&line.spans, content_w);
+```
+
+3. Remove the now-unused imports that `wrap_content` was the sole user of. Check whether `UnicodeWidthChar` / `UnicodeWidthStr` are still referenced elsewhere in `chat.rs` (grep `UnicodeWidth` in the file). If `UnicodeWidthStr` was only used by the deleted function, remove it from the `use unicode_width::...` line. Keep any imports still referenced by other code (e.g. `indent_w` uses `width()` via the `UnicodeWidthStr` trait — verify before removing).
+
+- [ ] **Step 5: Run tests to verify they pass**
+
+Run: `cargo test -p zoid-tui --lib text::`
+Expected: PASS — the three new tests pass.
+
+Run the full chat + markdown modules to confirm the move didn't break the existing prose-wrapping caller:
+Run: `cargo test -p zoid-tui --lib`
+Expected: all PASS.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add crates/zoid-tui/src/markdown.rs
-git commit -m "feat(tui): add wrap_spans helper for table cell wrapping"
+git add crates/zoid-tui/src/text.rs crates/zoid-tui/src/chat.rs
+git commit -m "refactor(tui): move wrap_content to shared text module for table reuse"
 ```
 
 ---
@@ -731,7 +653,7 @@ This is the heart: on `End(Table)`, measure columns, cap at 30, wrap overlong ce
 - Test: inline `#[cfg(test)] mod tests`.
 
 **Interfaces:**
-- Consumes: Task 1 tokens; Task 2 `TableAccum`/`TableRowData`/`Cell`; Task 3 `wrap_spans`.
+- Consumes: Task 1 tokens; Task 2 `TableAccum`/`TableRowData`/`Cell`; Task 3 `crate::text::wrap_content`.
 - Produces: rendered `BodyLine { kind: BodyKind::Table }` lines. The `End(Table)` arm calls a new method `Builder::render_table`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -900,7 +822,7 @@ Add a `render_table` method to `Builder`. It takes the accumulated `TableAccum` 
                 } else {
                     cell
                 };
-                let wrapped = wrap_spans(&base_spans, widths[c]);
+                let wrapped = crate::text::wrap_content(&base_spans, widths[c]);
                 // pad each visual row to the column width with alignment
                 let aligned = align_rows(wrapped, widths[c], table.alignments.get(c).copied());
                 wrapped_cells.push(aligned);
@@ -993,7 +915,7 @@ Add the constants and free helper functions near the top of the file (after the 
 const MAX_COL_W: usize = 30;
 ```
 
-Add the `BorderKind` enum and the two free helper functions (`border_line`, `align_rows`) below `wrap_spans`:
+Add the `BorderKind` enum and the two free helper functions (`border_line`, `align_rows`) below `MAX_COL_W` (near the top of the file, after the constants):
 
 ```rust
 #[derive(Clone, Copy)]
@@ -1143,12 +1065,21 @@ Add to the `#[cfg(test)] mod tests` block:
 
     #[test]
     fn malformed_table_does_not_panic() {
-        // Unbalanced pipes / weird input must not panic; it renders something.
-        let md = "| a |\n|nope|\n| b | c |\n";
-        let lines = render_markdown(md);
-        // Just assert it produced some output without panicking.
-        assert!(!lines.is_empty() || lines.is_empty()); // tautology — the real check is "didn't panic"
-        let _ = render_markdown("| | | |\n| --- |\n");
+        // Unbalanced pipes / weird input must not panic. The real contract is
+        // "doesn't panic" — which Rust's test harness enforces by failing on
+        // panic regardless of any assertion — so we just call render_markdown
+        // on a few gnarly inputs and assert each produces SOME output (>= 1
+        // line). No tautology: an empty Vec would fail the count check.
+        for md in [
+            "| a |\n|nope|\n| b | c |\n",
+            "| | | |\n| --- |\n",
+            "|\n|---\n",
+            "| a | b |\n",
+            "\n| --- | --- |\n| c | d |\n",
+        ] {
+            let lines = render_markdown(md);
+            assert!(lines.len() >= 1, "malformed table {md:?} produced no lines");
+        }
     }
 ```
 
@@ -1187,27 +1118,37 @@ Add to the `#[cfg(test)] mod tests` block:
 ```rust
     #[test]
     fn deep_table_nesting_bails_to_plain_text() {
-        // 9 levels of blockquote (> >>>>>>>>>>>) wrapping a table exceeds
-        // MAX_DEPTH (8). render_body must bail to plain_lines — the whole
-        // message becomes plain text, no table borders, no panic.
-        let mut md = String::new();
-        for _ in 0..9 {
-            md.push_str("> ");
-        }
-        md.push_str("| H |\n| --- |\n| x |\n");
-        let lines = render_markdown(&md);
-        let joined: String = lines
+        // MAX_DEPTH is 8. A table nested under 9 levels of blockquote must bail
+        // to plain_lines — no table borders. To make this test non-vacuous (a
+        // real guard, not a tautology), we ALSO assert that a shallow-nested
+        // table DOES render borders — proving pulldown-cmark emits a table at
+        // blockquote-nesting depth at all. If the shallow case didn't render,
+        // the deep case's "no borders" assertion would pass for the wrong
+        // reason (parser never made a table). Both halves together pin the
+        // bail behavior specifically.
+        let deep = format!("{}| H |\n{}| --- |\n{}| x |\n", "> ".repeat(9), "> ".repeat(9), "> ".repeat(9));
+        let deep_lines = render_markdown(&deep);
+        let deep_joined: String = deep_lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
             .collect();
-        assert!(!joined.contains('┌'), "bail must not render table borders: {joined:?}");
+        assert!(!deep_joined.contains('┌'), "deep-nested table must bail (no borders): {deep_joined:?}");
+
+        // Shallow control: a 1-level quote table renders borders (proves the
+        // parser emits tables under quotes, so the deep assertion is meaningful).
+        let shallow = "> | H |\n> | --- |\n> | x |\n";
+        let shallow_joined: String = render_markdown(shallow)
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(shallow_joined.contains('┌'), "shallow-nested table must render borders (control): {shallow_joined:?}");
     }
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p zoid-tui deep_table_nesting_bails_to_plain_text`
-Expected: FAIL or PASS depending on whether pulldown-cmark even yields a table at that depth. If it passes already (because 9-level quotes don't yield a table), keep it as a regression guard. If the table renders borders, it FAILS.
+Expected: the deep-nested assertion FAILS (table renders borders, because `Start(Table)` doesn't yet check depth). The shallow control should PASS. If the shallow control *also* fails (pulldown-cmark doesn't emit a table under a single blockquote), stop and report — the test premise is wrong and the implementer should switch to list-item nesting (`- ` repeated) instead of blockquote.
 
 - [ ] **Step 3: Add the depth check to `Start(Table)`**
 
@@ -1347,7 +1288,7 @@ Lock the visual layout of a representative table with an insta snapshot, matchin
 
 - [ ] **Step 1: Write the snapshot test**
 
-Add to `crates/zoid-tui/tests/shell_snapshot.rs`. First inspect how an existing snapshot test constructs a `ShellState` + messages and calls `draw`. The `draw` helper is `fn draw(state, msgs, w, h) -> String`. Add a new test function:
+Add to `crates/zoid-tui/tests/shell_snapshot.rs`. The `draw` helper is `fn draw(state, msgs, w, h) -> String`. `ShellState::default()` is used by existing tests in this file. The `ChatMsg::Assistant` variant (verified in `zoid-core/src/projection.rs:25–32`) has fields `{ text: String, tool_calls: Vec<ToolCallRef>, ts: i64, thinking: Option<String> }` — use that exact order:
 
 ```rust
 #[test]
@@ -1365,7 +1306,7 @@ fn table_basic() {
 }
 ```
 
-(Adjust the `ChatMsg::Assistant` field order if it differs — confirm against the existing `ChatMsg` definition in `zoid-core/src/projection.rs` before running.)
+(The `ChatMsg::Assistant` field order is `text, tool_calls, ts, thinking` — confirmed from `crates/zoid-core/src/projection.rs:25–32`. Do not adjust it.)
 
 - [ ] **Step 2: Generate the snapshot**
 
@@ -1401,12 +1342,12 @@ git commit -m "test(tui): snapshot for GFM table rendering"
 - Layout algorithm measure/cap/wrap/pad/emit (§2) → Task 4.
 - BodyKind::Table + visual tokens + styling (§3) → Tasks 1, 2, 7.
 - Inline formatting in cells (§4) → Task 2 (`cell_style`, flag routing) + Task 4 (header restyle) + tested in Task 4 (`inline_bold_and_code_in_cells_are_styled`).
-- Edge cases (§5): malformed → Task 5; empty/degenerate → Task 2; blockquote nesting → Task 5; MAX_DEPTH bail → Task 6; CJK width → covered by `unicode-width` in `wrap_spans` (Task 3).
-- Implementation surface (§6) → matches: markdown.rs (Tasks 2–6), chat.rs (Task 7), tokens.rs (Task 1).
+- Edge cases (§5): malformed → Task 5; empty/degenerate → Task 2; blockquote nesting → Task 5; MAX_DEPTH bail → Task 6; CJK width → covered by `unicode-width` in `crate::text::wrap_content` (Task 3).
+- Implementation surface (§6) → matches: markdown.rs (Tasks 2, 4–6), text.rs (Task 3), chat.rs (Tasks 3 + 7), tokens.rs (Task 1).
 - Testing (§7): all 10 named tests map to Tasks 2/4/5/6 + snapshot (Task 8). The §7 "plain_text_outside_table" and "empty_table" tests are in Task 2.
 
 **Placeholder scan:** no TBD/TODO; every code step shows the code.
 
-**Type consistency:** `TableAccum`, `TableRowData`, `Cell` defined in Task 2, used unchanged in Task 4. `wrap_spans` (Task 3) signature matches its use in Task 4. `border_line`/`align_rows`/`BorderKind` defined and used in Task 4. `BodyKind::Table` added in Task 2, matched in chat.rs (Task 7).
+**Type consistency:** `TableAccum`, `TableRowData`, `Cell` defined in Task 2, used unchanged in Task 4. `crate::text::wrap_content` (Task 3) signature matches its use in Task 4. `border_line`/`align_rows`/`BorderKind` defined and used in Task 4. `BodyKind::Table` added in Task 2, matched in chat.rs (Task 7).
 
 All requirements covered; no gaps found.
