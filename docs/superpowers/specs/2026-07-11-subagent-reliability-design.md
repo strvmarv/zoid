@@ -47,25 +47,122 @@ latent and would resurface on re-enable.
   errored tool results in the subagent's final state. Empty/no-op → `ok =
   false`.
 
+## Gap 0 — Commit the subagent's work + reconcile branch names (PREREQUISITE)
+
+### The two defects
+
+`subagent_diff` has **never worked** due to two independent defects, both
+predating the disable. The Gap 1 branch-retention fix is downstream of both —
+it would preserve an empty branch.
+
+**Defect A — branch name mismatch.** `create_worktree` is called with the
+worktree name `sub-<ulid>` (`agent.rs:1234`). libgit2's `git_worktree_add` with
+no explicit `reference` (the code uses `WorktreeAddOptions::new()` with nothing
+set — `worktree.rs:34`) creates a git branch named after the worktree name.
+So the git branch is **`sub-<ulid>`** (verified: `worktree_test.rs:39` checks
+for branch `sub-ax3`, the worktree name).
+
+But `subagent_diff` (`subagent_diff.rs:39–40`) strips `sub-` and looks for
+`subagent:<ulid>` — the zoid event-log `BranchId` (`subagent.rs:119`), which is
+**not a git ref at all**. There is no git branch named `subagent:<ulid>`, so
+`git rev-parse --verify` always fails → "history not found."
+
+**Defect B — the subagent never commits.** No tool or loop code calls `git
+commit` or `git2` commit on the subagent's worktree (verified: grep of the
+entire codebase finds no commit call). The subagent's file edits land
+**uncommitted** in the worktree's working tree. When `WorktreeGuard::drop` runs
+(`worktree.rs:48`: `remove_dir_all`), those uncommitted changes are **deleted
+with the directory**. So even with the correct branch name, there are no
+commits to diff.
+
+### The fix (two parts)
+
+**Part A — reconcile the branch name.** The git branch and `subagent_diff`'s
+expected ref must agree. The simplest reconciliation: make `subagent_diff`
+look for the git branch `sub-<ulid>` (the actual ref), not `subagent:<ulid>`
+(the event-log id). Change `subagent_diff.rs:39–40` from:
+
+```rust
+let ulid = id.strip_prefix("sub-").unwrap_or(&id);
+let branch = format!("subagent:{ulid}");
+```
+
+to:
+
+```rust
+// The git branch is named after the worktree: "sub-<ulid>" (the name passed
+// to create_worktree in the Emitting handler). The zoid event-log BranchId is
+// "subagent:<ulid>" — that's NOT a git ref. subagent_diff operates on git
+// refs, so it uses the worktree name directly.
+let branch = id;  // already "sub-<ulid>"
+```
+
+(Alternatively, set an explicit `reference` in `WorktreeAddOptions` to name the
+git branch `subagent:<ulid>` and keep `subagent_diff` as-is. But `:` in a git
+branch name is legal but unusual and can confuse some git tooling; the
+`sub-<ulid>` convention is simpler. The spec picks: use the worktree name as
+the git branch ref, and fix `subagent_diff` to match.)
+
+**Part B — commit the subagent's work before the worktree is removed.**
+`spawn_subagent` (`spawn_subagent.rs:32–48`) must, after `run_subagent` returns
+and before the `WorktreeGuard` is consumed/dropped, commit the working-tree
+changes on the `sub-<ulid>` branch in the worktree dir:
+
+```rust
+// In spawn_subagent, after run_subagent returns Ok(r), before handling wt:
+if let Some(wt) = &wt {
+    let _ = std::process::Command::new("git")
+        .args(["-C"])
+        .arg(wt.path())
+        .args(["add", "-A"])
+        .status();
+    let _ = std::process::Command::new("git")
+        .args(["-C"])
+        .arg(wt.path())
+        .args(["commit", "-m", &format!("subagent {sub_id}")])
+        .status();
+}
+```
+
+This runs on the **success** path only. On the error path, the worktree is
+dropped (full cleanup) and partial work is discarded — correct.
+
+After this commit, `into_kept_branch()` (Gap 1) preserves a branch that has
+the subagent's commits on it, and `subagent_diff` can retrieve them.
+
 ## Gap 1 — Branch lifecycle: keep commits for diff retrieval
 
 ### The problem
 
-`WorktreeGuard::drop` (`worktree.rs:44–61`) unconditionally removes the
-worktree dir, prunes the git registration, **and deletes the branch**. But
-`subagent_diff` (`subagent_diff.rs:39–46`) needs the branch (`subagent:<id>`)
-to exist to run `git rev-parse --verify` and `git log/diff`. When the subagent
-finishes and its `WorktreeGuard` drops (in `spawn_subagent.rs:48`), the branch
-is deleted — so the orchestrator's subsequent `subagent_diff` call fails with
-"history not found — it may have been cleaned up."
+`subagent_diff` (`subagent_diff.rs:39–46`) needs the branch (`sub-<ulid>`,
+after the Gap 0 naming fix) to exist to run `git rev-parse --verify` and
+`git log/diff`. When the subagent finishes, its `WorktreeGuard` drops and the
+branch is deleted — so the orchestrator's subsequent `subagent_diff` call
+fails with "history not found — it may have been cleaned up." (Gap 0 ensures
+the branch has commits on it; Gap 1 ensures the branch survives.)
 
 ### The fix
 
 Reuse the `into_kept()` design from `2026-07-08-chat-worktree-design.md` §
-Lifecycle. Add to `WorktreeGuard`:
+Lifecycle. **Factor the dir+prune logic** (currently inlined in `Drop`) into a
+private method so both `Drop` and `into_kept_branch` share one implementation:
 
 ```rust
 impl WorktreeGuard {
+    /// Remove the worktree dir + prune the registration. Does NOT delete the
+    /// branch ref. Called by both `Drop` (then deletes the branch) and
+    /// `into_kept_branch` (keeps the branch).
+    fn prune_dir(&self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+        if let Ok(repo) = git2::Repository::open(&self.repo_root) {
+            if let Ok(wt) = repo.find_worktree(&self.name) {
+                let mut po = git2::WorktreePruneOptions::new();
+                po.valid(true).working_tree(true);
+                let _ = wt.prune(Some(&mut po));
+            }
+        }
+    }
+
     /// Consume the guard, removing the worktree DIR but KEEPING the branch
     /// (with the subagent's commits) so `subagent_diff` can retrieve it.
     /// Returns (path, branch_name) for the caller to remember for later
@@ -73,40 +170,46 @@ impl WorktreeGuard {
     pub fn into_kept_branch(self) -> (PathBuf, String) {
         let path = self.path.clone();
         let name = self.name.clone();
-        let repo_root = self.repo_root.clone();
-        // Remove the worktree dir + prune the registration, but do NOT delete
-        // the branch. We suppress Drop (which would delete the branch) and do
-        // the dir/prune ourselves.
-        std::mem::forget(self);
-        let _ = std::fs::remove_dir_all(&path);
-        if let Ok(repo) = git2::Repository::open(&repo_root) {
-            if let Ok(wt) = repo.find_worktree(&name) {
-                let mut po = git2::WorktreePruneOptions::new();
-                po.valid(true).working_tree(true);
-                let _ = wt.prune(Some(&mut po));
+        self.prune_dir();       // shared dir+prune logic
+        std::mem::forget(self); // suppress Drop's branch deletion
+        (path, name)
+    }
+}
+
+impl Drop for WorktreeGuard {
+    fn drop(&mut self) {
+        self.prune_dir();       // shared dir+prune logic
+        // ...then delete the branch (the part into_kept_branch skips):
+        if let Ok(repo) = git2::Repository::open(&self.repo_root) {
+            if let Ok(mut branch) = repo.find_branch(&self.name, git2::BranchType::Local) {
+                let _ = branch.delete();
             }
         }
-        (path, name)
     }
 }
 ```
 
-`Drop` stays **unconditional full removal** (dir + prune + branch delete) —
-unchanged for the subagent error/panic path and for any future caller that
-wants full cleanup.
+One implementation of the dir+prune cleanup, two policies for the branch. If
+the cleanup logic changes (locking, error logging), only `prune_dir` updates.
 
 ### Subagent spawn path change
 
 `spawn_subagent.rs` currently does `drop(wt)` (line 48), which triggers full
 `Drop`. Change it to call `into_kept_branch()` when the subagent succeeds, so
-the branch is retained:
+the branch is retained. The retained branch name is already carried by the
+`DelegationResult.branch` field (`spawn_subagent.rs:51`: `branch: r.branch`) —
+no new field on `SubagentResult` is needed; `r.branch` is the `subagent:<ulid>`
+event-log id, and the git branch `sub-<ulid>` is derivable from it. But since
+the git branch is what `subagent_diff` resolves to, store it explicitly for
+clarity:
 
 ```rust
 // In spawn_subagent, after run_subagent returns Ok(r):
+// (Gap 0 already committed the work in the worktree before this point.)
 if let Some(wt) = wt {
-    let (_path, branch_name) = wt.into_kept_branch();
-    // The branch ref persists. It's cleaned up later (see Cleanup).
-    r.retained_branch = Some(branch_name);
+    let (_path, _branch_name) = wt.into_kept_branch();
+    // The git branch "sub-<ulid>" persists with the subagent's commits.
+    // subagent_diff retrieves it by the subagent_id. Cleanup is later.
 }
 ```
 
@@ -175,7 +278,9 @@ let config = TurnConfig {
 
 ```rust
 /// Hard cap on a subagent's tool-call iterations (spec §Gap 2). A headless
-/// subagent with no human to interrupt must stop fast when confused.
+/// subagent with no human to interrupt must stop fast when confused. 25
+/// covers a realistic read-edit-test-debug cycle with 2–3 retries; beyond
+/// that the subagent is almost certainly stuck in a loop.
 const SUBAGENT_MAX_ITERATIONS: u32 = 25;
 ```
 
@@ -244,18 +349,40 @@ in the Emitting handler. The flow:
 The guard must be **before** the spawn. So the Emitting handler needs to know
 whether a subagent is in flight. Two options:
 
-- **(a)** Pass an `in_flight` count/sender into `run_agent_turn_cancellable` (a
+- **(a)** Pass a shared in-flight set into `run_agent_turn_cancellable` (a
   new parameter or on `TurnConfig`). The handler checks it before spawning.
 - **(b)** Move the concurrency check to the main loop by having the Emitting
   handler send the dispatch *request* as an `AgentUpdate` and letting the main
   loop decide (like the chat-worktree `WorktreeRequested` pattern). This is
   cleaner but a bigger refactor.
 
-**v1 uses (a):** add `in_flight_subagents: Arc<AtomicUsize>` (or a shared
-`HashSet`) threaded into `run_agent_turn_cancellable` via `TurnConfig`. The
-handler checks `in_flight.load() > 0` before spawning. This is minimal and
-unblocks the sequential guard. (b) is the Phase 2 refactor when we want the
-dispatch logic fully in the main loop.
+**v1 uses (a):** thread a shared in-flight set — **`Arc<Mutex<HashSet<String>>>`**
+of subagent IDs, not a bare counter. A count can't participate in the existing
+ID-based correlation (`main.rs:2585–2587`: `retain(|s| s.id != *subagent_id)`),
+and a count and the `Vec<SubagentInfo>` on `App` could skew (spawn increments
+before the `SubagentStarted` AgentUpdate arrives). The shared set avoids skew:
+the Emitting handler **inserts the ID before spawning** and checks emptiness;
+the spawned task **removes the ID on completion** (alongside the
+`DelegationResult` emit). The main `run()` loop reads the same set for the
+drawer/busy state. `TurnConfig` gains:
+
+```rust
+pub struct TurnConfig {
+    // ... existing fields ...
+    /// Shared in-flight subagent ID set for the sequential-dispatch guard.
+    /// The Emitting handler inserts before spawning, checks emptiness to
+    /// refuse concurrent dispatch. None for the main chat loop when
+    /// dispatch_subagent is disabled.
+    pub in_flight: Option<Arc<Mutex<HashSet<String>>>>,
+}
+```
+
+The handler checks `in_flight.lock().is_empty()` (or `!contains`) before
+spawning; if non-empty, emits the "already running" error `ToolResult`. The
+spawned `spawn_subagent` task removes the ID when it finishes.
+
+This is minimal and unblocks the sequential guard. (b) is the Phase 2 refactor
+when we want the dispatch logic fully in the main loop.
 
 The `:delegate` command's existing one-at-a-time check is unchanged (it checks
 `in_flight_subagents` on `App` directly).
@@ -329,27 +456,31 @@ becomes a sequential-rejection test instead.
 
 ## Implementation surface (summary)
 
-1. **`crates/zoid/src/worktree.rs`** — add `into_kept_branch()`. `Drop`
-   unchanged. (Gap 1)
-2. **`crates/zoid/src/spawn_subagent.rs`** — call `into_kept_branch()` on
-   success, `drop(wt)` on error. Store the retained branch name. (Gap 1)
-3. **`crates/zoid/src/agent.rs`** — `TurnConfig.max_iterations`; cap check uses
+1. **`crates/zoid-tools/src/subagent_diff.rs`** — fix the branch name: look for
+   `sub-<ulid>` (the git ref), not `subagent:<ulid>` (the event-log id). (Gap 0A)
+2. **`crates/zoid/src/spawn_subagent.rs`** — commit the subagent's working-tree
+   changes (`git add -A && git commit`) on the success path, before the guard
+   is consumed. (Gap 0B)
+3. **`crates/zoid/src/worktree.rs`** — factor `prune_dir()`; add
+   `into_kept_branch()`. `Drop` uses `prune_dir()` + branch delete. (Gap 1)
+4. **`crates/zoid/src/spawn_subagent.rs`** — call `into_kept_branch()` on
+   success, `drop(wt)` on error. (Gap 1)
+5. **`crates/zoid/src/agent.rs`** — `TurnConfig.max_iterations`; cap check uses
    it. (Gap 2)
-4. **`crates/zoid/src/subagent.rs`** — set `max_iterations: Some(25)`; tighten
+6. **`crates/zoid/src/subagent.rs`** — set `max_iterations: Some(25)`; tighten
    distillation. (Gaps 2, 4)
-5. **`crates/zoid/src/agent.rs`** — Emitting handler checks shared in-flight
-   count before spawning. (Gap 3) — requires threading an `Arc<AtomicUsize>`
-   or shared set into the turn.
-6. **`crates/zoid/src/main.rs`** — wire the in-flight count to `TurnConfig` /
-   the turn call. (Gap 3)
-7. **`crates/zoid/src/invoke_skill.rs`** — uncomment the two `tools.push` lines;
+7. **`crates/zoid/src/agent.rs`** — Emitting handler checks shared in-flight ID
+   set before spawning. `TurnConfig.in_flight` field. (Gap 3)
+8. **`crates/zoid/src/main.rs`** — wire the shared `Arc<Mutex<HashSet<String>>>`
+   to `TurnConfig` / the turn call; the `DelegationResult` arm removes the ID.
+   (Gap 3)
+9. **`crates/zoid/src/invoke_skill.rs`** — uncomment the two `tools.push` lines;
    flip the test. (Gap 5)
-8. **`crates/zoid/src/agent.rs`** — un-ignore the two integration tests; adapt
-   the concurrent test to assert sequential rejection. (Gap 5)
+10. **`crates/zoid/src/agent.rs`** — un-ignore the two integration tests; adapt
+    the concurrent test to assert sequential rejection. (Gap 5)
 
-No changes to `zoid-tools` (the tool definitions are correct as-is), `zoid-core`
-(events/projection unchanged), or the skill files (SDD already references
-`dispatch_subagent`).
+No changes to `zoid-core` (events/projection unchanged) or the skill files (SDD
+already references `dispatch_subagent`).
 
 ## Testing
 
@@ -357,23 +488,28 @@ TDD, mirroring the existing `subagent_integration.rs` /
 `delegation_integration.rs` density.
 
 **Unit:**
-- `into_kept_branch()` removes the worktree dir but the branch ref survives;
-  `git rev-parse --verify subagent:<id>` succeeds after the call. `Drop`
-  (error path) still deletes both.
+- `subagent_diff` resolves the correct branch: given id `sub-01HZ...`, it looks
+  for git branch `sub-01HZ...` (not `subagent:01HZ...`). (Gap 0A)
+- `into_kept_branch()` removes the worktree dir but the branch ref (`sub-<id>`)
+  survives; `git rev-parse --verify sub-<id>` succeeds after the call. `Drop`
+  (error path) still deletes both. (Gap 1)
+- `prune_dir()` is shared: both `Drop` and `into_kept_branch` call it; verify
+  the dir is removed and registration pruned in both paths. (Gap 1)
 - `TurnConfig.max_iterations = Some(25)` caps a looping provider at 25
-  iterations; `None` falls back to 1000.
+  iterations; `None` falls back to 1000. (Gap 2)
 - Subagent distillation: empty assistant output → `ok = false`, summary
   contains the warn glyph. Errored tool result → `ok = false`, summary notes
-  the error. Normal output → `ok = true`.
+  the error. Normal output → `ok = true`. (Gap 4)
 
 **Integration:**
-- Dispatch a subagent that writes a file in a worktree → completes →
-  `into_kept_branch` retains the branch → `subagent_diff` retrieves the diff
-  successfully (no "history not found").
+- Dispatch a subagent that writes a file in a worktree → completes → the
+  working-tree changes are committed (Gap 0B) → `into_kept_branch` retains the
+  branch with commits → `subagent_diff` retrieves the diff successfully
+  (no "history not found"). (Gaps 0 + 1, the full chain)
 - Dispatch while another is in flight → second dispatch returns an error tool
-  result ("already running"); only one subagent spawns.
+  result ("already running"); only one subagent spawns. (Gap 3)
 - Subagent that hits the 25-iteration cap → `DelegationResult.ok = false`,
-  summary contains "tool-iteration limit reached".
+  summary contains "tool-iteration limit reached". (Gap 2)
 - Un-ignore `dispatch_subagent_returns_id_as_tool_result`; adapt
   `dispatch_two_subagents_concurrently` to assert the second is rejected.
 
@@ -384,4 +520,9 @@ TDD, mirroring the existing `subagent_integration.rs` /
 - A `cleanup_subagent_branch` tool / `:cleanup` command (Phase 2 — branches are
   lightweight refs; the `subagent_diff` "not found" path is graceful).
 - Changes to context construction or eviction in `run_subagent`.
-- Changes to the TUI subagents drawer (re-shown when the tools re-enable).
+- **TUI subagents drawer restoration.** The disable commit (`61ca909`) *removed*
+  the drawer rendering (`layout.rs`, `render.rs`, `state.rs`). Re-enabling the
+  tools does NOT automatically re-show the drawer — restoring `DrawerId::Subagents`
+  rendering is a separate small task, not covered here. v1 surfaces subagent
+  status via the existing status hint ("N subagents running…") and the
+  `DelegationResult` conversation card, not the drawer.
