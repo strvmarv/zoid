@@ -25,7 +25,7 @@ impl EventLog {
         self.0.push(Arc::new(e));
     }
 
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Event> + '_ {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Event> + Clone + '_ {
         self.0.iter().map(|a| a.as_ref())
     }
 

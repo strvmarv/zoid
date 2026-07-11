@@ -1565,6 +1565,9 @@ struct App {
     /// `CompactionComplete` arrived; the indicator stays visible until the 3s
     /// minimum display duration elapses (checked per-frame in `run()`).
     compaction_complete: bool,
+    /// Count of `AgentUpdate::DirectiveReasserted` events seen this session
+    /// (observability counter; no UI surface beyond tracing).
+    reassert_count: u64,
     /// When the current tool started (for the 2s minimum-display debounce).
     /// Set by `set_active_tool`; the per-frame debounce clears the indicator
     /// 2s after it started, even if the tool finished faster.
@@ -2040,6 +2043,7 @@ async fn main() -> Result<()> {
         companion_hub: zoid_companion::CompanionHub::new(),
         compaction_started_at: None,
         compaction_complete: false,
+        reassert_count: 0,
         tool_started_at: None,
         tool_complete: false,
         yielded: false,
@@ -2870,6 +2874,10 @@ where
                         // Don't clear app.shell.compacting here — the per-frame
                         // debounce check clears it once the 3s minimum has
                         // elapsed.
+                    }
+                    AgentUpdate::DirectiveReasserted { at_cumulative } => {
+                        app.reassert_count = app.reassert_count.saturating_add(1);
+                        tracing::info!(kind = "reassert", at = at_cumulative, "re-floor surfaced");
                     }
                     AgentUpdate::FeedbackOutcome(outcome) => {
                         match outcome {
@@ -6287,6 +6295,7 @@ mod tests {
             companion_hub: zoid_companion::CompanionHub::new(),
             compaction_started_at: None,
             compaction_complete: false,
+            reassert_count: 0,
             tool_started_at: None,
             tool_complete: false,
             yielded: false,

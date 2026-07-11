@@ -261,6 +261,8 @@ pub enum AgentUpdate {
     CompactionStarted,
     /// Automated compaction finished (after the burst).
     CompactionComplete,
+    /// A re-floor fired: the system prompt was re-asserted at the live edge.
+    DirectiveReasserted { at_cumulative: u64 },
     /// The current session was taken over by another instance (the heartbeat
     /// detected another process claimed the row). The bin cancels the in-flight
     /// turn, sets `yielded`, and surfaces a hint. Spec §2.4. Bin-only — subagents
@@ -579,6 +581,17 @@ async fn run_turn_inner(
             outcome = "aborted";
             break 'turn;
         }
+        // Decide re-floor FIRST so its ephemeral tokens are in the preflight size
+        // (spec: re-floor, S2/S3 ordering — decide → size → preflight → build).
+        let will_reassert = config.reassert_interval > 0
+            && zoid_core::reassert::reassertion_due(events.iter(), config.reassert_interval);
+        let reassert_text = will_reassert.then(|| wrap_reassertion(&config.system));
+
+        let mut overhead_now = overhead.clone();
+        if let Some(t) = &reassert_text {
+            overhead_now.system_tokens += zoid_core::economy::estimate_tokens(t);
+        }
+
         // PRE-FLIGHT GATE (spec §3.8): shrink to fit BEFORE building the request.
         preflight_gate(
             &session,
@@ -588,7 +601,7 @@ async fn run_turn_inner(
             session_id,
             now,
             &*calibration_ratio,
-            overhead,
+            &overhead_now,
         )
         .await?;
         let req = build_request_with_thinking(
@@ -597,7 +610,7 @@ async fn run_turn_inner(
             &tools,
             &config.system,
             config.thinking,
-            None,
+            reassert_text.clone(),
         );
 
         // Stream one model turn. Spawn the provider so a missing terminal Done
@@ -762,6 +775,27 @@ async fn run_turn_inner(
         }
         let _ = stream_task.await;
 
+        // Marker only on a clean stream close: the context-length `continue
+        // 'turn` above and the error/abort `break 'turn` paths all exit before
+        // this point, so a rejected re-floor does not burn its interval.
+        if will_reassert {
+            let at = zoid_core::reassert::cumulative_appended(events.iter());
+            emit(
+                &session,
+                &mut events,
+                ui,
+                &config.branch,
+                EventKind::DirectiveReasserted { at_cumulative: at },
+                session_id,
+                now,
+            )
+            .await?;
+            let _ = ui
+                .send(AgentUpdate::DirectiveReasserted { at_cumulative: at })
+                .await;
+            tracing::info!(kind = "reassert", at, "re-floor fired");
+        }
+
         // Record the sub-turn's token usage so the economy ledger is live.
         if turn_usage != zoid_core::event::TokenStat::default() {
             emit_with_tokens(
@@ -796,6 +830,7 @@ async fn run_turn_inner(
             },
             calibration_ratio,
             overhead,
+            will_reassert,
         )
         .await?;
 
@@ -2037,6 +2072,7 @@ async fn run_turn_inner(
             },
             calibration_ratio,
             overhead,
+            will_reassert,
         )
         .await?;
         // loop: re-request with the tool results now in context
@@ -2139,7 +2175,11 @@ fn render_recalled(events: &[Event]) -> String {
 /// in `calibration_ratio`. The chars/3 estimate is closer to the real tokenizer
 /// ratio than the old chars/4, but it's still an estimate; this ratio lets us
 /// fine-tune on cached sub-turns (where the provider reports 0): we scale the
-/// current estimate by the last known ratio.
+/// current estimate by the last known ratio. `skip_calibration` (set on a
+/// re-floor sub-turn) suppresses the update: the request carried the extra
+/// ephemeral reassert-reminder copy of the system prompt, so the real input
+/// count includes tokens not accounted for by `overhead`/`context_window_with`
+/// and would poison the ratio.
 // Pre-existing 9-arg signature (predates the companion feature); a refactor is
 // out of scope for companion lifecycle wiring, so the lint is suppressed here
 // rather than reshaping unrelated agent-loop plumbing.
@@ -2154,15 +2194,18 @@ async fn record_compactions(
     real_input_tokens: Option<u64>,
     calibration_ratio: &mut Option<f64>,
     overhead: &zoid_core::context::ContextOverhead,
+    skip_calibration: bool,
 ) -> Result<()> {
     // When the provider reports a non-zero input, learn the calibration ratio:
     // real tokens / estimated tokens. This is the ground-truth correction factor
-    // for the chars/3 estimate.
+    // for the chars/3 estimate. Skipped on re-floor sub-turns (see doc comment).
     let effective_tokens = real_input_tokens.filter(|&t| t > 0);
-    if let Some(real) = effective_tokens {
-        let window = zoid_core::context::context_window_with(events.iter(), overhead.clone());
-        if window.total_tokens > 0 {
-            *calibration_ratio = Some(real as f64 / window.total_tokens as f64);
+    if !skip_calibration {
+        if let Some(real) = effective_tokens {
+            let window = zoid_core::context::context_window_with(events.iter(), overhead.clone());
+            if window.total_tokens > 0 {
+                *calibration_ratio = Some(real as f64 / window.total_tokens as f64);
+            }
         }
     }
     // When cached (0), pass None — plan_compactions scales the estimate by the
@@ -2755,6 +2798,93 @@ mod tests {
             }
             Ok(())
         }
+    }
+
+    // Test double: records the `reassert` field of every request it receives
+    // (so a test can assert whether the re-floor reminder was injected),
+    // while replaying a fixed scripted response.
+    struct RecordingProvider {
+        scripted: Vec<zoid_provider::ProviderEvent>,
+        seen_reassert: std::sync::Mutex<Vec<Option<String>>>,
+    }
+    impl RecordingProvider {
+        fn new(scripted: Vec<zoid_provider::ProviderEvent>) -> Self {
+            Self {
+                scripted,
+                seen_reassert: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+    #[async_trait::async_trait]
+    impl zoid_provider::Provider for RecordingProvider {
+        async fn stream(
+            &self,
+            req: &zoid_provider::CompletionRequest,
+            sink: tokio::sync::mpsc::Sender<zoid_provider::ProviderEvent>,
+        ) -> anyhow::Result<()> {
+            self.seen_reassert.lock().unwrap().push(req.reassert.clone());
+            for ev in &self.scripted {
+                if sink.send(ev.clone()).await.is_err() {
+                    break;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn re_floor_fires_and_persists_marker_on_success() {
+        use ulid::Ulid;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::ProviderEvent;
+        // Seed a log whose cumulative_appended (estimated tokens) already
+        // exceeds a small reassert_interval: a 3000-char user message is
+        // ~1000 estimated tokens (chars/3).
+        let big = "x".repeat(3000);
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage { text: big },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+        let provider = std::sync::Arc::new(RecordingProvider::new(vec![
+            ProviderEvent::TextDelta("done".into()),
+            ProviderEvent::Done,
+        ]));
+        let mut cfg = chat_turn_config();
+        cfg.reassert_interval = 500; // well under the seeded ~1000 estimated tokens
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let out = run_agent_turn(
+            cfg,
+            provider.clone(),
+            std::sync::Arc::new(zoid_tools::registry()),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::new(),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let seen = provider.seen_reassert.lock().unwrap();
+        assert!(
+            seen.iter().any(|r| r.is_some()),
+            "the request sent to the provider must carry a reassert reminder"
+        );
+        assert!(
+            out.iter()
+                .any(|e| matches!(&e.kind, EventKind::DirectiveReasserted { .. })),
+            "a successful re-floor sub-turn must persist a DirectiveReasserted marker"
+        );
     }
 
     #[tokio::test]
