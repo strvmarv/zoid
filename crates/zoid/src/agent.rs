@@ -42,6 +42,20 @@ pub const SYSTEM_PROMPT: &str =
      close with a short recap — a few lines or a tight list of what changed and \
      any next step. Don't restate what the tool calls and diffs already showed.";
 
+/// Wrap the system prompt as a standing, tail-injected reminder. The pre/post
+/// framing is the only added text; `system` is verbatim (zero drift). The
+/// "NOT a signal that anything is complete" clause guards against a mid-loop
+/// re-floor being misread as "the task is done now".
+pub fn wrap_reassertion(system: &str) -> String {
+    format!(
+        "[Standing reminder — your operating instructions below are still in \
+         effect. This is a periodic re-statement, NOT a change of task and NOT \
+         a signal that anything is complete. Do not alter what you are doing in \
+         response to seeing this; continue the current work and keep following \
+         these instructions:]\n\n{system}\n\n[End of reminder — resume the task in progress.]"
+    )
+}
+
 /// The default Chat mode profile: the standard zoid system prompt with an
 /// unrestricted tool set (empty allow-list = every tool permitted, per
 /// `AgentProfile::allows`). The base profile for the `Chat` floor of the mode
@@ -96,6 +110,9 @@ pub struct TurnConfig {
     /// Shared in-flight subagent ID set for the sequential-dispatch guard.
     /// None when dispatch_subagent is disabled or for subagent turns.
     pub in_flight: Option<std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>>,
+    /// Token budget between system-prompt re-assertions (0 = disabled).
+    /// Chat gets it from `[economy]`; subagents/tests default off.
+    pub reassert_interval: u64,
 }
 
 // Manual `Debug`: `embed`/`embedder` hold a trait object (`dyn Embedder`) and
@@ -118,6 +135,7 @@ impl std::fmt::Debug for TurnConfig {
             .field("kill", &self.kill)
             .field("max_iterations", &self.max_iterations)
             .field("in_flight", &self.in_flight.is_some())
+            .field("reassert_interval", &self.reassert_interval)
             .finish()
     }
 }
@@ -148,6 +166,7 @@ pub fn chat_turn_config_with(profile: &AgentProfile, skill_menu: &str) -> TurnCo
         kill: zoid_tools::KillSlot::new(),
         max_iterations: None,
         in_flight: None,
+        reassert_interval: 0,
     }
 }
 
@@ -351,8 +370,9 @@ pub fn build_request(
     model: &str,
     tools: &[Box<dyn Tool>],
     system: &str,
+    reassert: Option<String>,
 ) -> CompletionRequest {
-    build_request_with_thinking(events, model, tools, system, ThinkingMode::Off)
+    build_request_with_thinking(events, model, tools, system, ThinkingMode::Off, reassert)
 }
 
 pub fn build_request_with_thinking(
@@ -361,6 +381,7 @@ pub fn build_request_with_thinking(
     tools: &[Box<dyn Tool>],
     system: &str,
     thinking: ThinkingMode,
+    reassert: Option<String>,
 ) -> CompletionRequest {
     let system = match zoid_core::eviction::eviction_breadcrumb(events.iter()) {
         Some(bc) => format!("{system}\n\n{bc}"),
@@ -387,7 +408,7 @@ pub fn build_request_with_thinking(
         max_tokens,
         tools: tool_specs(tools),
         thinking,
-        reassert: None,
+        reassert,
     }
 }
 
@@ -570,7 +591,14 @@ async fn run_turn_inner(
             overhead,
         )
         .await?;
-        let req = build_request_with_thinking(&events, &model, &tools, &config.system, config.thinking);
+        let req = build_request_with_thinking(
+            &events,
+            &model,
+            &tools,
+            &config.system,
+            config.thinking,
+            None,
+        );
 
         // Stream one model turn. Spawn the provider so a missing terminal Done
         // (truncated stream) can't hang us — we send our own Done after it ends.
@@ -2451,6 +2479,7 @@ mod tests {
             "m",
             &zoid_tools::registry(),
             "CUSTOM SYS",
+            None,
         );
         assert_eq!(req.system.as_deref(), Some("CUSTOM SYS"));
     }
@@ -2481,7 +2510,7 @@ mod tests {
                 },
             ),
         ]);
-        let req = build_request(&events, "m", &zoid_tools::registry(), "SYS");
+        let req = build_request(&events, "m", &zoid_tools::registry(), "SYS", None);
         let sys = req.system.unwrap();
         assert!(sys.starts_with("SYS"));
         assert!(sys.contains("recall"));
@@ -2542,7 +2571,7 @@ mod tests {
             ),
         ]);
 
-        let req = build_request(&events, "test-model", &zoid_tools::registry(), "SYS");
+        let req = build_request(&events, "test-model", &zoid_tools::registry(), "SYS", None);
 
         // Find the tool message in the built request
         let tool_msg = req
@@ -2576,6 +2605,14 @@ mod tests {
     fn zero_arg_chat_turn_config_matches_default_profile_no_menu() {
         // The zero-arg convenience must stay byte-identical to the old behavior.
         assert_eq!(chat_turn_config().system, SYSTEM_PROMPT);
+    }
+
+    #[test]
+    fn wrap_reassertion_frames_prompt_as_standing_reminder() {
+        let out = wrap_reassertion("BEHAVIORAL RULES");
+        assert!(out.contains("BEHAVIORAL RULES"));
+        assert!(out.contains("NOT a signal that anything is complete"));
+        assert!(out.contains("resume the task"));
     }
 
     #[tokio::test]
@@ -3714,7 +3751,7 @@ mod tool_call_id_threading_tests {
             ),
         ]);
 
-        let req = build_request(&events, "m", &[], "sys");
+        let req = build_request(&events, "m", &[], "sys", None);
 
         let tool_msg = req
             .messages

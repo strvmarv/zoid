@@ -5457,6 +5457,7 @@ fn spawn_turn(app: &mut App) {
         recent_n: app.economy.recent_n,
         max_output: None, // Slice-4 catalog supplies this; None → derived reserve
     };
+    turn_config.reassert_interval = app.economy.reassert_interval_tokens;
     // Resolve thinking mode from config + model capability.
     let model_support = app
         .fetched_model_info
@@ -5889,6 +5890,7 @@ mod tests {
             compact_threshold_pct: 80,
             band_headroom_pct: 20,
             recent_n: 4,
+            reassert_interval_tokens: 100_000,
         };
         let p = policy_from_config(&econ, 200_000);
         assert!(!p.auto_evict_cold);
@@ -6252,6 +6254,7 @@ mod tests {
                     thinking_enabled: Source::Default,
                     thinking_effort: Source::Default,
                     approval: Source::Default,
+                    reassert_interval_tokens: Source::Default,
                 }
             },
             secrets: None,
