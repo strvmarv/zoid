@@ -23,7 +23,7 @@ The key wrinkle (carried over from the Go design doc, which explicitly deferred 
 | Wire shape | Zen models | Endpoint |
 |---|---|---|
 | OpenAI Chat Completions | deepseek-v4-*, glm-5.*, grok-4.5, grok-build-0.1, minimax-m*, kimi-k2.*, big-pickle, hy3-free, mimo-v2.5-free, north-mini-code-free, nemotron-3-ultra-free (19 models) | `POST {base}/v1/chat/completions` |
-| Anthropic Messages | claude-fable-5, claude-opus-4-5..4-8, claude-sonnet-4-5..4-6/5, claude-haiku-4-5, qwen3.5-plus..3.7-max (16 models) | `POST {base}/v1/messages` |
+| Anthropic Messages | claude-fable-5, claude-opus-4-5..4-8, claude-sonnet-4-5..4-6/5, claude-haiku-4-5, qwen3.5-plus..3.7-max (13 models) | `POST {base}/v1/messages` |
 | OpenAI Responses | gpt-5..5.5, gpt-*-codex, gpt-5.4-mini/nano (17 models) | `POST {base}/v1/responses` |
 | Google Gemini | gemini-3-flash, gemini-3.1-pro, gemini-3.5-flash (3 models) | `POST {base}/v1/models/<model>:streamGenerateContent?alt=sse` |
 
@@ -37,10 +37,10 @@ Zen and Go are billed separately but the same API key authorizes both. The chose
 
 The config screen's Secrets section currently shows each secret row's label as the literal env-var name (`OPENCODE_GO_API_KEY`, `OLLAMA_API_KEY`, `ANTHROPIC_API_KEY`). That label doubles as the secret-store key: the edit commit flow does `secret_store.set(label, &buffer)` (main.rs ~line 3718), and `refresh_config_sections` looks up `status(name)` by that same string. So today the display label *is* the key.
 
-This slice prettifies the **displayed** labels to friendly names — `opencode`, `ollama`, `anthropic` — while the underlying secret-store keys (`OPENCODE_GO_API_KEY`, `OLLAMA_API_KEY`, `ANTHROPIC_API_KEY`) stay unchanged. This requires decoupling the display label from the key:
+This slice prettifies the **displayed** labels to friendly names — `opencode`, `ollama`, `anthropic`, `zai` — while the underlying secret-store keys (`OPENCODE_GO_API_KEY`, `OLLAMA_API_KEY`, `ANTHROPIC_API_KEY`, `ZAI_API_KEY`) stay unchanged. This requires decoupling the display label from the key:
 
 - `FieldRow` (`zoid-tui/src/config_view.rs`) gains an optional `secret_key: Option<&'static str>`. When present, the row renders `label` (the friendly name) but the secret edit flow and `status()` lookup use `secret_key`.
-- `build_sections`' Secrets section sets `label: "opencode"` / `"ollama"` / `"anthropic"` with `secret_key: Some("OPENCODE_GO_API_KEY")` / `Some("OLLAMA_API_KEY")` / `Some("ANTHROPIC_API_KEY")`.
+- `build_sections`' Secrets section sets `label: "opencode"` / `"ollama"` / `"anthropic"` / `"zai"` with `secret_key: Some("OPENCODE_GO_API_KEY")` / `Some("OLLAMA_API_KEY")` / `Some("ANTHROPIC_API_KEY")` / `Some("ZAI_API_KEY")` `[RV]` (zai added post-spec).
 - The commit flow (`Action::ConfigFieldCommit` arm at main.rs ~3714) and `field_target` resolve the secret-store key from the row's `secret_key` (falling back to `label` for any future secret row that doesn't set it), not from `label` directly. `current_config_field` is extended to carry `secret_key` (or the commit flow re-fetches the row from `config_sections`).
 - `refresh_config_sections` (`key_status` array, main.rs ~3140) keeps passing the real env-var names to `status()` — only the rendered label changes.
 
@@ -56,7 +56,7 @@ The provider picker rows (`opencode · go` → stays; `opencode · zen` → new)
 - An `OpenCodeZenProvider` (`opencode_zen.rs`) that delegates `stream()`/`list_models()` to one of four sub-clients based on a static per-model wire-shape map (`ZEN_MODELS`).
 - One new `ProviderEntry` in `zoid-model` (`opencode-zen`, family `opencode-zen`, transport `Http`, default base_url `https://opencode.ai/zen`).
 - New `MODEL_CAPS` entries for each Zen model id (placeholder caps — see §6).
-- Prettify the Secrets section display labels (`OPENCODE_GO_API_KEY`→`opencode`, `OLLAMA_API_KEY`→`ollama`, `ANTHROPIC_API_KEY`→`anthropic`) by decoupling display label from secret-store key via a new `FieldRow::secret_key` field. Underlying env-var names unchanged.
+- Prettify the Secrets section display labels (`OPENCODE_GO_API_KEY`→`opencode`, `OLLAMA_API_KEY`→`ollama`, `ANTHROPIC_API_KEY`→`anthropic`, `ZAI_API_KEY`→`zai` `[RV]`) by decoupling display label from secret-store key via a new `FieldRow::secret_key` field. Underlying env-var names unchanged.
 - Bin wiring: `key_env_for`, `select_provider`, `provider_for_id` gain `opencode-zen` arms reading `OPENCODE_GO_API_KEY`. No new settings field (shared key).
 - Tests for all new logic; offline `TcpListener` stubs for streaming/routing (no live-endpoint CI), matching the existing `ollama.rs`/`anthropic.rs`/`openai_compat.rs`/`opencode_go.rs` stance.
 
@@ -68,12 +68,13 @@ The provider picker rows (`opencode · go` → stays; `opencode · zen` → new)
 
 ## 3. Current state (what exists)
 
-- `crates/zoid-model/src/lib.rs` — `PROVIDERS` registry (4 entries: `ollama-local`, `ollama-cloud`, `opencode-go`, `anthropic-api`); `MODEL_CAPS` table; `canonical_id`, `entry`, `models_for`, `default_base_url`, `selectable`, `model_info`. `opencode-go` display is `"opencode · go"`.
+- `crates/zoid-model/src/lib.rs` — `PROVIDERS` registry (5 entries `[RV]`: `ollama-local`, `ollama-cloud`, `opencode-go`, `anthropic-api`, `zai-coding-plan`); `MODEL_CAPS` table; `canonical_id`, `entry`, `models_for`, `default_base_url`, `selectable`, `model_info`. `opencode-go` display is `"opencode · go"`.
 - `crates/zoid-provider/src/lib.rs` — `Provider` trait, `Message` (with `tool_call_id`), `ProviderEvent` (`TextDelta`/`ThinkingDelta`/`ThinkingSignature`/`ToolCall`/`Usage`/`Truncated`/`Done`/`Error`), `CompletionRequest` (now carries `reassert: Option<String>` `[RV]`, added post-spec by commit `b95ce65`), `ToolCall`, `Usage`, `ToolSpec`, `ThinkingMode`/`EffortLevel`, `default_provider()`/`default_model()`, `parse_data_id_models`, `http_client()`, `stream_idle_timeout()`.
 - `crates/zoid-provider/src/openai_compat.rs` — `OpenAICompatProvider` (OpenAI Chat Completions `/v1/chat/completions`, SSE, tool-calling with fragment accumulation, `with_base_url`/`with_idle_timeout`). Now drives thinking via `model_info(model).thinking_wire`.
 - `crates/zoid-provider/src/anthropic/` `[RV]` — `AnthropicProvider` (Messages API `/v1/messages`, SSE via `eventsource_stream`, text-only P1b, `with_base_url`/`with_idle_timeout`/`with_betas`). Refactored from a single file to a directory module (`mod.rs` + `request.rs`/`parse.rs`/`types.rs`/`cache.rs`) post-spec; the import `crate::anthropic::AnthropicProvider` still resolves.
 - `crates/zoid-provider/src/opencode_go.rs` — `OpenCodeGoProvider`: dedicated provider holding a static `GO_MODELS: &[(model, WireShape)]` (two variants) and delegating `stream()`/`list_models()` to `OpenAICompatProvider` or `AnthropicProvider`.
-- `crates/zoid/src/main.rs` — `key_env_for` (family → env var), `select_provider` (family branch → provider impl), `provider_for_id` (quick-switch live fetch), settings secret-field lists.
+- `crates/zoid-provider/src/zai.rs` `[RV]` — `ZaiProvider`: a thin wrapper delegating to `OpenAICompatProvider` with a ZAI base_url (added post-spec). Not used by Zen, but confirms the leaf-delegation pattern.
+- `crates/zoid/src/main.rs` — `key_env_for` (family → env var; now includes a `zai` arm), `select_provider` (family branch → provider impl; now includes a `zai` arm), `provider_for_id` (quick-switch live fetch), settings secret-field lists.
 - The Go design doc explicitly named the seams so `opencode-zen` slots in cleanly; this slice does exactly that.
 
 ## 4. Design
@@ -232,7 +233,7 @@ ProviderEntry {
 }
 ```
 
-The existing `opencode-go` entry is unchanged (id, family, display, base_url all stay as-is). `canonical_id("opencode-zen")` → passthrough (no legacy alias). `selectable()` now returns 5 entries; the existing `selectable_has_four_providers` test updates to five and adds `opencode-zen`.
+The existing `opencode-go` entry is unchanged (id, family, display, base_url all stay as-is). `canonical_id("opencode-zen")` → passthrough (no legacy alias). `selectable()` now returns 6 entries `[RV]` (5 existing + `opencode-zen`); the existing selectable-count test updates to six and adds `opencode-zen`.
 
 Placeholder `MODEL_CAPS` entries: one per Zen model id with conservative fields (real caps filled during implementation plan alongside the model list).
 
@@ -291,7 +292,7 @@ Constraints on the placeholders so the fill-in is mechanical: (filled — see §
 ## 8. Testing
 
 Offline, `TcpListener`-stubbed, matching the existing stance (no live-endpoint CI):
-- **`zoid-model`**: registry entry exists + selectable (assert 5 providers, including `opencode-zen`); `canonical_id("opencode-zen")` passthrough; `opencode-go` display unchanged (`"opencode · go"`); table-driven caps assertion for each Zen model id (mirrors `opencode_go_model_caps_match_reconciled_table`).
+- **`zoid-model`**: registry entry exists + selectable (assert 6 providers `[RV]`, including `opencode-zen`); `canonical_id("opencode-zen")` passthrough; `opencode-go` display unchanged (`"opencode · go"`); table-driven caps assertion for each Zen model id (mirrors `opencode_go_model_caps_match_reconciled_table`).
 - **`config_view.rs` / Secrets section**: `build_sections` renders `opencode`/`ollama`/`anthropic` labels with `secret_key` set to the real env-var names; a secret-edit commit stores under `secret_key` not `label` (unit test: build sections, assert the Secrets row labels are the friendly names and `secret_key` is the env-var name; assert `field_target`/the commit resolves the key from `secret_key`).
 - **`opencode_zen.rs`**: `wire_shape_for_known_models_matches_table`; `wire_shape_for_unknown_defaults_to_openai_chat`; `with_base_url` propagation; `TcpListener` stubs asserting each wire shape routes to the right path (`/v1/chat/completions`, `/v1/messages`, `/v1/responses`, `…/streamGenerateContent`) — mirrors Go's `openai_compat_model_routes_to_chat_completions` / `anthropic_model_routes_to_messages`.
 - **`openai_responses.rs`**: pure `request_body()` unit test (message/instruction/tool/reasoning mapping); `parse_event()` unit tests with fixture SSE lines for each surfaced event type (`output_text.delta`, `function_call_arguments.delta/.done`, `reasoning_summary_text.delta`, `completed` w/ usage, `incomplete`→Truncated, `failed`→Error); a `TcpListener` streaming round-trip feeding a scripted event stream and asserting the emitted `ProviderEvent` sequence.
