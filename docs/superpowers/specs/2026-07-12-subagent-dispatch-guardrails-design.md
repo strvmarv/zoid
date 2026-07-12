@@ -24,3 +24,9 @@ The gilfoyle-tech-reviewer subagent (`sub-01KXA83QGZZ1A3ZNYKCZ9WBHEF`) completed
 
 - Why did `SUBAGENT_MAX_ITERATIONS = 25` not catch the 26-min spin-out? Is the 1k limit a different layer? Check the dispatch path.
 - What exactly causes the DelegationResult delivery gap? Reproduce with a known-large output.
+
+## Follow-up TODOs (separate from guardrails design)
+
+- **Output token cap truncation (recurring tooling bug).** When a single tool response or assistant turn exceeds the output token limit, the response is silently truncated (e.g., "⚠ response truncated — hit the output token cap"). This has happened multiple times this session and earlier. File as a zoid bug report (strvmarv/zoid-releases): the truncation should either (a) auto-continue/paginate, (b) surface a clear error to the orchestrator so it can retry with a smaller scope, or (c) dispatch to a subagent that has its own output budget. Currently the only workaround is to dispatch subagents for large outputs.
+
+- **DelegationResult not firing main loop on subagent completion.** The gilfoyle reviewer subagent completed and produced output, but the result arrived as a bare message and did not trigger the main loop's DelegationResult handler. Reproduce, root-cause, and fix the event-delivery path. May be related to large-output tool errors near end-of-run.
