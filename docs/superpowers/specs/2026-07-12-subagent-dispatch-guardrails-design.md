@@ -7,7 +7,7 @@ in Spec 1). Build order 1 → 2 → 3.
 | Spec | Scope | Status |
 |------|-------|--------|
 | **1** | Subagent runtime guardrails — timeout, kill tool, Esc, `[subagent]` config → [`2026-07-12-subagent-guardrails-design.md`](2026-07-12-subagent-guardrails-design.md) | Design written |
-| **2** | Worktree tooling fixes — **WT-1 / WT-2** (see section below) | Not yet specced |
+| **2** | Worktree tooling correctness — **WT-1 / WT-2** (git/cwd) + **WT-3** (rail reflects worktree) + **WT-4** (drop bottom hint) → [`2026-07-12-worktree-tooling-fixes-design.md`](2026-07-12-worktree-tooling-fixes-design.md) | Design written |
 | **3** | Scheduled wake-ups — agent self-scheduling subsystem (new `EventKind` + watcher + `select!` branch + synthetic-turn injection + model tool) | Not yet specced |
 
 The sections below are the original observations, retained as raw material for
