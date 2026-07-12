@@ -32,3 +32,15 @@ The gilfoyle-tech-reviewer subagent (`sub-01KXA83QGZZ1A3ZNYKCZ9WBHEF`) completed
 - **Output token cap truncation (recurring tooling bug).** When a single tool response or assistant turn exceeds the output token limit, the response is silently truncated (e.g., "⚠ response truncated — hit the output token cap"). This has happened multiple times this session and earlier. File as a zoid bug report (strvmarv/zoid-releases): the truncation should either (a) auto-continue/paginate, (b) surface a clear error to the orchestrator so it can retry with a smaller scope, or (c) dispatch to a subagent that has its own output budget. Currently the only workaround is to dispatch subagents for large outputs.
 
 - **DelegationResult not firing main loop on subagent completion.** The gilfoyle reviewer subagent completed and produced output, but the result arrived as a bare message and did not trigger the main loop's DelegationResult handler. Reproduce, root-cause, and fix the event-delivery path. May be related to large-output tool errors near end-of-run.
+
+## Worktree tooling bugs (observed 2026-07-12)
+
+Two critical bugs in the `enter_worktree` / `exit_worktree` tooling that render worktrees completely useless for isolation:
+
+### WT-1: `enter_worktree` does not create an isolated branch — commits land on the parent branch
+`enter_worktree("opencode-zen-impl")` changed the CWD to `.zoid/worktrees/opencode-zen-impl` and created the worktree + branch, but all subsequent commits went to `main` (the parent branch), not to `opencode-zen-impl`. The worktree's HEAD pointed at the pre-implementation commit while `main` advanced with all 6 implementation commits. `git worktree list` showed the worktree stuck at the old commit while `main` moved forward. **Root cause to investigate:** the worktree is created but the tool doesn't switch the shell's git context to the new branch — the shell process continues operating on the parent's `.git` refs. The worktree dir is a CWD change, not a git-context change. This makes worktrees useless for parallel work (the entire point of using one here was isolation from the parallel agent).
+
+### WT-2: `exit_worktree` orphans the shell CWD — all tools break
+After `exit_worktree`, the shell tool's process CWD was left pointing at the deleted worktree directory. Every subsequent `shell`, `read`, `write`, `edit`, and `grep` call failed with `No such file or directory (os error 2)` because the process CWD didn't exist. Even `cd /home/gomanjoe/source/zoid` failed — the shell can't resolve the `cd` target because the process-level CWD is already invalid (the kernel can't resolve relative paths from a deleted directory). Only absolute-path file reads survived. The shell tool was permanently broken for the rest of the session.
+
+**Fix:** `exit_worktree` must restore the parent CWD (via an absolute path) BEFORE deleting the worktree directory, or the shell tool must chdir to an absolute path on every invocation (defensive). The current implementation appears to delete first, then try to restore — backwards.
