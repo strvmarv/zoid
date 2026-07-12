@@ -873,7 +873,7 @@ fn key_env_for(id: &str) -> Option<&'static str> {
         return None;
     }
     match zoid_provider::model::entry(id).map(|e| e.family) {
-        Some("opencode-go") => Some("OPENCODE_GO_API_KEY"),
+        Some("opencode-go") | Some("opencode-zen") => Some("OPENCODE_GO_API_KEY"),
         Some("anthropic") => Some("ANTHROPIC_API_KEY"),
         Some("zai") => Some("ZAI_API_KEY"),
         _ => Some("OLLAMA_API_KEY"),
@@ -927,6 +927,16 @@ fn select_provider(
                 true,
             ),
             None => (default_provider(), "opencode-go", false),
+        },
+        "opencode-zen" => match key_for("OPENCODE_GO_API_KEY") {
+            Some(k) => (
+                Arc::new(
+                    zoid_provider::opencode_zen::OpenCodeZenProvider::new(k).with_base_url(base_url),
+                ),
+                "opencode-zen",
+                true,
+            ),
+            None => (default_provider(), "opencode-zen", false),
         },
         "anthropic" => match key_for("ANTHROPIC_API_KEY") {
             Some(k) => (
@@ -1032,6 +1042,10 @@ fn provider_for_id(
     match family {
         "opencode-go" => key_for("OPENCODE_GO_API_KEY").map(|k| {
             Arc::new(zoid_provider::opencode_go::OpenCodeGoProvider::new(k).with_base_url(base_url))
+                as Arc<dyn Provider>
+        }),
+        "opencode-zen" => key_for("OPENCODE_GO_API_KEY").map(|k| {
+            Arc::new(zoid_provider::opencode_zen::OpenCodeZenProvider::new(k).with_base_url(base_url))
                 as Arc<dyn Provider>
         }),
         "anthropic" => key_for("ANTHROPIC_API_KEY").map(|k| {
@@ -3107,12 +3121,12 @@ fn current_write(
 }
 
 /// The (label, kind) of the row under the config cursor, if any.
-fn current_config_field(app: &App) -> Option<(&'static str, zoid_tui::config_view::FieldKind)> {
+fn current_config_field(app: &App) -> Option<(&'static str, zoid_tui::config_view::FieldKind, Option<&'static str>)> {
     app.shell
         .config_sections
         .get(app.shell.config_section)
         .and_then(|s| s.rows.get(app.shell.config_field))
-        .map(|r| (r.label, r.kind.clone()))
+        .map(|r| (r.label, r.kind.clone(), r.secret_key))
 }
 
 /// Replace an OPEN model picker's options with a freshly-fetched live list.
@@ -3127,7 +3141,7 @@ fn apply_models_fetched(app: &mut App, provider: String, mut models: Vec<String>
     if models.is_empty() || !app.shell.config_picker_open() {
         return;
     }
-    if current_config_field(app).map(|(l, _)| l) != Some("model") {
+    if current_config_field(app).map(|(l, _, _)| l) != Some("model") {
         return;
     }
     let cur = app.config.model.clone();
@@ -3779,18 +3793,19 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 );
                 return Ok(false);
             }
-            if let (Some((label, kind)), Some(buffer)) =
+            if let (Some((label, kind, secret_key)), Some(buffer)) =
                 (current_config_field(app), app.shell.config_edit.clone())
             {
                 match field_target(label, &kind) {
                     Some(FieldTarget::Secret) => {
+                        let key = secret_key.unwrap_or(label);
                         if let Some(s) = &app.secrets {
                             use zoid_core::secret::SecretStore;
-                            if let Err(e) = s.set(label, &buffer) {
-                                eprintln!("zoid: secret set failed for {label}: {e}");
+                            if let Err(e) = s.set(key, &buffer) {
+                                eprintln!("zoid: secret set failed for {key}: {e}");
                             }
                         } else {
-                            eprintln!("zoid: secret store unavailable; cannot set {label}");
+                            eprintln!("zoid: secret store unavailable; cannot set {key}");
                         }
                         refresh_config_sections(app);
                         // The key lives in the secret store, not config, so
@@ -3815,7 +3830,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::ConfigToggle => {
             use zoid_core::config::TomlValue;
-            if let Some((label, _kind)) = current_config_field(app) {
+            if let Some((label, _kind, _)) = current_config_field(app) {
                 let write = match label {
                     "auto-evict cold" => Some((
                         "economy.auto_evict_cold",
@@ -3832,7 +3847,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::ConfigDrillOpen => {
             use zoid_tui::state::ConfigCol;
-            if let Some((label, _)) = current_config_field(app) {
+            if let Some((label, _, _)) = current_config_field(app) {
                 app.shell.config_picker = match label {
                     "provider" => zoid_tui::config_view::provider_options(&app.config.provider),
                     "model" => zoid_tui::config_view::model_options(
@@ -3929,7 +3944,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 .get(app.shell.config_picker_sel)
                 .filter(|o| o.selectable)
                 .map(|o| o.id.clone());
-            let label = current_config_field(app).map(|(l, _)| l).unwrap_or("");
+            let label = current_config_field(app).map(|(l, _, _)| l).unwrap_or("");
             if let Some(id) = chosen {
                 if label == "provider" {
                     // Write provider, then seed base_url from the registry.
@@ -3999,7 +4014,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::ConfigSaveToRepo => {
             use zoid_tui::config_view::FieldKind;
-            if let Some((label, kind)) = current_config_field(app) {
+            if let Some((label, kind, _)) = current_config_field(app) {
                 match current_write(app, label, &kind) {
                     Some((key, value)) => apply_config_write(app, key, value, true),
                     None => {
@@ -4014,15 +4029,16 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::ConfigClearSecret => {
             use zoid_tui::config_view::FieldKind;
-            if let Some((label, kind)) = current_config_field(app) {
+            if let Some((label, kind, secret_key)) = current_config_field(app) {
                 if matches!(kind, FieldKind::Secret) {
+                    let key = secret_key.unwrap_or(label);
                     if let Some(s) = &app.secrets {
                         use zoid_core::secret::SecretStore;
-                        if let Err(e) = s.clear(label) {
-                            eprintln!("zoid: secret clear failed for {label}: {e}");
+                        if let Err(e) = s.clear(key) {
+                            eprintln!("zoid: secret clear failed for {key}: {e}");
                         }
                     } else {
-                        eprintln!("zoid: secret store unavailable; cannot clear {label}");
+                        eprintln!("zoid: secret store unavailable; cannot clear {key}");
                     }
                     refresh_config_sections(app);
                 }
@@ -6339,7 +6355,7 @@ mod tests {
             .expect("config sections must include a \"model\" row");
         app.shell.config_section = section;
         app.shell.config_field = field;
-        assert_eq!(current_config_field(&app).map(|(l, _)| l), Some("model"));
+        assert_eq!(current_config_field(&app).map(|(l, _, _)| l), Some("model"));
         app.shell.config_picker =
             zoid_tui::config_view::model_options(&app.config.provider, &app.config.model);
         app.shell.config_col = zoid_tui::state::ConfigCol::Picker;
@@ -6944,6 +6960,18 @@ mod tests {
     #[test]
     fn key_env_for_opencode_go_is_opencode_go_api_key() {
         assert_eq!(key_env_for("opencode-go"), Some("OPENCODE_GO_API_KEY"));
+    }
+
+    #[test]
+    fn key_env_for_opencode_zen_maps_to_shared_go_key() {
+        assert_eq!(key_env_for("opencode-zen"), Some("OPENCODE_GO_API_KEY"));
+        // sanity: Go unchanged
+        assert_eq!(key_env_for("opencode-go"), Some("OPENCODE_GO_API_KEY"));
+    }
+
+    #[test]
+    fn entry_requires_key_opencode_zen_is_true() {
+        assert!(entry_requires_key("opencode-zen"));
     }
 
     #[test]

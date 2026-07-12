@@ -587,6 +587,7 @@ mod tests {
                 kind: FieldKind::Pick,
                 source: Source::Default,
                 env_shadowed: false,
+                secret_key: None,
             }],
         }];
         s
@@ -1420,6 +1421,7 @@ mod tests {
                 kind: FieldKind::Bool,
                 source: Source::Default,
                 env_shadowed: false,
+                secret_key: None,
             }],
         }];
         s.config_section = 0;
@@ -1449,6 +1451,7 @@ mod tests {
                 kind: FieldKind::Pick,
                 source: Source::Default,
                 env_shadowed: false,
+                secret_key: None,
             }],
         }];
         assert!(matches!(
