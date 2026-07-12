@@ -284,6 +284,9 @@ pub fn conversation_for_branch<'a>(
                 // Metadata marker; not a conversation item. (Out of scope: rendering
                 // the in-context breadcrumb / recall filtering is a later slice.)
             }
+            EventKind::WakeScheduled { .. }
+            | EventKind::WakeFired { .. }
+            | EventKind::WakeCancelled { .. } => { /* bookkeeping: no conversation row */ }
         }
     }
     flush(&mut text, &mut calls, &mut turn_ts, &mut out, pending_thinking.take());

@@ -177,6 +177,20 @@ pub enum EventKind {
         id: String,
         answer: String,
     },
+    /// A one-shot wake scheduled by the agent (`schedule_wake` tool). Persisted
+    /// so it survives restart; the pending set is the projection of every
+    /// WakeScheduled with no matching WakeFired/WakeCancelled. Bookkeeping only —
+    /// inert to conversation rendering; the injected UserMessage is what shows.
+    WakeScheduled {
+        wake_id: String,
+        fire_at_ms: i64,
+        note: String,
+    },
+    /// A scheduled wake actually fired (injected its note + spawned a turn).
+    /// Written ONLY at injection, so a crash before injection re-fires on reload.
+    WakeFired { wake_id: String },
+    /// A scheduled wake was cancelled before firing (`cancel_wake` tool).
+    WakeCancelled { wake_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

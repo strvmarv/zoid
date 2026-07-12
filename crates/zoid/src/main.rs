@@ -5485,6 +5485,37 @@ fn should_wake_after_delegation(streaming: bool, in_flight_empty: bool, yielded:
     !streaming && in_flight_empty && !yielded
 }
 
+/// Project the pending-wake set from the event log: every `WakeScheduled`
+/// whose `wake_id` has no later `WakeFired`/`WakeCancelled`. Keyed by
+/// `(fire_at_ms, wake_id)` so the map is ordered by fire time (and same-ms
+/// schedules don't collide); the value is the note. Pure — rebuilt on load and
+/// unit-tested without timers. Takes an iterator (not `&[Event]`) because the
+/// live `EventLog` stores `Vec<Arc<Event>>` and exposes only `iter()` — there is
+/// no contiguous `&[Event]` slice to borrow (C2).
+fn rebuild_pending_wakes<'a>(
+    events: impl IntoIterator<Item = &'a zoid_core::event::Event>,
+) -> std::collections::BTreeMap<(i64, String), String> {
+    use zoid_core::event::EventKind;
+    // Fold to the latest state per wake_id, then materialize the survivors.
+    let mut by_id: std::collections::HashMap<String, (i64, String)> =
+        std::collections::HashMap::new();
+    for e in events {
+        match &e.kind {
+            EventKind::WakeScheduled { wake_id, fire_at_ms, note } => {
+                by_id.insert(wake_id.clone(), (*fire_at_ms, note.clone()));
+            }
+            EventKind::WakeFired { wake_id } | EventKind::WakeCancelled { wake_id } => {
+                by_id.remove(wake_id);
+            }
+            _ => {}
+        }
+    }
+    by_id
+        .into_iter()
+        .map(|(id, (fire_at, note))| ((fire_at, id), note))
+        .collect()
+}
+
 /// Called after a `DelegationResult` has been recorded into `app.events` and the
 /// finished subagent dropped from the in-flight sets. Decides whether the
 /// orchestrator should continue so it actually *sees* the result:
@@ -5737,6 +5768,25 @@ mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend, style::Modifier};
     use ratatui_textarea::TextArea;
+
+    #[test]
+    fn rebuild_pending_wakes_projects_unfired_uncancelled() {
+        use zoid_core::event::{Event, EventKind};
+        let mk = |kind| Event::new(Ulid::new(), None, 0, kind);
+        let evs = vec![
+            mk(EventKind::WakeScheduled { wake_id: "a".into(), fire_at_ms: 300, note: "later".into() }),
+            mk(EventKind::WakeScheduled { wake_id: "b".into(), fire_at_ms: 100, note: "soon".into() }),
+            mk(EventKind::WakeScheduled { wake_id: "c".into(), fire_at_ms: 200, note: "gone".into() }),
+            mk(EventKind::WakeFired { wake_id: "b".into() }),      // b fired → excluded
+            mk(EventKind::WakeCancelled { wake_id: "c".into() }),  // c cancelled → excluded
+        ];
+        let pending = rebuild_pending_wakes(&evs);
+        // Only `a` survives; BTreeMap orders by (fire_at, id).
+        assert_eq!(pending.len(), 1, "only the un-fired, un-cancelled wake survives");
+        assert_eq!(pending.get(&(300, "a".to_string())).map(String::as_str), Some("later"));
+        // Earliest fire_at of the pending set.
+        assert_eq!(pending.keys().next().map(|(t, _)| *t), Some(300));
+    }
 
     #[test]
     fn second_cancel_escalates_to_hard() {
