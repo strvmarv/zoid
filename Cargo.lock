@@ -5672,6 +5672,7 @@ dependencies = [
  "regex",
  "serde_json",
  "shlex",
+ "similar",
  "tempfile",
  "zoid-provider",
  "zoid-web",
