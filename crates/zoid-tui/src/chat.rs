@@ -70,16 +70,18 @@ pub fn conversation_lines_with_diffs(
     let mut hits = Vec::new();
     build_conversation(
         msgs,
-        streaming,
-        caret_on,
-        tz_offset_secs,
-        width,
+        &RenderCtx {
+            streaming,
+            caret_on,
+            tz_offset_secs,
+            width,
+            question,
+            edit_diffs,
+            inline_k,
+        },
         &mut hits,
         &mut Vec::new(),
         &mut Vec::new(),
-        question,
-        edit_diffs,
-        inline_k,
     )
 }
 
@@ -97,16 +99,18 @@ pub fn code_hits(
     let mut hits = Vec::new();
     build_conversation(
         msgs,
-        streaming,
-        caret_on,
-        tz_offset_secs,
-        width,
+        &RenderCtx {
+            streaming,
+            caret_on,
+            tz_offset_secs,
+            width,
+            question,
+            edit_diffs: &[],
+            inline_k: 0,
+        },
         &mut hits,
         &mut Vec::new(),
         &mut Vec::new(),
-        question,
-        &[],
-        0,
     );
     hits
 }
@@ -125,33 +129,45 @@ pub fn question_choice_hits(
     let mut choices = Vec::new();
     build_conversation(
         msgs,
-        streaming,
-        caret_on,
-        tz_offset_secs,
-        width,
+        &RenderCtx {
+            streaming,
+            caret_on,
+            tz_offset_secs,
+            width,
+            question,
+            edit_diffs: &[],
+            inline_k: 0,
+        },
         &mut Vec::new(),
         &mut Vec::new(),
         &mut choices,
-        question,
-        &[],
-        0,
     );
     choices
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_conversation(
-    msgs: &[ChatMsg],
+/// Frame-level context threaded unchanged through `build_conversation`.
+///
+/// Bundling these ends a positional-argument hazard the flat signature carried:
+/// several args were interchangeable by type — `streaming`/`caret_on` are both
+/// `bool`, `width`/`inline_k` both `usize` — so a transposed call compiled clean
+/// and rendered wrong. Constructing this struct by field name at each call site
+/// turns such a swap into a compile error.
+struct RenderCtx<'a> {
     streaming: bool,
     caret_on: bool,
     tz_offset_secs: i32,
     width: usize,
+    question: Option<&'a crate::question::QuestionState>,
+    edit_diffs: &'a [(String, crate::state::RenderDiff)],
+    inline_k: usize,
+}
+
+fn build_conversation(
+    msgs: &[ChatMsg],
+    ctx: &RenderCtx,
     hits: &mut Vec<CodeHit>,
     msg_starts: &mut Vec<usize>,
     question_choices: &mut Vec<QuestionChoiceHit>,
-    question: Option<&crate::question::QuestionState>,
-    edit_diffs: &[(String, crate::state::RenderDiff)],
-    inline_k: usize,
 ) -> Vec<Line<'static>> {
     let last = msgs.len().saturating_sub(1);
     if msgs.is_empty() {
@@ -163,7 +179,7 @@ fn build_conversation(
     // Dim 24h `HH:MM ` stamp prefixing each user/assistant message row.
     let stamp = |ts: i64| {
         Span::styled(
-            format!("{} ", crate::text::hhmm(ts, tz_offset_secs)),
+            format!("{} ", crate::text::hhmm(ts, ctx.tz_offset_secs)),
             Style::new().fg(color::DIM),
         )
     };
@@ -179,16 +195,16 @@ fn build_conversation(
         for m in msgs {
             if let ChatMsg::ToolResult { id, name, is_error: false, .. } = m {
                 if (name == "edit" || name == "write")
-                    && edit_diffs.iter().any(|(k, _)| k == id)
+                    && ctx.edit_diffs.iter().any(|(k, _)| k == id)
                 {
                     cached.push(id.as_str());
                 }
             }
         }
-        let start = cached.len().saturating_sub(inline_k);
+        let start = cached.len().saturating_sub(ctx.inline_k);
         cached[start..].iter().copied().collect()
     };
-    let find_diff = |id: &str| edit_diffs.iter().find(|(k, _)| k == id).map(|(_, d)| d);
+    let find_diff = |id: &str| ctx.edit_diffs.iter().find(|(k, _)| k == id).map(|(_, d)| d);
     for (i, m) in msgs.iter().enumerate() {
         // Record where each message's block begins (before its leading blank),
         // so a viewport-top line maps back to a message for cross-zoom anchoring.
@@ -208,7 +224,7 @@ fn build_conversation(
                     &mut code_ranges,
                     prefix,
                     render_body(text),
-                    width,
+                    ctx.width,
                 );
             }
             ChatMsg::Assistant {
@@ -231,7 +247,7 @@ fn build_conversation(
                     }
                 }
                 let mut shown = text.clone();
-                if streaming && caret_on && i == last && tool_calls.is_empty() {
+                if ctx.streaming && ctx.caret_on && i == last && tool_calls.is_empty() {
                     shown.push(glyph::CARET);
                 }
                 if !shown.is_empty() || tool_calls.is_empty() {
@@ -245,7 +261,7 @@ fn build_conversation(
                         &mut code_ranges,
                         prefix,
                         render_body(&shown),
-                        width,
+                        ctx.width,
                     );
                 }
                 for tc in tool_calls {
@@ -368,7 +384,7 @@ fn build_conversation(
                     } => {
                         // Overwrite the projection's placeholder cursor with the
                         // live cursor from ShellState.question (if present).
-                        if let Some(q) = question {
+                        if let Some(q) = ctx.question {
                             (q.selected, q.free_text.clone())
                         } else {
                             (*selected, free_text.clone())
@@ -385,7 +401,7 @@ fn build_conversation(
                     state,
                     selected,
                     &free_text,
-                    width,
+                    ctx.width,
                 );
             }
         }
@@ -709,16 +725,18 @@ pub fn conversation_view_indexed(
             let mut hits = Vec::new();
             build_conversation(
                 msgs,
-                streaming,
-                view.caret_on,
-                view.tz_offset_secs,
-                width,
+                &RenderCtx {
+                    streaming,
+                    caret_on: view.caret_on,
+                    tz_offset_secs: view.tz_offset_secs,
+                    width,
+                    question,
+                    edit_diffs,
+                    inline_k,
+                },
                 &mut hits,
                 &mut starts,
                 &mut Vec::new(),
-                question,
-                edit_diffs,
-                inline_k,
             )
         }
         Zoom::Detail => detail_lines(msgs, view.tz_offset_secs, width, &mut starts, question),
