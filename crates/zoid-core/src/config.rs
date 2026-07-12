@@ -37,6 +37,7 @@ pub struct Config {
     pub thinking: ThinkingConfig,
     pub approval: ApprovalConfig,
     pub embed: EmbedConfig,
+    pub ui: UiConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,6 +140,24 @@ impl Default for Config {
             thinking: ThinkingConfig::default(),
             approval: ApprovalConfig::default(),
             embed: EmbedConfig::default(),
+            ui: UiConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiConfig {
+    /// Master switch for the ephemeral edit/write diff snippets.
+    pub edit_diff: bool,
+    /// How many most-recent edits show an inline snippet (0 = counts only).
+    pub edit_diff_inline: u32,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            edit_diff: true,
+            edit_diff_inline: 5,
         }
     }
 }
@@ -187,6 +206,29 @@ mod tests {
         assert_eq!(cfg.embed.max_vectors, 1000);
         assert!(cfg.embed.auto_download); // default preserved when absent
     }
+
+    #[test]
+    fn ui_config_defaults_edit_diff_on_and_k_five() {
+        let c = UiConfig::default();
+        assert!(c.edit_diff, "edit diffs ship enabled");
+        assert_eq!(c.edit_diff_inline, 5);
+    }
+
+    #[test]
+    fn merge_applies_ui_overrides() {
+        let (p, _) = parse_toml("[ui]\nedit_diff = false\nedit_diff_inline = 2").unwrap();
+        let (cfg, _) = merge(&[(Source::Project, p)]);
+        assert!(!cfg.ui.edit_diff);
+        assert_eq!(cfg.ui.edit_diff_inline, 2);
+    }
+
+    #[test]
+    fn ui_defaults_when_section_absent() {
+        let (p, _) = parse_toml("[economy]\nrecent_n = 3").unwrap();
+        let (cfg, _) = merge(&[(Source::Project, p)]);
+        assert!(cfg.ui.edit_diff, "absent [ui] → default on");
+        assert_eq!(cfg.ui.edit_diff_inline, 5);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,6 +255,8 @@ pub struct Provenance {
     pub thinking_enabled: Source,
     pub thinking_effort: Source,
     pub approval: Source,
+    pub ui_edit_diff: Source,
+    pub ui_edit_diff_inline: Source,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -270,6 +314,13 @@ pub struct PartialApproval {
 
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default)]
+pub struct PartialUi {
+    pub edit_diff: Option<bool>,
+    pub edit_diff_inline: Option<u32>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(default)]
 pub struct PartialConfig {
     pub provider: Option<String>,
     pub base_url: Option<String>,
@@ -282,6 +333,7 @@ pub struct PartialConfig {
     pub thinking: PartialThinking,
     pub approval: PartialApproval,
     pub embed: PartialEmbed,
+    pub ui: PartialUi,
 }
 
 /// Parse one TOML layer. Known keys deserialize normally; unknown keys are NOT
@@ -314,6 +366,8 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         thinking_enabled: Source::Default,
         thinking_effort: Source::Default,
         approval: Source::Default,
+        ui_edit_diff: Source::Default,
+        ui_edit_diff_inline: Source::Default,
     };
     for (src, p) in layers {
         if let Some(v) = &p.provider {
@@ -355,6 +409,14 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         if let Some(v) = p.economy.reassert_interval_tokens {
             cfg.economy.reassert_interval_tokens = v;
             prov.reassert_interval_tokens = *src;
+        }
+        if let Some(v) = p.ui.edit_diff {
+            cfg.ui.edit_diff = v;
+            prov.ui_edit_diff = *src;
+        }
+        if let Some(v) = p.ui.edit_diff_inline {
+            cfg.ui.edit_diff_inline = v;
+            prov.ui_edit_diff_inline = *src;
         }
         if let Some(dirs) = &p.skills.source_dirs {
             for d in dirs {

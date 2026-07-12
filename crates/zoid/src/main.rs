@@ -2364,6 +2364,11 @@ where
             app.body_cache.msg_count = 0;
             None
         } else {
+            let inline_k = if app.config.ui.edit_diff {
+                app.config.ui.edit_diff_inline as usize
+            } else {
+                0
+            };
             let kind = app.body_cache.refresh(
                 BodyKey {
                     zoom,
@@ -2377,7 +2382,7 @@ where
                 body_w,
                 app.shell.question.as_ref(),
                 &app.shell.edit_diffs,
-                zoid_tui::chat::DEFAULT_INLINE_K,
+                inline_k,
             );
             // Telemetry only distinguishes a pure hit (no render work) from a
             // render; both incremental and full rebuilds count as a miss.
@@ -2899,7 +2904,9 @@ where
                         // and overlap the layout.
                     }
                     AgentUpdate::EditDiff { id, diff } => {
-                        app.shell.push_edit_diff(id, map_render_diff(diff));
+                        if app.config.ui.edit_diff {
+                            app.shell.push_edit_diff(id, map_render_diff(diff));
+                        }
                     }
                     AgentUpdate::CompactionStarted => {
                         app.shell.compacting = true;
@@ -6190,6 +6197,8 @@ mod tests {
                     thinking_effort: Source::Default,
                     approval: Source::Default,
                     reassert_interval_tokens: Source::Default,
+                    ui_edit_diff: Source::Default,
+                    ui_edit_diff_inline: Source::Default,
                 }
             },
             secrets: None,
