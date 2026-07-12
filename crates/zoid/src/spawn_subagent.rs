@@ -106,7 +106,10 @@ pub fn spawn_subagent(
 
         // If a firer tripped `hard`, force the failure branch regardless of what
         // the drained turn returned: label it with the abort reason and discard
-        // the worktree (partial work is not kept).
+        // the worktree (partial work is not kept). Note: there's an accepted
+        // ~250ms ceiling-boundary race where a late progress tick lands just
+        // after `hard` fires but before the turn observes it — charitable, not
+        // a correctness bug.
         let res = if hard.is_cancelled() {
             let reason = *abort_reason.lock().unwrap();
             Err(anyhow::anyhow!(abort_summary(reason)))

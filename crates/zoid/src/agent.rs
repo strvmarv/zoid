@@ -674,7 +674,7 @@ async fn run_turn_inner(
 
     'turn: loop {
         // Cancelled between sub-turns: nothing is pending here, so end cleanly.
-        if cancel.is_cancelled() {
+        if cancel.is_cancelled() || hard.is_cancelled() {
             outcome = "aborted";
             break 'turn;
         }
@@ -728,6 +728,10 @@ async fn run_turn_inner(
             let pe = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => {
+                    aborted = true;
+                    break;
+                }
+                _ = hard.cancelled() => {
                     aborted = true;
                     break;
                 }

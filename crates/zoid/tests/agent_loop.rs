@@ -462,13 +462,21 @@ async fn cancel_mid_stream_drains_pending_tool_calls_without_running_them() {
     );
 }
 
-/// A Network tool whose run_async sleeps must be abandonable on a hard-stop:
-/// the cancel yields a `[killed: hard-stop]` ToolResult, balanced so the next
-/// request isn't malformed.
+/// A Network tool whose run_async sleeps must be abandonable on a hard-stop.
+///
+/// Since the C1 fix (guardrails: observe `hard` in the streaming select!, not
+/// just the tool-exec select!s), `hard` firing while the turn is still parked
+/// at `prx.recv()` (as it is here — the tool call was emitted but the
+/// provider hasn't sent `Done` yet) is now caught by the OUTER streaming
+/// loop, which takes the `aborted` path and drains pending tool calls with
+/// `[skipped: turn aborted]` — the same balanced-request guarantee as a
+/// `cancel`, just resolved earlier than falling through to the (still
+/// hard-aware) tool-exec select!'s `[killed: hard-stop]` path. Both outcomes
+/// are a correct, balanced abort; this test asserts the (now dominant) faster
+/// one.
 #[tokio::test]
 async fn network_tool_hard_cancel_yields_killed_result() {
     // The hard token (Esc/Ctrl-C analog) fires when the tool call is observed.
-    // The Network arm's select! listens on `hard.cancelled()`, not `cancel`.
     let cancel = CancellationToken::new();
     let hard = CancellationToken::new();
     let provider = Arc::new(EmitToolCallThenStall {
@@ -528,9 +536,10 @@ async fn network_tool_hard_cancel_yields_killed_result() {
     assert!(
         log.iter().any(|e| matches!(
             &e.kind,
-            EventKind::ToolResult { output, is_error, .. } if output == "[killed: hard-stop]" && *is_error
+            EventKind::ToolResult { output, .. } if output == "[skipped: turn aborted]"
         )),
-        "network tool hard-stop must yield a [killed: hard-stop] error ToolResult"
+        "network tool hard-stop (caught in the streaming select!) must balance the pending \
+         tool call with a [skipped: turn aborted] ToolResult"
     );
 }
 
