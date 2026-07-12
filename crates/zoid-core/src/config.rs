@@ -38,6 +38,7 @@ pub struct Config {
     pub approval: ApprovalConfig,
     pub embed: EmbedConfig,
     pub ui: UiConfig,
+    pub subagent: SubagentConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,6 +127,23 @@ impl Default for EmbedConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubagentConfig {
+    /// Idle (no-progress) timeout in seconds; 0 = disabled. Default 120.
+    pub idle_timeout_secs: u64,
+    /// Absolute wall-clock ceiling in seconds; 0 = disabled. Default 900.
+    pub hard_timeout_secs: u64,
+}
+
+impl Default for SubagentConfig {
+    fn default() -> Self {
+        Self {
+            idle_timeout_secs: 120,
+            hard_timeout_secs: 900,
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -141,6 +159,7 @@ impl Default for Config {
             approval: ApprovalConfig::default(),
             embed: EmbedConfig::default(),
             ui: UiConfig::default(),
+            subagent: SubagentConfig::default(),
         }
     }
 }
@@ -175,6 +194,26 @@ mod tests {
         assert_eq!(c.economy.context_target, Some(300_000));
         assert_eq!(c.economy.band_headroom_pct, 20);
         assert_eq!(c.economy.recent_n, 4);
+    }
+
+    #[test]
+    fn subagent_defaults_are_120_and_900() {
+        let c = Config::default();
+        assert_eq!(c.subagent.idle_timeout_secs, 120);
+        assert_eq!(c.subagent.hard_timeout_secs, 900);
+    }
+
+    #[test]
+    fn subagent_section_parses_and_merges() {
+        let (p, _warn) =
+            parse_toml("[subagent]\nidle_timeout_secs = 30\nhard_timeout_secs = 0").unwrap();
+        assert_eq!(p.subagent.idle_timeout_secs, Some(30));
+        assert_eq!(p.subagent.hard_timeout_secs, Some(0));
+        let (cfg, prov) = merge(&[(Source::UserGlobal, p)]);
+        assert_eq!(cfg.subagent.idle_timeout_secs, 30);
+        assert_eq!(cfg.subagent.hard_timeout_secs, 0); // 0 = off, still a valid value
+        assert_eq!(prov.subagent_idle_timeout_secs, Source::UserGlobal);
+        assert_eq!(prov.subagent_hard_timeout_secs, Source::UserGlobal);
     }
 
     #[test]
@@ -257,6 +296,8 @@ pub struct Provenance {
     pub approval: Source,
     pub ui_edit_diff: Source,
     pub ui_edit_diff_inline: Source,
+    pub subagent_idle_timeout_secs: Source,
+    pub subagent_hard_timeout_secs: Source,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -306,6 +347,13 @@ pub struct PartialEmbed {
 
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default)]
+pub struct PartialSubagent {
+    pub idle_timeout_secs: Option<u64>,
+    pub hard_timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(default)]
 pub struct PartialApproval {
     pub yolo: Option<bool>,
     pub shell_danger: Option<Vec<String>>,
@@ -334,6 +382,7 @@ pub struct PartialConfig {
     pub approval: PartialApproval,
     pub embed: PartialEmbed,
     pub ui: PartialUi,
+    pub subagent: PartialSubagent,
 }
 
 /// Parse one TOML layer. Known keys deserialize normally; unknown keys are NOT
@@ -368,6 +417,8 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         approval: Source::Default,
         ui_edit_diff: Source::Default,
         ui_edit_diff_inline: Source::Default,
+        subagent_idle_timeout_secs: Source::Default,
+        subagent_hard_timeout_secs: Source::Default,
     };
     for (src, p) in layers {
         if let Some(v) = &p.provider {
@@ -409,6 +460,14 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         if let Some(v) = p.economy.reassert_interval_tokens {
             cfg.economy.reassert_interval_tokens = v;
             prov.reassert_interval_tokens = *src;
+        }
+        if let Some(v) = p.subagent.idle_timeout_secs {
+            cfg.subagent.idle_timeout_secs = v;
+            prov.subagent_idle_timeout_secs = *src;
+        }
+        if let Some(v) = p.subagent.hard_timeout_secs {
+            cfg.subagent.hard_timeout_secs = v;
+            prov.subagent_hard_timeout_secs = *src;
         }
         if let Some(v) = p.ui.edit_diff {
             cfg.ui.edit_diff = v;
