@@ -207,10 +207,12 @@ pub fn compute_file_diff(path: &str, before: &str, after: &str, line_cap: usize)
     }
 
     // Rendered lines: grouped hunks with CONTEXT_RADIUS context lines,
-    // flattened and capped to `line_cap`.
+    // flattened and capped to `line_cap`. CRITICAL: keep iterating ALL changes
+    // to count them; only the PUSH is guarded by the cap. (Do NOT `break` when
+    // the cap is hit — that would stop counting and make `truncated_by` wrong.)
     let mut lines: Vec<DiffLine> = Vec::new();
     let mut total_changed_or_ctx = 0u32;
-    'hunks: for group in diff.grouped_ops(CONTEXT_RADIUS).iter() {
+    for group in diff.grouped_ops(CONTEXT_RADIUS).iter() {
         for op in group {
             for ch in diff.iter_changes(op) {
                 let (kind, old_no, new_no) = match ch.tag() {
@@ -235,10 +237,9 @@ pub fn compute_file_diff(path: &str, before: &str, after: &str, line_cap: usize)
                     // `ch.value()` keeps the trailing newline; strip it for display.
                     let text = ch.value().strip_suffix('\n').unwrap_or(ch.value()).to_string();
                     lines.push(DiffLine { old_no, new_no, kind, text });
-                } else {
-                    // Cap reached; stop collecting but we already have full counts.
-                    break 'hunks;
                 }
+                // No `else break`: we must keep counting past the cap so
+                // `truncated_by` reflects EVERY dropped line, not just the first.
             }
         }
     }
@@ -260,7 +261,7 @@ pub fn compute_file_diff(path: &str, before: &str, after: &str, line_cap: usize)
 Run: `cargo test -p zoid-tools diff::`
 Expected: all 5 tests PASS.
 
-Note on the truncation test: `truncated_by` counts *rendered* lines dropped (changed + context) beyond `line_cap`, not the add/remove totals. The `truncates_to_cap_and_reports_remainder` test uses an all-additions input (no context), so rendered-line count == added count == 10, and `truncated_by == 10 - 4 == 6`.
+Note on the truncation test: the counting loop iterates EVERY change (it never breaks early); `total_changed_or_ctx` is the full count of changed+context lines, while `lines` is capped. For the all-additions input (10 inserts, no context, cap 4): `total_changed_or_ctx == 10`, `lines.len() == 4`, so `truncated_by == 10 - 4 == 6`. If you see `truncated_by == 1`, the `else break` was left in — remove it (the loop must keep counting past the cap).
 
 - [ ] **Step 6: Commit**
 
@@ -619,11 +620,18 @@ Change `let out = tokio::select! {` (line ~2000) to `let mut out = tokio::select
                     let tool_fail_msg = out.is_error.then(|| out.text.clone());
                     // Ephemeral UI-only diff (edit/write). Sent BEFORE the emit
                     // (which moves tc.id/out.text). Never persisted; the
-                    // ToolResult event below still stores only out.text.
-                    if let Some(diff) = out.diff.take() {
-                        let _ = ui
-                            .send(AgentUpdate::EditDiff { id: tc.id.clone(), diff })
-                            .await;
+                    // ToolResult event below still stores only out.text. MAIN
+                    // branch only — a subagent's edits happen in a worktree and
+                    // never render in the main transcript, so caching them would
+                    // only let a subagent burst evict the main agent's visible
+                    // diffs from the bounded cache (M6). `config.branch` is in
+                    // scope here (used by the `emit` just below).
+                    if config.branch == BranchId::default() {
+                        if let Some(diff) = out.diff.take() {
+                            let _ = ui
+                                .send(AgentUpdate::EditDiff { id: tc.id.clone(), diff })
+                                .await;
+                        }
                     }
                     emit(
                         &session,
@@ -728,8 +736,9 @@ git commit -m "feat(agent): forward ephemeral edit diffs to the TUI cache"
 ### Task 5: Render the counts line + inline last-K snippet (`zoid-tui/src/chat.rs`)
 
 **Files:**
-- Modify: `crates/zoid-tui/src/chat.rs` (`conversation_lines` :41, `build_conversation` signature + the `ChatMsg::ToolResult` arm at :224-252)
-- Modify: `crates/zoid/src/main.rs` + `crates/zoid-tui/src/render.rs` (call sites that pass args into `conversation_lines`/`build_conversation`)
+- Modify: `crates/zoid-tui/src/chat.rs` — `build_conversation` (+2 params) & its 4 callers (`conversation_lines`:50, `code_hits`:75, `question_choice_hits`:101, `conversation_view_indexed`:621); `conversation_view`:587 / `conversation_view_indexed`:600 threading; the `ChatMsg::ToolResult` arm at :224-252
+- Modify: `crates/zoid/src/main.rs` — `BodyCache::refresh`:1359 (+2 params) and its call site :2335
+- Modify: `crates/zoid-tui/src/render.rs`:159 (`conversation_view` fallback)
 
 **Interfaces:**
 - Consumes: `ShellState.edit_diffs` / `edit_diff` (Task 3).
@@ -850,7 +859,19 @@ pub fn conversation_lines(
 }
 ```
 
-Add the two parameters to `build_conversation`'s signature (find `fn build_conversation(`), appending `edit_diffs: &[(String, crate::state::RenderDiff)], inline_k: usize,`. Update any OTHER internal callers of `build_conversation` (e.g. the detail path) to pass `edit_diffs, inline_k` through, or `&[], 0` where a cache isn't available.
+Add the two parameters `edit_diffs: &[(String, crate::state::RenderDiff)], inline_k: usize,` to `build_conversation`'s signature (find `fn build_conversation(`). `build_conversation` has **exactly four callers** — update ALL of them or the crate won't compile:
+
+1. `conversation_lines` (chat.rs:50) — pass `&[], 0` (modal/test helper; no live cache).
+2. `code_hits` (chat.rs:75) — pass `&[], 0`.
+3. `question_choice_hits` (chat.rs:101) — pass `&[], 0`.
+4. `conversation_view_indexed` (chat.rs:621, the `Zoom::Normal` arm) — pass the threaded `edit_diffs, inline_k` (see below).
+
+**The live TUI render path is `conversation_view` → `conversation_view_indexed` → `build_conversation` — NOT `conversation_lines`.** Thread the two params down that path:
+
+- `conversation_view_indexed` (chat.rs:600): add `edit_diffs: &[(String, crate::state::RenderDiff)], inline_k: usize` to its signature; pass them into the `build_conversation` call in the `Zoom::Normal` arm (chat.rs:621). The `Overview`/`Summary` arms don't call `build_conversation` — leave them.
+- `conversation_view` (chat.rs:587): add the same two params; forward them to `conversation_view_indexed`.
+
+Keep the `conversation_lines_with_diffs` wrapper above (it calls `build_conversation` directly with the cache) — the Task-5 tests use it as a direct seam. Production rendering goes through `conversation_view` (wired in Step 6).
 
 - [ ] **Step 4: Compute the inline set + render** (in `build_conversation`)
 
@@ -952,9 +973,15 @@ Replace the `ChatMsg::ToolResult` arm (:224-252) so it destructures `id` and app
 Run: `cargo test -p zoid-tui tool_result_renders_counts cached_edit_beyond_k`
 Expected: both PASS.
 
-- [ ] **Step 6: Wire the real call site** (in `crates/zoid/src/main.rs` / `crates/zoid-tui/src/render.rs`)
+- [ ] **Step 6: Wire the real render call sites** (`crates/zoid/src/main.rs` + `crates/zoid-tui/src/render.rs`)
 
-Find where `conversation_lines(` is called to render the live chat (search `conversation_lines(`), and switch that call to `conversation_lines_with_diffs(…, &app.shell.edit_diffs, zoid_tui::chat::DEFAULT_INLINE_K)`. (Leave the modal/`render_shell` path on the plain `conversation_lines` — it can pass an empty cache; only the primary chat view needs the inline diffs.)
+The live transcript is built by `BodyCache::refresh` (main.rs:1359) — which calls `conversation_view_indexed` twice (main.rs:1400 incremental, main.rs:1417 full) — and by `render.rs`'s uncached fallback `conversation_view` (render.rs:159). Wire all three:
+
+1. **`BodyCache::refresh` (main.rs:1359):** add params `edit_diffs: &[(String, zoid_tui::state::RenderDiff)], inline_k: usize` to its signature, and pass them to BOTH `conversation_view_indexed(...)` calls (main.rs:1400 and :1417).
+2. **The refresh call site (main.rs:2335, `app.body_cache.refresh(...)`):** `app` is in scope, so pass `&app.shell.edit_diffs, zoid_tui::chat::DEFAULT_INLINE_K`. (Task 6 later replaces the constant with the config-derived `inline_k`.)
+3. **`render.rs:159` (`conversation_view(...)`):** `state` is the `ShellState`, so pass `&state.edit_diffs, crate::chat::DEFAULT_INLINE_K`.
+
+Ordering note (why the diff is on screen in time): the Task-4 fork sends `AgentUpdate::EditDiff` BEFORE emitting the `ToolResult` event. The bin processes them in order — the cache is updated first, then the new `ToolResult` message grows `msgs` and invalidates `BodyCache` (its `key` depends on message count), so the very rebuild that first shows the result row already sees the cached diff. No extra cache invalidation is needed.
 
 - [ ] **Step 7: Build the workspace**
 
@@ -1011,7 +1038,7 @@ The config is layered via the free function `merge(layers: &[(Source, PartialCon
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p zoid-core ui_config_defaults partial_ui_overrides 2>&1 | tail -20`
+Run: `cargo test -p zoid-core ui_config_defaults merge_applies_ui_overrides ui_defaults_when_section_absent 2>&1 | tail -20`
 Expected: FAIL — `UiConfig`/`Config.ui`/`PartialConfig.ui` undefined.
 
 - [ ] **Step 3: Add `UiConfig` following the `EconomyConfig` pattern** (in `crates/zoid-core/src/config.rs`)
@@ -1086,7 +1113,7 @@ and pass `inline_k` to `conversation_lines_with_diffs`. When `edit_diff` is `fal
 
 - [ ] **Step 5: Run tests + workspace build**
 
-Run: `cargo test -p zoid-core ui_config_defaults partial_ui_overrides && cargo build --workspace 2>&1 | grep -E "^error" | head; echo done`
+Run: `cargo test -p zoid-core ui_config_defaults merge_applies_ui_overrides ui_defaults_when_section_absent && cargo build --workspace 2>&1 | grep -E "^error" | head; echo done`
 Expected: config tests PASS; no `error` lines.
 
 - [ ] **Step 6: Commit**
@@ -1100,6 +1127,7 @@ git commit -m "feat(config): [ui] edit_diff toggle + edit_diff_inline (K)"
 
 ## Notes for the implementer
 
-- **Subagent edits.** A subagent running `edit`/`write` also emits `EditDiff` on the shared `ui` channel, so a few subagent diffs may land in the cache. They never render: subagent `ToolResult`s live on the subagent branch and are folded to a `Delegated` card, never appearing as a main-conversation `ChatMsg::ToolResult`. The bounded cache evicts them harmlessly. No special-casing needed in v1.
+- **Subagent edits.** The Task-4 fork sends `EditDiff` ONLY on the main branch (`config.branch == BranchId::default()`), so a subagent's `edit`/`write` calls never enter the cache — no risk of a subagent burst evicting the main agent's visible diffs (M6). (Subagent `ToolResult`s wouldn't render anyway — they live on the subagent branch and fold to a `Delegated` card.)
+- **`write` pre-image simplification (M4).** `read_to_string(&full).unwrap_or_default()` treats a missing OR non-UTF-8 pre-image as empty, so an overwrite of a non-UTF-8 file renders as all-additions rather than the spec's "counts-only" degrade. This is an accepted simplification: the diff is ephemeral and best-effort, and non-UTF-8 source files are not zoid's editing target. No counts-only path is implemented.
 - **`−` vs `-`.** The counts/sign use the Unicode minus `−` (U+2212) to match the mockups; tests accept either `-` or `−`.
 - **Detail zoom** (`detail_lines`, chat.rs:701) is unchanged — inline diffs are a normal-zoom affordance only (per spec non-goals).
