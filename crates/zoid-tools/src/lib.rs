@@ -4,6 +4,7 @@
 
 pub mod ask;
 pub mod approval;
+pub mod diff;
 pub mod edit;
 pub mod feedback;
 pub mod glob;
@@ -51,6 +52,7 @@ impl ToolOutput {
 }
 
 pub use kill::KillSlot;
+pub use diff::{compute_file_diff, DiffKind, DiffLine, FileDiff};
 
 /// How the agent loop must execute a tool. `Local` tools run synchronously in
 /// the working directory (the v1 default). `Emitting` tools append a domain
