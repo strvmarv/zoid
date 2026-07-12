@@ -14,6 +14,7 @@ pub mod read;
 pub mod recall;
 pub mod search;
 pub mod subagent_dispatch;
+pub mod subagent_kill;
 pub mod worktree_enter;
 pub mod worktree_exit;
 pub mod shell;

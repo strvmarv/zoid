@@ -98,6 +98,10 @@ pub fn chat_tools(skills: Arc<SkillRegistry>, kill: zoid_tools::KillSlot) -> Vec
     // parallel delegation. Chat-only (not in the base subagent registry).
     tools.push(Box::new(zoid_tools::subagent_dispatch::DispatchSubagent));
     tools.push(Box::new(zoid_tools::subagent_diff::SubagentDiff));
+    // Orchestrator kill switch: cancel a dispatched subagent by id, or all.
+    // Chat-only (needs the shared registry); never in the subagent registry so
+    // a subagent can't cancel its siblings.
+    tools.push(Box::new(zoid_tools::subagent_kill::CancelSubagent));
     // Worktree relocation: enter/exit persistent git worktrees. Chat-only —
     // subagents run in their own ephemeral worktrees via the subagent path.
     tools.push(Box::new(zoid_tools::worktree_enter::EnterWorktree));

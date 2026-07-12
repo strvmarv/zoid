@@ -108,6 +108,33 @@ pub struct SubagentHandle {
     pub abort_reason: std::sync::Arc<std::sync::Mutex<Option<AbortReason>>>,
 }
 
+/// Fire the `hard` token (and record `Killed`, first-writer-wins) for one
+/// subagent by id, or for ALL in-flight subagents when `target` is `None`.
+/// Returns how many handles were fired. Shared by the `cancel_subagent` tool
+/// handler and the Esc escalation path.
+pub fn fire_subagent_kill(
+    reg: &std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, SubagentHandle>>>,
+    target: Option<&str>,
+) -> usize {
+    let reg = reg.lock().unwrap();
+    let handles: Vec<&SubagentHandle> = match target {
+        Some(id) => reg.get(id).into_iter().collect(),
+        None => reg.values().collect(),
+    };
+    let mut fired = 0usize;
+    for h in handles {
+        {
+            let mut slot = h.abort_reason.lock().unwrap();
+            if slot.is_none() {
+                *slot = Some(AbortReason::Killed);
+            }
+        }
+        h.hard.cancel();
+        fired += 1;
+    }
+    fired
+}
+
 /// How one agent turn is run: its system prompt, working directory, and the
 /// event branch its output is recorded on. Chat uses the main branch + process
 /// cwd; a subagent uses its own branch + (optionally) a worktree.
@@ -1606,6 +1633,33 @@ async fn run_turn_inner(
                         ok = true,
                         "worktree exit requested"
                     );
+                }
+                Some(zoid_tools::ToolKind::Emitting) if tc.name == "cancel_subagent" => {
+                    let target = tc
+                        .args
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let fired = if let Some(reg) = &config.in_flight {
+                        fire_subagent_kill(reg, target.as_deref())
+                    } else {
+                        0
+                    };
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::ToolResult {
+                            id: tc.id,
+                            name: tc.name,
+                            output: format!("{{\"cancelled\": {fired}}}"),
+                            is_error: false,
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
                 }
                 Some(zoid_tools::ToolKind::Interactive)
                     if tc.name == "ask_user"
@@ -4417,5 +4471,36 @@ mod guardrail_types_tests {
         let h2 = h.clone();
         h.hard.cancel();
         assert!(h2.hard.is_cancelled(), "clone shares the same token");
+    }
+
+    #[test]
+    fn fire_kill_targets_one_or_all() {
+        use super::fire_subagent_kill;
+        use std::collections::HashMap;
+
+        let mk = || SubagentHandle {
+            cancel: CancellationToken::new(),
+            hard: CancellationToken::new(),
+            progress: Arc::new(AtomicI64::new(0)),
+            abort_reason: Arc::new(Mutex::new(None)),
+        };
+        let a = mk();
+        let b = mk();
+        let mut map = HashMap::new();
+        map.insert("sub-a".to_string(), a.clone());
+        map.insert("sub-b".to_string(), b.clone());
+        let reg = Arc::new(Mutex::new(map));
+
+        // Target one.
+        let n = fire_subagent_kill(&reg, Some("sub-a"));
+        assert_eq!(n, 1);
+        assert!(a.hard.is_cancelled());
+        assert_eq!(*a.abort_reason.lock().unwrap(), Some(super::AbortReason::Killed));
+        assert!(!b.hard.is_cancelled(), "untargeted subagent untouched");
+
+        // Target all.
+        let n = fire_subagent_kill(&reg, None);
+        assert_eq!(n, 2, "None fires every registered subagent");
+        assert!(b.hard.is_cancelled());
     }
 }
