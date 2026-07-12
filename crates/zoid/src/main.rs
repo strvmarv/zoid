@@ -6482,6 +6482,7 @@ mod tests {
                     reassert_interval_tokens: Source::Default,
                     ui_edit_diff: Source::Default,
                     ui_edit_diff_inline: Source::Default,
+                    wake_enabled: Source::Default,
                 }
             },
             secrets: None,

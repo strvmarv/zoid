@@ -39,6 +39,7 @@ pub struct Config {
     pub embed: EmbedConfig,
     pub ui: UiConfig,
     pub subagent: SubagentConfig,
+    pub wake: WakeConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,6 +145,18 @@ impl Default for SubagentConfig {
     }
 }
 
+/// `[wake]` — the master switch for agent-scheduled wake-ups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WakeConfig {
+    /// `false` → `schedule_wake` refuses and the watcher never fires. Default true.
+    pub enabled: bool,
+}
+impl Default for WakeConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -160,6 +173,7 @@ impl Default for Config {
             embed: EmbedConfig::default(),
             ui: UiConfig::default(),
             subagent: SubagentConfig::default(),
+            wake: WakeConfig::default(),
         }
     }
 }
@@ -214,6 +228,22 @@ mod tests {
         assert_eq!(cfg.subagent.hard_timeout_secs, 0); // 0 = off, still a valid value
         assert_eq!(prov.subagent_idle_timeout_secs, Source::UserGlobal);
         assert_eq!(prov.subagent_hard_timeout_secs, Source::UserGlobal);
+    }
+
+    #[test]
+    fn wake_enabled_defaults_true_and_merges() {
+        // Default: enabled = true, provenance Default.
+        let (cfg, prov) = merge(&[]);
+        assert!(cfg.wake.enabled, "wake.enabled defaults to true");
+        assert_eq!(prov.wake_enabled, Source::Default);
+
+        // A layer that turns it off is applied and recorded. Note the tuple is
+        // (Source, PartialConfig) — the order `merge` iterates (config.rs:423).
+        let mut partial = PartialConfig::default();
+        partial.wake.enabled = Some(false);
+        let (cfg, prov) = merge(&[(Source::UserGlobal, partial)]);
+        assert!(!cfg.wake.enabled, "an explicit false is merged");
+        assert_eq!(prov.wake_enabled, Source::UserGlobal);
     }
 
     #[test]
@@ -298,6 +328,7 @@ pub struct Provenance {
     pub ui_edit_diff_inline: Source,
     pub subagent_idle_timeout_secs: Source,
     pub subagent_hard_timeout_secs: Source,
+    pub wake_enabled: Source,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -352,6 +383,11 @@ pub struct PartialSubagent {
     pub hard_timeout_secs: Option<u64>,
 }
 
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct PartialWake {
+    pub enabled: Option<bool>,
+}
+
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default)]
 pub struct PartialApproval {
@@ -383,6 +419,8 @@ pub struct PartialConfig {
     pub embed: PartialEmbed,
     pub ui: PartialUi,
     pub subagent: PartialSubagent,
+    #[serde(default)]
+    pub wake: PartialWake,
 }
 
 /// Parse one TOML layer. Known keys deserialize normally; unknown keys are NOT
@@ -419,6 +457,7 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         ui_edit_diff_inline: Source::Default,
         subagent_idle_timeout_secs: Source::Default,
         subagent_hard_timeout_secs: Source::Default,
+        wake_enabled: Source::Default,
     };
     for (src, p) in layers {
         if let Some(v) = &p.provider {
@@ -468,6 +507,10 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         if let Some(v) = p.subagent.hard_timeout_secs {
             cfg.subagent.hard_timeout_secs = v;
             prov.subagent_hard_timeout_secs = *src;
+        }
+        if let Some(v) = p.wake.enabled {
+            cfg.wake.enabled = v;
+            prov.wake_enabled = *src;
         }
         if let Some(v) = p.ui.edit_diff {
             cfg.ui.edit_diff = v;
