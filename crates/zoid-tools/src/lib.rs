@@ -15,6 +15,7 @@ pub mod recall;
 pub mod search;
 pub mod subagent_dispatch;
 pub mod subagent_kill;
+pub mod wake;
 pub mod worktree_enter;
 pub mod worktree_exit;
 pub mod shell;
@@ -373,6 +374,9 @@ mod tests {
             !reg.iter().any(|t| t.name() == "subagent_diff"),
             "subagent_diff must not be in base registry"
         );
+        let names: Vec<&str> = reg.iter().map(|t| t.name()).collect();
+        assert!(!names.contains(&"schedule_wake"), "schedule_wake is chat-only");
+        assert!(!names.contains(&"cancel_wake"), "cancel_wake is chat-only");
     }
 
     #[test]

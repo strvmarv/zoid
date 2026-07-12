@@ -1653,6 +1653,12 @@ struct App {
     /// Injects no `UserMessage` (unlike `pending_message`) — it just continues
     /// the conversation with the delegation summary now in context.
     wake_after_delegation: bool,
+    /// Pending scheduled wakes, `(fire_at_ms, wake_id) → note`, ordered by fire
+    /// time. Rebuilt from the event log on load; mutated by schedule/cancel/fire.
+    pending_wakes: std::collections::BTreeMap<(i64, String), String>,
+    /// The watcher's next deadline (earliest `fire_at_ms`, `None` = park). Sending
+    /// a new value re-arms the watcher immediately (schedule/cancel/fire).
+    next_wake_tx: tokio::sync::watch::Sender<Option<i64>>,
     /// A takeover confirmation in flight: the session id the user is about to
     /// forcibly claim from another instance. Set by `SessionTakeoverConfirm`,
     /// consumed by the "Take over" answer in `QuestionSelect`. Spec §3.2.
@@ -2121,6 +2127,8 @@ async fn main() -> Result<()> {
         yielded: false,
         pending_message: None,
         wake_after_delegation: false,
+        pending_wakes: std::collections::BTreeMap::new(),
+        next_wake_tx: tokio::sync::watch::channel(None).0,
         pending_takeover: None,
         mcp,
         embed_index,
@@ -2221,6 +2229,48 @@ where
 {
     let mut term_events = EventStream::new();
 
+    // Wake watcher: parks on the next deadline; sends WakeDue when it elapses.
+    // Re-armed immediately whenever `next_wake_tx` changes (schedule/cancel/fire).
+    {
+        let ui = app.ui_tx.clone();
+        let mut next_rx = app.next_wake_tx.subscribe();
+        tokio::spawn(async move {
+            loop {
+                let next = *next_rx.borrow_and_update();
+                let sleep = async {
+                    match next {
+                        Some(fire_at_ms) => {
+                            let now = now_ms();
+                            let delay = (fire_at_ms - now).max(0) as u64;
+                            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                        }
+                        // Nothing scheduled: park until the cell changes.
+                        None => std::future::pending::<()>().await,
+                    }
+                };
+                tokio::select! {
+                    _ = sleep => {
+                        if ui.send(AgentUpdate::WakeDue).await.is_err() {
+                            break; // main loop gone
+                        }
+                        // Re-borrow next loop; the handler will re-arm via next_wake_tx.
+                    }
+                    changed = next_rx.changed() => {
+                        if changed.is_err() {
+                            break; // sender dropped — app exiting
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Rebuild the pending-wake set from the loaded event log and arm the
+    // watcher for the earliest deadline. Race-free: the watcher already called
+    // `subscribe()` synchronously above, before this send.
+    app.pending_wakes = rebuild_pending_wakes(app.events.iter());
+    let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
+
     let tick_period = std::time::Duration::from_millis(1000 / zoid_tui::motion::MOTION_FPS);
     let mut motion_tick = tokio::time::interval(tick_period);
     motion_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -2283,6 +2333,9 @@ where
             }
         });
     }
+
+    // Catch-up: fire any wakes whose fire_at already passed while closed.
+    let _ = drain_due_wakes(app).await?;
 
     loop {
         if let Some(ev) = app.pending_adjust.take() {
@@ -2813,6 +2866,11 @@ where
                             } else if take_deferred_delegation_wake(app) {
                                 spawn_turn(app);
                             }
+                            // A wake may have come due while this turn ran; now
+                            // that we're idle, drain it (spawns its own turn).
+                            if !app.streaming {
+                                let _ = drain_due_wakes(app).await?;
+                            }
                         }
                     }
                     AgentUpdate::SessionTakenOver => {
@@ -3059,6 +3117,15 @@ where
                     }
                     zoid::agent::AgentUpdate::WorktreeRequested { action, reply } => {
                         handle_worktree_request(app, action, Some(reply));
+                    }
+                    zoid::agent::AgentUpdate::WakeDue => {
+                        let _ = drain_due_wakes(app).await?;
+                    }
+                    zoid::agent::AgentUpdate::ScheduleWake { delay_secs, note, reply } => {
+                        let _ = reply.send(handle_schedule_wake(app, delay_secs, note).await);
+                    }
+                    zoid::agent::AgentUpdate::CancelWake { id, reply } => {
+                        let _ = reply.send(handle_cancel_wake(app, id).await);
                     }
                 }
             }
@@ -3787,6 +3854,9 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 // #6b resume: free any compacted ToolResult bodies immediately
                 // instead of re-inflating RAM to the pre-#6b footprint.
                 app.events.clear_compacted_bodies();
+                app.pending_wakes = rebuild_pending_wakes(app.events.iter());
+                let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
+                let _ = drain_due_wakes(app).await?;
                 // Wholesale event-log replacement: reset the caches so they
                 // can't serve the previous session's data at an equal length.
                 app.proj = ProjectionCache::default();
@@ -5052,6 +5122,8 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             app.shell.session_name = name;
             app.session_started_ms = ts;
             app.events = zoid::eventlog::EventLog::new();
+            app.pending_wakes = rebuild_pending_wakes(app.events.iter());
+            let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
             // New session: reset the caches (clear() may leave the same length).
             app.proj = ProjectionCache::default();
             app.body_cache = BodyCache::default();
@@ -5485,6 +5557,115 @@ fn should_wake_after_delegation(streaming: bool, in_flight_empty: bool, yielded:
     !streaming && in_flight_empty && !yielded
 }
 
+/// Project the pending-wake set from the event log: every `WakeScheduled`
+/// whose `wake_id` has no later `WakeFired`/`WakeCancelled`. Keyed by
+/// `(fire_at_ms, wake_id)` so the map is ordered by fire time (and same-ms
+/// schedules don't collide); the value is the note. Pure — rebuilt on load and
+/// unit-tested without timers. Takes an iterator (not `&[Event]`) because the
+/// live `EventLog` stores `Vec<Arc<Event>>` and exposes only `iter()` — there is
+/// no contiguous `&[Event]` slice to borrow (C2).
+fn rebuild_pending_wakes<'a>(
+    events: impl IntoIterator<Item = &'a zoid_core::event::Event>,
+) -> std::collections::BTreeMap<(i64, String), String> {
+    use zoid_core::event::EventKind;
+    // Fold to the latest state per wake_id, then materialize the survivors.
+    let mut by_id: std::collections::HashMap<String, (i64, String)> =
+        std::collections::HashMap::new();
+    for e in events {
+        match &e.kind {
+            EventKind::WakeScheduled { wake_id, fire_at_ms, note } => {
+                by_id.insert(wake_id.clone(), (*fire_at_ms, note.clone()));
+            }
+            EventKind::WakeFired { wake_id } | EventKind::WakeCancelled { wake_id } => {
+                by_id.remove(wake_id);
+            }
+            _ => {}
+        }
+    }
+    by_id
+        .into_iter()
+        .map(|(id, (fire_at, note))| ((fire_at, id), note))
+        .collect()
+}
+
+/// The earliest `fire_at_ms` in the pending set (the watcher's next deadline),
+/// or `None` when nothing is scheduled (the watcher parks on `changed()`).
+fn earliest_fire_at(pending: &std::collections::BTreeMap<(i64, String), String>) -> Option<i64> {
+    pending.keys().next().map(|(t, _)| *t)
+}
+
+/// Runaway guards for agent-scheduled wakes (constants in v1).
+const WAKE_MIN_DELAY_SECS: u64 = 30;
+const WAKE_MAX_PENDING: usize = 16;
+/// Ceiling for an agent-scheduled wake: 30 days. Prevents an absurd delay from
+/// overflowing the i64 millisecond fire-time arithmetic (a panic in the main loop).
+const WAKE_MAX_DELAY_SECS: u64 = 2_592_000;
+/// Validate a `schedule_wake` request against the master switch, the 30 s floor,
+/// and the 16-pending cap. Returns a user-facing error string on rejection.
+fn validate_schedule(enabled: bool, pending_count: usize, delay_secs: u64) -> Result<(), String> {
+    if !enabled {
+        return Err("scheduled wake-ups are disabled ([wake] enabled = false)".into());
+    }
+    if delay_secs < WAKE_MIN_DELAY_SECS {
+        return Err(format!("delay must be at least {WAKE_MIN_DELAY_SECS}s"));
+    }
+    if delay_secs > WAKE_MAX_DELAY_SECS {
+        return Err(format!("delay must be at most {WAKE_MAX_DELAY_SECS}s (30 days)"));
+    }
+    if pending_count >= WAKE_MAX_PENDING {
+        return Err(format!("too many pending wakes (max {WAKE_MAX_PENDING})"));
+    }
+    Ok(())
+}
+
+/// Validate + persist a scheduled wake, insert it into the pending set, and
+/// re-arm the watcher. Returns the new wake id (or a user-facing error).
+async fn handle_schedule_wake(
+    app: &mut App,
+    delay_secs: u64,
+    note: String,
+) -> Result<String, String> {
+    validate_schedule(app.config.wake.enabled, app.pending_wakes.len(), delay_secs)?;
+    let wake_id = Ulid::new().to_string();
+    let fire_at_ms = now_ms().saturating_add(i64::try_from(delay_secs).unwrap_or(i64::MAX).saturating_mul(1000));
+    app.record(EventKind::WakeScheduled {
+        wake_id: wake_id.clone(),
+        fire_at_ms,
+        note: note.clone(),
+    })
+    .await
+    .map_err(|e| format!("failed to persist wake: {e}"))?;
+    app.pending_wakes.insert((fire_at_ms, wake_id.clone()), note);
+    let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
+    Ok(wake_id)
+}
+
+/// Cancel one pending wake by id, or all when `id` is None. Records a
+/// WakeCancelled per removed wake and re-arms the watcher. Cancelling an
+/// unknown/already-fired id is a no-op success.
+async fn handle_cancel_wake(app: &mut App, id: Option<String>) -> Result<String, String> {
+    let targets: Vec<(i64, String)> = match &id {
+        Some(want) => app
+            .pending_wakes
+            .keys()
+            .filter(|(_, wid)| wid == want)
+            .cloned()
+            .collect(),
+        None => app.pending_wakes.keys().cloned().collect(),
+    };
+    for (fire_at, wid) in &targets {
+        app.record(EventKind::WakeCancelled { wake_id: wid.clone() })
+            .await
+            .map_err(|e| format!("failed to persist cancel: {e}"))?;
+        app.pending_wakes.remove(&(*fire_at, wid.clone()));
+    }
+    let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
+    Ok(match id {
+        Some(_) => format!("cancelled {} wake(s)", targets.len()),
+        None => format!("cancelled all {} pending wake(s)", targets.len()),
+    })
+}
+
 /// Called after a `DelegationResult` has been recorded into `app.events` and the
 /// finished subagent dropped from the in-flight sets. Decides whether the
 /// orchestrator should continue so it actually *sees* the result:
@@ -5527,6 +5708,59 @@ fn take_deferred_delegation_wake(app: &mut App) -> bool {
         app.streaming = true;
     }
     wake
+}
+
+/// The synthetic UserMessage text a fired wake injects. Appends a late stamp
+/// only when the fire is more than 5 s overdue (i.e. a catch-up on reopen, not
+/// a normal on-time timer elapse).
+const WAKE_LATE_STAMP_MS: i64 = 5_000;
+fn wake_injection_text(note: &str, fire_at_ms: i64, now_ms: i64) -> String {
+    if now_ms - fire_at_ms > WAKE_LATE_STAMP_MS {
+        format!("⏰ scheduled: {note} (fired late)")
+    } else {
+        format!("⏰ scheduled: {note}")
+    }
+}
+
+/// Drain every wake whose `fire_at_ms <= now`. When the orchestrator is idle and
+/// not yielded: record each as a synthetic UserMessage + a WakeFired marker
+/// (at-least-once — WakeFired is written ONLY here), drop them from the pending
+/// set, re-arm the watcher, and spawn ONE continuation turn to process them.
+/// When BUSY: touch nothing except parking the watcher (send None) so it stops
+/// re-firing on the now-past deadline; the wakes stay pending and the
+/// `TurnComplete` drain fires them once the turn ends (in correct log order).
+/// Returns whether a turn was spawned.
+async fn drain_due_wakes(app: &mut App) -> anyhow::Result<bool> {
+    let now = now_ms();
+    // Due keys (fire_at <= now), smallest-first. Exclusive upper bound at
+    // `now + 1` so a wake due at exactly `now` is included and `now+…` excluded.
+    let due: Vec<(i64, String)> = app
+        .pending_wakes
+        .range(..(now + 1, String::new()))
+        .map(|((t, id), _)| (*t, id.clone()))
+        .collect();
+    if due.is_empty() {
+        return Ok(false);
+    }
+    let idle = !app.streaming && app.in_flight_subagents.is_empty() && !app.yielded;
+    if !idle {
+        // Busy: leave the wakes pending and park the watcher so it does not spin
+        // on the past deadline. TurnComplete's drain fires them when idle.
+        let _ = app.next_wake_tx.send(None);
+        return Ok(false);
+    }
+    // Idle: fire them. Only now do we mutate the pending set + record events.
+    for (fire_at, id) in &due {
+        let note = app.pending_wakes.remove(&(*fire_at, id.clone())).unwrap_or_default();
+        let text = wake_injection_text(&note, *fire_at, now);
+        app.record(EventKind::UserMessage { text }).await?;
+        app.record(EventKind::WakeFired { wake_id: id.clone() }).await?;
+    }
+    // Re-arm the watcher to the next remaining deadline (or park).
+    let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
+    app.streaming = true;
+    spawn_turn(app);
+    Ok(true)
 }
 
 fn spawn_turn(app: &mut App) {
@@ -5737,6 +5971,58 @@ mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend, style::Modifier};
     use ratatui_textarea::TextArea;
+
+    #[test]
+    fn rebuild_pending_wakes_projects_unfired_uncancelled() {
+        use zoid_core::event::{Event, EventKind};
+        let mk = |kind| Event::new(Ulid::new(), None, 0, kind);
+        let evs = vec![
+            mk(EventKind::WakeScheduled { wake_id: "a".into(), fire_at_ms: 300, note: "later".into() }),
+            mk(EventKind::WakeScheduled { wake_id: "b".into(), fire_at_ms: 100, note: "soon".into() }),
+            mk(EventKind::WakeScheduled { wake_id: "c".into(), fire_at_ms: 200, note: "gone".into() }),
+            mk(EventKind::WakeFired { wake_id: "b".into() }),      // b fired → excluded
+            mk(EventKind::WakeCancelled { wake_id: "c".into() }),  // c cancelled → excluded
+        ];
+        let pending = rebuild_pending_wakes(&evs);
+        // Only `a` survives; BTreeMap orders by (fire_at, id).
+        assert_eq!(pending.len(), 1, "only the un-fired, un-cancelled wake survives");
+        assert_eq!(pending.get(&(300, "a".to_string())).map(String::as_str), Some("later"));
+        // Earliest fire_at of the pending set.
+        assert_eq!(pending.keys().next().map(|(t, _)| *t), Some(300));
+    }
+
+    #[test]
+    fn earliest_fire_at_is_the_min_key() {
+        let mut pending = std::collections::BTreeMap::new();
+        assert_eq!(earliest_fire_at(&pending), None, "empty → None (watcher parks)");
+        pending.insert((500i64, "a".to_string()), "n".to_string());
+        pending.insert((100i64, "b".to_string()), "n".to_string());
+        assert_eq!(earliest_fire_at(&pending), Some(100), "earliest fire_at wins");
+    }
+
+    #[test]
+    fn wake_injection_text_stamps_late_only_when_overdue() {
+        // On-time (within 5s): no late stamp.
+        assert_eq!(
+            wake_injection_text("check CI", 10_000, 10_200),
+            "⏰ scheduled: check CI"
+        );
+        // Overdue by > 5s (catch-up on reopen): late stamp appended.
+        assert_eq!(
+            wake_injection_text("check CI", 10_000, 20_000),
+            "⏰ scheduled: check CI (fired late)"
+        );
+    }
+
+    #[test]
+    fn validate_schedule_enforces_switch_floor_and_cap() {
+        assert!(validate_schedule(false, 0, 60).is_err(), "disabled → reject");
+        assert!(validate_schedule(true, 0, 29).is_err(), "below 30s floor → reject");
+        assert!(validate_schedule(true, 16, 60).is_err(), "at 16 pending cap → reject");
+        assert!(validate_schedule(true, 15, 30).is_ok(), "enabled, 30s, under cap → ok");
+        assert!(validate_schedule(true, 0, WAKE_MAX_DELAY_SECS + 1).is_err(), "above 30-day cap → reject");
+        assert!(validate_schedule(true, 0, WAKE_MAX_DELAY_SECS).is_ok(), "exactly at cap → ok");
+    }
 
     #[test]
     fn second_cancel_escalates_to_hard() {
@@ -6432,6 +6718,7 @@ mod tests {
                     reassert_interval_tokens: Source::Default,
                     ui_edit_diff: Source::Default,
                     ui_edit_diff_inline: Source::Default,
+                    wake_enabled: Source::Default,
                 }
             },
             secrets: None,
@@ -6472,12 +6759,107 @@ mod tests {
             yielded: false,
             pending_message: None,
             wake_after_delegation: false,
+            pending_wakes: std::collections::BTreeMap::new(),
+            next_wake_tx: tokio::sync::watch::channel(None).0,
             pending_takeover: None,
             mcp: None,
             embed_index: None,
             embedder: None,
             installing_plugin: false,
         }
+    }
+
+    #[tokio::test]
+    async fn schedule_then_cancel_roundtrips_the_pending_set() {
+        let mut app = test_app().await;
+        // Assumes wake.enabled defaults true in the test config.
+        let id = handle_schedule_wake(&mut app, 60, "check CI".into()).await.unwrap();
+        assert_eq!(app.pending_wakes.len(), 1, "schedule inserts one pending wake");
+        assert_eq!(
+            earliest_fire_at(&app.pending_wakes),
+            app.pending_wakes.keys().next().map(|(t, _)| *t)
+        );
+
+        let msg = handle_cancel_wake(&mut app, Some(id)).await.unwrap();
+        assert!(app.pending_wakes.is_empty(), "cancel removes it");
+        assert!(msg.contains("cancelled 1"));
+
+        // A projection rebuild over the recorded events agrees (Scheduled then Cancelled → empty).
+        let log = app.session.snapshot().await.unwrap();
+        assert!(
+            rebuild_pending_wakes(&log).is_empty(),
+            "event-log projection matches live state"
+        );
+    }
+
+    #[tokio::test]
+    async fn due_wake_injects_usermessage_and_fires_when_idle() {
+        let mut app = test_app().await;
+        app.streaming = false;
+        let past = now_ms() - 10_000; // already due, > 5s late
+        app.pending_wakes.insert((past, "w1".to_string()), "check the build".to_string());
+        let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
+
+        let spawned = drain_due_wakes(&mut app).await.unwrap();
+
+        assert!(spawned, "an idle orchestrator fires the due wake");
+        assert!(app.streaming, "firing marks the turn streaming");
+        assert!(app.pending_wakes.is_empty(), "the fired wake leaves the pending set");
+        let log = app.session.snapshot().await.unwrap();
+        assert!(
+            log.iter().any(|e| matches!(&e.kind,
+                EventKind::UserMessage { text } if text == "⏰ scheduled: check the build (fired late)")),
+            "the late-stamped note is injected as a UserMessage"
+        );
+        assert!(
+            log.iter().any(|e| matches!(&e.kind, EventKind::WakeFired { wake_id } if wake_id == "w1")),
+            "a WakeFired marker is recorded at injection (at-least-once)"
+        );
+    }
+
+    #[tokio::test]
+    async fn future_wake_does_not_fire() {
+        let mut app = test_app().await;
+        app.streaming = false;
+        let future = now_ms() + 60_000;
+        app.pending_wakes.insert((future, "w2".to_string()), "later".to_string());
+        let spawned = drain_due_wakes(&mut app).await.unwrap();
+        assert!(!spawned, "a not-yet-due wake must not fire");
+        assert_eq!(app.pending_wakes.len(), 1, "it stays pending");
+    }
+
+    #[tokio::test]
+    async fn busy_drain_is_side_effect_free_and_parks_watcher() {
+        // C1 invariant: when a turn is in flight, a due wake must NOT be recorded
+        // or removed — the drain only parks the watcher (send None) so it stops
+        // spinning on the past deadline; TurnComplete's drain fires it once idle.
+        let mut app = test_app().await;
+        app.streaming = true; // busy: a turn is in flight
+        let past = now_ms() - 10_000; // already due
+        app.pending_wakes
+            .insert((past, "w3".to_string()), "check later".to_string());
+        let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
+        let mut rx = app.next_wake_tx.subscribe();
+
+        let spawned = drain_due_wakes(&mut app).await.unwrap();
+
+        assert!(!spawned, "a busy orchestrator must not spawn a turn");
+        assert_eq!(
+            app.pending_wakes.len(),
+            1,
+            "busy drain must NOT remove the wake (side-effect-free)"
+        );
+        let log = app.session.snapshot().await.unwrap();
+        assert!(
+            !log.iter()
+                .any(|e| matches!(&e.kind, EventKind::WakeFired { .. })),
+            "busy drain must record no WakeFired (side-effect-free)"
+        );
+        assert_eq!(
+            *rx.borrow_and_update(),
+            None,
+            "busy drain parks the watcher (send None) so it stops spinning on the past deadline"
+        );
     }
 
     #[test]

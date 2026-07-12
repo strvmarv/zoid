@@ -155,8 +155,11 @@ config later if needed).
 ## Error handling
 
 - **At-least-once, never-lost:** `WakeFired` is written only at injection, so any
-  crash before injection re-fires the wake on reload (catch-up). A duplicate is
-  impossible because injection + `WakeFired` + pending-removal happen together.
+  crash before injection re-fires the wake on reload (catch-up). Injection and
+  `WakeFired` are two separate appends (not atomic): a crash in the window between
+  them re-fires and re-injects the note on reload. This is at-least-once by design
+  — the alternative order (WakeFired first) would silently lose wakes. Exactly-once
+  is not guaranteed; a duplicate injection is possible only across that crash window.
 - **Disabled mid-flight:** if `[wake] enabled` is flipped to `false`,
   `schedule_wake` refuses new wakes; already-scheduled wakes still fire (they're
   persisted) — turning it off does not silently strand a promised wake. (A

@@ -935,7 +935,7 @@ fn config_overlay_frame() {
         reassert_interval_tokens: Source::Default,
         reduced_motion: Source::Default,
             thinking_enabled: Source::Default,
-            thinking_effort: Source::Default, approval: Source::Default, ui_edit_diff: Source::Default, ui_edit_diff_inline: Source::Default,
+            thinking_effort: Source::Default, approval: Source::Default, ui_edit_diff: Source::Default, ui_edit_diff_inline: Source::Default, wake_enabled: Source::Default,
     };
     let ks = [
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
@@ -974,7 +974,7 @@ fn config_key_prompt_masks_entry() {
         reassert_interval_tokens: Source::Default,
         reduced_motion: Source::Default,
             thinking_enabled: Source::Default,
-            thinking_effort: Source::Default, approval: Source::Default, ui_edit_diff: Source::Default, ui_edit_diff_inline: Source::Default,
+            thinking_effort: Source::Default, approval: Source::Default, ui_edit_diff: Source::Default, ui_edit_diff_inline: Source::Default, wake_enabled: Source::Default,
     };
     let ks = [
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
@@ -1019,7 +1019,7 @@ fn config_overlay_provider_picker() {
         reassert_interval_tokens: Source::Default,
         reduced_motion: Source::Default,
             thinking_enabled: Source::Default,
-            thinking_effort: Source::Default, approval: Source::Default, ui_edit_diff: Source::Default, ui_edit_diff_inline: Source::Default,
+            thinking_effort: Source::Default, approval: Source::Default, ui_edit_diff: Source::Default, ui_edit_diff_inline: Source::Default, wake_enabled: Source::Default,
     };
     let ks = [
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
@@ -1076,7 +1076,7 @@ fn config_overlay_provider_picker_selection_styles() {
         reassert_interval_tokens: Source::Default,
         reduced_motion: Source::Default,
             thinking_enabled: Source::Default,
-            thinking_effort: Source::Default, approval: Source::Default, ui_edit_diff: Source::Default, ui_edit_diff_inline: Source::Default,
+            thinking_effort: Source::Default, approval: Source::Default, ui_edit_diff: Source::Default, ui_edit_diff_inline: Source::Default, wake_enabled: Source::Default,
     };
     let ks = [
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
@@ -1152,7 +1152,7 @@ fn config_overlay_narrow_degrades() {
         reassert_interval_tokens: Source::Default,
         reduced_motion: Source::Default,
             thinking_enabled: Source::Default,
-            thinking_effort: Source::Default, approval: Source::Default, ui_edit_diff: Source::Default, ui_edit_diff_inline: Source::Default,
+            thinking_effort: Source::Default, approval: Source::Default, ui_edit_diff: Source::Default, ui_edit_diff_inline: Source::Default, wake_enabled: Source::Default,
     };
     let ks = [
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
@@ -1198,7 +1198,7 @@ fn config_overlay_narrow_degrades_respects_focus() {
         reassert_interval_tokens: Source::Default,
         reduced_motion: Source::Default,
             thinking_enabled: Source::Default,
-            thinking_effort: Source::Default, approval: Source::Default, ui_edit_diff: Source::Default, ui_edit_diff_inline: Source::Default,
+            thinking_effort: Source::Default, approval: Source::Default, ui_edit_diff: Source::Default, ui_edit_diff_inline: Source::Default, wake_enabled: Source::Default,
     };
     let ks = [
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),

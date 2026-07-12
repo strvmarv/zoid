@@ -106,6 +106,10 @@ pub fn chat_tools(skills: Arc<SkillRegistry>, kill: zoid_tools::KillSlot) -> Vec
     // subagents run in their own ephemeral worktrees via the subagent path.
     tools.push(Box::new(zoid_tools::worktree_enter::EnterWorktree));
     tools.push(Box::new(zoid_tools::worktree_exit::ExitWorktree));
+    // Scheduled wake-ups: schedule/cancel a one-shot reminder to resume this
+    // conversation later. Chat-only — subagents have no session to wake.
+    tools.push(Box::new(zoid_tools::wake::ScheduleWake));
+    tools.push(Box::new(zoid_tools::wake::CancelWake));
     tools
 }
 
@@ -197,5 +201,8 @@ mod tests {
             tools.iter().any(|t| t.name() == "subagent_diff"),
             "subagent_diff must be in chat_tools"
         );
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert!(names.contains(&"schedule_wake"), "chat_tools includes schedule_wake");
+        assert!(names.contains(&"cancel_wake"), "chat_tools includes cancel_wake");
     }
 }

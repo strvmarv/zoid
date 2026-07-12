@@ -371,6 +371,20 @@ pub enum AgentUpdate {
         action: WorktreeAction,
         reply: tokio::sync::oneshot::Sender<Result<std::path::PathBuf, String>>,
     },
+    /// The wake watcher's timer elapsed; the main loop should drain any wakes
+    /// whose `fire_at_ms <= now` (inject if idle, else defer to TurnComplete).
+    WakeDue,
+    /// `schedule_wake` request → main loop validates + persists; replies Ok(wake_id) or Err(msg).
+    ScheduleWake {
+        delay_secs: u64,
+        note: String,
+        reply: tokio::sync::oneshot::Sender<Result<String, String>>,
+    },
+    /// `cancel_wake` request → main loop cancels one/all; replies Ok(summary) or Err(msg).
+    CancelWake {
+        id: Option<String>,
+        reply: tokio::sync::oneshot::Sender<Result<String, String>>,
+    },
 }
 
 /// The tool specs to advertise to the provider.
@@ -1695,6 +1709,92 @@ async fn run_turn_inner(
                         ms = tool_start.elapsed().as_millis() as u64,
                         ok = true,
                         "worktree exit requested"
+                    );
+                }
+                Some(zoid_tools::ToolKind::Emitting) if tc.name == "schedule_wake" => {
+                    let delay_secs = tc
+                        .args
+                        .get("delay_secs")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let note = tc
+                        .args
+                        .get("note")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    let _ = ui
+                        .send(AgentUpdate::ScheduleWake {
+                            delay_secs,
+                            note,
+                            reply: tx,
+                        })
+                        .await;
+                    let (output, is_error) = match rx.await {
+                        Ok(Ok(id)) => (format!("scheduled (id {id})"), false),
+                        Ok(Err(e)) => (e, true),
+                        Err(_) => ("schedule_wake failed (no reply)".to_string(), true),
+                    };
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::ToolResult {
+                            id: tc.id,
+                            name: tc.name,
+                            output,
+                            is_error,
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                    tracing::info!(
+                        kind = "tool",
+                        name = "schedule_wake",
+                        ms = tool_start.elapsed().as_millis() as u64,
+                        ok = true,
+                        "wake scheduled"
+                    );
+                }
+                Some(zoid_tools::ToolKind::Emitting) if tc.name == "cancel_wake" => {
+                    let id = tc
+                        .args
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    let _ = ui
+                        .send(AgentUpdate::CancelWake { id, reply: tx })
+                        .await;
+                    let (output, is_error) = match rx.await {
+                        Ok(Ok(msg)) => (msg, false),
+                        Ok(Err(e)) => (e, true),
+                        Err(_) => ("cancel_wake failed (no reply)".to_string(), true),
+                    };
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::ToolResult {
+                            id: tc.id,
+                            name: tc.name,
+                            output,
+                            is_error,
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                    tracing::info!(
+                        kind = "tool",
+                        name = "cancel_wake",
+                        ms = tool_start.elapsed().as_millis() as u64,
+                        ok = true,
+                        "wake cancel requested"
                     );
                 }
                 Some(zoid_tools::ToolKind::Emitting) if tc.name == "cancel_subagent" => {
