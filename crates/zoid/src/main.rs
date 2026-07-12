@@ -3121,6 +3121,12 @@ where
                     zoid::agent::AgentUpdate::WakeDue => {
                         let _ = drain_due_wakes(app).await?;
                     }
+                    zoid::agent::AgentUpdate::ScheduleWake { delay_secs, note, reply } => {
+                        let _ = reply.send(handle_schedule_wake(app, delay_secs, note).await);
+                    }
+                    zoid::agent::AgentUpdate::CancelWake { id, reply } => {
+                        let _ = reply.send(handle_cancel_wake(app, id).await);
+                    }
                 }
             }
             _ = motion_tick.tick(), if app.streaming || !app.in_flight_subagents.is_empty() || app.shell.compacting || app.shell.active_tool.is_some() || app.zoom_changed_at.is_some() => {
@@ -5588,6 +5594,72 @@ fn earliest_fire_at(pending: &std::collections::BTreeMap<(i64, String), String>)
     pending.keys().next().map(|(t, _)| *t)
 }
 
+/// Runaway guards for agent-scheduled wakes (constants in v1).
+const WAKE_MIN_DELAY_SECS: u64 = 30;
+const WAKE_MAX_PENDING: usize = 16;
+/// Validate a `schedule_wake` request against the master switch, the 30 s floor,
+/// and the 16-pending cap. Returns a user-facing error string on rejection.
+fn validate_schedule(enabled: bool, pending_count: usize, delay_secs: u64) -> Result<(), String> {
+    if !enabled {
+        return Err("scheduled wake-ups are disabled ([wake] enabled = false)".into());
+    }
+    if delay_secs < WAKE_MIN_DELAY_SECS {
+        return Err(format!("delay must be at least {WAKE_MIN_DELAY_SECS}s"));
+    }
+    if pending_count >= WAKE_MAX_PENDING {
+        return Err(format!("too many pending wakes (max {WAKE_MAX_PENDING})"));
+    }
+    Ok(())
+}
+
+/// Validate + persist a scheduled wake, insert it into the pending set, and
+/// re-arm the watcher. Returns the new wake id (or a user-facing error).
+async fn handle_schedule_wake(
+    app: &mut App,
+    delay_secs: u64,
+    note: String,
+) -> Result<String, String> {
+    validate_schedule(app.config.wake.enabled, app.pending_wakes.len(), delay_secs)?;
+    let wake_id = Ulid::new().to_string();
+    let fire_at_ms = now_ms() + (delay_secs as i64) * 1000;
+    app.record(EventKind::WakeScheduled {
+        wake_id: wake_id.clone(),
+        fire_at_ms,
+        note: note.clone(),
+    })
+    .await
+    .map_err(|e| format!("failed to persist wake: {e}"))?;
+    app.pending_wakes.insert((fire_at_ms, wake_id.clone()), note);
+    let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
+    Ok(wake_id)
+}
+
+/// Cancel one pending wake by id, or all when `id` is None. Records a
+/// WakeCancelled per removed wake and re-arms the watcher. Cancelling an
+/// unknown/already-fired id is a no-op success.
+async fn handle_cancel_wake(app: &mut App, id: Option<String>) -> Result<String, String> {
+    let targets: Vec<(i64, String)> = match &id {
+        Some(want) => app
+            .pending_wakes
+            .keys()
+            .filter(|(_, wid)| wid == want)
+            .cloned()
+            .collect(),
+        None => app.pending_wakes.keys().cloned().collect(),
+    };
+    for (fire_at, wid) in &targets {
+        app.pending_wakes.remove(&(*fire_at, wid.clone()));
+        app.record(EventKind::WakeCancelled { wake_id: wid.clone() })
+            .await
+            .map_err(|e| format!("failed to persist cancel: {e}"))?;
+    }
+    let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
+    Ok(match id {
+        Some(_) => format!("cancelled {} wake(s)", targets.len()),
+        None => format!("cancelled all {} pending wake(s)", targets.len()),
+    })
+}
+
 /// Called after a `DelegationResult` has been recorded into `app.events` and the
 /// finished subagent dropped from the in-flight sets. Decides whether the
 /// orchestrator should continue so it actually *sees* the result:
@@ -5934,6 +6006,14 @@ mod tests {
             wake_injection_text("check CI", 10_000, 20_000),
             "⏰ scheduled: check CI (fired late)"
         );
+    }
+
+    #[test]
+    fn validate_schedule_enforces_switch_floor_and_cap() {
+        assert!(validate_schedule(false, 0, 60).is_err(), "disabled → reject");
+        assert!(validate_schedule(true, 0, 29).is_err(), "below 30s floor → reject");
+        assert!(validate_schedule(true, 16, 60).is_err(), "at 16 pending cap → reject");
+        assert!(validate_schedule(true, 15, 30).is_ok(), "enabled, 30s, under cap → ok");
     }
 
     #[test]
@@ -6679,6 +6759,29 @@ mod tests {
             embedder: None,
             installing_plugin: false,
         }
+    }
+
+    #[tokio::test]
+    async fn schedule_then_cancel_roundtrips_the_pending_set() {
+        let mut app = test_app().await;
+        // Assumes wake.enabled defaults true in the test config.
+        let id = handle_schedule_wake(&mut app, 60, "check CI".into()).await.unwrap();
+        assert_eq!(app.pending_wakes.len(), 1, "schedule inserts one pending wake");
+        assert_eq!(
+            earliest_fire_at(&app.pending_wakes),
+            app.pending_wakes.keys().next().map(|(t, _)| *t)
+        );
+
+        let msg = handle_cancel_wake(&mut app, Some(id)).await.unwrap();
+        assert!(app.pending_wakes.is_empty(), "cancel removes it");
+        assert!(msg.contains("cancelled 1"));
+
+        // A projection rebuild over the recorded events agrees (Scheduled then Cancelled → empty).
+        let log = app.session.snapshot().await.unwrap();
+        assert!(
+            rebuild_pending_wakes(&log).is_empty(),
+            "event-log projection matches live state"
+        );
     }
 
     #[tokio::test]
