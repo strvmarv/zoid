@@ -28,48 +28,53 @@ fn push_escaped(out: &mut String, s: &str) {
     }
 }
 
+/// Emit a run of normal-width cells sharing one (fg,bg) style.
+fn write_run(out: &mut String, fg: &Option<String>, bg: &Option<String>, run: &str) {
+    if run.is_empty() {
+        return;
+    }
+    let mut style = String::new();
+    if let Some(fg) = fg {
+        let _ = write!(style, "color:{fg};");
+    }
+    if let Some(bg) = bg {
+        let _ = write!(style, "background:{bg};");
+    }
+    if style.is_empty() {
+        out.push_str(run);
+    } else {
+        let _ = write!(out, "<span style=\"{}\">{}</span>", style.trim_end_matches(';'), run);
+    }
+}
+
+/// Emit a single wide (≥2 cell) glyph as a fixed-width inline-block, so the
+/// browser reserves exactly its terminal cell count and the grid can't drift.
+fn write_wide(out: &mut String, fg: &Option<String>, bg: &Option<String>, w: u16, glyph: &str) {
+    let mut style = format!("display:inline-block;width:{w}ch;text-align:center;");
+    if let Some(fg) = fg {
+        let _ = write!(style, "color:{fg};");
+    }
+    if let Some(bg) = bg {
+        let _ = write!(style, "background:{bg};");
+    }
+    let _ = write!(out, "<span style=\"{}\">{}</span>", style.trim_end_matches(';'), glyph);
+}
+
 /// Convert a rendered buffer into a colored `<pre>` mirroring the terminal grid.
 pub fn buffer_to_html(buf: &Buffer) -> String {
     let area = buf.area;
     let mut out = String::from("<pre class=\"tui\">");
     for y in area.y..area.y + area.height {
-        // Rows are *separated* by `\n`, not terminated: emit the newline before
-        // every row except the first, so `</pre>` follows the last row's content
-        // with no trailing blank line (which `<pre>` would render).
+        // Rows are *separated* by `\n`, not terminated (no trailing blank line).
         if y > area.y {
             out.push('\n');
         }
         let mut x = area.x;
-        // Open-span state for the current run.
+        // Open normal-run state for this row.
         let mut run = String::new();
-        let mut cur: Option<(Option<String>, Option<String>)> = None;
-
-        let flush = |out: &mut String,
-                     run: &mut String,
-                     cur: &mut Option<(Option<String>, Option<String>)>| {
-            if let Some((fg, bg)) = cur.take() {
-                let mut style = String::new();
-                if let Some(fg) = fg {
-                    let _ = write!(style, "color:{fg};");
-                }
-                if let Some(bg) = bg {
-                    let _ = write!(style, "background:{bg};");
-                }
-                if style.is_empty() {
-                    out.push_str(run);
-                } else {
-                    let _ = write!(
-                        out,
-                        "<span style=\"{}\">{}</span>",
-                        style.trim_end_matches(';'),
-                        run
-                    );
-                }
-            } else {
-                out.push_str(run);
-            }
-            run.clear();
-        };
+        let mut run_fg: Option<String> = None;
+        let mut run_bg: Option<String> = None;
+        let mut run_open = false;
 
         while x < area.x + area.width {
             let cell = &buf[(x, y)];
@@ -77,19 +82,34 @@ pub fn buffer_to_html(buf: &Buffer) -> String {
             if cell.modifier.contains(Modifier::REVERSED) {
                 std::mem::swap(&mut fg, &mut bg);
             }
-            let key = (css(fg), css(bg));
-            if cur.as_ref() != Some(&key) {
-                flush(&mut out, &mut run, &mut cur);
-                cur = Some(key);
-            }
+            let fg = css(fg);
+            let bg = css(bg);
             let sym = cell.symbol();
-            push_escaped(&mut run, sym);
             // Advance by the glyph's display width so a 2-col glyph skips its
             // reserved continuation cell (ratatui leaves it blank).
             let w = sym.width().max(1) as u16;
+
+            if w >= 2 {
+                // Flush any pending normal run, then emit the wide glyph alone.
+                write_run(&mut out, &run_fg, &run_bg, &run);
+                run.clear();
+                run_open = false;
+                let mut esc = String::new();
+                push_escaped(&mut esc, sym);
+                write_wide(&mut out, &fg, &bg, w, &esc);
+            } else {
+                if !run_open || run_fg != fg || run_bg != bg {
+                    write_run(&mut out, &run_fg, &run_bg, &run);
+                    run.clear();
+                    run_fg = fg.clone();
+                    run_bg = bg.clone();
+                    run_open = true;
+                }
+                push_escaped(&mut run, sym);
+            }
             x += w;
         }
-        flush(&mut out, &mut run, &mut cur);
+        write_run(&mut out, &run_fg, &run_bg, &run);
     }
     out.push_str("</pre>");
     out
@@ -148,5 +168,33 @@ mod tests {
             .and_then(|s| s.strip_suffix("</pre>"))
             .expect("wrapper present");
         assert_eq!(body, "a\nb");
+    }
+
+    #[test]
+    fn wide_glyph_gets_explicit_cell_width() {
+        // A 2-cell emoji must be emitted as a fixed 2ch inline-block so the
+        // browser reserves exactly its terminal width regardless of font advance
+        // (otherwise every column to its right — worst of all the scrollbar —
+        // drifts). ratatui reserves the continuation cell, so use a width-2 buffer.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 2, 1));
+        buf.set_string(0, 0, "📦", Style::default().fg(Color::Rgb(0x58, 0xa6, 0xff)));
+        let html = buffer_to_html(&buf);
+        assert!(
+            html.contains("display:inline-block;width:2ch"),
+            "expected fixed 2ch width for the wide glyph; got: {html}"
+        );
+        assert!(html.contains("📦"));
+    }
+
+    #[test]
+    fn wide_glyph_does_not_shift_following_text() {
+        // "📦" at col 0 (occupies cols 0-1), "x" at col 2. The wide glyph is
+        // isolated in its own fixed-width span; the trailing normal run is intact.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 3, 1));
+        buf.set_string(0, 0, "📦", Style::default());
+        buf.set_string(2, 0, "x", Style::default());
+        let html = buffer_to_html(&buf);
+        assert!(html.contains("width:2ch"));
+        assert!(html.trim_end().ends_with("x</pre>"), "got: {html}");
     }
 }
