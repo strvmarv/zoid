@@ -7572,6 +7572,14 @@ mod worktree_switch_tests {
         std::fs::write(cwd.join("f.txt"), "uncommitted change").unwrap();
         compute_worktree_switch(&mut active, WorktreeAction::Exit, false, repo.path()).unwrap();
         assert!(cwd.exists(), "dirty worktree dir must be KEPT on exit (no data loss)");
+        // The bytes themselves must survive, not just the directory — this is the
+        // actual "no data loss" invariant (a dir-only check would pass even if a
+        // future remove-adjacent bug truncated tracked files).
+        assert_eq!(
+            std::fs::read_to_string(cwd.join("f.txt")).unwrap(),
+            "uncommitted change",
+            "uncommitted bytes must survive a dirty exit"
+        );
         // Re-enter the same name — must NOT error (idempotent re-enter).
         let cwd2 = compute_worktree_switch(&mut active, WorktreeAction::Enter { name: "keep".into() }, false, repo.path()).unwrap();
         assert!(cwd2.exists());
