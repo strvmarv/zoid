@@ -17,7 +17,7 @@ pub fn seeded() -> Vec<ChatMsg> {
             ts: 0,
         },
         ChatMsg::Assistant {
-                thinking: None,
+            thinking: None,
             text: "searching for the failing lookup".into(),
             tool_calls: vec![ToolCallRef {
                 id: "c1".into(),
@@ -50,7 +50,7 @@ pub fn seeded() -> Vec<ChatMsg> {
 fn seeded_objects() -> Vec<ChatMsg> {
     vec![
         ChatMsg::Assistant {
-                thinking: None,
+            thinking: None,
             text: String::new(),
             tool_calls: vec![ToolCallRef {
                 id: "c1".into(),
@@ -171,6 +171,29 @@ fn seeded_economy() -> EconomyView {
     EconomyView::build(&w, &churn, 0)
 }
 
+/// A short, realistic task list for the hero scene's Tasks drawer.
+fn seeded_tasks() -> Vec<zoid_core::tasks::TaskItem> {
+    use zoid_core::tasks::{TaskItem, TaskStatus};
+    vec![
+        TaskItem {
+            text: "reproduce the 500".into(),
+            status: TaskStatus::Done,
+        },
+        TaskItem {
+            text: "patch the unwrapped lookup".into(),
+            status: TaskStatus::Active,
+        },
+    ]
+}
+
+/// Tasks a scene renders into the Tasks drawer (empty for scenes without tasks).
+fn scene_tasks(name: &str) -> Vec<zoid_core::tasks::TaskItem> {
+    match name {
+        "economy" | "context-economy" => seeded_tasks(),
+        _ => vec![],
+    }
+}
+
 pub fn scene(name: &str) -> (ShellState, Vec<ChatMsg>, EconomyView) {
     let mut s = ShellState::new();
     match name {
@@ -186,6 +209,22 @@ pub fn scene(name: &str) -> (ShellState, Vec<ChatMsg>, EconomyView) {
             return (s, vec![], empty_economy());
         }
         "economy" => {
+            // Populate the right-rail widgets so the frame reads as real usage.
+            s.session_name = "diagnose 500".into();
+            s.model = "glm-5.2".into();
+            s.provider = "ollama".into();
+            s.duration = "12m".into();
+            s.session_tokens = 48_200;
+            s.cached_tokens = 31_040;
+            s.cache_supported = true;
+            s.ctx_used = 18_000;
+            s.ctx_ceiling = 128_000;
+            s.repo_name = "api".into();
+            s.branch = "main".into();
+            s.changes_added = 24;
+            s.changes_removed = 6;
+            s.changes_files = 3;
+            s.tasks_len = 2;
             return (s, seeded(), seeded_economy());
         }
         "summary" => {
@@ -207,13 +246,16 @@ pub fn scene(name: &str) -> (ShellState, Vec<ChatMsg>, EconomyView) {
     (s, seeded(), empty_economy())
 }
 
-/// Render a shell scene and return a clone of the rendered buffer.
-// This module is compiled into both the `preview` and `web_capture` example
-// crates; `preview` never calls this (only `web_capture` does), so it is dead
-// code from `preview`'s build. Each consumer uses a subset — expected.
+/// Render one frame (state + messages + economy + tasks) to a cloned buffer.
 #[allow(dead_code)]
-pub fn render_shell_scene(name: &str, w: u16, h: u16) -> Buffer {
-    let (state, msgs, economy) = scene(name);
+pub fn render_one(
+    state: &ShellState,
+    msgs: &[ChatMsg],
+    economy: &EconomyView,
+    tasks: &[zoid_core::tasks::TaskItem],
+    w: u16,
+    h: u16,
+) -> Buffer {
     let input = TextArea::default();
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -225,8 +267,37 @@ pub fn render_shell_scene(name: &str, w: u16, h: u16) -> Buffer {
     };
     terminal
         .draw(|f| {
-            render_shell(f, &state, &economy, &msgs, None, &[], &input, false, &view);
+            render_shell(f, state, economy, msgs, None, tasks, &input, false, &view);
         })
         .unwrap();
     terminal.backend().buffer().clone()
+}
+
+/// Render a shell scene and return a clone of the rendered buffer.
+// This module is compiled into both the `preview` and `web_capture` example
+// crates; `preview` never calls this (only `web_capture` does), so it is dead
+// code from `preview`'s build. Each consumer uses a subset — expected.
+#[allow(dead_code)]
+pub fn render_shell_scene(name: &str, w: u16, h: u16) -> Buffer {
+    let (state, msgs, economy) = scene(name);
+    render_one(&state, &msgs, &economy, &scene_tasks(name), w, h)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn economy_scene_is_populated() {
+        // The captured hero scene must read as real usage: a named session with
+        // real token/cache/ctx numbers and a couple of tasks — not empty rails.
+        let (s, _msgs, _econ) = scene("economy");
+        assert!(!s.session_name.is_empty(), "session should be named");
+        assert!(s.session_tokens > 0, "session tokens should be non-zero");
+        assert!(
+            s.ctx_used > 0 && s.ctx_ceiling > s.ctx_used,
+            "ctx should be seeded"
+        );
+        assert_eq!(scene_tasks("economy").len(), 2, "two tasks expected");
+    }
 }
