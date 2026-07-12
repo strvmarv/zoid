@@ -70,10 +70,11 @@ impl Tool for Edit {
         }
 
         let full = crate::resolve(cwd, &path);
-        let mut contents = match std::fs::read_to_string(&full) {
+        let before = match std::fs::read_to_string(&full) {
             Ok(c) => c,
             Err(e) => return ToolOutput::err(format!("edit({path}): {e}")),
         };
+        let mut contents = before.clone();
         // Apply all edits in memory; bail (writing nothing) on the first failure.
         for (i, (old, new, replace_all)) in edits.iter().enumerate() {
             match apply_one(&contents, old, new, *replace_all) {
@@ -82,7 +83,10 @@ impl Tool for Edit {
             }
         }
         match std::fs::write(&full, contents.as_bytes()) {
-            Ok(()) => ToolOutput::ok(format!("edited {path} ({} change(s))", edits.len())),
+            Ok(()) => {
+                let fd = crate::compute_file_diff(&path, &before, &contents, crate::diff::INLINE_LINE_CAP);
+                ToolOutput::ok(format!("edited {path} ({} change(s))", edits.len())).with_diff(fd)
+            }
             Err(e) => ToolOutput::err(format!("edit({path}): {e}")),
         }
     }
@@ -213,5 +217,29 @@ mod tests {
         );
         assert!(out.is_error, "{}", out.text);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
+    }
+
+    #[test]
+    fn successful_edit_carries_a_file_diff() {
+        let (_d, path) = seed("alpha beta gamma");
+        let out = Edit.run(
+            &json!({ "path": path, "old_string": "beta", "new_string": "BETA" }),
+            std::path::Path::new("."),
+        );
+        assert!(!out.is_error, "{}", out.text);
+        let diff = out.diff.expect("edit success must carry a diff");
+        assert_eq!(diff.added, 1);
+        assert_eq!(diff.removed, 1);
+    }
+
+    #[test]
+    fn failed_edit_has_no_diff() {
+        let (_d, path) = seed("hello");
+        let out = Edit.run(
+            &json!({ "path": path, "old_string": "zzz", "new_string": "y" }),
+            std::path::Path::new("."),
+        );
+        assert!(out.is_error);
+        assert!(out.diff.is_none(), "error path carries no diff");
     }
 }

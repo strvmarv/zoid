@@ -34,6 +34,11 @@ use zoid_provider::{ToolCall, ToolSpec};
 pub struct ToolOutput {
     pub text: String,
     pub is_error: bool,
+    /// Ephemeral, UI-only diff for file-editing tools (edit/write). Never
+    /// persisted and never sent to the model — the bin forwards it on a
+    /// non-persisted `AgentUpdate` and drops it here. `None` for every other
+    /// tool and every error path.
+    pub diff: Option<diff::FileDiff>,
 }
 
 impl ToolOutput {
@@ -41,13 +46,20 @@ impl ToolOutput {
         Self {
             text: text.into(),
             is_error: false,
+            diff: None,
         }
     }
     pub fn err(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
             is_error: true,
+            diff: None,
         }
+    }
+    /// Attach an ephemeral UI diff to a successful output.
+    pub fn with_diff(mut self, diff: diff::FileDiff) -> Self {
+        self.diff = Some(diff);
+        self
     }
 }
 

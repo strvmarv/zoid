@@ -65,6 +65,7 @@ impl Tool for Shell {
                 ToolOutput {
                     text,
                     is_error: code != 0,
+                    diff: None,
                 }
             }
             Err(e) => ToolOutput::err(format!("shell({command}): {e}")),

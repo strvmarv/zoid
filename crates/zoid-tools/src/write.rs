@@ -34,8 +34,15 @@ impl Tool for Write {
             Ok(c) => c,
             Err(e) => return e,
         };
-        match std::fs::write(crate::resolve(cwd, &path), content.as_bytes()) {
-            Ok(()) => ToolOutput::ok(format!("wrote {} bytes to {path}", content.len())),
+        let full = crate::resolve(cwd, &path);
+        // Best-effort pre-image for the ephemeral diff; a new/unreadable file
+        // is treated as empty (all-additions).
+        let before = std::fs::read_to_string(&full).unwrap_or_default();
+        match std::fs::write(&full, content.as_bytes()) {
+            Ok(()) => {
+                let fd = crate::compute_file_diff(&path, &before, &content, crate::diff::INLINE_LINE_CAP);
+                ToolOutput::ok(format!("wrote {} bytes to {path}", content.len())).with_diff(fd)
+            }
             Err(e) => ToolOutput::err(format!("write({path}): {e}")),
         }
     }
@@ -68,5 +75,34 @@ mod tests {
         );
         assert!(out.is_error);
         assert!(out.text.contains("content"));
+    }
+
+    #[test]
+    fn write_of_new_file_carries_all_additions_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.txt");
+        let out = Write.run(
+            &json!({ "path": path.to_str().unwrap(), "content": "a\nb\n" }),
+            std::path::Path::new("."),
+        );
+        assert!(!out.is_error, "{}", out.text);
+        let diff = out.diff.expect("write success must carry a diff");
+        assert_eq!(diff.added, 2);
+        assert_eq!(diff.removed, 0);
+    }
+
+    #[test]
+    fn overwrite_diffs_against_prior_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.txt");
+        std::fs::write(&path, "a\nb\n").unwrap();
+        let out = Write.run(
+            &json!({ "path": path.to_str().unwrap(), "content": "a\nB\n" }),
+            std::path::Path::new("."),
+        );
+        assert!(!out.is_error, "{}", out.text);
+        let diff = out.diff.expect("write success must carry a diff");
+        assert_eq!(diff.added, 1, "B is added");
+        assert_eq!(diff.removed, 1, "b is removed");
     }
 }
