@@ -30,6 +30,7 @@ pre.tui{margin:0;padding:14px 16px;font-family:var(--mono);font-size:12px;line-h
 /* Reduced motion: show the final (resolved) frame, no animation. */
 @media (prefers-reduced-motion: reduce){
   .player .tui-frame{display:none;}
+  .player.nojs .tui-frame:first-child{display:none;}
   .player .tui-frame:last-child{display:block;}
 }
 </style>
