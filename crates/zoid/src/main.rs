@@ -2334,6 +2334,9 @@ where
         });
     }
 
+    // Catch-up: fire any wakes whose fire_at already passed while closed.
+    let _ = drain_due_wakes(app).await?;
+
     loop {
         if let Some(ev) = app.pending_adjust.take() {
             app.session.append(ev.clone()).await.ok();
@@ -2863,6 +2866,11 @@ where
                             } else if take_deferred_delegation_wake(app) {
                                 spawn_turn(app);
                             }
+                            // A wake may have come due while this turn ran; now
+                            // that we're idle, drain it (spawns its own turn).
+                            if !app.streaming {
+                                let _ = drain_due_wakes(app).await?;
+                            }
                         }
                     }
                     AgentUpdate::SessionTakenOver => {
@@ -3111,8 +3119,7 @@ where
                         handle_worktree_request(app, action, Some(reply));
                     }
                     zoid::agent::AgentUpdate::WakeDue => {
-                        // Draining due wakes is Task 4's job; the watcher only
-                        // signals the deadline elapsed.
+                        let _ = drain_due_wakes(app).await?;
                     }
                 }
             }
@@ -3843,6 +3850,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 app.events.clear_compacted_bodies();
                 app.pending_wakes = rebuild_pending_wakes(app.events.iter());
                 let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
+                let _ = drain_due_wakes(app).await?;
                 // Wholesale event-log replacement: reset the caches so they
                 // can't serve the previous session's data at an equal length.
                 app.proj = ProjectionCache::default();
@@ -5624,6 +5632,59 @@ fn take_deferred_delegation_wake(app: &mut App) -> bool {
     wake
 }
 
+/// The synthetic UserMessage text a fired wake injects. Appends a late stamp
+/// only when the fire is more than 5 s overdue (i.e. a catch-up on reopen, not
+/// a normal on-time timer elapse).
+const WAKE_LATE_STAMP_MS: i64 = 5_000;
+fn wake_injection_text(note: &str, fire_at_ms: i64, now_ms: i64) -> String {
+    if now_ms - fire_at_ms > WAKE_LATE_STAMP_MS {
+        format!("⏰ scheduled: {note} (fired late)")
+    } else {
+        format!("⏰ scheduled: {note}")
+    }
+}
+
+/// Drain every wake whose `fire_at_ms <= now`. When the orchestrator is idle and
+/// not yielded: record each as a synthetic UserMessage + a WakeFired marker
+/// (at-least-once — WakeFired is written ONLY here), drop them from the pending
+/// set, re-arm the watcher, and spawn ONE continuation turn to process them.
+/// When BUSY: touch nothing except parking the watcher (send None) so it stops
+/// re-firing on the now-past deadline; the wakes stay pending and the
+/// `TurnComplete` drain fires them once the turn ends (in correct log order).
+/// Returns whether a turn was spawned.
+async fn drain_due_wakes(app: &mut App) -> anyhow::Result<bool> {
+    let now = now_ms();
+    // Due keys (fire_at <= now), smallest-first. Exclusive upper bound at
+    // `now + 1` so a wake due at exactly `now` is included and `now+…` excluded.
+    let due: Vec<(i64, String)> = app
+        .pending_wakes
+        .range(..(now + 1, String::new()))
+        .map(|((t, id), _)| (*t, id.clone()))
+        .collect();
+    if due.is_empty() {
+        return Ok(false);
+    }
+    let idle = !app.streaming && app.in_flight_subagents.is_empty() && !app.yielded;
+    if !idle {
+        // Busy: leave the wakes pending and park the watcher so it does not spin
+        // on the past deadline. TurnComplete's drain fires them when idle.
+        let _ = app.next_wake_tx.send(None);
+        return Ok(false);
+    }
+    // Idle: fire them. Only now do we mutate the pending set + record events.
+    for (fire_at, id) in &due {
+        let note = app.pending_wakes.remove(&(*fire_at, id.clone())).unwrap_or_default();
+        let text = wake_injection_text(&note, *fire_at, now);
+        app.record(EventKind::UserMessage { text }).await?;
+        app.record(EventKind::WakeFired { wake_id: id.clone() }).await?;
+    }
+    // Re-arm the watcher to the next remaining deadline (or park).
+    let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
+    app.streaming = true;
+    spawn_turn(app);
+    Ok(true)
+}
+
 fn spawn_turn(app: &mut App) {
     let provider = app.provider.clone();
     let session = app.session.clone();
@@ -5859,6 +5920,20 @@ mod tests {
         pending.insert((500i64, "a".to_string()), "n".to_string());
         pending.insert((100i64, "b".to_string()), "n".to_string());
         assert_eq!(earliest_fire_at(&pending), Some(100), "earliest fire_at wins");
+    }
+
+    #[test]
+    fn wake_injection_text_stamps_late_only_when_overdue() {
+        // On-time (within 5s): no late stamp.
+        assert_eq!(
+            wake_injection_text("check CI", 10_000, 10_200),
+            "⏰ scheduled: check CI"
+        );
+        // Overdue by > 5s (catch-up on reopen): late stamp appended.
+        assert_eq!(
+            wake_injection_text("check CI", 10_000, 20_000),
+            "⏰ scheduled: check CI (fired late)"
+        );
     }
 
     #[test]
@@ -6604,6 +6679,42 @@ mod tests {
             embedder: None,
             installing_plugin: false,
         }
+    }
+
+    #[tokio::test]
+    async fn due_wake_injects_usermessage_and_fires_when_idle() {
+        let mut app = test_app().await;
+        app.streaming = false;
+        let past = now_ms() - 10_000; // already due, > 5s late
+        app.pending_wakes.insert((past, "w1".to_string()), "check the build".to_string());
+        let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
+
+        let spawned = drain_due_wakes(&mut app).await.unwrap();
+
+        assert!(spawned, "an idle orchestrator fires the due wake");
+        assert!(app.streaming, "firing marks the turn streaming");
+        assert!(app.pending_wakes.is_empty(), "the fired wake leaves the pending set");
+        let log = app.session.snapshot().await.unwrap();
+        assert!(
+            log.iter().any(|e| matches!(&e.kind,
+                EventKind::UserMessage { text } if text == "⏰ scheduled: check the build (fired late)")),
+            "the late-stamped note is injected as a UserMessage"
+        );
+        assert!(
+            log.iter().any(|e| matches!(&e.kind, EventKind::WakeFired { wake_id } if wake_id == "w1")),
+            "a WakeFired marker is recorded at injection (at-least-once)"
+        );
+    }
+
+    #[tokio::test]
+    async fn future_wake_does_not_fire() {
+        let mut app = test_app().await;
+        app.streaming = false;
+        let future = now_ms() + 60_000;
+        app.pending_wakes.insert((future, "w2".to_string()), "later".to_string());
+        let spawned = drain_due_wakes(&mut app).await.unwrap();
+        assert!(!spawned, "a not-yet-due wake must not fire");
+        assert_eq!(app.pending_wakes.len(), 1, "it stays pending");
     }
 
     #[test]
