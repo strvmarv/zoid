@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zoid — motion preview (context economy)</title>
+<style>
+:root{
+  --bg:#0d1117; --panel:#161b22; --line:#30363d; --line2:#21262d;
+  --txt:#c9d1d9; --muted:#8b949e; --dim:#6e7681; --acc:#58a6ff; --acc2:#79c0ff;
+  --mono:"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;background:var(--bg);color:var(--txt);font-family:var(--mono);
+  font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;}
+.wrap{max-width:1120px;margin:0 auto;padding:48px 24px;}
+h1{font-size:22px;font-weight:600;}
+.sub{color:var(--muted);margin:0 0 28px;}
+.frame{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--bg);
+  box-shadow:0 8px 40px rgba(0,0,0,.4);}
+pre.tui{margin:0;padding:14px 16px;font-family:var(--mono);font-size:12px;line-height:1.5;
+  color:var(--txt);background:var(--bg);white-space:pre;}
+@media (max-width:640px){pre.tui{font-size:10px;}}
+
+/* Player: exactly one frame visible at a time. */
+.player .tui-frame{display:none;}
+.player .tui-frame.on{display:block;}
+/* Pre-JS / no-JS fallback: show the first frame. */
+.player.nojs .tui-frame:first-child{display:block;}
+/* Reduced motion: show the final (resolved) frame, no animation. */
+@media (prefers-reduced-motion: reduce){
+  .player .tui-frame{display:none;}
+  .player .tui-frame:last-child{display:block;}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>zoid — motion preview</h1>
+  <p class="sub"># context economy · real renderer frames · phase-1 fidelity check</p>
+  <div class="frame">
+    <div class="player nojs" role="img"
+         aria-label="zoid diagnosing a 500: the turn streams in while the context economy rail fills.">
+<!--SEQ:context-economy-->
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var reduce = window.matchMedia
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  document.querySelectorAll('.player').forEach(function(p){
+    p.classList.remove('nojs');
+    var frames = p.querySelectorAll('.tui-frame');
+    if(!frames.length) return;
+    if(reduce){ frames[frames.length-1].classList.add('on'); return; }
+    var i = 0;
+    function show(n){ frames.forEach(function(f,k){ f.classList.toggle('on', k===n); }); }
+    show(0);
+    var timer = null;
+    function tick(){ i = (i+1) % frames.length; show(i); }
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if(e.isIntersecting && !timer){ timer = setInterval(tick, 1400); }
+        else if(!e.isIntersecting && timer){ clearInterval(timer); timer = null; }
+      });
+    }, {threshold:0.25});
+    io.observe(p);
+  });
+})();
+</script>
+</body>
+</html>
