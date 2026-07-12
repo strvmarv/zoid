@@ -13,14 +13,20 @@
 *{box-sizing:border-box;}
 html,body{margin:0;background:var(--bg);color:var(--txt);font-family:var(--mono);
   font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;}
-.wrap{max-width:1120px;margin:0 auto;padding:48px 24px;}
+.wrap{max-width:1500px;margin:0 auto;padding:48px 24px;}
 h1{font-size:22px;font-weight:600;}
 .sub{color:var(--muted);margin:0 0 28px;}
+/* overflow-x:auto is the safety net for very narrow viewports; the responsive
+   font-size below is sized so the full 160-column grid normally fits without it. */
 .frame{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--bg);
   box-shadow:0 8px 40px rgba(0,0,0,.4);}
-pre.tui{margin:0;padding:14px 16px;font-family:var(--mono);font-size:12px;line-height:1.5;
+/* Fit the 160-col TUI to the viewport: JetBrains Mono advances 0.6ch per em, so
+   160 cols == 96*font-size px. Solve 96*F + chrome <= 100vw for F and clamp it
+   (cap so it isn't huge on ultrawide; floor so it stays legible — below the floor
+   the frame's overflow-x:auto scrolls, e.g. on phones where 160 cols can't fit). */
+pre.tui{margin:0;padding:14px 16px;font-family:var(--mono);
+  font-size:clamp(7px, calc((100vw - 90px) / 96), 13.5px);line-height:1.5;
   color:var(--txt);background:var(--bg);white-space:pre;}
-@media (max-width:640px){pre.tui{font-size:10px;}}
 
 /* Player: exactly one frame visible at a time. */
 .player .tui-frame{display:none;}
