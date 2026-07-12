@@ -1653,6 +1653,12 @@ struct App {
     /// Injects no `UserMessage` (unlike `pending_message`) — it just continues
     /// the conversation with the delegation summary now in context.
     wake_after_delegation: bool,
+    /// Pending scheduled wakes, `(fire_at_ms, wake_id) → note`, ordered by fire
+    /// time. Rebuilt from the event log on load; mutated by schedule/cancel/fire.
+    pending_wakes: std::collections::BTreeMap<(i64, String), String>,
+    /// The watcher's next deadline (earliest `fire_at_ms`, `None` = park). Sending
+    /// a new value re-arms the watcher immediately (schedule/cancel/fire).
+    next_wake_tx: tokio::sync::watch::Sender<Option<i64>>,
     /// A takeover confirmation in flight: the session id the user is about to
     /// forcibly claim from another instance. Set by `SessionTakeoverConfirm`,
     /// consumed by the "Take over" answer in `QuestionSelect`. Spec §3.2.
@@ -2121,6 +2127,8 @@ async fn main() -> Result<()> {
         yielded: false,
         pending_message: None,
         wake_after_delegation: false,
+        pending_wakes: std::collections::BTreeMap::new(),
+        next_wake_tx: tokio::sync::watch::channel(None).0,
         pending_takeover: None,
         mcp,
         embed_index,
@@ -2220,6 +2228,48 @@ where
     <B as ratatui::backend::Backend>::Error: Send + Sync + 'static,
 {
     let mut term_events = EventStream::new();
+
+    // Wake watcher: parks on the next deadline; sends WakeDue when it elapses.
+    // Re-armed immediately whenever `next_wake_tx` changes (schedule/cancel/fire).
+    {
+        let ui = app.ui_tx.clone();
+        let mut next_rx = app.next_wake_tx.subscribe();
+        tokio::spawn(async move {
+            loop {
+                let next = *next_rx.borrow_and_update();
+                let sleep = async {
+                    match next {
+                        Some(fire_at_ms) => {
+                            let now = now_ms();
+                            let delay = (fire_at_ms - now).max(0) as u64;
+                            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                        }
+                        // Nothing scheduled: park until the cell changes.
+                        None => std::future::pending::<()>().await,
+                    }
+                };
+                tokio::select! {
+                    _ = sleep => {
+                        if ui.send(AgentUpdate::WakeDue).await.is_err() {
+                            break; // main loop gone
+                        }
+                        // Re-borrow next loop; the handler will re-arm via next_wake_tx.
+                    }
+                    changed = next_rx.changed() => {
+                        if changed.is_err() {
+                            break; // sender dropped — app exiting
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Rebuild the pending-wake set from the loaded event log and arm the
+    // watcher for the earliest deadline. Race-free: the watcher already called
+    // `subscribe()` synchronously above, before this send.
+    app.pending_wakes = rebuild_pending_wakes(app.events.iter());
+    let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
 
     let tick_period = std::time::Duration::from_millis(1000 / zoid_tui::motion::MOTION_FPS);
     let mut motion_tick = tokio::time::interval(tick_period);
@@ -3060,6 +3110,10 @@ where
                     zoid::agent::AgentUpdate::WorktreeRequested { action, reply } => {
                         handle_worktree_request(app, action, Some(reply));
                     }
+                    zoid::agent::AgentUpdate::WakeDue => {
+                        // Draining due wakes is Task 4's job; the watcher only
+                        // signals the deadline elapsed.
+                    }
                 }
             }
             _ = motion_tick.tick(), if app.streaming || !app.in_flight_subagents.is_empty() || app.shell.compacting || app.shell.active_tool.is_some() || app.zoom_changed_at.is_some() => {
@@ -3787,6 +3841,8 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 // #6b resume: free any compacted ToolResult bodies immediately
                 // instead of re-inflating RAM to the pre-#6b footprint.
                 app.events.clear_compacted_bodies();
+                app.pending_wakes = rebuild_pending_wakes(app.events.iter());
+                let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
                 // Wholesale event-log replacement: reset the caches so they
                 // can't serve the previous session's data at an equal length.
                 app.proj = ProjectionCache::default();
@@ -5052,6 +5108,8 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             app.shell.session_name = name;
             app.session_started_ms = ts;
             app.events = zoid::eventlog::EventLog::new();
+            app.pending_wakes = rebuild_pending_wakes(app.events.iter());
+            let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
             // New session: reset the caches (clear() may leave the same length).
             app.proj = ProjectionCache::default();
             app.body_cache = BodyCache::default();
@@ -5516,6 +5574,12 @@ fn rebuild_pending_wakes<'a>(
         .collect()
 }
 
+/// The earliest `fire_at_ms` in the pending set (the watcher's next deadline),
+/// or `None` when nothing is scheduled (the watcher parks on `changed()`).
+fn earliest_fire_at(pending: &std::collections::BTreeMap<(i64, String), String>) -> Option<i64> {
+    pending.keys().next().map(|(t, _)| *t)
+}
+
 /// Called after a `DelegationResult` has been recorded into `app.events` and the
 /// finished subagent dropped from the in-flight sets. Decides whether the
 /// orchestrator should continue so it actually *sees* the result:
@@ -5786,6 +5850,15 @@ mod tests {
         assert_eq!(pending.get(&(300, "a".to_string())).map(String::as_str), Some("later"));
         // Earliest fire_at of the pending set.
         assert_eq!(pending.keys().next().map(|(t, _)| *t), Some(300));
+    }
+
+    #[test]
+    fn earliest_fire_at_is_the_min_key() {
+        let mut pending = std::collections::BTreeMap::new();
+        assert_eq!(earliest_fire_at(&pending), None, "empty → None (watcher parks)");
+        pending.insert((500i64, "a".to_string()), "n".to_string());
+        pending.insert((100i64, "b".to_string()), "n".to_string());
+        assert_eq!(earliest_fire_at(&pending), Some(100), "earliest fire_at wins");
     }
 
     #[test]
@@ -6523,6 +6596,8 @@ mod tests {
             yielded: false,
             pending_message: None,
             wake_after_delegation: false,
+            pending_wakes: std::collections::BTreeMap::new(),
+            next_wake_tx: tokio::sync::watch::channel(None).0,
             pending_takeover: None,
             mcp: None,
             embed_index: None,

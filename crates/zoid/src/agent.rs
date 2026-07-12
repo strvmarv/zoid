@@ -371,6 +371,9 @@ pub enum AgentUpdate {
         action: WorktreeAction,
         reply: tokio::sync::oneshot::Sender<Result<std::path::PathBuf, String>>,
     },
+    /// The wake watcher's timer elapsed; the main loop should drain any wakes
+    /// whose `fire_at_ms <= now` (inject if idle, else defer to TurnComplete).
+    WakeDue,
 }
 
 /// The tool specs to advertise to the provider.
