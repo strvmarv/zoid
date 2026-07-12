@@ -70,6 +70,23 @@ fn write_wide(out: &mut String, fg: &Option<String>, bg: &Option<String>, w: u16
     );
 }
 
+/// Whether a cell must be pinned to an explicit `ch` box rather than left to
+/// flow at the browser's natural advance. Wide glyphs are handled by width; this
+/// covers the other drift source: **width-1 non-ASCII symbols** whose font
+/// fallback advance isn't a clean `1ch` (geometric shapes ● ◐ ▾, arrows → ⏎,
+/// dingbats ✓, technical ⊟ ⎇ …). ASCII and the box-drawing/block-element range
+/// (U+2500..=U+259F, reliably `1ch` in the mono stack) keep flowing so we don't
+/// wrap the hundreds of border/shading cells per frame.
+fn needs_fixed_cell(sym: &str) -> bool {
+    match sym.chars().next() {
+        Some(c) => {
+            let cp = c as u32;
+            cp >= 0x7f && !(0x2500..=0x259f).contains(&cp)
+        }
+        None => false,
+    }
+}
+
 /// Convert a rendered buffer into a colored `<pre>` mirroring the terminal grid.
 pub fn buffer_to_html(buf: &Buffer) -> String {
     let area = buf.area;
@@ -99,8 +116,11 @@ pub fn buffer_to_html(buf: &Buffer) -> String {
             // reserved continuation cell (ratatui leaves it blank).
             let w = sym.width().max(1) as u16;
 
-            if w >= 2 {
-                // Flush any pending normal run, then emit the wide glyph alone.
+            if w >= 2 || needs_fixed_cell(sym) {
+                // Flush any pending normal run, then emit the glyph in its own
+                // fixed `w`-ch box so its browser advance can't shift the grid
+                // (the rail/scrollbar to its right stay put). `w` is 1 for the
+                // width-1 symbols caught by `needs_fixed_cell`.
                 write_run(&mut out, &run_fg, &run_bg, &run);
                 run.clear();
                 run_open = false;
@@ -211,5 +231,39 @@ mod tests {
         let html = buffer_to_html(&buf);
         assert!(html.contains("width:2ch"));
         assert!(html.trim_end().ends_with("x</pre>"), "got: {html}");
+    }
+
+    #[test]
+    fn ambiguous_width_symbol_gets_fixed_one_ch_box() {
+        // '●' (U+25CF, East-Asian-Width Ambiguous) is unicode-width 1, but the
+        // browser's symbol-font fallback rarely renders it at exactly 1ch — so it
+        // must be pinned in a fixed 1ch box, otherwise everything to its right on
+        // the row (rail + scrollbar) drifts once the conversation populates.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 2, 1));
+        buf.set_string(0, 0, "●", Style::default());
+        buf.set_string(1, 0, "x", Style::default());
+        let html = buffer_to_html(&buf);
+        assert!(
+            html.contains("display:inline-block;width:1ch"),
+            "expected fixed 1ch box for the ambiguous symbol; got: {html}"
+        );
+        assert!(html.contains("●"));
+        // The trailing normal cell is untouched (not swept into the box).
+        assert!(html.trim_end().ends_with("x</pre>"), "got: {html}");
+    }
+
+    #[test]
+    fn box_drawing_stays_flowing_not_boxed() {
+        // Box-drawing (U+2500..=U+257F) renders reliably at 1ch in the mono stack,
+        // so it must NOT be wrapped — hundreds of these appear per frame and
+        // boxing them all would bloat the output for no fidelity gain.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 3, 1));
+        buf.set_string(0, 0, "─│┐", Style::default());
+        let html = buffer_to_html(&buf);
+        assert!(
+            !html.contains("display:inline-block"),
+            "box-drawing should flow, not be boxed; got: {html}"
+        );
+        assert!(html.contains("─│┐"));
     }
 }
