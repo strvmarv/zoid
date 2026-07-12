@@ -365,9 +365,11 @@ pub enum AgentUpdate {
         res: Result<zoid_core::wizard::UpstreamScan, String>,
     },
     /// The agent (or user via `:worktree`) requested a worktree relocation.
-    /// The main `run()` loop performs the actual enter/exit between turns.
+    /// `reply` carries the new absolute cwd (or an error) back to the awaiting
+    /// turn so its in-flight tool execution repoints atomically (WT-1/WT-2).
     WorktreeRequested {
         action: WorktreeAction,
+        reply: tokio::sync::oneshot::Sender<Result<std::path::PathBuf, String>>,
     },
 }
 
@@ -1002,7 +1004,7 @@ async fn run_turn_inner(
 
         // Execute each pending tool in the configured working directory
         // (blocking work off the async runtime), recording its result as an event.
-        let cwd_for_exec = config.cwd.clone();
+        let mut cwd_for_exec = config.cwd.clone();
         let mut pending_iter = pending.into_iter();
         while let Some(tc) = pending_iter.next() {
             // Cancelled mid-batch: skip this tool and every remaining one with a
@@ -1579,27 +1581,57 @@ async fn run_turn_inner(
                         .await?;
                         continue;
                     }
-                    // Send the relocation request to the main loop.
+                    // Synchronous relocation: send a reply channel and await the
+                    // main loop's new absolute cwd so THIS turn's subsequent tool
+                    // calls run in the worktree (WT-1). No optimistic result.
+                    let (tx, rx) = tokio::sync::oneshot::channel();
                     let _ = ui
                         .send(AgentUpdate::WorktreeRequested {
                             action: WorktreeAction::Enter { name: name.clone() },
+                            reply: tx,
                         })
                         .await;
-                    emit(
-                        &session,
-                        &mut events,
-                        ui,
-                        &config.branch,
-                        EventKind::ToolResult {
-                            id: tc.id,
-                            name: tc.name,
-                            output: format!("{{\"worktree\": \"{name}\"}}"),
-                            is_error: false,
-                        },
-                        session_id,
-                        now,
-                    )
-                    .await?;
+                    match rx.await {
+                        Ok(Ok(new_cwd)) => {
+                            cwd_for_exec = new_cwd;
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::ToolResult {
+                                    id: tc.id,
+                                    name: tc.name,
+                                    output: format!("{{\"worktree\": \"{name}\"}}"),
+                                    is_error: false,
+                                },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                        }
+                        other => {
+                            let msg = match other {
+                                Ok(Err(m)) => m,
+                                _ => "worktree switch failed (no reply)".to_string(),
+                            };
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::ToolResult {
+                                    id: tc.id,
+                                    name: tc.name,
+                                    output: msg,
+                                    is_error: true,
+                                },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                        }
+                    }
                     tracing::info!(
                         kind = "tool",
                         name = "enter_worktree",
@@ -1609,27 +1641,54 @@ async fn run_turn_inner(
                     );
                 }
                 Some(zoid_tools::ToolKind::Emitting) if tc.name == "exit_worktree" => {
-                    // Send the exit request to the main loop.
+                    let (tx, rx) = tokio::sync::oneshot::channel();
                     let _ = ui
                         .send(AgentUpdate::WorktreeRequested {
                             action: WorktreeAction::Exit,
+                            reply: tx,
                         })
                         .await;
-                    emit(
-                        &session,
-                        &mut events,
-                        ui,
-                        &config.branch,
-                        EventKind::ToolResult {
-                            id: tc.id,
-                            name: tc.name,
-                            output: "exiting worktree".into(),
-                            is_error: false,
-                        },
-                        session_id,
-                        now,
-                    )
-                    .await?;
+                    match rx.await {
+                        Ok(Ok(new_cwd)) => {
+                            cwd_for_exec = new_cwd;
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::ToolResult {
+                                    id: tc.id,
+                                    name: tc.name,
+                                    output: "exited worktree".into(),
+                                    is_error: false,
+                                },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                        }
+                        other => {
+                            let msg = match other {
+                                Ok(Err(m)) => m,
+                                _ => "worktree exit failed (no reply)".to_string(),
+                            };
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::ToolResult {
+                                    id: tc.id,
+                                    name: tc.name,
+                                    output: msg,
+                                    is_error: true,
+                                },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                        }
+                    }
                     tracing::info!(
                         kind = "tool",
                         name = "exit_worktree",
