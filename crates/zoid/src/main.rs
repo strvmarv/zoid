@@ -341,6 +341,32 @@ fn pid_alive(_pid: i64) -> bool {
     true // non-Unix: no portable check; lean on the heartbeat window.
 }
 
+/// Map the tool-side `FileDiff` into the TUI's render mirror (keeps zoid-tui
+/// free of a zoid-tools dependency; mirrors SubagentStarted → SubagentRow).
+fn map_render_diff(d: zoid_tools::FileDiff) -> zoid_tui::state::RenderDiff {
+    use zoid_tui::state::{RenderDiff, RenderDiffKind, RenderDiffLine};
+    RenderDiff {
+        path: d.path,
+        added: d.added,
+        removed: d.removed,
+        truncated_by: d.truncated_by,
+        lines: d
+            .lines
+            .into_iter()
+            .map(|l| RenderDiffLine {
+                old_no: l.old_no,
+                new_no: l.new_no,
+                kind: match l.kind {
+                    zoid_tools::DiffKind::Ctx => RenderDiffKind::Ctx,
+                    zoid_tools::DiffKind::Add => RenderDiffKind::Add,
+                    zoid_tools::DiffKind::Del => RenderDiffKind::Del,
+                },
+                text: l.text,
+            })
+            .collect(),
+    }
+}
+
 /// Truncate a queued-message hint to ~40 chars with an ellipsis (mirrors
 /// `derive_session_name`'s truncation).
 fn truncate_for_hint(s: &str) -> String {
@@ -2863,6 +2889,9 @@ where
                         // drawer, NOT the bottom status bar. Do NOT set
                         // status_hint here — it would render on the bottom bar
                         // and overlap the layout.
+                    }
+                    AgentUpdate::EditDiff { id, diff } => {
+                        app.shell.push_edit_diff(id, map_render_diff(diff));
                     }
                     AgentUpdate::CompactionStarted => {
                         app.shell.compacting = true;
@@ -7238,5 +7267,25 @@ mod tests {
             matches!(ans, zoid::agent::Answer::Choice(ref c) if c == "Reject"),
             "the answer channel should receive Reject"
         );
+    }
+
+    #[test]
+    fn map_render_diff_preserves_counts_and_kinds() {
+        let fd = zoid_tools::FileDiff {
+            path: "f.rs".into(),
+            added: 3,
+            removed: 1,
+            truncated_by: 2,
+            lines: vec![
+                zoid_tools::DiffLine { old_no: Some(1), new_no: Some(1), kind: zoid_tools::DiffKind::Ctx, text: "a".into() },
+                zoid_tools::DiffLine { old_no: None, new_no: Some(2), kind: zoid_tools::DiffKind::Add, text: "b".into() },
+                zoid_tools::DiffLine { old_no: Some(3), new_no: None, kind: zoid_tools::DiffKind::Del, text: "c".into() },
+            ],
+        };
+        let r = map_render_diff(fd);
+        assert_eq!((r.added, r.removed, r.truncated_by), (3, 1, 2));
+        assert_eq!(r.lines.len(), 3);
+        assert!(matches!(r.lines[1].kind, zoid_tui::state::RenderDiffKind::Add));
+        assert!(matches!(r.lines[2].kind, zoid_tui::state::RenderDiffKind::Del));
     }
 }

@@ -241,6 +241,13 @@ pub enum AgentUpdate {
     /// A subagent was dispatched (via the dispatch_subagent tool). The UI tracks
     /// it as in-flight until its DelegationResult arrives.
     SubagentStarted { id: String, task: String },
+    /// An ephemeral, UI-only diff for an edit/write tool call. Carries the
+    /// computed `FileDiff` to the TUI's in-memory cache; never persisted and
+    /// never sent to the model. Keyed by tool-call id.
+    EditDiff {
+        id: String,
+        diff: zoid_tools::FileDiff,
+    },
     /// The turn is finished (model produced no further tool calls / cap / error).
     TurnComplete,
     /// Live model list fetched for the config model picker, tagged with the
@@ -1997,7 +2004,7 @@ async fn run_turn_inner(
                     let mut exec = tokio::task::spawn_blocking(move || {
                         zoid_tools::run_tool(&tools_for_exec, &name, &args, &cwd)
                     });
-                    let out = tokio::select! {
+                    let mut out = tokio::select! {
                         biased;
                         _ = hard.cancelled() => {
                             // Force-kill the shell's process group (sticky kill:
@@ -2016,6 +2023,21 @@ async fn run_turn_inner(
                     };
                     let tool_ok = !out.is_error;
                     let tool_fail_msg = out.is_error.then(|| out.text.clone());
+                    // Ephemeral UI-only diff (edit/write). Sent BEFORE the emit
+                    // (which moves tc.id/out.text). Never persisted; the
+                    // ToolResult event below still stores only out.text. MAIN
+                    // branch only — a subagent's edits happen in a worktree and
+                    // never render in the main transcript, so caching them would
+                    // only let a subagent burst evict the main agent's visible
+                    // diffs from the bounded cache (M6). `config.branch` is in
+                    // scope here (used by the `emit` just below).
+                    if config.branch == BranchId::default() {
+                        if let Some(diff) = out.diff.take() {
+                            let _ = ui
+                                .send(AgentUpdate::EditDiff { id: tc.id.clone(), diff })
+                                .await;
+                        }
+                    }
                     emit(
                         &session,
                         &mut events,
