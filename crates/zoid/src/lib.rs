@@ -16,4 +16,5 @@ pub mod startup;
 pub mod subagent;
 pub mod uninstall;
 pub mod update;
+pub mod wake_timer;
 pub mod worktree;

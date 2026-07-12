@@ -59,6 +59,7 @@ default = []
 local-embed = ["dep:zoid-embed"]
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 tempfile = { workspace = true }
 toml = { workspace = true }
 async-trait = { workspace = true }
