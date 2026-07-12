@@ -231,11 +231,11 @@ models get conservative caps per family:
 ```rust
     // --- OpenCode Zen models (39 NEW entries; 13 overlap with Go & keep
     // their existing researched MODEL_CAPS entries — do NOT duplicate) ---
-    // Anthropic Messages models (NEW, not in Go): 200k context, tools=false
-    // (P1b text-only, matching Go's Anthropic-shape models), prompt_cache=true.
+    // Anthropic Messages models (NEW, not in Go): 200k context, tools=true
+    // (the Anthropic leaf supports tool-use via P1b.1), prompt_cache=true.
     (
         "claude-sonnet-4-5",
-        ModelInfo { context_window: 200_000, max_output: 0, tools: false, prompt_cache: true, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: true, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
     ),
     // ... (repeat for each NEW claude-* and qwen* model: claude-fable-5,
     // claude-opus-4-5/4-6/4-7, claude-sonnet-5, claude-sonnet-4-6 is EXISTING,
@@ -362,7 +362,14 @@ Add to `crates/zoid-provider/src/openai_responses.rs` (above the test module):
 ```rust
 /// Map `ThinkingMode` to the Responses `reasoning.effort` object, or `None` to
 /// omit the field entirely (Off). zoid's EffortLevel::Max → OpenAI "xhigh".
+/// Only emits when the model supports OpenAI-style reasoning (gated by
+/// `model_info(model).thinking_wire == OpenAI`), matching `openai_compat.rs`'s
+/// `thinking_params()` pattern. Non-reasoning models get no `reasoning` field.
 fn reasoning_params(req: &CompletionRequest) -> Option<Value> {
+    let info = crate::model::model_info(&req.model);
+    if info.thinking_wire != crate::model::ThinkingWireShape::OpenAI {
+        return None;
+    }
     let effort = match req.thinking {
         crate::ThinkingMode::Off => return None,
         crate::ThinkingMode::Auto => "medium",
@@ -545,6 +552,27 @@ Append to the `tests` module:
         };
         let body = request_body(&req);
         assert_eq!(body["reasoning"]["effort"], "xhigh");
+    }
+
+    #[test]
+    fn body_omits_reasoning_for_non_reasoning_model() {
+        // A model whose thinking_wire != OpenAI must NOT get a reasoning field,
+        // even when thinking is Auto. Guards against the generic leaf spuriously
+        // enabling reasoning for non-reasoning models (review B1).
+        let req = CompletionRequest {
+            model: "ollama-model".into(), // thinking_wire: None (DEFAULT_MODEL_INFO)
+            system: None,
+            messages: vec![Message::user("x")],
+            max_tokens: 8,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Auto,
+            reassert: None,
+        };
+        let body = request_body(&req);
+        assert!(
+            body.get("reasoning").is_none(),
+            "non-reasoning model must not get reasoning field: got {body}"
+        );
     }
 ```
 
@@ -1437,6 +1465,19 @@ Append to the `tests` module in `google_gemini.rs`:
     }
 
     #[test]
+    fn parse_prompt_feedback_block_reason_yields_error() {
+        // Spec §4.4/§7: promptFeedback.blockReason → Error.
+        let chunk = json!({
+            "promptFeedback": { "blockReason": "SAFETY" }
+        });
+        let out = parse_chunk(&chunk);
+        assert!(
+            out.iter().any(|e| matches!(e, ProviderEvent::Error(msg) if msg.contains("SAFETY"))),
+            "blocked request must yield Error: got {out:?}"
+        );
+    }
+
+    #[test]
     fn parse_finish_reason_max_tokens_yields_truncated() {
         let chunk = json!({
             "candidates": [{ "content": { "role": "model", "parts": [] }, "finishReason": "MAX_TOKENS" }]
@@ -1541,6 +1582,17 @@ pub fn parse_chunk(obj: &Value) -> Vec<ProviderEvent> {
                     out.push(ProviderEvent::Truncated);
                 }
             }
+        }
+    }
+    // promptFeedback.blockReason → Error (spec §4.4/§7). A safety-blocked request
+    // surfaces the block reason; the stream then ends with a synthetic trailing Done.
+    if let Some(reason) = obj
+        .get("promptFeedback")
+        .and_then(|pf| pf.get("blockReason"))
+        .and_then(|b| b.as_str())
+    {
+        if !reason.is_empty() {
+            out.push(ProviderEvent::Error(format!("gemini blocked: {reason}")));
         }
     }
     // Zen's Gemini stream emits `usageMetadata` on EVERY chunk — intermediate
@@ -2352,30 +2404,16 @@ Update **every** caller of `current_config_field` (there are 7 — search `curre
 - ~3932 `Action::ConfigSaveToRepo`: `if let Some((label, kind, _)) = current_config_field(app)`.
 - ~3947 `Action::ConfigClearSecret`: `if let Some((label, kind, secret_key)) = current_config_field(app)` and `s.clear(secret_key.unwrap_or(label))`.
 
-- [ ] **Step 7: Write the failing bin test for key resolution**
+- [ ] **Step 7: Commit**
 
-Add to `main.rs` tests:
+(The bin tests for `key_env_for("opencode-zen")` live in Task 9, which adds the `key_env_for` arm — writing them here would violate TDD by creating tests that can't compile/pass until the next task.)
 
-```rust
-    #[test]
-    fn key_env_for_opencode_zen_is_opencode_go_api_key() {
-        assert_eq!(key_env_for("opencode-zen"), Some("OPENCODE_GO_API_KEY"));
-    }
-
-    #[test]
-    fn entry_requires_key_opencode_zen_is_true() {
-        assert!(entry_requires_key("opencode-zen"));
-    }
+```bash
+git add crates/zoid-tui/src/config_view.rs crates/zoid-tui/src/route.rs crates/zoid-tui/tests/snapshots/ crates/zoid/src/main.rs
+git commit -m "feat(ui): prettify Secrets labels via FieldRow::secret_key decoupling"
 ```
 
-- [ ] **Step 8: Run tests to verify they pass (after adding the arm in Task 9)**
-
-This test depends on the `opencode-zen` arm in `key_env_for`, which is added in Task 9. Run after Task 9 Step 3:
-
-Run: `cargo test -p zoid key_env_for_opencode_zen`
-Expected: PASS.
-
-- [ ] **Step 9: Update the provider-options count test (Task 1 added a 7th provider)**
+- [ ] **Step 8: Update the provider-options count test (Task 1 added a 7th provider)**
 
 Adding the `opencode-zen` registry entry (Task 1) grows `PROVIDERS` to 7, so `provider_options()` now returns 7 entries. The existing test `provider_options_annotate_endpoints_and_mark_planned` in `crates/zoid-tui/src/config_view.rs` asserts `opts.len() == 5` — it will fail. Update it:
 
@@ -2405,7 +2443,7 @@ Adding the `opencode-zen` registry entry (Task 1) grows `PROVIDERS` to 7, so `pr
 Run: `cargo test -p zoid-tui provider_options_annotate_endpoints`
 Expected: PASS.
 
-- [ ] **Step 10: Regenerate the provider-picker insta snapshots**
+- [ ] **Step 9: Regenerate the provider-picker insta snapshots**
 
 Three `insta` snapshot files embed the full provider-picker list and will break when `opencode-zen` is added (Task 1): `shell_snapshot__config_overlay_provider_picker.snap`, `shell_snapshot__config_overlay_narrow_degrades.snap`, `shell_snapshot__provider_switch_card.snap`. The snapshots assert the rendered picker, which now includes the `opencode · zen` row.
 
@@ -2421,7 +2459,7 @@ If the diff shows only the new `opencode · zen` row in each affected snapshot, 
 Run: `cargo test -p zoid-tui --test shell_snapshot`
 Expected: PASS (snapshots now match).
 
-- [ ] **Step 11: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add crates/zoid-tui/src/config_view.rs crates/zoid-tui/src/route.rs crates/zoid-tui/tests/snapshots/ crates/zoid/src/main.rs
@@ -2440,9 +2478,9 @@ git commit -m "feat(ui): prettify Secrets labels via FieldRow::secret_key decoup
 - Consumes: `zoid_provider::opencode_zen::OpenCodeZenProvider`, `zoid_provider::model::entry`/`canonical_id` (from Task 1).
 - Produces: `opencode-zen` arms in `key_env_for`, `select_provider`, `provider_for_id`.
 
-- [ ] **Step 1: Write the failing test for select_provider routing**
+- [ ] **Step 1: Write the failing tests for key resolution**
 
-Add to `main.rs` tests (this asserts the family arm exists; it constructs a provider for an id whose family is `opencode-zen`):
+Add to `main.rs` tests:
 
 ```rust
     #[test]
@@ -2451,12 +2489,17 @@ Add to `main.rs` tests (this asserts the family arm exists; it constructs a prov
         // sanity: Go unchanged
         assert_eq!(key_env_for("opencode-go"), Some("OPENCODE_GO_API_KEY"));
     }
+
+    #[test]
+    fn entry_requires_key_opencode_zen_is_true() {
+        assert!(entry_requires_key("opencode-zen"));
+    }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p zoid key_env_for_opencode_zen_maps_to_shared_go_key`
-Expected: FAIL — `key_env_for("opencode-zen")` returns `Some("OLLAMA_API_KEY")` (the `_` arm).
+Run: `cargo test -p zoid key_env_for_opencode_zen_maps_to_shared_go_key && cargo test -p zoid entry_requires_key_opencode_zen_is_true`
+Expected: FAIL — `key_env_for("opencode-zen")` returns `Some("OLLAMA_API_KEY")` (the `_` arm); `entry_requires_key("opencode-zen")` may already pass if the registry entry exists from Task 1 (if so, that test is a sanity check, not a red-green).
 
 - [ ] **Step 3: Add the three arms**
 
@@ -2504,7 +2547,7 @@ fn key_env_for(id: &str) -> Option<&'static str> {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p zoid key_env_for_opencode_zen_maps_to_shared_go_key && cargo test -p zoid key_env_for_opencode_zen_is_opencode_go_api_key`
+Run: `cargo test -p zoid key_env_for_opencode_zen_maps_to_shared_go_key && cargo test -p zoid entry_requires_key_opencode_zen_is_true`
 Expected: PASS.
 
 - [ ] **Step 5: Full workspace build + test**
@@ -2533,21 +2576,57 @@ In `crates/zoid-model/src/lib.rs`, add to `opencode_zen_tests`:
 ```rust
     #[test]
     fn opencode_zen_caps_match_table() {
-        // Spot-check one NEW model per wire shape (full table locked by
-        // opencode_zen_model_caps_present which iterates all 52 ids).
+        // Lock ALL 39 NEW model caps (13 overlap with Go — their existing caps
+        // are authoritative, not duplicated here). Mirrors the Go provider's
+        // opencode_go_model_caps_match_reconciled_table which locks all 13.
         // NOTE: use only NEW models here — 13 Zen models overlap with Go and
         // keep their existing (different) caps. e.g. `glm-5.2` has
         // context_window=1_000_000 from the Go provider, NOT 128_000.
         let cases: &[(&str, u64, u64, bool, bool)] = &[
             // (id, context_window, max_output, tools, prompt_cache)
-            // Anthropic Messages (NEW — claude-sonnet-4-5 is new, Go has 4-6)
-            ("claude-sonnet-4-5", 200_000, 0, false, true),
-            // OpenAI Responses (all 17 gpt-* are NEW)
+            // --- Anthropic Messages (NEW — 11 models; 4-6/opus-4-8 overlap) ---
+            ("claude-sonnet-4-5", 200_000, 0, true, true),
+            ("claude-fable-5", 200_000, 0, true, true),
+            ("claude-opus-4-7", 200_000, 0, true, true),
+            ("claude-opus-4-6", 200_000, 0, true, true),
+            ("claude-opus-4-5", 200_000, 0, true, true),
+            ("claude-sonnet-5", 200_000, 0, true, true),
+            ("claude-haiku-4-5", 200_000, 0, true, true),
+            ("qwen3.6-plus", 200_000, 0, true, true),
+            ("qwen3.5-plus", 200_000, 0, true, true),
+            // --- OpenAI Responses (all 17 gpt-* are NEW) ---
+            ("gpt-5.5", 200_000, 0, true, false),
+            ("gpt-5.5-pro", 200_000, 0, true, false),
             ("gpt-5.4", 200_000, 0, true, false),
-            // OpenAI Chat Completions (NEW — grok-4.5; glm-5.2 is EXISTING)
+            ("gpt-5.4-pro", 200_000, 0, true, false),
+            ("gpt-5.4-mini", 200_000, 0, true, false),
+            ("gpt-5.4-nano", 200_000, 0, true, false),
+            ("gpt-5.3-codex", 200_000, 0, true, false),
+            ("gpt-5.3-codex-spark", 200_000, 0, true, false),
+            ("gpt-5.2", 200_000, 0, true, false),
+            ("gpt-5.2-codex", 200_000, 0, true, false),
+            ("gpt-5.1", 200_000, 0, true, false),
+            ("gpt-5.1-codex-max", 200_000, 0, true, false),
+            ("gpt-5.1-codex", 200_000, 0, true, false),
+            ("gpt-5.1-codex-mini", 200_000, 0, true, false),
+            ("gpt-5", 200_000, 0, true, false),
+            ("gpt-5-codex", 200_000, 0, true, false),
+            ("gpt-5-nano", 200_000, 0, true, false),
+            // --- OpenAI Chat Completions (NEW — 10 models; glm/deepseek/kimi/minimax overlap) ---
             ("grok-4.5", 128_000, 0, true, false),
-            // Google Gemini (all 3 are NEW)
+            ("grok-build-0.1", 128_000, 0, true, false),
+            ("kimi-k2.5", 128_000, 0, true, false),
+            ("deepseek-v4-flash-free", 128_000, 0, true, false),
+            ("glm-5", 128_000, 0, true, false),
+            ("big-pickle", 128_000, 0, true, false),
+            ("hy3-free", 128_000, 0, true, false),
+            ("mimo-v2.5-free", 128_000, 0, true, false),
+            ("north-mini-code-free", 128_000, 0, true, false),
+            ("nemotron-3-ultra-free", 128_000, 0, true, false),
+            // --- Google Gemini (all 3 are NEW) ---
             ("gemini-3-flash", 1_000_000, 0, true, false),
+            ("gemini-3.1-pro", 1_000_000, 0, true, false),
+            ("gemini-3.5-flash", 1_000_000, 0, true, false),
         ];
         for (id, ctx, max_out, tools, pc) in cases {
             let info = model_info(id);
@@ -2573,6 +2652,17 @@ In `crates/zoid-model/src/lib.rs`, add to `opencode_zen_tests`:
         assert_eq!(e.models.len(), 13);
     }
 ```
+
+> **NOTE — `tools: true` for Anthropic Messages models (review n1):** The
+> reviewer flagged that the prior draft set `tools: false` for NEW claude
+> models ("P1b text-only"), but the existing `claude-sonnet-4-6` /
+> `claude-opus-4-8` (which route through the same Anthropic leaf) are
+> `tools: true`. This plan corrects all NEW Anthropic-shape models to
+> `tools: true` (matching the leaf's P1b.1 tool-use wiring). If the
+> Anthropic leaf is genuinely text-only for these models at runtime, the
+> tool calls will fail with a provider error — that's a better failure mode
+> than silently hiding tools the model supports. Verify during implementation
+> smoke test.
 
 - [ ] **Step 2: Run full workspace tests**
 
