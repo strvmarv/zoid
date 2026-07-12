@@ -1579,7 +1579,8 @@ struct App {
     /// Shared in-flight subagent ID set, threaded into TurnConfig so the
     /// Emitting handler can enforce sequential dispatch (Gap 3). The spawned
     /// subagent's DelegationResult removes the ID.
-    in_flight: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    in_flight:
+        std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, zoid::agent::SubagentHandle>>>,
     /// The reply channel for an in-flight `ask_user` question (Task 11): `Some`
     /// while the question overlay is up. Dropping it (Esc-abort) makes the
     /// agent loop record a balanced "[user aborted]" result and end the turn.
@@ -2079,7 +2080,7 @@ async fn main() -> Result<()> {
         in_flight_subagents: Vec::new(),
         active_worktree: None,
         in_flight: std::sync::Arc::new(std::sync::Mutex::new(
-            std::collections::HashSet::new(),
+            std::collections::HashMap::new(),
         )),
         pending_answer: None,
         turn_cancel: None,
@@ -6211,6 +6212,8 @@ mod tests {
                     reduced_motion: Source::Default,
                     thinking_enabled: Source::Default,
                     thinking_effort: Source::Default,
+                    subagent_idle_timeout_secs: Source::Default,
+                    subagent_hard_timeout_secs: Source::Default,
                     approval: Source::Default,
                     reassert_interval_tokens: Source::Default,
                     ui_edit_diff: Source::Default,
@@ -6237,7 +6240,7 @@ mod tests {
             in_flight_subagents: Vec::new(),
             active_worktree: None,
         in_flight: std::sync::Arc::new(std::sync::Mutex::new(
-            std::collections::HashSet::new(),
+            std::collections::HashMap::new(),
         )),
             pending_answer: None,
             turn_cancel: None,

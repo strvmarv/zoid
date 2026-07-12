@@ -70,6 +70,44 @@ pub fn default_profile() -> AgentProfile {
     }
 }
 
+/// Why a subagent was aborted. Shared across all three firers (timeout supervisor,
+/// kill tool, Esc) via a single first-writer-wins slot in `SubagentHandle`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbortReason {
+    /// No-progress (idle) timeout tripped.
+    IdleTimeout,
+    /// Absolute wall-clock ceiling tripped.
+    Ceiling,
+    /// Cancelled by the orchestrator kill tool or the user's Esc.
+    Killed,
+}
+
+impl AbortReason {
+    /// Short human label for the failure summary.
+    pub fn label(&self) -> &'static str {
+        match self {
+            AbortReason::IdleTimeout => "idle timeout",
+            AbortReason::Ceiling => "hard timeout",
+            AbortReason::Killed => "killed",
+        }
+    }
+}
+
+/// Live handle to one in-flight subagent: how to stop it and how it reports why.
+/// Held in the registry (`App.in_flight` / `TurnConfig.in_flight`) so the timeout
+/// supervisor, the kill tool, and Esc can all reach the same tokens.
+#[derive(Clone)]
+pub struct SubagentHandle {
+    /// Graceful cancel (reserved; parity with the main turn).
+    pub cancel: CancellationToken,
+    /// Force-kill this subagent (drains + kills its shell via the turn loop).
+    pub hard: CancellationToken,
+    /// Heartbeat: last-progress epoch ms, bumped per iteration by the turn loop.
+    pub progress: std::sync::Arc<std::sync::atomic::AtomicI64>,
+    /// First-writer-wins abort reason, set by whichever firer trips first.
+    pub abort_reason: std::sync::Arc<std::sync::Mutex<Option<AbortReason>>>,
+}
+
 /// How one agent turn is run: its system prompt, working directory, and the
 /// event branch its output is recorded on. Chat uses the main branch + process
 /// cwd; a subagent uses its own branch + (optionally) a worktree.
@@ -107,12 +145,22 @@ pub struct TurnConfig {
     /// MAX_TOOL_ITERATIONS (1000); subagents override this to a tighter bound
     /// so a confused headless agent stops fast. None = MAX_TOOL_ITERATIONS.
     pub max_iterations: Option<u32>,
-    /// Shared in-flight subagent ID set for the sequential-dispatch guard.
-    /// None when dispatch_subagent is disabled or for subagent turns.
-    pub in_flight: Option<std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>>,
+    /// Shared in-flight subagent registry (id → live handle) for the
+    /// sequential-dispatch guard and the guardrail firers. None when
+    /// dispatch_subagent is disabled or for subagent turns.
+    pub in_flight:
+        Option<std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, SubagentHandle>>>>,
     /// Token budget between system-prompt re-assertions (0 = disabled).
     /// Chat gets it from `[economy]`; subagents/tests default off.
     pub reassert_interval: u64,
+    /// Heartbeat slot the turn loop bumps each iteration so a subagent's
+    /// `WakeTimer` can detect a stalled `await`. `None` for the main chat turn.
+    pub progress: Option<std::sync::Arc<std::sync::atomic::AtomicI64>>,
+    /// Idle-timeout for a subagent dispatched from THIS turn (chat only). `None`
+    /// = disabled. Consumed at the dispatch site; ignored by subagent turns.
+    pub subagent_idle: Option<std::time::Duration>,
+    /// Absolute-ceiling for a subagent dispatched from THIS turn. `None` = off.
+    pub subagent_ceiling: Option<std::time::Duration>,
 }
 
 // Manual `Debug`: `embed`/`embedder` hold a trait object (`dyn Embedder`) and
@@ -136,6 +184,9 @@ impl std::fmt::Debug for TurnConfig {
             .field("max_iterations", &self.max_iterations)
             .field("in_flight", &self.in_flight.is_some())
             .field("reassert_interval", &self.reassert_interval)
+            .field("progress", &self.progress.is_some())
+            .field("subagent_idle", &self.subagent_idle)
+            .field("subagent_ceiling", &self.subagent_ceiling)
             .finish()
     }
 }
@@ -167,6 +218,9 @@ pub fn chat_turn_config_with(profile: &AgentProfile, skill_menu: &str) -> TurnCo
         max_iterations: None,
         in_flight: None,
         reassert_interval: 0,
+        progress: None,
+        subagent_idle: None,
+        subagent_ceiling: None,
     }
 }
 
@@ -894,6 +948,9 @@ async fn run_turn_inner(
         thinking_buf.clear();
 
         iterations += 1;
+        if let Some(p) = &config.progress {
+            p.store(now(), std::sync::atomic::Ordering::Relaxed);
+        }
         let cap = config.max_iterations.unwrap_or(MAX_TOOL_ITERATIONS);
         if iterations > cap {
             emit(
@@ -1399,11 +1456,26 @@ async fn run_turn_inner(
                         })
                         .unwrap_or_else(|| config.cwd.clone());
 
-                    // Track the in-flight subagent BEFORE spawning, so a
-                    // fast-completing subagent can't emit DelegationResult
-                    // (which removes the ID) before we insert it.
-                    if let Some(set) = &config.in_flight {
-                        set.lock().unwrap().insert(sub_id.clone());
+                    // Create the guardrail tokens + heartbeat for this subagent and
+                    // register a handle BEFORE spawning, so a fast-completing
+                    // subagent can't emit DelegationResult (which removes the ID)
+                    // before we insert it. Tokens are created here but not fired
+                    // until the WakeTimer + firers are wired (Task 4).
+                    let _sub_cancel = CancellationToken::new();
+                    let _sub_hard = CancellationToken::new();
+                    let _sub_progress =
+                        std::sync::Arc::new(std::sync::atomic::AtomicI64::new(now()));
+                    let _sub_abort_reason = std::sync::Arc::new(std::sync::Mutex::new(None));
+                    if let Some(reg) = &config.in_flight {
+                        reg.lock().unwrap().insert(
+                            sub_id.clone(),
+                            SubagentHandle {
+                                cancel: _sub_cancel.clone(),
+                                hard: _sub_hard.clone(),
+                                progress: _sub_progress.clone(),
+                                abort_reason: _sub_abort_reason.clone(),
+                            },
+                        );
                     }
 
                     crate::spawn_subagent::spawn_subagent(
@@ -3991,9 +4063,9 @@ mod tests {
 
         let mut config = chat_turn_config();
         let shared: std::sync::Arc<
-            std::sync::Mutex<std::collections::HashSet<String>>,
+            std::sync::Mutex<std::collections::HashMap<String, SubagentHandle>>,
         > = std::sync::Arc::new(std::sync::Mutex::new(
-            std::collections::HashSet::new(),
+            std::collections::HashMap::new(),
         ));
         config.in_flight = Some(shared.clone());
 
@@ -4311,5 +4383,33 @@ mod tool_call_id_threading_tests {
         let b = ensure_tool_call_id(String::new());
         assert!(!a.is_empty() && !b.is_empty(), "empty id must be filled");
         assert_ne!(a, b, "two empty ids must not collide");
+    }
+}
+
+#[cfg(test)]
+mod guardrail_types_tests {
+    use super::{AbortReason, SubagentHandle};
+    use std::sync::atomic::AtomicI64;
+    use std::sync::{Arc, Mutex};
+    use tokio_util::sync::CancellationToken;
+
+    #[test]
+    fn abort_reason_labels_are_stable() {
+        assert_eq!(AbortReason::IdleTimeout.label(), "idle timeout");
+        assert_eq!(AbortReason::Ceiling.label(), "hard timeout");
+        assert_eq!(AbortReason::Killed.label(), "killed");
+    }
+
+    #[test]
+    fn subagent_handle_is_constructible_and_clonable() {
+        let h = SubagentHandle {
+            cancel: CancellationToken::new(),
+            hard: CancellationToken::new(),
+            progress: Arc::new(AtomicI64::new(0)),
+            abort_reason: Arc::new(Mutex::new(None)),
+        };
+        let h2 = h.clone();
+        h.hard.cancel();
+        assert!(h2.hard.is_cancelled(), "clone shares the same token");
     }
 }

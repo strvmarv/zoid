@@ -172,6 +172,9 @@ pub async fn run_subagent(
         max_iterations: Some(SUBAGENT_MAX_ITERATIONS),
         in_flight: None,
         reassert_interval: 0,
+        progress: None,
+        subagent_idle: None,
+        subagent_ceiling: None,
     };
     // Subagents have no session-scoped companion (the `show` tool is chat-only
     // and is never in the subagent tool registry), so this hub is never
