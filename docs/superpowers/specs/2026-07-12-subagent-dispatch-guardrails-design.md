@@ -8,7 +8,7 @@ in Spec 1). Build order 1 → 2 → 3.
 |------|-------|--------|
 | **1** | Subagent runtime guardrails — timeout, kill tool, Esc, `[subagent]` config → [`2026-07-12-subagent-guardrails-design.md`](2026-07-12-subagent-guardrails-design.md) | Design written |
 | **2** | Worktree tooling correctness — **WT-1 / WT-2** (git/cwd) + **WT-3** (rail reflects worktree) + **WT-4** (drop bottom hint) → [`2026-07-12-worktree-tooling-fixes-design.md`](2026-07-12-worktree-tooling-fixes-design.md) | Design written |
-| **3** | Scheduled wake-ups — agent self-scheduling subsystem (new `EventKind` + watcher + `select!` branch + synthetic-turn injection + model tool) | Not yet specced |
+| **3** | Scheduled wake-ups — agent self-scheduling subsystem (new `EventKind`s + watcher + synthetic-turn injection + `schedule_wake`/`cancel_wake` tools) → [`2026-07-12-scheduled-wakeups-design.md`](2026-07-12-scheduled-wakeups-design.md) | Design written |
 
 The sections below are the original observations, retained as raw material for
 Specs 2 and 3. Note: the two "spin-out" incidents (#1, #2) were most likely
