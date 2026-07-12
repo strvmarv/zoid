@@ -5597,6 +5597,9 @@ fn earliest_fire_at(pending: &std::collections::BTreeMap<(i64, String), String>)
 /// Runaway guards for agent-scheduled wakes (constants in v1).
 const WAKE_MIN_DELAY_SECS: u64 = 30;
 const WAKE_MAX_PENDING: usize = 16;
+/// Ceiling for an agent-scheduled wake: 30 days. Prevents an absurd delay from
+/// overflowing the i64 millisecond fire-time arithmetic (a panic in the main loop).
+const WAKE_MAX_DELAY_SECS: u64 = 2_592_000;
 /// Validate a `schedule_wake` request against the master switch, the 30 s floor,
 /// and the 16-pending cap. Returns a user-facing error string on rejection.
 fn validate_schedule(enabled: bool, pending_count: usize, delay_secs: u64) -> Result<(), String> {
@@ -5605,6 +5608,9 @@ fn validate_schedule(enabled: bool, pending_count: usize, delay_secs: u64) -> Re
     }
     if delay_secs < WAKE_MIN_DELAY_SECS {
         return Err(format!("delay must be at least {WAKE_MIN_DELAY_SECS}s"));
+    }
+    if delay_secs > WAKE_MAX_DELAY_SECS {
+        return Err(format!("delay must be at most {WAKE_MAX_DELAY_SECS}s (30 days)"));
     }
     if pending_count >= WAKE_MAX_PENDING {
         return Err(format!("too many pending wakes (max {WAKE_MAX_PENDING})"));
@@ -5621,7 +5627,7 @@ async fn handle_schedule_wake(
 ) -> Result<String, String> {
     validate_schedule(app.config.wake.enabled, app.pending_wakes.len(), delay_secs)?;
     let wake_id = Ulid::new().to_string();
-    let fire_at_ms = now_ms() + (delay_secs as i64) * 1000;
+    let fire_at_ms = now_ms().saturating_add(i64::try_from(delay_secs).unwrap_or(i64::MAX).saturating_mul(1000));
     app.record(EventKind::WakeScheduled {
         wake_id: wake_id.clone(),
         fire_at_ms,
@@ -5648,10 +5654,10 @@ async fn handle_cancel_wake(app: &mut App, id: Option<String>) -> Result<String,
         None => app.pending_wakes.keys().cloned().collect(),
     };
     for (fire_at, wid) in &targets {
-        app.pending_wakes.remove(&(*fire_at, wid.clone()));
         app.record(EventKind::WakeCancelled { wake_id: wid.clone() })
             .await
             .map_err(|e| format!("failed to persist cancel: {e}"))?;
+        app.pending_wakes.remove(&(*fire_at, wid.clone()));
     }
     let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
     Ok(match id {
@@ -6014,6 +6020,8 @@ mod tests {
         assert!(validate_schedule(true, 0, 29).is_err(), "below 30s floor → reject");
         assert!(validate_schedule(true, 16, 60).is_err(), "at 16 pending cap → reject");
         assert!(validate_schedule(true, 15, 30).is_ok(), "enabled, 30s, under cap → ok");
+        assert!(validate_schedule(true, 0, WAKE_MAX_DELAY_SECS + 1).is_err(), "above 30-day cap → reject");
+        assert!(validate_schedule(true, 0, WAKE_MAX_DELAY_SECS).is_ok(), "exactly at cap → ok");
     }
 
     #[test]
