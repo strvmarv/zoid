@@ -1510,4 +1510,22 @@ mod tests {
         assert!(text.contains("NEWLINE"), "last edit is inline");
         assert!(!text.contains("OLDLINE"), "older edit is counts-only, no snippet");
     }
+
+    #[test]
+    fn indented_table_never_exceeds_width() {
+        // Regression: an assistant-message table must fit within `width` including
+        // the "HH:MM zoid " prefix indent (the indent-overflow bug).
+        let width = 50;
+        let msgs = vec![ChatMsg::Assistant {
+            thinking: None,
+            text: "| Commit | What |\n| --- | --- |\n| 9856d34 | Registry entry plus fifty two model ids and thirty nine caps |\n".into(),
+            tool_calls: vec![],
+            ts: 0,
+        }];
+        let lines = conversation_view(&msgs, &view(Zoom::Normal), false, width, None, &[], 0);
+        for l in &lines {
+            let w: usize = l.spans.iter().map(|s| s.content.width()).sum();
+            assert!(w <= width, "line exceeds width {width}: got {w}");
+        }
+    }
 }

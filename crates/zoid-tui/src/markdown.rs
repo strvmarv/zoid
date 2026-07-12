@@ -16,9 +16,9 @@ use zoid_syntax::Language;
 /// Max container nesting (lists + blockquotes) before we bail to plain text.
 const MAX_DEPTH: usize = 8;
 
-/// Maximum display width of a single table column (spec §2 step 2). Cells
-/// exceeding this wrap to multiple visual rows within the column.
-const MAX_COL_W: usize = 30;
+/// Minimum column content width we shrink to before tolerating horizontal
+/// overflow. A column already narrower than this keeps its natural width.
+const MIN_COL_W: usize = 8;
 
 /// What a rendered body line is, so downstream layout can treat it correctly:
 /// prose word-wraps with a hanging indent; code lines never word-wrap (their
@@ -112,6 +112,49 @@ fn border_line(widths: &[usize], kind: BorderKind) -> Vec<Span<'static>> {
     }
     spans.push(Span::styled(right.to_string(), dim));
     spans
+}
+
+/// Non-content width a table spends on chrome for `ncols` columns: one pad
+/// space on each side of every column (`2*ncols`) plus `ncols + 1` vertical
+/// bars. Must stay consistent with `border_line`'s geometry (which derives the
+/// same `Σw + 3*ncols + 1` independently — they are not coupled in code).
+fn table_chrome_w(ncols: usize) -> usize {
+    3 * ncols + 1
+}
+
+/// Per-column display widths given each column's natural (unwrapped) content
+/// width and the available content width `content_w`. Columns keep their
+/// natural width when the whole table fits; otherwise the widest columns
+/// shrink first, never below `MIN_COL_W` (or their natural width if already
+/// narrower). If even all floors overflow the budget, the floors are returned
+/// and the caller tolerates horizontal overflow (the viewport clips).
+fn table_col_widths(natural: &[usize], content_w: usize) -> Vec<usize> {
+    let ncols = natural.len();
+    let budget = content_w.saturating_sub(table_chrome_w(ncols));
+    let mut widths = natural.to_vec();
+    let total: usize = widths.iter().sum();
+    if total <= budget {
+        return widths;
+    }
+    let mut overflow = total - budget;
+    let floor: Vec<usize> = natural.iter().map(|&w| w.min(MIN_COL_W)).collect();
+    while overflow > 0 {
+        // Widest column still above its floor; lowest index wins ties.
+        let mut target: Option<usize> = None;
+        for c in 0..ncols {
+            if widths[c] > floor[c] && target.map_or(true, |t| widths[c] > widths[t]) {
+                target = Some(c);
+            }
+        }
+        match target {
+            Some(c) => {
+                widths[c] -= 1;
+                overflow -= 1;
+            }
+            None => break, // every column at floor: tolerate overflow
+        }
+    }
+    widths
 }
 
 /// Pad each visual row of `rows` to `width`, honoring alignment. Returns the
@@ -609,7 +652,6 @@ impl Builder {
     /// push them onto `self.lines` (spec §2). Called from `end(TagEnd::Table)`.
     /// `table` is the fully-accumulated grid (moved out of `self.table`).
     fn render_table(&mut self, table: TableAccum, content_w: usize) {
-        let _ = content_w; // used in Task 2
         let ncols = table.alignments.len();
         if ncols == 0 {
             return; // degenerate: no columns, emit nothing
@@ -638,9 +680,8 @@ impl Builder {
                 natural[c] = natural[c].max(cell_w);
             }
         }
-        // --- Step 2: cap ---
-        let cap = MAX_COL_W;
-        let widths: Vec<usize> = natural.iter().map(|&w| w.min(cap)).collect();
+        // --- Step 2: adaptive widths (fit natural, else shrink widest first) ---
+        let widths: Vec<usize> = table_col_widths(&natural, content_w);
 
         // --- Step 3: wrap + pad every cell into Vec<Vec<Span>> of width widths[c] ---
         // wrapped_rows[ri] = (wrapped_cells, is_header) where wrapped_cells[ci]
@@ -755,6 +796,39 @@ mod tests {
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| (s.content.to_string(), s.style)))
             .collect()
+    }
+
+    #[test]
+    fn col_widths_fit_naturally_when_room() {
+        // sum(natural)=52, chrome=7, budget=60-7=53 → no shrink.
+        assert_eq!(table_col_widths(&[8, 44], 60), vec![8, 44]);
+    }
+
+    #[test]
+    fn col_widths_shrink_widest_first() {
+        // natural [8,60], content_w=44, chrome=7, budget=37, overflow=31.
+        // Widest (col 1) absorbs all of it: 60-31=29; narrow col untouched.
+        assert_eq!(table_col_widths(&[8, 60], 44), vec![8, 29]);
+    }
+
+    #[test]
+    fn col_widths_never_shrink_below_floor_and_tolerate_overflow() {
+        // content_w=18, chrome=7, budget=11. Both floors=8; can't fit → [8,8].
+        assert_eq!(table_col_widths(&[8, 60], 18), vec![8, 8]);
+    }
+
+    #[test]
+    fn col_widths_do_not_inflate_already_narrow_columns() {
+        // Columns narrower than MIN_COL_W keep their natural width when it fits.
+        assert_eq!(table_col_widths(&[3, 3], 100), vec![3, 3]);
+    }
+
+    #[test]
+    fn col_widths_chrome_math_is_exact() {
+        // budget == sum(natural): [10,10], chrome=7 → content_w=27 fits with no wrap.
+        assert_eq!(table_col_widths(&[10, 10], 27), vec![10, 10]);
+        // one tighter must force a 1-col shrink of the (tied) widest = col 0.
+        assert_eq!(table_col_widths(&[10, 10], 26), vec![9, 10]);
     }
 
     #[test]
@@ -1043,34 +1117,24 @@ mod tests {
     }
 
     #[test]
-    fn wide_cell_wraps_within_column_cap() {
-        // A single 40-char cell — wider than the 30 cap — must wrap.
+    fn wide_cell_wraps_when_over_budget() {
+        // A 40-char cell wraps only when the available width can't hold it.
         let long = "x".repeat(40);
         let md = format!("| {} |\n| --- |\n| {} |\n", long, long);
-        let lines = render_markdown(&md, TEST_W);
-        // The header row and the body row each must have wrapped (height >= 2).
-        // Count rows that contain content lines (not borders): a wrapped table
-        // is taller than an unwrapped one. We assert there are >= 2 non-border
-        // lines containing 'x' beyond the first.
+        let lines = render_markdown(&md, 30); // budget 30-4=26 < 40 → wraps
         let x_rows: Vec<&ratatui::text::Line> = lines
             .iter()
-            .filter(|l| {
-                l.spans.iter().any(|s| s.content.contains('x'))
-            })
+            .filter(|l| l.spans.iter().any(|s| s.content.contains('x')))
             .collect();
-        assert!(x_rows.len() >= 2, "expected wrapping (>=2 x-rows), got {}: {x_rows:?}", x_rows.len());
+        assert!(x_rows.len() >= 2, "expected wrapping (>=2 x-rows), got {}", x_rows.len());
     }
 
     #[test]
-    fn column_width_is_widest_cell_capped_at_30() {
-        // The 40-char cell wraps at the 30 cap: no single CONTENT span in a
-        // body row exceeds 30 display columns. (Border spans are ─/│ runs and
-        // are excluded — they are deliberately wider than the content column
-        // because border_line adds +2 padding dashes per column, so measuring
-        // them would test the border, not the cap.)
+    fn wide_cell_does_not_wrap_when_width_allows() {
+        // Same 40-char cell, but a wide pane keeps it on one row (no cap anymore).
         let long = "a".repeat(40);
         let md = format!("| {} |\n| --- |\n| {} |\n", long, long);
-        let body = render_body(&md, TEST_W);
+        let body = render_body(&md, 80); // budget 80-4=76 >= 40 → no wrap
         let max_content_w = body
             .iter()
             .flat_map(|b| b.line.spans.iter())
@@ -1078,10 +1142,33 @@ mod tests {
             .map(|s| s.content.width())
             .max()
             .unwrap_or(0);
-        assert!(
-            max_content_w <= 30,
-            "cell content exceeded the 30 cap: {max_content_w}"
-        );
+        assert_eq!(max_content_w, 40, "wide pane must not wrap the 40-char cell");
+    }
+
+    #[test]
+    fn few_columns_use_available_width_no_wrap() {
+        // The screenshot case: 2 columns, plenty of width → the wide column keeps
+        // its natural width and does not wrap at 30.
+        let md = "| Commit | What |\n| --- | --- |\n| 9856d34 | Registry entry plus fifty two model ids and thirty nine caps |\n";
+        let body = render_body(md, 100);
+        // The 'What' cell is ~58 chars; with content_w=100 it must stay one row.
+        // `wrap_content` always tokenizes cell text into per-word spans (even
+        // when a cell fits unwrapped), so join each line's spans before
+        // searching for the multi-word phrase rather than checking any single
+        // span's content.
+        let what_row_count = body
+            .iter()
+            .filter(|b| {
+                let joined: String = b.line.spans.iter().map(|s| s.content.as_ref()).collect();
+                joined.contains("Registry entry")
+            })
+            .count();
+        assert_eq!(what_row_count, 1, "wide 'What' column must not wrap");
+        // And no rendered line exceeds content_w.
+        for b in &body {
+            let w: usize = b.line.spans.iter().map(|s| s.content.width()).sum();
+            assert!(w <= 100, "table line exceeded content_w: {w}");
+        }
     }
 
     #[test]
