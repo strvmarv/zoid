@@ -133,6 +133,35 @@ pub struct SubagentRow {
     pub task: String,
 }
 
+/// Ephemeral, UI-only diff cap for the in-memory edit/write snippet cache.
+pub const EDIT_DIFF_CACHE_CAP: usize = 16;
+
+/// Render-side mirror of `zoid_tools::FileDiff` (kept here so `zoid-tui` needn't
+/// depend on `zoid-tools`; the bin maps between them, like SubagentRow).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RenderDiffKind {
+    Ctx,
+    Add,
+    Del,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderDiffLine {
+    pub old_no: Option<u32>,
+    pub new_no: Option<u32>,
+    pub kind: RenderDiffKind,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderDiff {
+    pub path: String,
+    pub added: u32,
+    pub removed: u32,
+    pub lines: Vec<RenderDiffLine>,
+    pub truncated_by: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Drawer {
     pub id: DrawerId,
@@ -256,6 +285,10 @@ pub struct ShellState {
     /// by the bin from `in_flight_subagents`. Cleared when a DelegationResult
     /// arrives. NOT on the bottom status bar — subagent status belongs here.
     pub subagent_rows: Vec<SubagentRow>,
+    /// Ephemeral, UI-only edit/write diffs, keyed by tool-call id in insertion
+    /// order (bounded to `EDIT_DIFF_CACHE_CAP`, oldest evicted). Populated by the
+    /// bin from `AgentUpdate::EditDiff`; NOT persisted, empty after reload.
+    pub edit_diffs: Vec<(String, RenderDiff)>,
     /// Display rows for the resume-session picker (bin-formatted, most-recent-first).
     pub sessions: Vec<String>,
     /// Per-row "in use" flags for the resume-session picker, index-aligned with
@@ -432,6 +465,7 @@ impl ShellState {
             colon_trigger_hinted: false,
             tasks_len: 0,
             subagent_rows: Vec::new(),
+            edit_diffs: Vec::new(),
             sessions: Vec::new(),
             sessions_live: Vec::new(),
             session_selected: 0,
@@ -599,6 +633,25 @@ impl ShellState {
     /// True when the col-3 contextual picker is drilled open.
     pub fn config_picker_open(&self) -> bool {
         !self.config_picker.is_empty()
+    }
+
+    /// Insert or update an ephemeral edit diff, keeping the cache bounded to
+    /// `EDIT_DIFF_CACHE_CAP` (oldest evicted). Re-inserting an existing id
+    /// updates it in place without growing the cache.
+    pub fn push_edit_diff(&mut self, id: String, diff: RenderDiff) {
+        if let Some(slot) = self.edit_diffs.iter_mut().find(|(k, _)| *k == id) {
+            slot.1 = diff;
+            return;
+        }
+        self.edit_diffs.push((id, diff));
+        if self.edit_diffs.len() > EDIT_DIFF_CACHE_CAP {
+            self.edit_diffs.remove(0);
+        }
+    }
+
+    /// Look up a cached diff by tool-call id.
+    pub fn edit_diff(&self, id: &str) -> Option<&RenderDiff> {
+        self.edit_diffs.iter().find(|(k, _)| k == id).map(|(_, d)| d)
     }
 }
 
@@ -942,5 +995,29 @@ mod tests {
         assert!(matches!(s.config_col, ConfigCol::Fields));
         assert!(!s.config_picker_open());
         assert_eq!(s.config_picker_sel, 0);
+    }
+
+    #[test]
+    fn edit_diff_cache_is_bounded_and_evicts_oldest() {
+        let mut s = ShellState::default();
+        for i in 0..(EDIT_DIFF_CACHE_CAP + 3) {
+            s.push_edit_diff(
+                format!("id{i}"),
+                RenderDiff { path: "f".into(), added: 1, removed: 0, lines: vec![], truncated_by: 0 },
+            );
+        }
+        assert_eq!(s.edit_diffs.len(), EDIT_DIFF_CACHE_CAP, "cache is capped");
+        assert!(s.edit_diff("id0").is_none(), "oldest evicted");
+        assert!(s.edit_diff(&format!("id{}", EDIT_DIFF_CACHE_CAP + 2)).is_some(), "newest kept");
+    }
+
+    #[test]
+    fn edit_diff_reinsert_updates_in_place_without_growth() {
+        let mut s = ShellState::default();
+        let mk = |a| RenderDiff { path: "f".into(), added: a, removed: 0, lines: vec![], truncated_by: 0 };
+        s.push_edit_diff("x".into(), mk(1));
+        s.push_edit_diff("x".into(), mk(9));
+        assert_eq!(s.edit_diffs.len(), 1, "same id updates, does not duplicate");
+        assert_eq!(s.edit_diff("x").unwrap().added, 9);
     }
 }
