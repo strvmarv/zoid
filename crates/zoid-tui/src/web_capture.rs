@@ -43,7 +43,12 @@ fn write_run(out: &mut String, fg: &Option<String>, bg: &Option<String>, run: &s
     if style.is_empty() {
         out.push_str(run);
     } else {
-        let _ = write!(out, "<span style=\"{}\">{}</span>", style.trim_end_matches(';'), run);
+        let _ = write!(
+            out,
+            "<span style=\"{}\">{}</span>",
+            style.trim_end_matches(';'),
+            run
+        );
     }
 }
 
@@ -57,7 +62,12 @@ fn write_wide(out: &mut String, fg: &Option<String>, bg: &Option<String>, w: u16
     if let Some(bg) = bg {
         let _ = write!(style, "background:{bg};");
     }
-    let _ = write!(out, "<span style=\"{}\">{}</span>", style.trim_end_matches(';'), glyph);
+    let _ = write!(
+        out,
+        "<span style=\"{}\">{}</span>",
+        style.trim_end_matches(';'),
+        glyph
+    );
 }
 
 /// Convert a rendered buffer into a colored `<pre>` mirroring the terminal grid.
@@ -177,7 +187,12 @@ mod tests {
         // (otherwise every column to its right — worst of all the scrollbar —
         // drifts). ratatui reserves the continuation cell, so use a width-2 buffer.
         let mut buf = Buffer::empty(Rect::new(0, 0, 2, 1));
-        buf.set_string(0, 0, "📦", Style::default().fg(Color::Rgb(0x58, 0xa6, 0xff)));
+        buf.set_string(
+            0,
+            0,
+            "📦",
+            Style::default().fg(Color::Rgb(0x58, 0xa6, 0xff)),
+        );
         let html = buffer_to_html(&buf);
         assert!(
             html.contains("display:inline-block;width:2ch"),
