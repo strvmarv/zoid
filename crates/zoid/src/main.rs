@@ -2994,8 +2994,8 @@ where
                             persist_active_mode(app).await;
                         }
                     }
-                    zoid::agent::AgentUpdate::WorktreeRequested { action } => {
-                        handle_worktree_request(app, action);
+                    zoid::agent::AgentUpdate::WorktreeRequested { action, reply } => {
+                        handle_worktree_request(app, action, Some(reply));
                     }
                 }
             }
@@ -5071,11 +5071,11 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             // Call the handler directly — NOT via the ui_tx channel.
             // exec_command runs on the main loop task that also recv()s
             // from ui_rx; sending via the bounded channel can deadlock.
-            handle_worktree_request(app, zoid::agent::WorktreeAction::Enter { name });
+            handle_worktree_request(app, zoid::agent::WorktreeAction::Enter { name }, None);
             Ok(false)
         }
         Command::WorktreeExit => {
-            handle_worktree_request(app, zoid::agent::WorktreeAction::Exit);
+            handle_worktree_request(app, zoid::agent::WorktreeAction::Exit, None);
             Ok(false)
         }
         Command::OpenConfig => {
@@ -5295,101 +5295,105 @@ fn parse_thinking_env(val: &str) -> Option<zoid_core::config::PartialThinking> {
     Some(pt)
 }
 
-/// Process a `WorktreeRequested` signal from the agent loop or `:worktree`
-/// command. Performs the actual worktree enter/exit between turns.
-fn handle_worktree_request(app: &mut App, action: zoid::agent::WorktreeAction) {
+/// Perform the worktree enter/exit git work and return the new absolute cwd for
+/// the in-flight turn. Guard failures return `Err(msg)`. Does NOT touch `App`,
+/// `status_hint`, or the rail — the caller applies the cwd and the poller owns
+/// the rail labels.
+///
+/// `repo_root` is the main checkout root (`"."` in production; a temp dir in tests).
+/// On Enter, `*active` is set to the new `WorktreeSession`; on Exit it is cleared.
+fn compute_worktree_switch(
+    active: &mut Option<WorktreeSession>,
+    action: zoid::agent::WorktreeAction,
+    subagent_running: bool,
+    repo_root: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
     use zoid::agent::WorktreeAction;
     match action {
         WorktreeAction::Enter { name } => {
-            // Guard: already inside a worktree?
-            if app.active_worktree.is_some() {
-                app.shell.status_hint = Some(
-                    "already in a worktree — exit with :worktree exit first".into(),
-                );
-                return;
+            if active.is_some() {
+                return Err("already in a worktree — exit with :worktree exit first".into());
             }
-            // Guard: subagent running?
-            if !app.in_flight_subagents.is_empty() {
-                app.shell.status_hint =
-                    Some("cannot enter worktree while a subagent is running".into());
-                return;
+            if subagent_running {
+                return Err("cannot enter worktree while a subagent is running".into());
             }
-            // Guard: git repo?
-            if !std::path::Path::new(".git").exists() {
-                app.shell.status_hint = Some("not a git repository".into());
-                return;
+            if !repo_root.join(".git").exists() {
+                return Err("not a git repository".into());
             }
-            // Create the worktree (idempotent: if it already exists, enter it).
-            let wt = match zoid::worktree::create_worktree(std::path::Path::new("."), &name)
-            {
-                Ok(guard) => guard,
-                Err(_e) => {
-                    // Name collision: the worktree may already exist from a
-                    // prior enter that was kept. Enter it directly.
-                    let existing_path =
-                        std::path::Path::new(".zoid").join("worktrees").join(&name);
-                    if existing_path.exists() {
-                        let path =
-                            std::fs::canonicalize(&existing_path).unwrap_or(existing_path);
-                        app.active_worktree = Some(WorktreeSession {
-                            path: path.clone(),
-                            name: name.clone(),
-                        });
-                        app.shell.cwd = path.display().to_string();
-                        app.shell.status_hint =
-                            Some(format!("entered existing worktree '{name}'"));
-                        return;
+            // Create the worktree, or (idempotent re-enter) adopt an existing
+            // dir left by a prior dirty-kept exit. `into_kept()` moves the
+            // guard's contents into a Drop-free session so the dir + branch are
+            // never auto-removed.
+            let (path, sess_name) = match zoid::worktree::create_worktree(repo_root, &name) {
+                Ok(guard) => guard.into_kept(),
+                Err(e) => {
+                    let existing = repo_root.join(".zoid").join("worktrees").join(&name);
+                    if existing.exists() {
+                        (existing, name.clone())
+                    } else {
+                        return Err(format!("enter_worktree failed: {e}"));
                     }
-                    app.shell.status_hint =
-                        Some(format!("enter_worktree failed: {_e}"));
-                    return;
                 }
             };
-            let (path, branch_name) = wt.into_kept();
             let path = std::fs::canonicalize(&path).unwrap_or(path);
-            app.active_worktree = Some(WorktreeSession {
+            *active = Some(WorktreeSession {
                 path: path.clone(),
-                name: branch_name,
+                name: sess_name,
             });
-            app.shell.cwd = path.display().to_string();
-            app.shell.status_hint = Some(format!("entered worktree '{name}'"));
+            Ok(path)
         }
         WorktreeAction::Exit => {
-            // Guard: not in a worktree?
-            let wt = match app.active_worktree.take() {
+            let wt = match active.take() {
                 Some(wt) => wt,
-                None => {
-                    app.shell.status_hint = Some("not in a worktree".into());
-                    return;
-                }
+                None => return Err("not in a worktree".into()),
             };
-            // Guard: subagent running?
-            if !app.in_flight_subagents.is_empty() {
-                app.shell.status_hint = Some(
-                    "cannot exit worktree while a subagent is running".into(),
-                );
-                // Put it back — exit refused.
-                app.active_worktree = Some(wt);
-                return;
+            if subagent_running {
+                *active = Some(wt); // put it back — exit refused
+                return Err("cannot exit worktree while a subagent is running".into());
             }
-            // Check if the worktree is clean (no uncommitted changes).
-            let is_clean = is_worktree_clean(&wt.path);
-            if is_clean {
-                // Auto-remove: dir + prune + branch.
-                let _ =
-                    zoid::worktree::remove_worktree(std::path::Path::new("."), &wt.name);
-                app.shell.status_hint =
-                    Some(format!("exited and removed worktree '{}'", wt.name));
-            } else {
-                // Dirty: keep the worktree on disk, just restore cwd.
-                app.shell.status_hint = Some(format!(
-                    "exited worktree '{}' (kept — has uncommitted changes; remove manually with: git worktree remove .zoid/worktrees/{})",
-                    wt.name, wt.name
-                ));
+            // Absolute repo root computed BEFORE any removal, so tooling never
+            // points at a deleted dir (WT-2).
+            let root = std::fs::canonicalize(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
+            // Clean → remove (dir + prune + branch). Dirty → keep (WorktreeSession
+            // has no Drop, so doing nothing preserves the user's work).
+            if is_worktree_clean(&wt.path) {
+                let _ = zoid::worktree::remove_worktree(repo_root, &wt.name);
             }
-            // Restore the TUI's cwd display to the main checkout.
-            app.shell.cwd = ".".to_string();
+            Ok(root)
         }
+    }
+}
+
+/// Process a `WorktreeRequested` signal from the agent loop or `:worktree`
+/// command. Performs the actual worktree enter/exit between turns.
+fn handle_worktree_request(
+    app: &mut App,
+    action: zoid::agent::WorktreeAction,
+    reply: Option<tokio::sync::oneshot::Sender<Result<std::path::PathBuf, String>>>,
+) {
+    let subagent_running = !app.in_flight_subagents.is_empty();
+    let result = compute_worktree_switch(
+        &mut app.active_worktree,
+        action,
+        subagent_running,
+        std::path::Path::new("."),
+    );
+    match &result {
+        Ok(cwd) => {
+            // WT-2: the Session drawer's cwd display (not clobbered by the poller).
+            app.shell.cwd = cwd.display().to_string();
+        }
+        Err(msg) => {
+            // The `:worktree` slash path (reply == None) has no ToolResult to carry
+            // the error, so surface it here. The turn path gets the error via its
+            // ToolResult and does not need a status_hint.
+            if reply.is_none() {
+                app.shell.status_hint = Some(msg.clone());
+            }
+        }
+    }
+    if let Some(reply) = reply {
+        let _ = reply.send(result);
     }
 }
 
@@ -7429,5 +7433,114 @@ mod tests {
         assert_eq!(r.lines.len(), 3);
         assert!(matches!(r.lines[1].kind, zoid_tui::state::RenderDiffKind::Add));
         assert!(matches!(r.lines[2].kind, zoid_tui::state::RenderDiffKind::Del));
+    }
+}
+
+#[cfg(test)]
+mod worktree_switch_tests {
+    use super::compute_worktree_switch;
+    use std::path::Path;
+    use std::process::Command;
+    use zoid::agent::WorktreeAction;
+
+    /// `git init` a fresh repo with one commit so HEAD exists (worktrees need a commit).
+    fn init_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        let run = |args: &[&str]| {
+            let ok = Command::new("git")
+                .args(args)
+                .current_dir(p)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?} failed");
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(p.join("f.txt"), "hi").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-qm", "init"]);
+        dir
+    }
+
+    #[test]
+    fn enter_returns_absolute_worktree_path_and_sets_active() {
+        let repo = init_repo();
+        let mut active = None;
+        let cwd = compute_worktree_switch(
+            &mut active,
+            WorktreeAction::Enter { name: "feature-x".into() },
+            false,
+            repo.path(),
+        )
+        .expect("enter should succeed");
+        assert!(cwd.is_absolute(), "enter cwd must be absolute: {cwd:?}");
+        assert!(
+            cwd.ends_with(Path::new(".zoid/worktrees/feature-x")),
+            "enter cwd points at the worktree: {cwd:?}"
+        );
+        assert!(cwd.exists(), "the worktree dir was created");
+        assert!(active.is_some(), "active worktree is now set");
+    }
+
+    #[test]
+    fn enter_guard_already_in_worktree_errors() {
+        let repo = init_repo();
+        let mut active = None;
+        compute_worktree_switch(&mut active, WorktreeAction::Enter { name: "a".into() }, false, repo.path()).unwrap();
+        let err = compute_worktree_switch(&mut active, WorktreeAction::Enter { name: "b".into() }, false, repo.path()).unwrap_err();
+        assert!(err.contains("already in a worktree"), "got: {err}");
+    }
+
+    #[test]
+    fn enter_guard_subagent_running_errors() {
+        let repo = init_repo();
+        let mut active = None;
+        let err = compute_worktree_switch(&mut active, WorktreeAction::Enter { name: "a".into() }, true, repo.path()).unwrap_err();
+        assert!(err.contains("subagent"), "got: {err}");
+        assert!(active.is_none(), "guard must not enter");
+    }
+
+    #[test]
+    fn exit_returns_absolute_repo_root_and_clears() {
+        let repo = init_repo();
+        let mut active = None;
+        compute_worktree_switch(&mut active, WorktreeAction::Enter { name: "a".into() }, false, repo.path()).unwrap();
+        let cwd = compute_worktree_switch(&mut active, WorktreeAction::Exit, false, repo.path()).expect("exit should succeed");
+        assert!(cwd.is_absolute());
+        assert_eq!(
+            cwd.canonicalize().unwrap(),
+            repo.path().canonicalize().unwrap(),
+            "exit cwd is the repo root"
+        );
+        assert!(active.is_none(), "exit clears the active worktree");
+    }
+
+    #[test]
+    fn exit_guard_not_in_worktree_errors() {
+        let repo = init_repo();
+        let mut active = None;
+        let err = compute_worktree_switch(&mut active, WorktreeAction::Exit, false, repo.path()).unwrap_err();
+        assert!(err.contains("not in a worktree"), "got: {err}");
+    }
+
+    #[test]
+    fn dirty_exit_keeps_worktree_and_reenter_succeeds() {
+        // I2 + dirty-keep: a worktree with uncommitted changes survives exit and
+        // can be re-entered without error.
+        let repo = init_repo();
+        let mut active = None;
+        let cwd = compute_worktree_switch(&mut active, WorktreeAction::Enter { name: "keep".into() }, false, repo.path()).unwrap();
+        // Dirty it: modify the tracked file inside the worktree.
+        std::fs::write(cwd.join("f.txt"), "uncommitted change").unwrap();
+        compute_worktree_switch(&mut active, WorktreeAction::Exit, false, repo.path()).unwrap();
+        assert!(cwd.exists(), "dirty worktree dir must be KEPT on exit (no data loss)");
+        // Re-enter the same name — must NOT error (idempotent re-enter).
+        let cwd2 = compute_worktree_switch(&mut active, WorktreeAction::Enter { name: "keep".into() }, false, repo.path()).unwrap();
+        assert!(cwd2.exists());
+        assert!(active.is_some());
     }
 }
