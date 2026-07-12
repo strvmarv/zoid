@@ -187,7 +187,8 @@ Source: OpenAI's published OpenAPI spec (`openai/openai-openapi`), `CreateRespon
 **SSE parse** (`parse_event(line) -> Vec<ProviderEvent>`): SSE via `eventsource_stream` (same plumbing as `anthropic.rs`). Discriminate on the `type` field:
 - `response.output_text.delta` → `TextDelta(delta)`.
 - `response.function_call_arguments.delta` → accumulate `delta` into a per-`item_id` buffer (fragment assembly, like `openai_compat.rs`'s tool-call accumulator).
-- `response.function_call_arguments.done` → emit one `ToolCall{call_id, name, arguments(JSON string→Value)}`; flush that item's buffer. The `call_id` is the function tool call's `call_id` (carried on the output item, surfaced via `response.output_item.added`/`.done` or the `.done` event itself — confirm the exact field during implementation; the `.done` event carries `item_id`, `name`, `arguments`).
+- `response.output_item.added` → when the item is a `function_call`, record its `call_id` keyed by `item_id` (the `.delta`/`.done` events carry only `item_id`, not `call_id` — confirmed via 2026-07-11 capture `[RV]`). The two are distinct values; the next turn's `function_call_output` MUST use `call_id`.
+- `response.function_call_arguments.done` → emit one `ToolCall{call_id, name, arguments(JSON string→Value)}`; flush that item's buffer. The `call_id` is sourced from the `output_item.added` record (NOT from `item_id` — using `item_id` here would break the next-turn round-trip).
 - `response.reasoning_summary_text.delta` / `response.reasoning_text.delta` → `ThinkingDelta(delta)`.
 - `response.completed` → `Usage{input_tokens, output_tokens, cached: input_tokens_details.cached_tokens, thinking_tokens: output_tokens_details.reasoning_tokens}` then `Done`.
 - `response.incomplete` → `Truncated` then `Done`.
@@ -211,7 +212,8 @@ Source: Google's Generative Language API discovery doc (`generativelanguage.goog
 - `max_output_tokens` → `generationConfig.maxOutputTokens`.
 
 **SSE parse** (`parse_chunk(obj) -> Vec<ProviderEvent>`): `?alt=sse` returns one `GenerateContentResponse` JSON object per SSE `data:` line. For each chunk:
-- `candidates[].content.parts[]`: a part `{text}` → `TextDelta`; `{functionCall:{id,name,args}}` → `ToolCall{id, name, args}`; `{thought:true, text}` → `ThinkingDelta(text)` (when thoughts enabled).
+- `candidates[].content.parts[]`: a part `{text}` → `TextDelta`; `{functionCall:{id,name,args}}` → `ToolCall{id, name, args}` (Zen's Gemini omits `id` — confirmed via capture; falls back to empty string `[RV]`); `{thought:true, text}` → `ThinkingDelta(text)` (Google's standard schema — but Zen's Gemini does NOT emit this shape; it uses opaque `thoughtSignature` blobs on empty-text parts instead `[RV]`, so this path is dead code for Zen but correct for direct-Gemini use).
+- `{"type":"ping",...}` events (Zen-injected cost/keepalive) have no `candidates` → naturally ignored `[RV]`.
 - `candidates[].finishReason == "MAX_TOKENS"` → `Truncated`.
 - `usageMetadata` (present on the final chunk) → `Usage{input_tokens: promptTokenCount, output_tokens: candidatesTokenCount, cached: cachedContentTokenCount, thinking_tokens: thoughtsTokenCount}` then `Done`. Additive-once on the final frame (matches Ollama's single-snapshot emit; safe under the agent loop's summation).
 - `promptFeedback.blockReason` (if present) → `Error(reason)`.
@@ -303,7 +305,7 @@ Offline, `TcpListener`-stubbed, matching the existing stance (no live-endpoint C
 
 1. **~~Zen model catalog~~** — RESOLVED. 52 models across four wire shapes: 17 OpenAI Responses (GPT), 13 Anthropic Messages (Claude + Qwen), 19 OpenAI Chat Completions (deepseek, glm, grok, kimi, minimax, misc), 3 Google Gemini. Disabled models (claude-opus-4-1, claude-sonnet-4) excluded. See `docs/superpowers/spikes/2026-07-10-opencode-zen-api-research.md`.
 2. **~~Default Zen base URL~~** — RESOLVED: `https://opencode.ai/zen` (confirmed via curl).
-3. **Responses `call_id` source** — the `.done` event carries `item_id`/`name`/`arguments`; confirm `call_id` presence on a real capture (confirmed the endpoint works with `input` string + `max_output_tokens`; need a tool-bearing capture for the `function_call_arguments` event shape).
-4. **Gemini tool-call `id`** — `FunctionCall.id` is optional in the schema; confirm whether Zen's Gemini models populate it (falls back to empty string, matching Ollama's call-id-less shape, if absent).
+3. **~~Responses `call_id` source~~** — RESOLVED (2026-07-11 capture). `call_id` ≠ `item_id`. The `response.output_item.added` event carries the full item including `call_id`; `function_call_arguments.delta/.done` carry only `item_id`. The accumulator must learn `call_id` from `output_item.added` (keyed by `item_id`) and emit it on flush. See spike `## Tool-call captures`.
+4. **~~Gemini tool-call `id`~~** — RESOLVED (2026-07-11 capture). `functionCall.id` is **absent** from Zen's Gemini. The fallback (empty-string id, matching Ollama's shape) is correct. See spike `## Tool-call captures`.
 5. **~~ZEN_MODELS[0]~~** — RESOLVED: `claude-sonnet-4-5` (same family as Go's default, user-perceived continuity).
 6. **~~Gemini thinking wire-shape~~ `[RV]`~~** — RESOLVED (2026-07-11 brainstorm): leaf-local. `MODEL_CAPS` sets `thinking: Toggle, thinking_wire: None`; `google_gemini.rs` renders `thinkingConfig.includeThoughts` from `req.thinking != Off`. No new `ThinkingWireShape::Gemini` variant (mirrors Ollama's leaf-local approach).

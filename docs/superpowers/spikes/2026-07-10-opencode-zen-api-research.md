@@ -162,6 +162,99 @@ which endpoint to POST to without trial-and-error.
 - `/v1/responses` with `gpt-5.4-nano` — 200 ✓ (stream + non-stream)
 - `/v1/models/gemini-3-flash:generateContent` with `x-goog-api-key` — 200 ✓
 
+## Tool-call captures (2026-07-11) — resolves spec open questions #3 and #4
+
+### OpenAI Responses: `call_id` vs `item_id` (spec §9 q3)
+
+**RESOLVED: `call_id` ≠ `item_id`. They are distinct values.** The
+`function_call_output` input item on the next turn MUST use `call_id`, not
+`item_id`.
+
+Non-streaming response `output[0]`:
+```json
+{
+  "id": "fc_064905c2d2b6eb62006a530939c8b081949c6a609833d343e3",   // item_id
+  "type": "function_call",
+  "name": "get_weather",
+  "call_id": "call_yQdsSPBGsR5JFINRZS9p9b1l",                       // call_id (DIFFERENT)
+  "arguments": "{\"location\":\"San Francisco\"}"
+}
+```
+
+Streaming event sequence (tool-bearing call):
+- `response.output_item.added` → carries the **full item including `call_id`**:
+  `{"item":{"id":"fc_...","type":"function_call","call_id":"call_...","arguments":""}}`
+- `response.function_call_arguments.delta` → carries **`item_id` only** (no `call_id`):
+  `{"item_id":"fc_...","delta":"{\""}`
+- `response.function_call_arguments.done` → carries **`item_id` only** (no `call_id`):
+  `{"item_id":"fc_...","arguments":"{\"location\":\"San Francisco\"}"}`
+- `response.output_item.done` → carries the **full item including `call_id`** (same as `.added`).
+
+**Implementation impact:** the accumulator must learn `call_id` from
+`response.output_item.added` (keyed by `item_id`) and emit it when flushing
+on `response.function_call_arguments.done`. Using `item_id` as the tool-call
+id (the plan's original assumption) would break the next-turn
+`function_call_output` round-trip — the provider can't match the result back.
+
+### Google Gemini: `functionCall.id` (spec §9 q4)
+
+**RESOLVED: `functionCall.id` is ABSENT.** Zen's Gemini `functionCall` parts
+carry only `name` and `args`:
+```json
+{"functionCall":{"name":"get_weather","args":{"location":"San Francisco"}}}
+```
+No `id` field at all. The fallback (empty-string id, matching Ollama's
+call-id-less shape) is correct.
+
+### Google Gemini: thought parts are NOT `thought:true, text:"..."` (NEW)
+
+**The spec's §4.4 `thought:true, text` part shape does NOT match Zen.** Zen's
+Gemini surfaces thinking via an opaque `thoughtSignature` (base64 blob) on
+**empty-text parts**, not readable thought text:
+
+Streaming (with `thinkingConfig.includeThoughts: true`):
+- First chunk: `{"text":"Hello."}` + `"usageMetadata":{}`
+- Final chunk: `{"text":"","thoughtSignature":"AY89a1+cmbdq5mYb..."}` +
+  `"finishReason":"STOP"` + full `usageMetadata`
+
+There is **no** `thought:true` boolean and **no** readable thought text —
+thoughts are encoded in the opaque signature, not surfaced as deltas.
+
+**Implementation impact:** the plan's `parse_thought_part_yields_thinking_delta`
+test fixture (`{"thought":true,"text":"pondering"}`) does not match Zen's
+actual shape. For v1, thoughts are silently dropped (no readable delta). The
+`parse_chunk` thought handling should check for `thought:true` AND
+`thoughtSignature` (ignore both), not assume readable text. The
+`ThinkingDelta` emit path is dead code for Zen's Gemini — keep the parse
+logic (it's correct per Google's schema for direct-Gemini use) but don't
+expect Zen to exercise it.
+
+### Google Gemini: `{"type":"ping"}` SSE events (NEW)
+
+Zen's Gemini stream injects non-standard `{"type":"ping","cost":"..."}` and
+`{"type":"ping","x-opencode-type":"inference-cost",...}` events between
+content chunks. These carry no `candidates` array and no standard
+`usageMetadata` shape. `parse_chunk` naturally ignores them (no `candidates` →
+empty vec; `usageMetadata` absent → no Usage emit), but the implementation
+must not crash on the `type` field being present.
+
+### Google Gemini: `usageMetadata` field shape confirmed
+
+Final-chunk `usageMetadata`:
+```json
+{
+  "candidatesTokensDetails": [{"modality":"TEXT","tokenCount":2}],
+  "promptTokensDetails": [{"modality":"TEXT","tokenCount":6}],
+  "candidatesTokenCount": 2,
+  "promptTokenCount": 6,
+  "thoughtsTokenCount": 71,
+  "totalTokenCount": 79
+}
+```
+- `cachedContentTokenCount` is **absent** (not zero — the field is missing).
+  `unwrap_or(0)` is correct; Gemini cached reads always report 0.
+- `thoughtsTokenCount` maps to zoid's `thinking_tokens`.
+
 ## Gotchas discovered during research
 
 ### Gemini `usageMetadata` on every chunk
