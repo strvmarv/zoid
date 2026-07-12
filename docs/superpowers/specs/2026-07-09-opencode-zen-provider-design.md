@@ -1,8 +1,18 @@
 # OpenCode Zen provider — full-parity subscription, four-way per-model wire routing
 
 Date: 2026-07-09
-Status: Design (approved in brainstorm; spec research complete 2026-07-10, ready for writing-plans)
+Status: Design (approved in brainstorm; spec research complete 2026-07-10; **re-validated 2026-07-11** — see §0)
 Extends: `2026-07-05-opencode-go-provider-design.md` (registry shape, provider picker, key gate), `2026-07-03-settings-redesign-design.md`
+
+## 0. Re-validation (2026-07-11)
+
+The design was re-validated against the codebase after the reassertion + thinking-mode features landed. **No architectural changes** — the 4-way routing, shared key, model catalog, and Secrets prettification all hold. Three mechanical drifts are corrected inline (marked `[RV]`):
+
+1. **`CompletionRequest.reassert` field** (`[RV]`, added by commit `b95ce65`, post-spec). Every `CompletionRequest { … }` literal in the implementation plan must include `reassert: None`. The two new generic leaves render reassert as a no-op for v1 (pass `None`); a follow-up can wire trailing-text placement if needed. See §4.3/§4.4 notes.
+
+2. **Thinking mode is now model-driven via `ThinkingWireShape`.** The original spec hardcoded `reasoning_params` for OpenAI Responses. The codebase now drives thinking rendering from `model_info(model).thinking_wire` (`None`/`Anthropic`/`DeepSeek`/`OpenAI`). The OpenAI Responses leaf consults `thinking_wire == OpenAI` (matching `openai_compat.rs`'s pattern) rather than a leaf-local map. Gemini has **no** `ThinkingWireShape` variant — per brainstorm decision (Option A), Gemini thinking is **leaf-local**: `MODEL_CAPS` sets `thinking: Toggle, thinking_wire: None`, and `google_gemini.rs` renders `generationConfig.thinkingConfig.includeThoughts` from `req.thinking != Off`. This mirrors how `ollama.rs` handles its own thinking param without a dedicated wire-shape variant. See §4.3/§4.4.
+
+3. **Anthropic provider refactored to a directory module** (`anthropic/mod.rs` + `request.rs`/`parse.rs`/`types.rs`/`cache.rs`). The import `crate::anthropic::AnthropicProvider` still resolves correctly — no code change, just a reference update. The `AnthropicProvider` gains `with_betas` (not used by Zen v1).
 
 ## 1. Problem
 
@@ -59,9 +69,9 @@ The provider picker rows (`opencode · go` → stays; `opencode · zen` → new)
 ## 3. Current state (what exists)
 
 - `crates/zoid-model/src/lib.rs` — `PROVIDERS` registry (4 entries: `ollama-local`, `ollama-cloud`, `opencode-go`, `anthropic-api`); `MODEL_CAPS` table; `canonical_id`, `entry`, `models_for`, `default_base_url`, `selectable`, `model_info`. `opencode-go` display is `"opencode · go"`.
-- `crates/zoid-provider/src/lib.rs` — `Provider` trait, `Message` (with `tool_call_id`), `ProviderEvent` (`TextDelta`/`ThinkingDelta`/`ThinkingSignature`/`ToolCall`/`Usage`/`Truncated`/`Done`/`Error`), `CompletionRequest`, `ToolCall`, `Usage`, `ToolSpec`, `ThinkingMode`/`EffortLevel`, `default_provider()`/`default_model()`, `parse_data_id_models`, `http_client()`, `stream_idle_timeout()`.
-- `crates/zoid-provider/src/openai_compat.rs` — `OpenAICompatProvider` (OpenAI Chat Completions `/v1/chat/completions`, SSE, tool-calling with fragment accumulation, `with_base_url`/`with_idle_timeout`).
-- `crates/zoid-provider/src/anthropic.rs` — `AnthropicProvider` (Messages API `/v1/messages`, SSE via `eventsource_stream`, text-only P1b, `with_base_url`/`with_idle_timeout`).
+- `crates/zoid-provider/src/lib.rs` — `Provider` trait, `Message` (with `tool_call_id`), `ProviderEvent` (`TextDelta`/`ThinkingDelta`/`ThinkingSignature`/`ToolCall`/`Usage`/`Truncated`/`Done`/`Error`), `CompletionRequest` (now carries `reassert: Option<String>` `[RV]`, added post-spec by commit `b95ce65`), `ToolCall`, `Usage`, `ToolSpec`, `ThinkingMode`/`EffortLevel`, `default_provider()`/`default_model()`, `parse_data_id_models`, `http_client()`, `stream_idle_timeout()`.
+- `crates/zoid-provider/src/openai_compat.rs` — `OpenAICompatProvider` (OpenAI Chat Completions `/v1/chat/completions`, SSE, tool-calling with fragment accumulation, `with_base_url`/`with_idle_timeout`). Now drives thinking via `model_info(model).thinking_wire`.
+- `crates/zoid-provider/src/anthropic/` `[RV]` — `AnthropicProvider` (Messages API `/v1/messages`, SSE via `eventsource_stream`, text-only P1b, `with_base_url`/`with_idle_timeout`/`with_betas`). Refactored from a single file to a directory module (`mod.rs` + `request.rs`/`parse.rs`/`types.rs`/`cache.rs`) post-spec; the import `crate::anthropic::AnthropicProvider` still resolves.
 - `crates/zoid-provider/src/opencode_go.rs` — `OpenCodeGoProvider`: dedicated provider holding a static `GO_MODELS: &[(model, WireShape)]` (two variants) and delegating `stream()`/`list_models()` to `OpenAICompatProvider` or `AnthropicProvider`.
 - `crates/zoid/src/main.rs` — `key_env_for` (family → env var), `select_provider` (family branch → provider impl), `provider_for_id` (quick-switch live fetch), settings secret-field lists.
 - The Go design doc explicitly named the seams so `opencode-zen` slots in cleanly; this slice does exactly that.
@@ -170,7 +180,7 @@ Source: OpenAI's published OpenAPI spec (`openai/openai-openapi`), `CreateRespon
 - `model`.
 - `input`: zoid's `messages` → Responses input shape. A `user`/`assistant` text message → `{role, content:[{type:"input_text"|"output_text", text}]}`. A `Tool` message → a top-level `function_call_output` input item `{type:"function_call_output", call_id, output}`. `system` → `instructions` (a top-level field, not a message).
 - `tools`: zoid's `ToolSpec[]` → `[{type:"function", name, description, parameters, strict:false}]`.
-- `reasoning`: derived from `ThinkingMode` — `Off` → omit the field; `Auto` → `{effort:"medium"}`; `Effort(level)` → `{effort: "low"|"medium"|"high"|"xhigh"}` (zoid's `EffortLevel::Max` → `"xhigh"`).
+- `reasoning`: derived from `ThinkingMode` **via the model-driven `thinking_wire` pattern** `[RV]` — when `model_info(model).thinking_wire == OpenAI`, map `ThinkingMode` to `reasoning.effort`: `Off` → omit the field; `Auto` → `{effort:"medium"}`; `Effort(level)` → `{effort: "low"|"medium"|"high"|"xhigh"}` (zoid's `EffortLevel::Max` → `"xhigh"`). This matches `openai_compat.rs`'s existing `thinking_params()` pattern rather than a leaf-local heuristic.
 - `max_output_tokens`, `stream:true`, `tool_choice:"auto"`.
 
 **SSE parse** (`parse_event(line) -> Vec<ProviderEvent>`): SSE via `eventsource_stream` (same plumbing as `anthropic.rs`). Discriminate on the `type` field:
@@ -196,7 +206,7 @@ Source: Google's Generative Language API discovery doc (`generativelanguage.goog
   - An `assistant` message with `tool_calls` → `{role:"model", parts:[{functionCall:{id,name,args}}]}`.
 - `system` → `systemInstruction:{parts:[{text}]}` (top-level, not in `contents`).
 - `tools` → `[{functionDeclarations:[{name, description, parameters}]}]` (parameters is a JSON Schema object).
-- `thinking` → `generationConfig.thinkingConfig:{includeThoughts:true, thinkingBudget:…}` (derive from `ThinkingMode`; `Off` → omit). Gemini's `thought:true` parts map to `ThinkingDelta`.
+- `thinking` → `generationConfig.thinkingConfig:{includeThoughts:true, thinkingBudget:…}` (derive from `ThinkingMode`; `Off` → omit). **Leaf-local rendering `[RV]`:** `MODEL_CAPS` sets `thinking: Toggle, thinking_wire: None` for Gemini models. The leaf consults `req.thinking != Off` directly (not `thinking_wire`), mirroring how `ollama.rs` renders its own thinking param without a dedicated `ThinkingWireShape::Ollama` variant. Gemini's `thought:true` parts map to `ThinkingDelta`.
 - `max_output_tokens` → `generationConfig.maxOutputTokens`.
 
 **SSE parse** (`parse_chunk(obj) -> Vec<ProviderEvent>`): `?alt=sse` returns one `GenerateContentResponse` JSON object per SSE `data:` line. For each chunk:
@@ -294,4 +304,5 @@ Offline, `TcpListener`-stubbed, matching the existing stance (no live-endpoint C
 2. **~~Default Zen base URL~~** — RESOLVED: `https://opencode.ai/zen` (confirmed via curl).
 3. **Responses `call_id` source** — the `.done` event carries `item_id`/`name`/`arguments`; confirm `call_id` presence on a real capture (confirmed the endpoint works with `input` string + `max_output_tokens`; need a tool-bearing capture for the `function_call_arguments` event shape).
 4. **Gemini tool-call `id`** — `FunctionCall.id` is optional in the schema; confirm whether Zen's Gemini models populate it (falls back to empty string, matching Ollama's call-id-less shape, if absent).
-5. **ZEN_MODELS[0]** — must equal the registry's `models[0]` (the default model). Pick: `claude-sonnet-4-5` (same as Go's default) or `gpt-5.4`? *Recommendation: `claude-sonnet-4-5` — same family as Go's default, user-perceived continuity.*
+5. **~~ZEN_MODELS[0]~~** — RESOLVED: `claude-sonnet-4-5` (same family as Go's default, user-perceived continuity).
+6. **~~Gemini thinking wire-shape~~ `[RV]`~~** — RESOLVED (2026-07-11 brainstorm): leaf-local. `MODEL_CAPS` sets `thinking: Toggle, thinking_wire: None`; `google_gemini.rs` renders `thinkingConfig.includeThoughts` from `req.thinking != Off`. No new `ThinkingWireShape::Gemini` variant (mirrors Ollama's leaf-local approach).
