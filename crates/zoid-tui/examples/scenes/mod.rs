@@ -283,6 +283,41 @@ pub fn render_shell_scene(name: &str, w: u16, h: u16) -> Buffer {
     render_one(&state, &msgs, &economy, &scene_tasks(name), w, h)
 }
 
+/// The context-economy story as an ordered set of states. Reuses the enriched
+/// `economy` ShellState and progressively reveals the seeded turn; the context
+/// rail fills once the compaction event lands (frame 2), so the player animates
+/// "work happens → context becomes a managed, measured resource".
+#[allow(dead_code)]
+pub fn scene_seq(name: &str) -> Vec<(ShellState, Vec<ChatMsg>, EconomyView)> {
+    match name {
+        "context-economy" => {
+            // The enriched right-rail state, reused for every frame.
+            let base = || {
+                let (s, _m, _e) = scene("economy");
+                s
+            };
+            let turn = seeded(); // [user, assistant+search, compacted result, answer]
+            vec![
+                (base(), turn[..1].to_vec(), empty_economy()),
+                (base(), turn[..2].to_vec(), empty_economy()),
+                (base(), turn[..3].to_vec(), seeded_economy()),
+                (base(), turn[..4].to_vec(), seeded_economy()),
+            ]
+        }
+        _ => vec![scene(name)],
+    }
+}
+
+/// Render every frame of a sequence to cloned buffers.
+#[allow(dead_code)]
+pub fn render_shell_scene_seq(name: &str, w: u16, h: u16) -> Vec<Buffer> {
+    let tasks = scene_tasks(name);
+    scene_seq(name)
+        .into_iter()
+        .map(|(state, msgs, economy)| render_one(&state, &msgs, &economy, &tasks, w, h))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,5 +334,21 @@ mod tests {
             "ctx should be seeded"
         );
         assert_eq!(scene_tasks("economy").len(), 2, "two tasks expected");
+    }
+
+    #[test]
+    fn context_economy_sequence_reveals_the_turn() {
+        // Four frames: user prompt → +searching → +compaction → +answer.
+        let seq = scene_seq("context-economy");
+        assert_eq!(seq.len(), 4, "expected a 4-frame reveal");
+        assert_eq!(seq[0].1.len(), 1, "frame 0 shows only the user prompt");
+        assert_eq!(seq[3].1.len(), 4, "final frame shows the whole turn");
+        // The rail fills once compaction happens (frame 2 onward).
+        assert!(seq[0].2.rows.is_empty(), "frame 0 rail empty");
+        assert!(!seq[2].2.rows.is_empty(), "frame 2 rail populated");
+
+        // And each frame renders to a buffer at the required min size.
+        let frames = render_shell_scene_seq("context-economy", 160, 40);
+        assert_eq!(frames.len(), 4);
     }
 }
