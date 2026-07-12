@@ -7,6 +7,9 @@ pub mod anthropic;
 pub mod ollama;
 pub mod openai_compat;
 pub mod opencode_go;
+pub mod openai_responses;
+pub mod google_gemini;
+pub mod opencode_zen;
 pub mod zai;
 
 /// The shared model/provider catalog lives in the dependency-free `zoid-model`

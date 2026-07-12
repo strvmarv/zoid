@@ -149,6 +149,78 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         models: &["glm-5.2", "glm-5-turbo", "glm-4.7"],
         status: Status::Available,
     },
+    ProviderEntry {
+        id: "opencode-zen",
+        display: "opencode · zen",
+        family: "opencode-zen",
+        transport: Transport::Http {
+            default_base_url: "https://opencode.ai/zen",
+        },
+        models: ZEN_MODEL_IDS,
+        status: Status::Available,
+    },
+];
+
+/// All 52 Zen model ids, grouped by wire shape. First entry = default model.
+/// Wire-shape routing lives in `opencode_zen.rs::ZEN_MODELS`; this list is the
+/// registry's model picker source.
+pub static ZEN_MODEL_IDS: &[&str] = &[
+    // --- Anthropic Messages (13) ---
+    "claude-sonnet-4-5", // default model
+    "claude-fable-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-opus-4-5",
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+    "qwen3.7-max",
+    "qwen3.7-plus",
+    "qwen3.6-plus",
+    "qwen3.5-plus",
+    // --- OpenAI Responses (17) ---
+    "gpt-5.5",
+    "gpt-5.5-pro",
+    "gpt-5.4",
+    "gpt-5.4-pro",
+    "gpt-5.4-mini",
+    "gpt-5.4-nano",
+    "gpt-5.3-codex",
+    "gpt-5.3-codex-spark",
+    "gpt-5.2",
+    "gpt-5.2-codex",
+    "gpt-5.1",
+    "gpt-5.1-codex-max",
+    "gpt-5.1-codex",
+    "gpt-5.1-codex-mini",
+    "gpt-5",
+    "gpt-5-codex",
+    "gpt-5-nano",
+    // --- OpenAI Chat Completions (19) ---
+    "deepseek-v4-pro",
+    "deepseek-v4-flash",
+    "deepseek-v4-flash-free",
+    "glm-5.2",
+    "glm-5.1",
+    "glm-5",
+    "grok-4.5",
+    "grok-build-0.1",
+    "kimi-k2.5",
+    "kimi-k2.6",
+    "kimi-k2.7-code",
+    "minimax-m3",
+    "minimax-m2.7",
+    "minimax-m2.5",
+    "big-pickle",
+    "hy3-free",
+    "mimo-v2.5-free",
+    "north-mini-code-free",
+    "nemotron-3-ultra-free",
+    // --- Google Gemini (3) ---
+    "gemini-3.5-flash",
+    "gemini-3.1-pro",
+    "gemini-3-flash",
 ];
 
 /// Per-model capabilities. One entry per known model id (case-insensitive
@@ -385,6 +457,170 @@ const MODEL_CAPS: &[(&str, ModelInfo)] = &[
             thinking_wire: ThinkingWireShape::OpenAI,
         },
     ),
+    // --- OpenCode Zen models (39 NEW entries; 13 overlap with Go & keep
+    // their existing researched MODEL_CAPS entries — do NOT duplicate) ---
+    // Anthropic Messages models (NEW, not in Go): 200k context, tools=true
+    // (the Anthropic leaf supports tool-use via P1b.1), prompt_cache=true.
+    (
+        "claude-sonnet-4-5",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: true, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    (
+        "claude-fable-5",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: true, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    (
+        "claude-opus-4-7",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: true, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    (
+        "claude-opus-4-6",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: true, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    (
+        "claude-opus-4-5",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: true, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    (
+        "claude-sonnet-5",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: true, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    (
+        "claude-haiku-4-5",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: true, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    (
+        "qwen3.6-plus",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: true, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    (
+        "qwen3.5-plus",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: true, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    // OpenAI Responses models (all 17 gpt-* are NEW): 200k, tools=true,
+    // thinking=ToggleWithEffort, thinking_wire=OpenAI.
+    (
+        "gpt-5.5",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::ToggleWithEffort, thinking_wire: ThinkingWireShape::OpenAI },
+    ),
+    (
+        "gpt-5.5-pro",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::ToggleWithEffort, thinking_wire: ThinkingWireShape::OpenAI },
+    ),
+    (
+        "gpt-5.4",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::ToggleWithEffort, thinking_wire: ThinkingWireShape::OpenAI },
+    ),
+    (
+        "gpt-5.4-pro",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::ToggleWithEffort, thinking_wire: ThinkingWireShape::OpenAI },
+    ),
+    (
+        "gpt-5.4-mini",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::ToggleWithEffort, thinking_wire: ThinkingWireShape::OpenAI },
+    ),
+    (
+        "gpt-5.4-nano",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::ToggleWithEffort, thinking_wire: ThinkingWireShape::OpenAI },
+    ),
+    (
+        "gpt-5.3-codex",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::ToggleWithEffort, thinking_wire: ThinkingWireShape::OpenAI },
+    ),
+    (
+        "gpt-5.3-codex-spark",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::ToggleWithEffort, thinking_wire: ThinkingWireShape::OpenAI },
+    ),
+    (
+        "gpt-5.2",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::ToggleWithEffort, thinking_wire: ThinkingWireShape::OpenAI },
+    ),
+    (
+        "gpt-5.2-codex",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::ToggleWithEffort, thinking_wire: ThinkingWireShape::OpenAI },
+    ),
+    (
+        "gpt-5.1",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::ToggleWithEffort, thinking_wire: ThinkingWireShape::OpenAI },
+    ),
+    (
+        "gpt-5.1-codex-max",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::ToggleWithEffort, thinking_wire: ThinkingWireShape::OpenAI },
+    ),
+    (
+        "gpt-5.1-codex",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::ToggleWithEffort, thinking_wire: ThinkingWireShape::OpenAI },
+    ),
+    (
+        "gpt-5.1-codex-mini",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::ToggleWithEffort, thinking_wire: ThinkingWireShape::OpenAI },
+    ),
+    (
+        "gpt-5",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::ToggleWithEffort, thinking_wire: ThinkingWireShape::OpenAI },
+    ),
+    (
+        "gpt-5-codex",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::ToggleWithEffort, thinking_wire: ThinkingWireShape::OpenAI },
+    ),
+    (
+        "gpt-5-nano",
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::ToggleWithEffort, thinking_wire: ThinkingWireShape::OpenAI },
+    ),
+    // OpenAI Chat Completions models (NEW only): 128k context, tools=true.
+    (
+        "grok-4.5",
+        ModelInfo { context_window: 128_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    (
+        "grok-build-0.1",
+        ModelInfo { context_window: 128_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    (
+        "kimi-k2.5",
+        ModelInfo { context_window: 128_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    (
+        "deepseek-v4-flash-free",
+        ModelInfo { context_window: 128_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    (
+        "glm-5",
+        ModelInfo { context_window: 128_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    (
+        "big-pickle",
+        ModelInfo { context_window: 128_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    (
+        "hy3-free",
+        ModelInfo { context_window: 128_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    (
+        "mimo-v2.5-free",
+        ModelInfo { context_window: 128_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    (
+        "north-mini-code-free",
+        ModelInfo { context_window: 128_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    (
+        "nemotron-3-ultra-free",
+        ModelInfo { context_window: 128_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+    ),
+    // Google Gemini models (all 3 are NEW): 1M context, tools=true, thinking=Toggle.
+    (
+        "gemini-3-flash",
+        ModelInfo { context_window: 1_000_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::Toggle, thinking_wire: ThinkingWireShape::None },
+    ),
+    (
+        "gemini-3.1-pro",
+        ModelInfo { context_window: 1_000_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::Toggle, thinking_wire: ThinkingWireShape::None },
+    ),
+    (
+        "gemini-3.5-flash",
+        ModelInfo { context_window: 1_000_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::Toggle, thinking_wire: ThinkingWireShape::None },
+    ),
 ];
 
 /// Conservative fallback for models not in the registry. Under-estimating the
@@ -525,12 +761,13 @@ mod tests {
     }
 
     #[test]
-    fn selectable_has_five_providers() {
+    fn selectable_has_six_providers() {
         let ids: Vec<&str> = selectable().map(|e| e.id).collect();
-        assert_eq!(ids.len(), 5);
+        assert_eq!(ids.len(), 6);
         assert!(ids.contains(&"ollama-local"));
         assert!(ids.contains(&"ollama-cloud"));
         assert!(ids.contains(&"opencode-go"));
+        assert!(ids.contains(&"opencode-zen"));
         assert!(ids.contains(&"anthropic-api"));
         assert!(ids.contains(&"zai-coding-plan"));
     }
@@ -559,6 +796,55 @@ mod tests {
         assert!(model_info("claude-opus-4-8").tools);
         assert!(model_info("claude-sonnet-4-6").prompt_cache);
         assert!(model_info("claude-opus-4-8").prompt_cache);
+    }
+}
+
+#[cfg(test)]
+mod opencode_zen_tests {
+    use super::*;
+
+    #[test]
+    fn opencode_zen_registry_entry_exists_and_is_selectable() {
+        let e = entry("opencode-zen").expect("opencode-zen entry must exist");
+        assert_eq!(e.id, "opencode-zen");
+        assert_eq!(e.family, "opencode-zen");
+        assert_eq!(e.display, "opencode · zen");
+        assert_eq!(e.status, Status::Available);
+        assert_eq!(
+            e.transport,
+            Transport::Http {
+                default_base_url: "https://opencode.ai/zen"
+            }
+        );
+        assert!(!e.models.is_empty(), "must list at least one model");
+        let ids: Vec<&str> = selectable().map(|e| e.id).collect();
+        assert!(ids.contains(&"opencode-zen"));
+    }
+
+    #[test]
+    fn canonical_id_opencode_zen_is_passthrough() {
+        assert_eq!(canonical_id("opencode-zen"), "opencode-zen");
+    }
+
+    #[test]
+    fn default_base_url_opencode_zen() {
+        assert_eq!(
+            default_base_url("opencode-zen"),
+            Some("https://opencode.ai/zen")
+        );
+    }
+
+    #[test]
+    fn opencode_zen_model_caps_present() {
+        for id in entry("opencode-zen").unwrap().models {
+            let info = model_info(id);
+            // conservative but non-default: ensure each model has an
+            // explicit entry (not the 32k DEFAULT_MODEL_INFO floor).
+            assert!(
+                info.context_window >= 128_000,
+                "{id} should have an explicit caps entry, got {info:?}"
+            );
+        }
     }
 }
 

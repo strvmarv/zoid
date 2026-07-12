@@ -79,6 +79,10 @@ pub struct FieldRow {
     pub kind: FieldKind,
     pub source: Source,
     pub env_shadowed: bool,
+    /// The secret-store key for `FieldKind::Secret` rows. When set, the row
+    /// renders `label` (a friendly name) but the edit/clear flows key the
+    /// secret store by `secret_key`. `None` for non-secret rows.
+    pub secret_key: Option<&'static str>,
 }
 
 /// A titled group of config rows shown in the left-nav / right-detail panes.
@@ -86,6 +90,18 @@ pub struct FieldRow {
 pub struct Section {
     pub title: String,
     pub rows: Vec<FieldRow>,
+}
+
+/// Map a secret env-var name to a friendly display label + the (unchanged)
+/// secret-store key. Unknown env vars fall back to the raw name as both.
+fn friendly_secret_label(name: &'static str) -> (&'static str, Option<&'static str>) {
+    match name {
+        "OPENCODE_GO_API_KEY" => ("opencode", Some("OPENCODE_GO_API_KEY")),
+        "OLLAMA_API_KEY" => ("ollama", Some("OLLAMA_API_KEY")),
+        "ANTHROPIC_API_KEY" => ("anthropic", Some("ANTHROPIC_API_KEY")),
+        "ZAI_API_KEY" => ("zai", Some("ZAI_API_KEY")),
+        other => (other, None),
+    }
 }
 
 /// Build the four config sections (Provider & Model, Economy, Interface, Secrets) from a
@@ -112,6 +128,7 @@ pub fn build_sections(
             kind: FieldKind::Text,
             source: prov.base_url,
             env_shadowed: prov.base_url == Source::Env,
+            secret_key: None,
         },
         // Http (and Sdk, which simply shows an empty base_url) → base_url row.
         _ => FieldRow {
@@ -120,6 +137,7 @@ pub fn build_sections(
             kind: FieldKind::Text,
             source: prov.base_url,
             env_shadowed: prov.base_url == Source::Env,
+            secret_key: None,
         },
     };
     let provider_model = Section {
@@ -131,6 +149,7 @@ pub fn build_sections(
                 kind: FieldKind::Pick,
                 source: prov.provider,
                 env_shadowed: prov.provider == Source::Env,
+                secret_key: None,
             },
             FieldRow {
                 label: "model",
@@ -138,6 +157,7 @@ pub fn build_sections(
                 kind: FieldKind::Pick,
                 source: prov.model,
                 env_shadowed: prov.model == Source::Env,
+                secret_key: None,
             },
             connection_row,
             FieldRow {
@@ -146,6 +166,7 @@ pub fn build_sections(
                 kind: FieldKind::Bool,
                 source: prov.thinking_enabled,
                 env_shadowed: prov.thinking_enabled == Source::Env,
+                secret_key: None,
             },
             FieldRow {
                 label: "effort",
@@ -157,6 +178,7 @@ pub fn build_sections(
                 kind: FieldKind::Pick,
                 source: prov.thinking_effort,
                 env_shadowed: prov.thinking_effort == Source::Env,
+                secret_key: None,
             },
         ],
     };
@@ -169,6 +191,7 @@ pub fn build_sections(
                 kind: FieldKind::Uint,
                 source: prov.context_target,
                 env_shadowed: prov.context_target == Source::Env,
+                secret_key: None,
             },
             FieldRow {
                 label: "auto-evict cold",
@@ -176,6 +199,7 @@ pub fn build_sections(
                 kind: FieldKind::Bool,
                 source: prov.auto_evict_cold,
                 env_shadowed: prov.auto_evict_cold == Source::Env,
+                secret_key: None,
             },
             FieldRow {
                 label: "compact at %",
@@ -183,6 +207,7 @@ pub fn build_sections(
                 kind: FieldKind::Uint,
                 source: prov.compact_threshold_pct,
                 env_shadowed: prov.compact_threshold_pct == Source::Env,
+                secret_key: None,
             },
             FieldRow {
                 label: "band headroom %",
@@ -190,6 +215,7 @@ pub fn build_sections(
                 kind: FieldKind::Uint,
                 source: prov.band_headroom_pct,
                 env_shadowed: prov.band_headroom_pct == Source::Env,
+                secret_key: None,
             },
             FieldRow {
                 label: "recent turns",
@@ -197,6 +223,7 @@ pub fn build_sections(
                 kind: FieldKind::Uint,
                 source: prov.recent_n,
                 env_shadowed: prov.recent_n == Source::Env,
+                secret_key: None,
             },
         ],
     };
@@ -208,6 +235,7 @@ pub fn build_sections(
             kind: FieldKind::Bool,
             source: prov.reduced_motion,
             env_shadowed: prov.reduced_motion == Source::Env,
+            secret_key: None,
         }],
     };
     let secrets = Section {
@@ -220,10 +248,11 @@ pub fn build_sections(
                     SecretStatus::Set { from_env: false } => ("set".to_string(), false),
                     SecretStatus::NotSet => ("not set".to_string(), false),
                 };
+                let (friendly_label, friendly_sk) = friendly_secret_label(name);
                 // `source` is inert for secret rows: nothing reads it, only `env_shadowed`
                 // drives the [env] marker.
                 FieldRow {
-                    label: name,
+                    label: friendly_label,
                     value,
                     kind: FieldKind::Secret,
                     source: if shadowed {
@@ -232,6 +261,7 @@ pub fn build_sections(
                         Source::Default
                     },
                     env_shadowed: shadowed,
+                    secret_key: friendly_sk,
                 }
             })
             .collect(),
@@ -302,7 +332,10 @@ mod tests {
         // (ollama-local, ollama-cloud, opencode-go, anthropic-api,
         // zai-coding-plan) and that anthropic-api + zai-coding-plan are
         // present + selectable.
-        assert_eq!(opts.len(), 5);
+        assert_eq!(opts.len(), 6);
+        let zen = opts.iter().find(|o| o.id == "opencode-zen").unwrap();
+        assert!(zen.selectable);
+        assert!(zen.detail.contains("https://opencode.ai/zen"));
         let api = opts.iter().find(|o| o.id == "anthropic-api").unwrap();
         assert!(api.selectable);
         assert!(api.detail.contains("https://api.anthropic.com"));

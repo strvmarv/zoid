@@ -19,9 +19,14 @@
 - **Default model:** `claude-sonnet-4-5` (Anthropic Messages) — matches Go's default family for user-perceived continuity.
 - **PRODUCT DECISION — real model ids, Status::Available.** The `opencode-zen` entry is `Status::Available` with all 52 real Zen models in the picker. No fake model names reach the user.
 - **13 Zen models overlap with Go.** 13 of the 52 Zen models (`glm-5.2`, `glm-5.1`, `deepseek-v4-pro`, `deepseek-v4-flash`, `kimi-k2.6`, `kimi-k2.7-code`, `minimax-m3`, `minimax-m2.7`, `minimax-m2.5`, `qwen3.7-max`, `qwen3.7-plus`, `claude-sonnet-4-6`, `claude-opus-4-8`) already have `MODEL_CAPS` entries from the Go provider, carefully researched from upstream docs. `model_info()` uses `.find()` → first match wins. Do NOT duplicate these entries — the existing values are authoritative. Only add 39 NEW caps entries.
+- **`CompletionRequest.reassert` field.** The struct now carries `reassert: Option<String>` (commit `b95ce65`). Every `CompletionRequest { … }` literal in tests MUST include `reassert: None`. Both new generic leaves pass it through as a no-op for v1.
 - **Gemini `usageMetadata` appears on every chunk.** Zen's Gemini stream emits `{"usageMetadata":{}}` (empty object) on intermediate chunks. The parse logic must gate on `promptTokenCount` being present, not on `usageMetadata` existing — otherwise it emits premature `Usage` + `Done` and kills the stream after the first delta.
-- **Zen Responses rejects small `max_output_tokens` with streaming.** The Zen `/v1/responses` endpoint returns 400 when `max_output_tokens < ~50` and `stream: true`. The agent loop always sends `max_tokens >= 4096`, so this is not a production issue. Unit tests use smaller values but hit `TcpListener` stubs, not the real API. Documented in the spike; no code change needed.
-- **Known follow-up (out of this plan's scope): key-prompt gate label.** When a key-requiring provider is selected without a key, the gate prompt (`render.rs:1206`, `Enter {env}`) shows the raw env-var name (e.g. `OPENCODE_GO_API_KEY`), while the Secrets *rows* now show the friendly name (`opencode`). This is a cosmetic inconsistency in a transient prompt, scoped out per the spec (which limits prettification to Secrets rows). Closing it requires extracting `friendly_secret_label` to a public helper and wiring `render.rs` to it — a small but separate change, deferred to a follow-up so this plan doesn't expand into the render layer.
+- **Gemini `functionCall.id` is ABSENT on Zen** (confirmed via 2026-07-11 capture). Falls back to empty string, matching Ollama's call-id-less shape.
+- **Gemini thoughts are opaque `thoughtSignature` blobs on Zen** (confirmed via capture), NOT `thought:true, text:"..."`. The `parse_chunk` thought-handling is correct per Google's schema (for direct-Gemini use) but Zen never exercises it. Zen also injects `{"type":"ping"}` SSE events (cost/keepalive) that must be ignored.
+- **Responses `call_id` ≠ `item_id`** (confirmed via 2026-07-11 capture). The `response.output_item.added` event carries the full item including `call_id`; `function_call_arguments.delta`/`.done` carry only `item_id`. The accumulator MUST learn `call_id` from `output_item.added` and emit it on flush. Using `item_id` as the tool-call id breaks the next-turn round-trip.
+- **Zen Responses rejects small `max_output_tokens` with streaming.** The Zen `/v1/responses` endpoint returns 400 when `max_output_tokens < ~50` and `stream: true`. The agent loop always sends `max_tokens >= 4096`, so this is not a production issue. Unit tests use smaller values but hit `TcpListener` stubs, not the real API.
+- **Secrets section has FOUR rows** (not three): `OPENCODE_GO_API_KEY`, `OLLAMA_API_KEY`, `ANTHROPIC_API_KEY`, `ZAI_API_KEY` (zai added post-original-draft). The `friendly_secret_label` helper needs a fourth arm for `zai`.
+- **PROVIDERS registry has 6 existing entries.** Adding `opencode-zen` makes 7 selectable. All provider-count assertions must say 7 (the prior draft said 5).
 - Commit frequently (every task or sub-step).
 
 ---
@@ -106,18 +111,19 @@ mod opencode_zen_tests {
 }
 ```
 
-Also update the existing `selectable_has_four_providers` test to five:
+Also update the existing `selectable_has_four_providers` test to seven (6 existing + opencode-zen):
 
 ```rust
     #[test]
-    fn selectable_has_five_providers() {
+    fn selectable_has_seven_providers() {
         let ids: Vec<&str> = selectable().map(|e| e.id).collect();
-        assert_eq!(ids.len(), 5);
+        assert_eq!(ids.len(), 7);
         assert!(ids.contains(&"ollama-local"));
         assert!(ids.contains(&"ollama-cloud"));
         assert!(ids.contains(&"opencode-go"));
         assert!(ids.contains(&"opencode-zen"));
         assert!(ids.contains(&"anthropic-api"));
+        assert!(ids.contains(&"zai-coding-plan"));
     }
 ```
 
@@ -126,7 +132,7 @@ Also update the existing `selectable_has_four_providers` test to five:
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cargo test -p zoid-model`
-Expected: FAIL — `entry("opencode-zen")` returns `None`; `selectable_has_five_providers` length mismatch (4 ≠ 5).
+Expected: FAIL — `entry("opencode-zen")` returns `None`; `selectable_has_seven_providers` length mismatch (6 ≠ 7).
 
 - [ ] **Step 3: Add the registry entry and model caps**
 
@@ -225,11 +231,11 @@ models get conservative caps per family:
 ```rust
     // --- OpenCode Zen models (39 NEW entries; 13 overlap with Go & keep
     // their existing researched MODEL_CAPS entries — do NOT duplicate) ---
-    // Anthropic Messages models (NEW, not in Go): 200k context, tools=false
-    // (P1b text-only, matching Go's Anthropic-shape models), prompt_cache=true.
+    // Anthropic Messages models (NEW, not in Go): 200k context, tools=true
+    // (the Anthropic leaf supports tool-use via P1b.1), prompt_cache=true.
     (
         "claude-sonnet-4-5",
-        ModelInfo { context_window: 200_000, max_output: 0, tools: false, prompt_cache: true, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+        ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: true, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
     ),
     // ... (repeat for each NEW claude-* and qwen* model: claude-fable-5,
     // claude-opus-4-5/4-6/4-7, claude-sonnet-5, claude-sonnet-4-6 is EXISTING,
@@ -271,7 +277,7 @@ existing entries are the carefully-researched truth.
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cargo test -p zoid-model`
-Expected: PASS — all `opencode_zen_tests` + `selectable_has_five_providers` green.
+Expected: PASS — all `opencode_zen_tests` + `selectable_has_seven_providers` green.
 
 - [ ] **Step 5: Commit**
 
@@ -328,6 +334,7 @@ mod tests {
             max_tokens: 1024,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["model"], "gpt-5.4");
@@ -355,7 +362,14 @@ Add to `crates/zoid-provider/src/openai_responses.rs` (above the test module):
 ```rust
 /// Map `ThinkingMode` to the Responses `reasoning.effort` object, or `None` to
 /// omit the field entirely (Off). zoid's EffortLevel::Max → OpenAI "xhigh".
+/// Only emits when the model supports OpenAI-style reasoning (gated by
+/// `model_info(model).thinking_wire == OpenAI`), matching `openai_compat.rs`'s
+/// `thinking_params()` pattern. Non-reasoning models get no `reasoning` field.
 fn reasoning_params(req: &CompletionRequest) -> Option<Value> {
+    let info = crate::model::model_info(&req.model);
+    if info.thinking_wire != crate::model::ThinkingWireShape::OpenAI {
+        return None;
+    }
     let effort = match req.thinking {
         crate::ThinkingMode::Off => return None,
         crate::ThinkingMode::Auto => "medium",
@@ -477,6 +491,7 @@ Append to the `tests` module:
             max_tokens: 64,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let body = request_body(&req);
         assert!(body["input"].is_array(), "multi-message input must be an array");
@@ -501,6 +516,7 @@ Append to the `tests` module:
                 parameters: json!({"type": "object"}),
             }],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["tools"][0]["type"], "function");
@@ -517,6 +533,7 @@ Append to the `tests` module:
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Auto,
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["reasoning"]["effort"], "medium");
@@ -531,9 +548,31 @@ Append to the `tests` module:
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Effort(crate::EffortLevel::Max),
+            reassert: None,
         };
         let body = request_body(&req);
         assert_eq!(body["reasoning"]["effort"], "xhigh");
+    }
+
+    #[test]
+    fn body_omits_reasoning_for_non_reasoning_model() {
+        // A model whose thinking_wire != OpenAI must NOT get a reasoning field,
+        // even when thinking is Auto. Guards against the generic leaf spuriously
+        // enabling reasoning for non-reasoning models (review B1).
+        let req = CompletionRequest {
+            model: "ollama-model".into(), // thinking_wire: None (DEFAULT_MODEL_INFO)
+            system: None,
+            messages: vec![Message::user("x")],
+            max_tokens: 8,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Auto,
+            reassert: None,
+        };
+        let body = request_body(&req);
+        assert!(
+            body.get("reasoning").is_none(),
+            "non-reasoning model must not get reasoning field: got {body}"
+        );
     }
 ```
 
@@ -586,16 +625,21 @@ Append to the `tests` module in `openai_responses.rs`:
     #[test]
     fn parse_function_call_arguments_done_emits_toolcall() {
         let mut acc = ResponsesToolAccum::new();
+        // output_item.added carries the full item INCLUDING call_id (confirmed
+        // via 2026-07-11 capture). The .delta/.done events carry only item_id.
+        let added = r#"{"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call","status":"in_progress","name":"read_file","call_id":"call_xyz","arguments":""}}"#;
         let d1 = r#"{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"{\"path\":"}"#;
         let d2 = r#"{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"\"a\"}"}"#;
         let done = r#"{"type":"response.function_call_arguments.done","item_id":"fc_1","name":"read_file","output_index":0,"arguments":"{\"path\":\"a\"}"}"#;
+        let _ = parse_event(added, &mut acc);
         let _ = parse_event(d1, &mut acc);
         let _ = parse_event(d2, &mut acc);
         let out = parse_event(done, &mut acc);
+        // The emitted ToolCall uses call_id ("call_xyz"), NOT item_id ("fc_1").
         assert_eq!(
             out,
             vec![ProviderEvent::ToolCall(ToolCall {
-                id: "fc_1".into(),
+                id: "call_xyz".into(),
                 name: "read_file".into(),
                 args: json!({"path": "a"}),
             })]
@@ -661,9 +705,18 @@ Add to `crates/zoid-provider/src/openai_responses.rs` (above the test module):
 ```rust
 /// Accumulates OpenAI Responses function-call argument fragments by `item_id`,
 /// flushing a complete `ToolCall` on `response.function_call_arguments.done`.
+///
+/// `call_id` is learned from `response.output_item.added` (which carries the
+/// full item including `call_id`), keyed by `item_id`. The `.delta`/`.done`
+/// events carry only `item_id` — NOT `call_id` (confirmed via 2026-07-11 Zen
+/// capture; see spike `## Tool-call captures`). The two values are distinct;
+/// the next turn's `function_call_output` MUST use `call_id`.
 #[derive(Debug, Default)]
 pub struct ResponsesToolAccum {
+    /// item_id → accumulated argument fragments.
     by_item: std::collections::BTreeMap<String, String>,
+    /// item_id → call_id (learned from `response.output_item.added`).
+    call_ids: std::collections::BTreeMap<String, String>,
 }
 
 impl ResponsesToolAccum {
@@ -678,26 +731,21 @@ impl ResponsesToolAccum {
             .push_str(delta);
     }
 
+    /// Record the `call_id` for an `item_id`, learned from
+    /// `response.output_item.added`.
+    fn note_call_id(&mut self, item_id: &str, call_id: &str) {
+        self.call_ids.insert(item_id.to_string(), call_id.to_string());
+    }
+
     fn flush(&mut self, item_id: &str, name: &str, arguments: &str) -> Option<ProviderEvent> {
         self.by_item.remove(item_id);
+        let call_id = self.call_ids.remove(item_id).unwrap_or_default();
         let args: Value = serde_json::from_str(arguments)
             .ok()
             .filter(Value::is_object)
             .unwrap_or_else(|| json!({}));
-        // ASSUMPTION (spec §9 open-question #3): the `response.function_call_arguments.done`
-        // event's `item_id` is usable as the tool-call `call_id` for the next turn's
-        // `function_call_output` input item. OpenAI's Responses API distinguishes
-        // `item_id` (the output item's id) from `call_id` (the function-call id the
-        // model generated); the `function_call_output` input item on the next turn
-        // is keyed by `call_id`, not `item_id`. If Zen's gateway surfaces them as
-        // distinct values, this must source `call_id` from `response.output_item.added`
-        // / `response.output_item.done` (which carry the full function_call output
-        // item including `call_id`) rather than the `.done` event's `item_id`.
-        // Until confirmed against a real Zen capture, we use `item_id` as a
-        // best-effort id (matches Ollama's call-id-less fallback shape if empty).
-        // TODO(spec §9 q3): confirm item_id == call_id against a real Zen capture.
         Some(ProviderEvent::ToolCall(ToolCall {
-            id: item_id.to_string(),
+            id: call_id,
             name: name.to_string(),
             args,
         }))
@@ -731,6 +779,19 @@ pub fn parse_event(data: &str, acc: &mut ResponsesToolAccum) -> Vec<ProviderEven
             if let Some(delta) = v.get("delta").and_then(|d| d.as_str()) {
                 if !delta.is_empty() {
                     out.push(ProviderEvent::ThinkingDelta(delta.to_string()));
+                }
+            }
+        }
+        "response.output_item.added" => {
+            // Learn call_id from the full item (the .delta/.done events carry
+            // only item_id, NOT call_id — confirmed via 2026-07-11 capture).
+            if let Some(item) = v.get("item") {
+                if item.get("type").and_then(|t| t.as_str()) == Some("function_call") {
+                    let item_id = item.get("id").and_then(|i| i.as_str()).unwrap_or("");
+                    let call_id = item.get("call_id").and_then(|c| c.as_str()).unwrap_or("");
+                    if !item_id.is_empty() {
+                        acc.note_call_id(item_id, call_id);
+                    }
                 }
             }
         }
@@ -837,6 +898,7 @@ Append to the `tests` module in `openai_responses.rs`:
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         }
     }
 
@@ -1191,6 +1253,7 @@ mod tests {
             max_tokens: 128,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let (path, body) = request_body(&req, "gemini-3-flash");
         assert_eq!(path, "v1/models/gemini-3-flash:streamGenerateContent");
@@ -1230,6 +1293,7 @@ Append to the `tests` module:
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let (_, body) = request_body(&req, "m");
         assert_eq!(body["systemInstruction"]["parts"][0]["text"], "be terse");
@@ -1248,6 +1312,7 @@ Append to the `tests` module:
                 parameters: json!({"type": "object"}),
             }],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let (_, body) = request_body(&req, "m");
         assert_eq!(body["tools"][0]["functionDeclarations"][0]["name"], "read_file");
@@ -1276,6 +1341,7 @@ Append to the `tests` module:
             max_tokens: 64,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         let (_, body) = request_body(&req, "m");
         let contents = body["contents"].as_array().unwrap();
@@ -1297,6 +1363,7 @@ Append to the `tests` module:
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Auto,
+            reassert: None,
         };
         let (_, body) = request_body(&req, "m");
         assert_eq!(body["generationConfig"]["thinkingConfig"]["includeThoughts"], true);
@@ -1339,17 +1406,19 @@ Append to the `tests` module in `google_gemini.rs`:
 
     #[test]
     fn parse_function_call_part_yields_toolcall() {
+        // Zen's Gemini does NOT populate functionCall.id (confirmed via
+        // 2026-07-11 capture) — falls back to empty string, matching Ollama.
         let chunk = json!({
             "candidates": [{
                 "content": { "role": "model", "parts": [{
-                    "functionCall": { "id": "fc_1", "name": "read_file", "args": { "path": "a" } }
+                    "functionCall": { "name": "read_file", "args": { "path": "a" } }
                 }] }
             }]
         });
         assert_eq!(
             parse_chunk(&chunk),
             vec![ProviderEvent::ToolCall(ToolCall {
-                id: "fc_1".into(),
+                id: "".into(),
                 name: "read_file".into(),
                 args: json!({"path": "a"}),
             })]
@@ -1358,6 +1427,10 @@ Append to the `tests` module in `google_gemini.rs`:
 
     #[test]
     fn parse_thought_part_yields_thinking_delta() {
+        // This is the Google-standard schema shape ({thought:true, text}).
+        // Zen's Gemini does NOT emit this — it uses opaque thoughtSignature
+        // blobs instead (see parse_thought_signature_is_ignored below).
+        // Keep this test for direct-Gemini correctness.
         let chunk = json!({
             "candidates": [{
                 "content": { "role": "model", "parts": [{ "thought": true, "text": "pondering" }] }
@@ -1366,6 +1439,41 @@ Append to the `tests` module in `google_gemini.rs`:
         assert_eq!(
             parse_chunk(&chunk),
             vec![ProviderEvent::ThinkingDelta("pondering".into())]
+        );
+    }
+
+    #[test]
+    fn parse_thought_signature_is_ignored() {
+        // Zen's Gemini emits opaque thoughtSignature blobs on empty-text parts
+        // (confirmed via 2026-07-11 capture). Must not crash or emit a delta.
+        let chunk = json!({
+            "candidates": [{
+                "content": { "role": "model", "parts": [{ "text": "", "thoughtSignature": "AY89a1+cmbdq5mYb..." }] }
+            }]
+        });
+        let out = parse_chunk(&chunk);
+        assert!(out.is_empty(), "empty-text thoughtSignature part yields nothing: got {out:?}");
+    }
+
+    #[test]
+    fn parse_ping_event_is_ignored() {
+        // Zen injects {type:ping} SSE events (cost/keepalive) between content
+        // chunks. No candidates, no usageMetadata — must be silently ignored.
+        let chunk = json!({"type": "ping", "cost": "0.00000900"});
+        let out = parse_chunk(&chunk);
+        assert!(out.is_empty(), "ping event must yield nothing: got {out:?}");
+    }
+
+    #[test]
+    fn parse_prompt_feedback_block_reason_yields_error() {
+        // Spec §4.4/§7: promptFeedback.blockReason → Error.
+        let chunk = json!({
+            "promptFeedback": { "blockReason": "SAFETY" }
+        });
+        let out = parse_chunk(&chunk);
+        assert!(
+            out.iter().any(|e| matches!(e, ProviderEvent::Error(msg) if msg.contains("SAFETY"))),
+            "blocked request must yield Error: got {out:?}"
         );
     }
 
@@ -1476,6 +1584,17 @@ pub fn parse_chunk(obj: &Value) -> Vec<ProviderEvent> {
             }
         }
     }
+    // promptFeedback.blockReason → Error (spec §4.4/§7). A safety-blocked request
+    // surfaces the block reason; the stream then ends with a synthetic trailing Done.
+    if let Some(reason) = obj
+        .get("promptFeedback")
+        .and_then(|pf| pf.get("blockReason"))
+        .and_then(|b| b.as_str())
+    {
+        if !reason.is_empty() {
+            out.push(ProviderEvent::Error(format!("gemini blocked: {reason}")));
+        }
+    }
     // Zen's Gemini stream emits `usageMetadata` on EVERY chunk — intermediate
     // chunks carry `"usageMetadata":{}` (empty object). An empty object is
     // `Some`, not `None`, so a naive `if let Some(usage) = obj.get(...)` check
@@ -1526,6 +1645,7 @@ Append to the `tests` module:
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         }
     }
 
@@ -1976,6 +2096,7 @@ Append to the `tests` module in `opencode_zen.rs` (mirrors `opencode_go.rs`'s `s
             max_tokens: 8,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
+            reassert: None,
         }
     }
 
@@ -2146,11 +2267,12 @@ In `crates/zoid-tui/src/config_view.rs`, add to the `tests` module:
             ("OLLAMA_API_KEY", SecretStatus::NotSet),
             ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
             ("OPENCODE_GO_API_KEY", SecretStatus::NotSet),
+            ("ZAI_API_KEY", SecretStatus::NotSet),
         ];
         let sections = build_sections(&cfg, &prov, &ks);
         let sec = sections.iter().find(|s| s.title == "Secrets").unwrap();
         let labels: Vec<&str> = sec.rows.iter().map(|r| r.label).collect();
-        assert_eq!(labels, vec!["ollama", "anthropic", "opencode"]);
+        assert_eq!(labels, vec!["ollama", "anthropic", "opencode", "zai"]);
         let keys: Vec<Option<&str>> = sec.rows.iter().map(|r| r.secret_key).collect();
         assert_eq!(
             keys,
@@ -2158,6 +2280,7 @@ In `crates/zoid-tui/src/config_view.rs`, add to the `tests` module:
                 Some("OLLAMA_API_KEY"),
                 Some("ANTHROPIC_API_KEY"),
                 Some("OPENCODE_GO_API_KEY"),
+                Some("ZAI_API_KEY"),
             ]
         );
     }
@@ -2236,6 +2359,7 @@ fn friendly_secret_label(name: &'static str) -> (&'static str, Option<&'static s
         "OPENCODE_GO_API_KEY" => ("opencode", Some("OPENCODE_GO_API_KEY")),
         "OLLAMA_API_KEY" => ("ollama", Some("OLLAMA_API_KEY")),
         "ANTHROPIC_API_KEY" => ("anthropic", Some("ANTHROPIC_API_KEY")),
+        "ZAI_API_KEY" => ("zai", Some("ZAI_API_KEY")),
         other => (other, None), // fallback: label == key
     }
 }
@@ -2280,32 +2404,18 @@ Update **every** caller of `current_config_field` (there are 7 — search `curre
 - ~3932 `Action::ConfigSaveToRepo`: `if let Some((label, kind, _)) = current_config_field(app)`.
 - ~3947 `Action::ConfigClearSecret`: `if let Some((label, kind, secret_key)) = current_config_field(app)` and `s.clear(secret_key.unwrap_or(label))`.
 
-- [ ] **Step 7: Write the failing bin test for key resolution**
+- [ ] **Step 7: Commit**
 
-Add to `main.rs` tests:
+(The bin tests for `key_env_for("opencode-zen")` live in Task 9, which adds the `key_env_for` arm — writing them here would violate TDD by creating tests that can't compile/pass until the next task.)
 
-```rust
-    #[test]
-    fn key_env_for_opencode_zen_is_opencode_go_api_key() {
-        assert_eq!(key_env_for("opencode-zen"), Some("OPENCODE_GO_API_KEY"));
-    }
-
-    #[test]
-    fn entry_requires_key_opencode_zen_is_true() {
-        assert!(entry_requires_key("opencode-zen"));
-    }
+```bash
+git add crates/zoid-tui/src/config_view.rs crates/zoid-tui/src/route.rs crates/zoid-tui/tests/snapshots/ crates/zoid/src/main.rs
+git commit -m "feat(ui): prettify Secrets labels via FieldRow::secret_key decoupling"
 ```
 
-- [ ] **Step 8: Run tests to verify they pass (after adding the arm in Task 9)**
+- [ ] **Step 8: Update the provider-options count test (Task 1 added a 7th provider)**
 
-This test depends on the `opencode-zen` arm in `key_env_for`, which is added in Task 9. Run after Task 9 Step 3:
-
-Run: `cargo test -p zoid key_env_for_opencode_zen`
-Expected: PASS.
-
-- [ ] **Step 9: Update the provider-options count test (Task 1 added a 5th provider)**
-
-Adding the `opencode-zen` registry entry (Task 1) grows `PROVIDERS` to 5, so `provider_options()` now returns 5 entries. The existing test `provider_options_annotate_endpoints_and_mark_planned` in `crates/zoid-tui/src/config_view.rs` asserts `opts.len() == 4` — it will fail. Update it:
+Adding the `opencode-zen` registry entry (Task 1) grows `PROVIDERS` to 7, so `provider_options()` now returns 7 entries. The existing test `provider_options_annotate_endpoints_and_mark_planned` in `crates/zoid-tui/src/config_view.rs` asserts `opts.len() == 5` — it will fail. Update it:
 
 ```rust
     #[test]
@@ -2317,25 +2427,28 @@ Adding the `opencode-zen` registry entry (Task 1) grows `PROVIDERS` to 5, so `pr
         assert!(cloud.detail.contains("https://ollama.com"));
 
         // All surviving providers are selectable (no [planned] rows remain).
-        assert_eq!(opts.len(), 5);
+        assert_eq!(opts.len(), 7);
         let zen = opts.iter().find(|o| o.id == "opencode-zen").unwrap();
         assert!(zen.selectable);
         assert!(zen.detail.contains("https://opencode.ai/zen"));
         let api = opts.iter().find(|o| o.id == "anthropic-api").unwrap();
         assert!(api.selectable);
         assert!(api.detail.contains("https://api.anthropic.com"));
+        let zai = opts.iter().find(|o| o.id == "zai-coding-plan").unwrap();
+        assert!(zai.selectable);
+        assert!(zai.detail.contains("https://api.z.ai"));
     }
 ```
 
 Run: `cargo test -p zoid-tui provider_options_annotate_endpoints`
 Expected: PASS.
 
-- [ ] **Step 10: Regenerate the provider-picker insta snapshots**
+- [ ] **Step 9: Regenerate the provider-picker insta snapshots**
 
 Three `insta` snapshot files embed the full provider-picker list and will break when `opencode-zen` is added (Task 1): `shell_snapshot__config_overlay_provider_picker.snap`, `shell_snapshot__config_overlay_narrow_degrades.snap`, `shell_snapshot__provider_switch_card.snap`. The snapshots assert the rendered picker, which now includes the `opencode · zen` row.
 
 Run: `INSTA_UPDATE=always cargo test -p zoid-tui --test shell_snapshot`
-Expected: the three snapshots update with the new 5th row; the rest are unchanged.
+Expected: the three snapshots update with the new 7th row (`opencode · zen`); the rest are unchanged.
 
 Then review the diffs to confirm only the expected new row was added (no incidental whitespace drift):
 
@@ -2346,7 +2459,7 @@ If the diff shows only the new `opencode · zen` row in each affected snapshot, 
 Run: `cargo test -p zoid-tui --test shell_snapshot`
 Expected: PASS (snapshots now match).
 
-- [ ] **Step 11: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add crates/zoid-tui/src/config_view.rs crates/zoid-tui/src/route.rs crates/zoid-tui/tests/snapshots/ crates/zoid/src/main.rs
@@ -2365,9 +2478,9 @@ git commit -m "feat(ui): prettify Secrets labels via FieldRow::secret_key decoup
 - Consumes: `zoid_provider::opencode_zen::OpenCodeZenProvider`, `zoid_provider::model::entry`/`canonical_id` (from Task 1).
 - Produces: `opencode-zen` arms in `key_env_for`, `select_provider`, `provider_for_id`.
 
-- [ ] **Step 1: Write the failing test for select_provider routing**
+- [ ] **Step 1: Write the failing tests for key resolution**
 
-Add to `main.rs` tests (this asserts the family arm exists; it constructs a provider for an id whose family is `opencode-zen`):
+Add to `main.rs` tests:
 
 ```rust
     #[test]
@@ -2376,12 +2489,17 @@ Add to `main.rs` tests (this asserts the family arm exists; it constructs a prov
         // sanity: Go unchanged
         assert_eq!(key_env_for("opencode-go"), Some("OPENCODE_GO_API_KEY"));
     }
+
+    #[test]
+    fn entry_requires_key_opencode_zen_is_true() {
+        assert!(entry_requires_key("opencode-zen"));
+    }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p zoid key_env_for_opencode_zen_maps_to_shared_go_key`
-Expected: FAIL — `key_env_for("opencode-zen")` returns `Some("OLLAMA_API_KEY")` (the `_` arm).
+Run: `cargo test -p zoid key_env_for_opencode_zen_maps_to_shared_go_key && cargo test -p zoid entry_requires_key_opencode_zen_is_true`
+Expected: FAIL — `key_env_for("opencode-zen")` returns `Some("OLLAMA_API_KEY")` (the `_` arm); `entry_requires_key("opencode-zen")` may already pass if the registry entry exists from Task 1 (if so, that test is a sanity check, not a red-green).
 
 - [ ] **Step 3: Add the three arms**
 
@@ -2397,6 +2515,7 @@ fn key_env_for(id: &str) -> Option<&'static str> {
     match zoid_provider::model::entry(id).map(|e| e.family) {
         Some("opencode-go") | Some("opencode-zen") => Some("OPENCODE_GO_API_KEY"),
         Some("anthropic") => Some("ANTHROPIC_API_KEY"),
+        Some("zai") => Some("ZAI_API_KEY"),
         _ => Some("OLLAMA_API_KEY"),
     }
 }
@@ -2428,13 +2547,13 @@ fn key_env_for(id: &str) -> Option<&'static str> {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p zoid key_env_for_opencode_zen_maps_to_shared_go_key && cargo test -p zoid key_env_for_opencode_zen_is_opencode_go_api_key`
+Run: `cargo test -p zoid key_env_for_opencode_zen_maps_to_shared_go_key && cargo test -p zoid entry_requires_key_opencode_zen_is_true`
 Expected: PASS.
 
 - [ ] **Step 5: Full workspace build + test**
 
 Run: `cargo build --workspace && cargo test --workspace`
-Expected: PASS — all workspace tests green (including the new Tasks 1-9 tests and the updated `selectable_has_five_providers`).
+Expected: PASS — all workspace tests green (including the new Tasks 1-9 tests and the updated `selectable_has_seven_providers`).
 
 - [ ] **Step 6: Commit**
 
@@ -2457,21 +2576,57 @@ In `crates/zoid-model/src/lib.rs`, add to `opencode_zen_tests`:
 ```rust
     #[test]
     fn opencode_zen_caps_match_table() {
-        // Spot-check one NEW model per wire shape (full table locked by
-        // opencode_zen_model_caps_present which iterates all 52 ids).
+        // Lock ALL 39 NEW model caps (13 overlap with Go — their existing caps
+        // are authoritative, not duplicated here). Mirrors the Go provider's
+        // opencode_go_model_caps_match_reconciled_table which locks all 13.
         // NOTE: use only NEW models here — 13 Zen models overlap with Go and
         // keep their existing (different) caps. e.g. `glm-5.2` has
         // context_window=1_000_000 from the Go provider, NOT 128_000.
         let cases: &[(&str, u64, u64, bool, bool)] = &[
             // (id, context_window, max_output, tools, prompt_cache)
-            // Anthropic Messages (NEW — claude-sonnet-4-5 is new, Go has 4-6)
-            ("claude-sonnet-4-5", 200_000, 0, false, true),
-            // OpenAI Responses (all 17 gpt-* are NEW)
+            // --- Anthropic Messages (NEW — 11 models; 4-6/opus-4-8 overlap) ---
+            ("claude-sonnet-4-5", 200_000, 0, true, true),
+            ("claude-fable-5", 200_000, 0, true, true),
+            ("claude-opus-4-7", 200_000, 0, true, true),
+            ("claude-opus-4-6", 200_000, 0, true, true),
+            ("claude-opus-4-5", 200_000, 0, true, true),
+            ("claude-sonnet-5", 200_000, 0, true, true),
+            ("claude-haiku-4-5", 200_000, 0, true, true),
+            ("qwen3.6-plus", 200_000, 0, true, true),
+            ("qwen3.5-plus", 200_000, 0, true, true),
+            // --- OpenAI Responses (all 17 gpt-* are NEW) ---
+            ("gpt-5.5", 200_000, 0, true, false),
+            ("gpt-5.5-pro", 200_000, 0, true, false),
             ("gpt-5.4", 200_000, 0, true, false),
-            // OpenAI Chat Completions (NEW — grok-4.5; glm-5.2 is EXISTING)
+            ("gpt-5.4-pro", 200_000, 0, true, false),
+            ("gpt-5.4-mini", 200_000, 0, true, false),
+            ("gpt-5.4-nano", 200_000, 0, true, false),
+            ("gpt-5.3-codex", 200_000, 0, true, false),
+            ("gpt-5.3-codex-spark", 200_000, 0, true, false),
+            ("gpt-5.2", 200_000, 0, true, false),
+            ("gpt-5.2-codex", 200_000, 0, true, false),
+            ("gpt-5.1", 200_000, 0, true, false),
+            ("gpt-5.1-codex-max", 200_000, 0, true, false),
+            ("gpt-5.1-codex", 200_000, 0, true, false),
+            ("gpt-5.1-codex-mini", 200_000, 0, true, false),
+            ("gpt-5", 200_000, 0, true, false),
+            ("gpt-5-codex", 200_000, 0, true, false),
+            ("gpt-5-nano", 200_000, 0, true, false),
+            // --- OpenAI Chat Completions (NEW — 10 models; glm/deepseek/kimi/minimax overlap) ---
             ("grok-4.5", 128_000, 0, true, false),
-            // Google Gemini (all 3 are NEW)
+            ("grok-build-0.1", 128_000, 0, true, false),
+            ("kimi-k2.5", 128_000, 0, true, false),
+            ("deepseek-v4-flash-free", 128_000, 0, true, false),
+            ("glm-5", 128_000, 0, true, false),
+            ("big-pickle", 128_000, 0, true, false),
+            ("hy3-free", 128_000, 0, true, false),
+            ("mimo-v2.5-free", 128_000, 0, true, false),
+            ("north-mini-code-free", 128_000, 0, true, false),
+            ("nemotron-3-ultra-free", 128_000, 0, true, false),
+            // --- Google Gemini (all 3 are NEW) ---
             ("gemini-3-flash", 1_000_000, 0, true, false),
+            ("gemini-3.1-pro", 1_000_000, 0, true, false),
+            ("gemini-3.5-flash", 1_000_000, 0, true, false),
         ];
         for (id, ctx, max_out, tools, pc) in cases {
             let info = model_info(id);
@@ -2497,6 +2652,17 @@ In `crates/zoid-model/src/lib.rs`, add to `opencode_zen_tests`:
         assert_eq!(e.models.len(), 13);
     }
 ```
+
+> **NOTE — `tools: true` for Anthropic Messages models (review n1):** The
+> reviewer flagged that the prior draft set `tools: false` for NEW claude
+> models ("P1b text-only"), but the existing `claude-sonnet-4-6` /
+> `claude-opus-4-8` (which route through the same Anthropic leaf) are
+> `tools: true`. This plan corrects all NEW Anthropic-shape models to
+> `tools: true` (matching the leaf's P1b.1 tool-use wiring). If the
+> Anthropic leaf is genuinely text-only for these models at runtime, the
+> tool calls will fail with a provider error — that's a better failure mode
+> than silently hiding tools the model supports. Verify during implementation
+> smoke test.
 
 - [ ] **Step 2: Run full workspace tests**
 
