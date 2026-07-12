@@ -139,13 +139,12 @@ pub fn parse_chunk(obj: &Value) -> Vec<ProviderEvent> {
     // present (only the final frame carries real counts). Confirmed Zen behavior
     // (see spike research, 2026-07-10/2026-07-11).
     if let Some(usage) = obj.get("usageMetadata") {
-        let input = usage.get("promptTokenCount").and_then(|n| n.as_u64());
-        if input.is_some() {
+        if let Some(prompt_tokens) = usage.get("promptTokenCount").and_then(|n| n.as_u64()) {
             let output = usage.get("candidatesTokenCount").and_then(|n| n.as_u64()).unwrap_or(0);
             let cached = usage.get("cachedContentTokenCount").and_then(|n| n.as_u64()).unwrap_or(0);
             let thinking = usage.get("thoughtsTokenCount").and_then(|n| n.as_u64()).unwrap_or(0);
             out.push(ProviderEvent::Usage(Usage {
-                input_tokens: input.unwrap(),
+                input_tokens: prompt_tokens,
                 output_tokens: output,
                 cached,
                 thinking_tokens: thinking,

@@ -846,6 +846,81 @@ mod opencode_zen_tests {
             );
         }
     }
+
+    #[test]
+    fn opencode_zen_caps_match_table() {
+        // Lock ALL 39 NEW model caps (13 overlap with Go — their existing caps
+        // are authoritative, not duplicated here). Mirrors the Go provider's
+        // opencode_go_model_caps_match_reconciled_table which locks all 13.
+        let cases: &[(&str, u64, u64, bool, bool)] = &[
+            // (id, context_window, max_output, tools, prompt_cache)
+            // --- Anthropic Messages (NEW — 11 models; 4-6/opus-4-8 overlap) ---
+            ("claude-sonnet-4-5", 200_000, 0, true, true),
+            ("claude-fable-5", 200_000, 0, true, true),
+            ("claude-opus-4-7", 200_000, 0, true, true),
+            ("claude-opus-4-6", 200_000, 0, true, true),
+            ("claude-opus-4-5", 200_000, 0, true, true),
+            ("claude-sonnet-5", 200_000, 0, true, true),
+            ("claude-haiku-4-5", 200_000, 0, true, true),
+            ("qwen3.6-plus", 200_000, 0, true, true),
+            ("qwen3.5-plus", 200_000, 0, true, true),
+            // --- OpenAI Responses (all 17 gpt-* are NEW) ---
+            ("gpt-5.5", 200_000, 0, true, false),
+            ("gpt-5.5-pro", 200_000, 0, true, false),
+            ("gpt-5.4", 200_000, 0, true, false),
+            ("gpt-5.4-pro", 200_000, 0, true, false),
+            ("gpt-5.4-mini", 200_000, 0, true, false),
+            ("gpt-5.4-nano", 200_000, 0, true, false),
+            ("gpt-5.3-codex", 200_000, 0, true, false),
+            ("gpt-5.3-codex-spark", 200_000, 0, true, false),
+            ("gpt-5.2", 200_000, 0, true, false),
+            ("gpt-5.2-codex", 200_000, 0, true, false),
+            ("gpt-5.1", 200_000, 0, true, false),
+            ("gpt-5.1-codex-max", 200_000, 0, true, false),
+            ("gpt-5.1-codex", 200_000, 0, true, false),
+            ("gpt-5.1-codex-mini", 200_000, 0, true, false),
+            ("gpt-5", 200_000, 0, true, false),
+            ("gpt-5-codex", 200_000, 0, true, false),
+            ("gpt-5-nano", 200_000, 0, true, false),
+            // --- OpenAI Chat Completions (NEW — 10 models; glm/deepseek/kimi/minimax overlap) ---
+            ("grok-4.5", 128_000, 0, true, false),
+            ("grok-build-0.1", 128_000, 0, true, false),
+            ("kimi-k2.5", 128_000, 0, true, false),
+            ("deepseek-v4-flash-free", 128_000, 0, true, false),
+            ("glm-5", 128_000, 0, true, false),
+            ("big-pickle", 128_000, 0, true, false),
+            ("hy3-free", 128_000, 0, true, false),
+            ("mimo-v2.5-free", 128_000, 0, true, false),
+            ("north-mini-code-free", 128_000, 0, true, false),
+            ("nemotron-3-ultra-free", 128_000, 0, true, false),
+            // --- Google Gemini (all 3 are NEW) ---
+            ("gemini-3-flash", 1_000_000, 0, true, false),
+            ("gemini-3.1-pro", 1_000_000, 0, true, false),
+            ("gemini-3.5-flash", 1_000_000, 0, true, false),
+        ];
+        for (id, ctx, max_out, tools, pc) in cases {
+            let info = model_info(id);
+            assert_eq!(info.context_window, *ctx, "ctx mismatch for {id}");
+            assert_eq!(info.max_output, *max_out, "max_output mismatch for {id}");
+            assert_eq!(info.tools, *tools, "tools mismatch for {id}");
+            assert_eq!(info.prompt_cache, *pc, "prompt_cache mismatch for {id}");
+        }
+    }
+
+    #[test]
+    fn opencode_go_entry_unchanged() {
+        // Regression: the Go entry must NOT have been modified by the Zen slice.
+        let e = entry("opencode-go").unwrap();
+        assert_eq!(e.display, "opencode · go");
+        assert_eq!(e.family, "opencode-go");
+        assert_eq!(
+            e.transport,
+            Transport::Http {
+                default_base_url: "https://opencode.ai/zen/go"
+            }
+        );
+        assert_eq!(e.models.len(), 13);
+    }
 }
 
 #[cfg(test)]
