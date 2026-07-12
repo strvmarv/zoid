@@ -53,8 +53,9 @@ pub struct BodyLine {
 /// Render markdown `source` into typed body lines. Most non-empty input yields at
 /// least one line; whitespace-only input can yield an empty vec (the caller —
 /// `push_message` — handles an empty body by emitting the prefix alone).
-pub fn render_body(source: &str) -> Vec<BodyLine> {
+pub fn render_body(source: &str, content_w: usize) -> Vec<BodyLine> {
     let mut b = Builder::default();
+    b.content_w = content_w;
     for ev in Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES) {
         b.event(ev);
         if b.bail {
@@ -65,8 +66,8 @@ pub fn render_body(source: &str) -> Vec<BodyLine> {
 }
 
 /// Flatten [`render_body`] to plain `Line`s (drops the per-line kind).
-pub fn render_markdown(source: &str) -> Vec<Line<'static>> {
-    render_body(source).into_iter().map(|b| b.line).collect()
+pub fn render_markdown(source: &str, content_w: usize) -> Vec<Line<'static>> {
+    render_body(source, content_w).into_iter().map(|b| b.line).collect()
 }
 
 /// One TXT-styled prose `Line` per source row — the parse-issue / over-nesting fallback.
@@ -280,6 +281,9 @@ struct Builder {
     code_buf: String,
     bail: bool,
     table: Option<TableAccum>,
+    /// Available content width for width-aware table layout. Set by
+    /// `render_body` before the first event; `0` for a bare `Builder::default()`.
+    content_w: usize,
 }
 
 impl Builder {
@@ -594,7 +598,7 @@ impl Builder {
             }
             TagEnd::Table => {
                 if let Some(t) = self.table.take() {
-                    self.render_table(t);
+                    self.render_table(t, self.content_w);
                 }
             }
             _ => {}
@@ -604,7 +608,8 @@ impl Builder {
     /// Layout a finished table grid into bordered `BodyKind::Table` lines and
     /// push them onto `self.lines` (spec §2). Called from `end(TagEnd::Table)`.
     /// `table` is the fully-accumulated grid (moved out of `self.table`).
-    fn render_table(&mut self, table: TableAccum) {
+    fn render_table(&mut self, table: TableAccum, content_w: usize) {
+        let _ = content_w; // used in Task 2
         let ncols = table.alignments.len();
         if ncols == 0 {
             return; // degenerate: no columns, emit nothing
@@ -742,6 +747,9 @@ mod tests {
     use ratatui::style::Modifier;
     use unicode_width::UnicodeWidthStr;
 
+    /// Wide enough that width-agnostic tests never trigger table wrapping.
+    const TEST_W: usize = 80;
+
     fn spans(lines: &[ratatui::text::Line<'static>]) -> Vec<(String, ratatui::style::Style)> {
         lines
             .iter()
@@ -751,7 +759,7 @@ mod tests {
 
     #[test]
     fn plain_prose_is_one_txt_line() {
-        let lines = render_markdown("just a sentence.");
+        let lines = render_markdown("just a sentence.", TEST_W);
         assert_eq!(lines.len(), 1);
         assert!(lines[0]
             .spans
@@ -761,7 +769,7 @@ mod tests {
 
     #[test]
     fn heading_is_accent_bold() {
-        let lines = render_markdown("# Title");
+        let lines = render_markdown("# Title", TEST_W);
         let (_, style) = spans(&lines)
             .into_iter()
             .find(|(t, _)| t.contains("Title"))
@@ -772,7 +780,7 @@ mod tests {
 
     #[test]
     fn bold_and_inline_code_are_styled() {
-        let lines = render_markdown("a **b** `c`");
+        let lines = render_markdown("a **b** `c`", TEST_W);
         let s = spans(&lines);
         assert!(s
             .iter()
@@ -784,7 +792,7 @@ mod tests {
 
     #[test]
     fn list_items_render_with_bullets() {
-        let lines = render_markdown("- one\n- two");
+        let lines = render_markdown("- one\n- two", TEST_W);
         assert_eq!(lines.len(), 2);
         let text: Vec<String> = lines
             .iter()
@@ -797,7 +805,7 @@ mod tests {
 
     #[test]
     fn fenced_code_is_highlighted_by_language() {
-        let lines = render_markdown("```rust\nfn x() {}\n```");
+        let lines = render_markdown("```rust\nfn x() {}\n```", TEST_W);
         let has_kw = lines.iter().any(|l| {
             l.spans
                 .iter()
@@ -811,7 +819,7 @@ mod tests {
         // An unknown/empty fence is not syntax-highlighted: no span carries a
         // SYN_* hue. (The container chrome — bar/tag — is dim, so we assert the
         // absence of highlighting rather than "everything is TXT".)
-        let lines = render_markdown("```\nplain body\n```");
+        let lines = render_markdown("```\nplain body\n```", TEST_W);
         assert!(lines.iter().all(|l| l
             .spans
             .iter()
@@ -828,7 +836,7 @@ mod tests {
 
     #[test]
     fn top_level_fence_has_bar_and_language_header() {
-        let lines = render_markdown("```rust\nfn x() {}\n```");
+        let lines = render_markdown("```rust\nfn x() {}\n```", TEST_W);
         // header row carries the language tag…
         let joined: Vec<String> = lines
             .iter()
@@ -852,7 +860,7 @@ mod tests {
 
     #[test]
     fn fenced_code_in_blockquote_keeps_quote_bar() {
-        let lines = render_markdown("> ```rust\n> fn x() {}\n> ```");
+        let lines = render_markdown("> ```rust\n> fn x() {}\n> ```", TEST_W);
         // every rendered code line must carry the quote bar prefix
         assert!(
             lines.iter().all(|l| l
@@ -866,7 +874,7 @@ mod tests {
 
     #[test]
     fn fenced_code_in_list_is_indented() {
-        let lines = render_markdown("- item\n\n  ```rust\n  fn x() {}\n  ```");
+        let lines = render_markdown("- item\n\n  ```rust\n  fn x() {}\n  ```", TEST_W);
         // at least one code line is indented (leading spaces) under the list
         assert!(
             lines.iter().any(|l| l
@@ -880,7 +888,7 @@ mod tests {
 
     #[test]
     fn link_text_is_md_link_underlined() {
-        let lines = render_markdown("see [docs](http://x)");
+        let lines = render_markdown("see [docs](http://x)", TEST_W);
         let s = spans(&lines);
         assert!(
             s.iter().any(|(t, st)| t.contains("docs")
@@ -894,7 +902,7 @@ mod tests {
 
     #[test]
     fn inline_code_inside_link_is_md_code_not_md_link() {
-        let lines = render_markdown("[`c`](http://x)");
+        let lines = render_markdown("[`c`](http://x)", TEST_W);
         let s = spans(&lines);
         assert!(
             s.iter()
@@ -905,7 +913,7 @@ mod tests {
 
     #[test]
     fn heading_inside_blockquote_is_accent_bold_not_dim() {
-        let lines = render_markdown("> # Title");
+        let lines = render_markdown("> # Title", TEST_W);
         let (_, style) = spans(&lines)
             .into_iter()
             .find(|(t, _)| t.contains("Title"))
@@ -920,7 +928,7 @@ mod tests {
 
     #[test]
     fn strikethrough_is_crossed_out() {
-        let lines = render_markdown("~~struck~~");
+        let lines = render_markdown("~~struck~~", TEST_W);
         let s = spans(&lines);
         assert!(
             s.iter()
@@ -934,7 +942,7 @@ mod tests {
         // A degenerate table (header only, no body) still parses as a table
         // (ENABLE_TABLES), but until the layout/emit lands it renders zero
         // lines — and crucially does NOT panic or emit raw pipe text.
-        let lines = render_markdown("| H1 | H2 |\n| --- | --- |\n");
+        let lines = render_markdown("| H1 | H2 |\n| --- | --- |\n", TEST_W);
         let joined: String = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
@@ -950,7 +958,7 @@ mod tests {
         // would emit it as BodyKind::Prose). Before Task 4's layout landed this
         // asserted the text was absent entirely; now the table renders, so the
         // invariant is "captured as Table, NOT leaked as Prose."
-        let body = render_body("| H1 | H2 |\n| --- | --- |\n");
+        let body = render_body("| H1 | H2 |\n| --- | --- |\n", TEST_W);
         let (in_table, in_prose) = body.iter().fold((false, false), |(tbl, prose), b| {
             let has_h = b.line.spans.iter().any(|s| s.content.contains("H1") || s.content.contains("H2"));
             match b.kind {
@@ -967,7 +975,7 @@ mod tests {
     fn plain_text_outside_table_still_renders() {
         // Prose before and after a table must render normally — proves the
         // table-mode enter/exit does not corrupt the prose path.
-        let lines = render_markdown("before\n\n| a | b |\n| --- | --- |\n\nafter");
+        let lines = render_markdown("before\n\n| a | b |\n| --- | --- |\n\nafter", TEST_W);
         let joined: String = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
@@ -979,7 +987,7 @@ mod tests {
     #[test]
     fn simple_two_by_two_table_renders_bordered_grid() {
         let md = "| H1 | H2 |\n| --- | --- |\n| a | b |\n";
-        let lines = render_markdown(md);
+        let lines = render_markdown(md, TEST_W);
         let joined: String = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
@@ -995,7 +1003,7 @@ mod tests {
     #[test]
     fn header_cells_are_accent_bold() {
         let md = "| H | \n| --- |\n| x |\n";
-        let body = render_body(md);
+        let body = render_body(md, TEST_W);
         // A header cell span: fg == TABLE_HEADER AND bold. Filter by the style
         // invariant directly (not span ordering) so the test doesn't rely on
         // "the first H-containing span happens to be the cell text."
@@ -1018,7 +1026,7 @@ mod tests {
     #[test]
     fn inline_bold_and_code_in_cells_are_styled() {
         let md = "| c |\n| --- |\n| **k** `v` |\n";
-        let body = render_body(md);
+        let body = render_body(md, TEST_W);
         let spans: Vec<&Span> = body.iter().flat_map(|b| b.line.spans.iter()).collect();
         // "k" must be bold (in a body cell).
         assert!(
@@ -1039,7 +1047,7 @@ mod tests {
         // A single 40-char cell — wider than the 30 cap — must wrap.
         let long = "x".repeat(40);
         let md = format!("| {} |\n| --- |\n| {} |\n", long, long);
-        let lines = render_markdown(&md);
+        let lines = render_markdown(&md, TEST_W);
         // The header row and the body row each must have wrapped (height >= 2).
         // Count rows that contain content lines (not borders): a wrapped table
         // is taller than an unwrapped one. We assert there are >= 2 non-border
@@ -1062,7 +1070,7 @@ mod tests {
         // them would test the border, not the cap.)
         let long = "a".repeat(40);
         let md = format!("| {} |\n| --- |\n| {} |\n", long, long);
-        let body = render_body(&md);
+        let body = render_body(&md, TEST_W);
         let max_content_w = body
             .iter()
             .flat_map(|b| b.line.spans.iter())
@@ -1082,7 +1090,7 @@ mod tests {
         // visible. We verify the padding by checking the leading/trailing space
         // ratio around the content in a rendered body cell line.
         let md = "| L | C | R |\n| :--- | :---: | ---: |\n| x | x | x |\n";
-        let body = render_body(md);
+        let body = render_body(md, TEST_W);
         // Find the body-row cell line (contains three "x"s separated by borders).
         let cell_line = body
             .iter()
@@ -1104,7 +1112,7 @@ mod tests {
         // content is full TXT (not dimmed), proving the quote flag did not bleed
         // into cells.
         let md = "> | H |\n> | --- |\n> | x |\n";
-        let body = render_body(md);
+        let body = render_body(md, TEST_W);
         let body_span = body
             .iter()
             .flat_map(|b| b.line.spans.iter())
@@ -1131,7 +1139,7 @@ mod tests {
             "| a | b |\n",
             "\n| --- | --- |\n| c | d |\n",
         ] {
-            let lines = render_markdown(md);
+            let lines = render_markdown(md, TEST_W);
             assert!(lines.len() >= 1, "malformed table {md:?} produced no lines");
         }
     }
@@ -1147,7 +1155,7 @@ mod tests {
         // reason (parser never made a table). Both halves together pin the
         // bail behavior specifically.
         let deep = format!("{}| H |\n{}| --- |\n{}| x |\n", "> ".repeat(9), "> ".repeat(9), "> ".repeat(9));
-        let deep_lines = render_markdown(&deep);
+        let deep_lines = render_markdown(&deep, TEST_W);
         let deep_joined: String = deep_lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
@@ -1157,7 +1165,7 @@ mod tests {
         // Shallow control: a 1-level quote table renders borders (proves the
         // parser emits tables under quotes, so the deep assertion is meaningful).
         let shallow = "> | H |\n> | --- |\n> | x |\n";
-        let shallow_joined: String = render_markdown(shallow)
+        let shallow_joined: String = render_markdown(shallow, TEST_W)
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
             .collect();
@@ -1167,7 +1175,7 @@ mod tests {
     #[test]
     fn table_lines_are_bodykind_table() {
         let md = "| H |\n| --- |\n| x |\n";
-        let body = render_body(md);
+        let body = render_body(md, TEST_W);
         let has_table_kind = body.iter().any(|b| b.kind == BodyKind::Table);
         assert!(has_table_kind, "table lines must be BodyKind::Table: {body:?}");
     }

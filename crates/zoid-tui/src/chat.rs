@@ -219,11 +219,13 @@ fn build_conversation(
                         Style::new().fg(color::CHAT_ACCENT),
                     ),
                 ];
+                let indent_w: usize = prefix.iter().map(|s| s.content.width()).sum();
+                let content_w = ctx.width.saturating_sub(indent_w).max(1);
                 push_message(
                     &mut lines,
                     &mut code_ranges,
                     prefix,
-                    render_body(text),
+                    render_body(text, content_w),
                     ctx.width,
                 );
             }
@@ -256,11 +258,13 @@ fn build_conversation(
                         stamp(*ts),
                         Span::styled("zoid ".to_string(), Style::new().fg(color::DIM)),
                     ];
+                    let indent_w: usize = prefix.iter().map(|s| s.content.width()).sum();
+                    let content_w = ctx.width.saturating_sub(indent_w).max(1);
                     push_message(
                         &mut lines,
                         &mut code_ranges,
                         prefix,
-                        render_body(&shown),
+                        render_body(&shown, content_w),
                         ctx.width,
                     );
                 }
@@ -868,7 +872,7 @@ fn detail_lines(
                     Span::styled(format!("{mark}"), Style::new().fg(mark_color)),
                 ]));
                 // PLAN-1 seam: route the summary through Plan 1's markdown renderer.
-                for line in crate::markdown::render_markdown(summary) {
+                for line in crate::markdown::render_markdown(summary, width.saturating_sub(4)) {
                     let mut spans = vec![Span::styled("    ", Style::new())];
                     spans.extend(line.spans);
                     out.push(Line::from(spans));
@@ -921,7 +925,7 @@ fn detail_lines(
                                 Style::new().fg(color::DIM),
                             ),
                         ]));
-                        for line in crate::markdown::render_markdown(thinking_text) {
+                        for line in crate::markdown::render_markdown(thinking_text, width.saturating_sub(4)) {
                             let mut spans = vec![Span::styled("    ", Style::new())];
                             spans.extend(line.spans);
                             out.push(Line::from(spans));
