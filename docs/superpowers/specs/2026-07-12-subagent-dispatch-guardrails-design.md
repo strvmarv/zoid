@@ -20,6 +20,8 @@ The gilfoyle-tech-reviewer subagent (`sub-01KXA83QGZZ1A3ZNYKCZ9WBHEF`) completed
 
 4. **Output-size awareness.** Investigate whether large subagent outputs cause the DelegationResult delivery failure (failure #2). If so, cap/summarize before emission.
 
+5. **Kill capability for the orchestrator.** There is currently no way for the orchestrating agent (or user) to kill/cancel a running subagent mid-flight. A subagent that's spinning (failure #1) or producing an unexpectedly large output (failure #2) runs to completion or until the hard iteration cap — there's no interactive stop. Add a kill signal (CancellationToken or similar) threaded into `spawn_subagent`, surfaced as a user command or agent-initiated abort, that cancels the subagent's active turn and emits a failure `DelegationResult`.
+
 ## Investigation needed
 
 - Why did `SUBAGENT_MAX_ITERATIONS = 25` not catch the 26-min spin-out? Is the 1k limit a different layer? Check the dispatch path.
