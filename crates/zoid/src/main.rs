@@ -1125,16 +1125,23 @@ fn policy_from_config(
     }
 }
 
-/// Best-effort current branch from `.git/HEAD` (`ref: refs/heads/<name>`); "main" otherwise.
-fn current_branch() -> String {
-    std::fs::read_to_string(".git/HEAD")
-        .ok()
-        .and_then(|s| {
-            s.trim()
-                .strip_prefix("ref: refs/heads/")
-                .map(|b| b.to_string())
-        })
-        .unwrap_or_else(|| "main".into())
+/// Current branch of the checkout at `root`. Reads `<root>/.git/HEAD` for a
+/// normal checkout; falls back to git2 for a linked worktree (whose `.git` is a
+/// gitdir-file, not a directory).
+fn current_branch_at(root: &std::path::Path) -> String {
+    if let Ok(s) = std::fs::read_to_string(root.join(".git").join("HEAD")) {
+        if let Some(b) = s.trim().strip_prefix("ref: refs/heads/") {
+            return b.to_string();
+        }
+    }
+    match git2::Repository::open(root) {
+        Ok(repo) => repo
+            .head()
+            .ok()
+            .and_then(|h| h.shorthand().map(|s| s.to_string()))
+            .unwrap_or_else(|| "main".into()),
+        Err(_) => "main".into(),
+    }
 }
 
 /// The worktree label for the repo drawer: the linked-worktree name when the
@@ -1187,11 +1194,12 @@ fn parse_numstat(out: &str) -> (usize, usize, usize) {
     (added, removed, files)
 }
 
-/// Working-tree change stats via `git diff --numstat` (unstaged) + `--cached`
-/// (staged). Best-effort — any failure yields zeros.
-fn git_status() -> (usize, usize, usize) {
+/// Diff stats (added, removed, files) for the git checkout at `dir`.
+fn git_status_at(dir: &std::path::Path) -> (usize, usize, usize) {
     let run = |args: &[&str]| -> String {
         std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
             .args(args)
             .output()
             .ok()
@@ -1576,6 +1584,10 @@ struct App {
     in_flight_subagents: Vec<SubagentInfo>,
     /// The active worktree session (None when in the main checkout).
     active_worktree: Option<WorktreeSession>,
+    /// Active worktree path the git poller should open (None = main checkout).
+    /// Updated on enter/exit so the poller re-polls immediately (WT-3 immediate)
+    /// and confirms rather than reverts the rail (WT-3 durable).
+    active_wt_tx: tokio::sync::watch::Sender<Option<std::path::PathBuf>>,
     /// Shared in-flight subagent ID set, threaded into TurnConfig so the
     /// Emitting handler can enforce sequential dispatch (Gap 3). The spawned
     /// subagent's DelegationResult removes the ID.
@@ -2083,6 +2095,7 @@ async fn main() -> Result<()> {
         session_ids: Vec::new(),
         in_flight_subagents: Vec::new(),
         active_worktree: None,
+        active_wt_tx: tokio::sync::watch::channel(None).0,
         in_flight: std::sync::Arc::new(std::sync::Mutex::new(
             std::collections::HashMap::new(),
         )),
@@ -2219,29 +2232,45 @@ where
     // subprocess entirely. The drawer's presence is the git-repo signal decided
     // at startup. The receiver still reads its initial (0, 0, 0).
     if app.shell.drawer(zoid_tui::DrawerId::Repo).is_some() {
+        let mut active_wt_rx = app.active_wt_tx.subscribe();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
             loop {
-                tick.tick().await;
-                let (added, removed, files) = tokio::task::spawn_blocking(git_status)
-                    .await
-                    .unwrap_or((0, 0, 0));
-                let branch = tokio::task::spawn_blocking(current_branch)
-                    .await
-                    .unwrap_or("main".into());
-                let worktree = tokio::task::spawn_blocking(|| {
-                    git2::Repository::open(".")
+                // Latest active-worktree path (main checkout when None).
+                let dir = active_wt_rx
+                    .borrow_and_update()
+                    .clone()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                let dir_status = dir.clone();
+                let (added, removed, files) =
+                    tokio::task::spawn_blocking(move || git_status_at(&dir_status))
+                        .await
+                        .unwrap_or((0, 0, 0));
+                let dir_labels = dir.clone();
+                let (branch, worktree) = tokio::task::spawn_blocking(move || {
+                    let branch = current_branch_at(&dir_labels);
+                    let worktree = git2::Repository::open(&dir_labels)
                         .ok()
                         .map(|r| worktree_label(&r))
-                        .unwrap_or_else(|| "(none)".into())
+                        .unwrap_or_else(|| "(none)".into());
+                    (branch, worktree)
                 })
                 .await
-                .unwrap_or("(none)".into());
+                .unwrap_or_else(|_| ("main".into(), "(none)".into()));
                 if git_tx
                     .send((added, removed, files, branch, worktree))
                     .is_err()
                 {
                     break; // receiver dropped — app is exiting
+                }
+                // Wake on the 5 s tick OR an enter/exit (immediate re-poll).
+                tokio::select! {
+                    _ = tick.tick() => {}
+                    changed = active_wt_rx.changed() => {
+                        if changed.is_err() {
+                            break; // sender dropped — app is exiting
+                        }
+                    }
                 }
             }
         });
@@ -5392,6 +5421,10 @@ fn handle_worktree_request(
             }
         }
     }
+    // Point the git poller at the worktree (enter) or back to "." (exit), and
+    // wake it immediately so the rail updates without waiting for the next tick.
+    let active_path = app.active_worktree.as_ref().map(|w| w.path.clone());
+    let _ = app.active_wt_tx.send(active_path);
     if let Some(reply) = reply {
         let _ = reply.send(result);
     }
@@ -6334,6 +6367,7 @@ mod tests {
             session_ids: Vec::new(),
             in_flight_subagents: Vec::new(),
             active_worktree: None,
+            active_wt_tx: tokio::sync::watch::channel(None).0,
         in_flight: std::sync::Arc::new(std::sync::Mutex::new(
             std::collections::HashMap::new(),
         )),
@@ -7542,5 +7576,22 @@ mod worktree_switch_tests {
         let cwd2 = compute_worktree_switch(&mut active, WorktreeAction::Enter { name: "keep".into() }, false, repo.path()).unwrap();
         assert!(cwd2.exists());
         assert!(active.is_some());
+    }
+
+    #[test]
+    fn git_status_at_reads_the_given_dir_not_cwd() {
+        use super::git_status_at;
+        let repo = init_repo();
+        std::fs::write(repo.path().join("f.txt"), "hi there changed").unwrap();
+        let (_added, _removed, files) = git_status_at(repo.path());
+        assert!(files >= 1, "git_status_at must see the change in the given dir: files={files}");
+    }
+
+    #[test]
+    fn current_branch_at_reads_the_given_dir() {
+        use super::current_branch_at;
+        let repo = init_repo();
+        let b = current_branch_at(repo.path());
+        assert!(b == "main" || b == "master", "init default branch, got: {b}");
     }
 }
