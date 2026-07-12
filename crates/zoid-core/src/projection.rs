@@ -85,6 +85,24 @@ pub enum QuestionCardState {
 /// visible history and the model's context, which is what compaction was
 /// doing. (See `context.rs::context_window` for the window-scoped filter.)
 pub fn conversation<'a>(events: impl IntoIterator<Item = &'a Event>) -> Vec<ChatMsg> {
+    conversation_for_branch(events, &crate::event::BranchId::default())
+}
+
+/// Like [`conversation`], but in addition to the default (main) branch it also
+/// keeps events on `active`. The agent turn loop uses this when rebuilding the
+/// provider request: a subagent's entire transcript lives on its own
+/// `subagent:<id>` branch, so filtering to the default branch alone yields an
+/// EMPTY message list — the provider then receives a system-message-only body
+/// and rejects it with HTTP 400. Passing the subagent's branch as `active`
+/// makes the subagent's own turns visible to itself.
+///
+/// When `active` IS the default branch (the main chat), this is byte-identical
+/// to filtering to the default branch only — subagent branches stay excluded
+/// from the main conversation.
+pub fn conversation_for_branch<'a>(
+    events: impl IntoIterator<Item = &'a Event>,
+    active: &crate::event::BranchId,
+) -> Vec<ChatMsg> {
     let events: Vec<&Event> = events.into_iter().collect();
     let visible: &[&Event] = &events;
     let evicted = crate::eviction::evicted_ids(events.iter().copied());
@@ -150,7 +168,7 @@ pub fn conversation<'a>(events: impl IntoIterator<Item = &'a Event>) -> Vec<Chat
         if evicted.contains(&e.id) {
             continue;
         }
-        if e.branch != crate::event::BranchId::default() {
+        if e.branch != crate::event::BranchId::default() && e.branch != *active {
             continue;
         }
         match &e.kind {
@@ -571,6 +589,31 @@ mod tests {
                     ok: true
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn conversation_for_branch_includes_active_subagent_branch() {
+        use crate::event::BranchId;
+        let sub = BranchId("subagent:ax3".into());
+        let mut seed = user(1, "do the task");
+        seed.branch = sub.clone();
+        // The default conversation() still excludes non-main-branch events, so
+        // a subagent's transcript never leaks into the MAIN conversation …
+        assert!(
+            conversation(&[seed.clone()]).is_empty(),
+            "default conversation must still exclude subagent-branch events"
+        );
+        // … but conversation_for_branch keeps the active branch, so when a
+        // subagent rebuilds its OWN provider request it sees its seed turn.
+        // Without this the request carries only the system message → HTTP 400.
+        let msgs = conversation_for_branch(&[seed], &sub);
+        assert_eq!(
+            msgs,
+            vec![ChatMsg::User {
+                text: "do the task".into(),
+                ts: 0
+            }]
         );
     }
 

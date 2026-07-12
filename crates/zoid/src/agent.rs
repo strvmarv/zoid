@@ -13,7 +13,7 @@ use ulid::Ulid;
 
 use zoid_core::agent_profile::AgentProfile;
 use zoid_core::event::{BranchId, Event, EventKind};
-use zoid_core::projection::{conversation, ChatMsg};
+use zoid_core::projection::ChatMsg;
 use zoid_core::session::SessionHandle;
 use zoid_provider::{CompletionRequest, Message, Provider, ProviderEvent, ThinkingMode, ToolCall, ToolSpec};
 use zoid_tools::{Gate, Tool, ToolGate};
@@ -374,7 +374,15 @@ pub fn build_request(
     system: &str,
     reassert: Option<String>,
 ) -> CompletionRequest {
-    build_request_with_thinking(events, model, tools, system, ThinkingMode::Off, reassert)
+    build_request_with_thinking(
+        events,
+        model,
+        tools,
+        system,
+        ThinkingMode::Off,
+        reassert,
+        &zoid_core::event::BranchId::default(),
+    )
 }
 
 pub fn build_request_with_thinking(
@@ -384,6 +392,7 @@ pub fn build_request_with_thinking(
     system: &str,
     thinking: ThinkingMode,
     reassert: Option<String>,
+    active_branch: &zoid_core::event::BranchId,
 ) -> CompletionRequest {
     let system = match zoid_core::eviction::eviction_breadcrumb(events.iter()) {
         Some(bc) => format!("{system}\n\n{bc}"),
@@ -403,7 +412,7 @@ pub fn build_request_with_thinking(
     CompletionRequest {
         model: model.to_string(),
         system: Some(system),
-        messages: conversation(events.iter())
+        messages: zoid_core::projection::conversation_for_branch(events.iter(), active_branch)
             .into_iter()
             .map(map_msg)
             .collect(),
@@ -611,6 +620,7 @@ async fn run_turn_inner(
             &config.system,
             config.thinking,
             reassert_text.clone(),
+            &config.branch,
         );
 
         // Stream one model turn. Spawn the provider so a missing terminal Done
@@ -2525,6 +2535,49 @@ mod tests {
             None,
         );
         assert_eq!(req.system.as_deref(), Some("CUSTOM SYS"));
+    }
+
+    #[test]
+    fn subagent_branch_request_carries_the_seed_turn_not_empty() {
+        use zoid_core::event::{BranchId, Event, EventKind};
+        let sub = BranchId("subagent:zz9".into());
+        let mut seed = Event::new(
+            ulid::Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "do the subagent task".into(),
+            },
+        );
+        seed.branch = sub.clone();
+        let events = crate::eventlog::EventLog::from_vec(vec![seed]);
+        // Regression guard (HTTP 400): the turn loop rebuilds the request from
+        // the event log, but the projection filters to the default branch — a
+        // subagent's whole transcript lives on `subagent:<id>`, so the naive
+        // build yielded an EMPTY messages array and the provider (zai/glm-5.2,
+        // Ollama) rejected it. Building for the active branch keeps the seed.
+        let sub_req = build_request_with_thinking(
+            &events,
+            "m",
+            &zoid_tools::registry(),
+            "SYS",
+            ThinkingMode::Off,
+            None,
+            &sub,
+        );
+        assert_eq!(
+            sub_req.messages.len(),
+            1,
+            "subagent request must carry its seed user turn (else HTTP 400)"
+        );
+        // The main-branch build still excludes it — proving this is branch
+        // selection, not a blanket "include everything" that would leak a
+        // subagent's turns into the main conversation.
+        let main_req = build_request(&events, "m", &zoid_tools::registry(), "SYS", None);
+        assert!(
+            main_req.messages.is_empty(),
+            "main-branch build must not include subagent-branch events"
+        );
     }
 
     #[test]

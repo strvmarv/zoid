@@ -5064,118 +5064,6 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
     }
 }
 
-/// Dispatch `task` to a single subagent (spec §6). One at a time. Non-trivial:
-/// runs in an isolated git worktree (falls back to cwd if not a repo); its
-/// DelegationResult folds back as a card. (Trivial edits use the normal inline
-/// chat path — this is the explicit delegate path only.)
-#[allow(dead_code)] // subagent delegation temporarily disabled
-fn start_delegation(app: &mut App, task: String) {
-    if app.streaming || !app.in_flight_subagents.is_empty() {
-        app.shell.status_hint = Some("busy · one subagent at a time".into());
-        return;
-    }
-    if app.yielded {
-        app.shell.status_hint = Some("session taken over — :new or :resume".into());
-        return;
-    }
-    if task.trim().is_empty() {
-        app.shell.status_hint = Some("usage: :delegate <task>".into());
-        return;
-    }
-    let sub_ulid = Ulid::new();
-    let sub_id = format!("sub-{sub_ulid}");
-    app.in_flight_subagents.push(SubagentInfo {
-        id: sub_id.clone(),
-        task: task.clone(),
-    });
-    app.shell.status_hint = Some(format!(
-        "{} {} subagent running…",
-        zoid_tui::tokens::glyph::RUNNING,
-        app.in_flight_subagents.len()
-    ));
-
-    // Create the isolated worktree up front so a genuine failure (a real repo
-    // where worktree creation failed) can surface a hint; "not a git repo"
-    // falls back to the process cwd silently (isolation isn't possible there).
-    let wt = if Path::new(".git").exists() {
-        zoid::worktree::create_worktree(Path::new("."), &format!("sub-{sub_ulid}"))
-            .inspect_err(|_| {
-                app.shell.status_hint = Some(format!(
-                    "{} worktree failed — running in the main tree",
-                    zoid_tui::tokens::glyph::WARNING
-                ));
-            })
-            .ok()
-    } else {
-        None // not a git repo: run in the process cwd, isolation not possible
-    };
-    let cwd = wt
-        .as_ref()
-        .map(|w| w.path().to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("."));
-
-    let provider = app.provider.clone();
-    let session = app.session.clone();
-    let session_id = app.session_id;
-    let seed = app.events.snapshot(); // context for construction (B3)
-    let model = app.model.clone();
-    let ui = app.ui_tx.clone();
-    let approval_config = app.config.approval.clone();
-    let model_support = app
-        .fetched_model_info
-        .map(|info| info.thinking)
-        .unwrap_or_else(|| zoid_provider::model::model_info(&app.model).thinking);
-    let app_thinking = resolve_thinking(&app.config.thinking, model_support);
-    tokio::spawn(async move {
-        let res = zoid::subagent::run_subagent(
-            &task,
-            &seed,
-            &zoid_core::agent_profile::AgentProfile::builtin(),
-            provider,
-            cwd,
-            model,
-            app_thinking,
-            session.clone(),
-            session_id,
-            ui.clone(),
-            now_ms,
-            sub_id,
-            approval_config,
-        )
-        .await;
-        // WorktreeGuard `wt` drops here → worktree cleaned up (isolation preserved
-        // even on failure — the main copy never saw the subagent's edits).
-        drop(wt);
-
-        let (subagent_id, branch, summary, ok) = match res {
-            Ok(r) => (r.id, r.branch, r.summary, r.ok),
-            Err(e) => (
-                String::new(),
-                String::new(),
-                format!("delegation failed: {e}"),
-                false,
-            ),
-        };
-        // Record the outcome on the MAIN branch, tagged to this session, so
-        // conversation() folds it (Plan 2 seam: untagged events land in the nil
-        // session and never surface).
-        let ev = Event::new(
-            Ulid::new(),
-            None,
-            now_ms(),
-            EventKind::DelegationResult {
-                subagent_id,
-                branch,
-                summary,
-                ok,
-            },
-        )
-        .with_session(session_id);
-        let _ = session.append(ev.clone()).await;
-        let _ = ui.send(AgentUpdate::Appended(Box::new(ev))).await;
-    });
-}
-
 /// Mirror the active mode + names onto the shell for the pure renderer/palette.
 fn sync_mode_mirror(app: &mut App) {
     app.shell.active_mode = app.modes.active_name().to_string();
@@ -6648,7 +6536,7 @@ mod tests {
     }
 
     /// Regression for I-1: `Action::SessionPick` must be a no-op while a
-    /// delegation is in flight, symmetric with `Submit`/`start_delegation`'s
+    /// delegation is in flight, symmetric with `Submit`'s
     /// `app.streaming || !app.in_flight_subagents.is_empty()` guard. Before the fix, `SessionPick`
     /// only checked `app.streaming`, so a mid-delegation session switch would
     /// let the still-running subagent push session A's events into session
@@ -6836,21 +6724,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delegate_blocked_and_new_clears_yielded() {
+    async fn new_clears_yielded_and_unblocks_submit() {
         let mut app = test_app().await;
         app.yielded = true;
-
-        // `:delegate` is blocked while yielded — no subagent starts.
-        start_delegation(&mut app, "do something".into());
-        assert!(
-            app.in_flight_subagents.is_empty(),
-            "delegate must not start while yielded"
-        );
-        assert_eq!(
-            app.shell.status_hint.as_deref(),
-            Some("session taken over — :new or :resume"),
-            "blocked delegate should surface the yield hint"
-        );
 
         // `:new` clears yielded and reclaims the fresh session.
         let quit = exec_command(&mut app, zoid_tui::command::Command::NewSession)
