@@ -1594,6 +1594,10 @@ struct App {
     /// already cancelled. Force-kills a running local tool. Cleared with
     /// `turn_cancel` on `TurnComplete`.
     turn_hard: Option<tokio_util::sync::CancellationToken>,
+    /// Armed state for the no-active-turn subagent kill confirm: first Esc arms,
+    /// second Esc fires all in-flight subagents. Reset when the registry empties
+    /// or a turn's tokens take over the escalation.
+    subagent_kill_armed: bool,
     /// Dynamically-fetched model capabilities (from Ollama `/api/show` etc.),
     /// overriding the static MODEL_CAPS table. `None` until the first fetch
     /// lands (or when the provider doesn't support capability introspection).
@@ -2085,6 +2089,7 @@ async fn main() -> Result<()> {
         pending_answer: None,
         turn_cancel: None,
         turn_hard: None,
+        subagent_kill_armed: false,
         fetched_model_info: None,
         companion: None,
         companion_hub: zoid_companion::CompanionHub::new(),
@@ -2665,6 +2670,9 @@ where
                         if let EventKind::DelegationResult { subagent_id, .. } = &ev.kind {
                             app.in_flight_subagents.retain(|s| s.id != *subagent_id);
                             app.in_flight.lock().unwrap().remove(subagent_id);
+                            if app.in_flight.lock().unwrap().is_empty() {
+                                app.subagent_kill_armed = false;
+                            }
                             app.shell.subagent_rows.retain(|s| s.id != *subagent_id);
                         }
                         // A tool result ends the in-flight indicator for that tool.
@@ -3591,10 +3599,22 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::CancelTurn => {
             // First Esc: graceful (finish current step, drain, end). Second Esc
-            // while already cancelling: hard-stop — force-kill the running tool.
-            // The resulting TurnComplete clears both tokens.
+            // while already cancelling: hard-stop — force-kill the running tool AND
+            // every in-flight subagent. The resulting TurnComplete clears both tokens.
             if let (Some(g), Some(h)) = (&app.turn_cancel, &app.turn_hard) {
-                app.shell.status_hint = Some(escalate_cancel(g, h).into());
+                app.shell.status_hint = Some(escalate_cancel(g, h, &app.in_flight).into());
+            } else {
+                // No active main turn, but subagents may be running: two-press confirm.
+                let pending = app.in_flight.lock().unwrap().len();
+                if pending > 0 {
+                    let (next_armed, fire, hint) =
+                        subagent_kill_decision(app.subagent_kill_armed, pending);
+                    if fire {
+                        zoid::agent::fire_subagent_kill(&app.in_flight, None);
+                    }
+                    app.subagent_kill_armed = next_armed;
+                    app.shell.status_hint = Some(hint);
+                }
             }
         }
         // Object-first picker (P4d ④): pick an object, then a verb scoped to
@@ -4370,13 +4390,31 @@ fn latest_open_question(
 fn escalate_cancel(
     graceful: &tokio_util::sync::CancellationToken,
     hard: &tokio_util::sync::CancellationToken,
+    subagents: &std::sync::Arc<
+        std::sync::Mutex<std::collections::HashMap<String, zoid::agent::SubagentHandle>>,
+    >,
 ) -> &'static str {
     if graceful.is_cancelled() {
         hard.cancel();
+        // The force press also kills every in-flight subagent (reason Killed).
+        zoid::agent::fire_subagent_kill(subagents, None);
         "force-stopping…"
     } else {
         graceful.cancel();
         "cancelling… (Esc again to force)"
+    }
+}
+
+/// Pure decision for the no-active-turn subagent-kill escalation. Given the
+/// current armed flag and how many subagents are in flight, returns
+/// `(next_armed, should_fire, status_hint)`. First press arms (no fire); second
+/// press fires all and disarms. Kept pure so the transition is unit-testable;
+/// the caller performs the actual `fire_subagent_kill` when `should_fire`.
+fn subagent_kill_decision(armed: bool, pending: usize) -> (bool, bool, String) {
+    if armed {
+        (false, true, format!("killing {pending} subagent(s)…"))
+    } else {
+        (true, false, format!("kill {pending} subagent(s)? Esc again to confirm"))
     }
 }
 
@@ -5581,15 +5619,62 @@ mod tests {
     fn second_cancel_escalates_to_hard() {
         let graceful = tokio_util::sync::CancellationToken::new();
         let hard = tokio_util::sync::CancellationToken::new();
+        let reg = std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::<String, zoid::agent::SubagentHandle>::new(),
+        ));
         // First Esc: graceful only.
         assert_eq!(
-            escalate_cancel(&graceful, &hard),
+            escalate_cancel(&graceful, &hard, &reg),
             "cancelling… (Esc again to force)"
         );
         assert!(graceful.is_cancelled() && !hard.is_cancelled());
         // Second Esc: escalate to hard.
-        assert_eq!(escalate_cancel(&graceful, &hard), "force-stopping…");
+        assert_eq!(escalate_cancel(&graceful, &hard, &reg), "force-stopping…");
         assert!(hard.is_cancelled());
+    }
+
+    #[test]
+    fn escalate_force_fires_registered_subagents() {
+        use std::collections::HashMap;
+        let graceful = tokio_util::sync::CancellationToken::new();
+        let hard = tokio_util::sync::CancellationToken::new();
+        let sub = zoid::agent::SubagentHandle {
+            cancel: tokio_util::sync::CancellationToken::new(),
+            hard: tokio_util::sync::CancellationToken::new(),
+            progress: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            abort_reason: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        };
+        let mut map = HashMap::new();
+        map.insert("sub-x".to_string(), sub.clone());
+        let reg = std::sync::Arc::new(std::sync::Mutex::new(map));
+
+        // First press: graceful only — subagents untouched.
+        let _ = escalate_cancel(&graceful, &hard, &reg);
+        assert!(!sub.hard.is_cancelled(), "first Esc must not kill subagents");
+
+        // Second press: force — every registered subagent's hard fires with Killed.
+        let hint = escalate_cancel(&graceful, &hard, &reg);
+        assert_eq!(hint, "force-stopping…");
+        assert!(sub.hard.is_cancelled(), "force Esc kills in-flight subagents");
+        assert_eq!(
+            *sub.abort_reason.lock().unwrap(),
+            Some(zoid::agent::AbortReason::Killed)
+        );
+    }
+
+    #[test]
+    fn subagent_kill_decision_arms_then_fires() {
+        // First press (disarmed): arms, does NOT fire, prompts for confirm.
+        let (next, fire, hint) = super::subagent_kill_decision(false, 3);
+        assert!(next, "first press arms");
+        assert!(!fire, "first press must not fire");
+        assert!(hint.contains("Esc again"), "first press asks to confirm: {hint}");
+
+        // Second press (armed): fires, disarms, reports the kill.
+        let (next, fire, hint) = super::subagent_kill_decision(true, 3);
+        assert!(!next, "second press disarms");
+        assert!(fire, "second press fires");
+        assert!(hint.contains("killing"), "second press reports the kill: {hint}");
     }
 
     #[test]
@@ -6251,6 +6336,7 @@ mod tests {
             pending_answer: None,
             turn_cancel: None,
             turn_hard: None,
+            subagent_kill_armed: false,
             fetched_model_info: None,
             companion: None,
             companion_hub: zoid_companion::CompanionHub::new(),

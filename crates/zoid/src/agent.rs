@@ -4503,4 +4503,27 @@ mod guardrail_types_tests {
         assert_eq!(n, 2, "None fires every registered subagent");
         assert!(b.hard.is_cancelled());
     }
+
+    #[test]
+    fn fire_kill_preserves_existing_reason() {
+        use super::fire_subagent_kill;
+        use std::collections::HashMap;
+        let h = SubagentHandle {
+            cancel: CancellationToken::new(),
+            hard: CancellationToken::new(),
+            progress: Arc::new(AtomicI64::new(0)),
+            abort_reason: Arc::new(Mutex::new(Some(super::AbortReason::IdleTimeout))),
+        };
+        let mut map = HashMap::new();
+        map.insert("sub-a".to_string(), h.clone());
+        let reg = Arc::new(Mutex::new(map));
+        let n = fire_subagent_kill(&reg, None);
+        assert_eq!(n, 1, "still fires the handle");
+        assert!(h.hard.is_cancelled(), "hard token still fired");
+        assert_eq!(
+            *h.abort_reason.lock().unwrap(),
+            Some(super::AbortReason::IdleTimeout),
+            "a reason set by the timeout supervisor must NOT be overwritten by Killed"
+        );
+    }
 }
