@@ -162,6 +162,8 @@ pub fn render_shell(
                         streaming,
                         text.width as usize,
                         state.question.as_ref(),
+                        &state.edit_diffs,
+                        crate::chat::DEFAULT_INLINE_K,
                     );
                     // The in-flight tool indicator moved to the status bar; the
                     // body is just the transcript, no trailing spinner line.

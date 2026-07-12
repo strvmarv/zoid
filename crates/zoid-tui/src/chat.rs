@@ -34,6 +34,9 @@ pub struct QuestionChoiceHit {
     pub choice: String,
 }
 
+/// Default number of most-recent edit/write results shown with an inline diff.
+pub const DEFAULT_INLINE_K: usize = 5;
+
 /// Build the conversation lines (user/assistant turns + inline tool cards).
 /// Shared by `render_chat` and the modal `render_shell`. `width` is the text
 /// column width used to word-wrap prose with a hanging indent (spec §3.5); pass
@@ -46,6 +49,24 @@ pub fn conversation_lines(
     width: usize,
     question: Option<&crate::question::QuestionState>,
 ) -> Vec<Line<'static>> {
+    conversation_lines_with_diffs(
+        msgs, streaming, caret_on, tz_offset_secs, width, question, &[], 0,
+    )
+}
+
+/// Like `conversation_lines`, but with the ephemeral edit-diff cache and the
+/// inline-K window. `conversation_lines` delegates here with an empty cache.
+#[allow(clippy::too_many_arguments)]
+pub fn conversation_lines_with_diffs(
+    msgs: &[ChatMsg],
+    streaming: bool,
+    caret_on: bool,
+    tz_offset_secs: i32,
+    width: usize,
+    question: Option<&crate::question::QuestionState>,
+    edit_diffs: &[(String, crate::state::RenderDiff)],
+    inline_k: usize,
+) -> Vec<Line<'static>> {
     let mut hits = Vec::new();
     build_conversation(
         msgs,
@@ -57,6 +78,8 @@ pub fn conversation_lines(
         &mut Vec::new(),
         &mut Vec::new(),
         question,
+        edit_diffs,
+        inline_k,
     )
 }
 
@@ -82,6 +105,8 @@ pub fn code_hits(
         &mut Vec::new(),
         &mut Vec::new(),
         question,
+        &[],
+        0,
     );
     hits
 }
@@ -108,6 +133,8 @@ pub fn question_choice_hits(
         &mut Vec::new(),
         &mut choices,
         question,
+        &[],
+        0,
     );
     choices
 }
@@ -123,6 +150,8 @@ fn build_conversation(
     msg_starts: &mut Vec<usize>,
     question_choices: &mut Vec<QuestionChoiceHit>,
     question: Option<&crate::question::QuestionState>,
+    edit_diffs: &[(String, crate::state::RenderDiff)],
+    inline_k: usize,
 ) -> Vec<Line<'static>> {
     let last = msgs.len().saturating_sub(1);
     if msgs.is_empty() {
@@ -144,6 +173,22 @@ fn build_conversation(
     // the range (via the `CodeHead` `BodyLine`), so a block and its clipboard
     // text can never desync — including when a message bails to plain text.
     let mut code_ranges: Vec<(usize, usize, String)> = Vec::new();
+    // Ids of the last `inline_k` edit/write results that have a cached diff.
+    let inline_ids: std::collections::HashSet<&str> = {
+        let mut cached: Vec<&str> = Vec::new();
+        for m in msgs {
+            if let ChatMsg::ToolResult { id, name, is_error: false, .. } = m {
+                if (name == "edit" || name == "write")
+                    && edit_diffs.iter().any(|(k, _)| k == id)
+                {
+                    cached.push(id.as_str());
+                }
+            }
+        }
+        let start = cached.len().saturating_sub(inline_k);
+        cached[start..].iter().copied().collect()
+    };
+    let find_diff = |id: &str| edit_diffs.iter().find(|(k, _)| k == id).map(|(_, d)| d);
     for (i, m) in msgs.iter().enumerate() {
         // Record where each message's block begins (before its leading blank),
         // so a viewport-top line maps back to a message for cross-zoom anchoring.
@@ -222,6 +267,7 @@ fn build_conversation(
                 }
             }
             ChatMsg::ToolResult {
+                id,
                 name,
                 output,
                 is_error,
@@ -244,11 +290,48 @@ fn build_conversation(
                     ));
                 }
                 spans.push(Span::styled(name.clone(), Style::new().fg(color::DIM)));
-                spans.push(Span::styled(
-                    format!(" → {}", first_line(output)),
-                    Style::new().fg(color::DIM),
-                ));
+                // Ephemeral edit/write diff, if cached: counts on the line …
+                let diff = (!*is_error).then(|| find_diff(id.as_str())).flatten();
+                if let Some(d) = diff {
+                    spans.push(Span::styled(
+                        format!(" · +{} ", d.added),
+                        Style::new().fg(color::ADDED),
+                    ));
+                    spans.push(Span::styled(
+                        format!("−{}", d.removed),
+                        Style::new().fg(color::REMOVED),
+                    ));
+                } else {
+                    spans.push(Span::styled(
+                        format!(" → {}", first_line(output)),
+                        Style::new().fg(color::DIM),
+                    ));
+                }
                 lines.push(Line::from(spans));
+
+                // … and an inline snippet for the last-K cached edits.
+                if let Some(d) = diff {
+                    if inline_ids.contains(id.as_str()) {
+                        for dl in &d.lines {
+                            let (sign, col) = match dl.kind {
+                                crate::state::RenderDiffKind::Add => ("+", color::ADDED),
+                                crate::state::RenderDiffKind::Del => ("−", color::REMOVED),
+                                crate::state::RenderDiffKind::Ctx => (" ", color::DIM),
+                            };
+                            let no = dl.new_no.or(dl.old_no).unwrap_or(0);
+                            lines.push(Line::from(vec![
+                                Span::styled(format!("      {no:>5} "), Style::new().fg(color::DIM)),
+                                Span::styled(format!("{sign} {}", dl.text), Style::new().fg(col)),
+                            ]));
+                        }
+                        if d.truncated_by > 0 {
+                            lines.push(Line::from(vec![Span::styled(
+                                format!("      …+{} more", d.truncated_by),
+                                Style::new().fg(color::DIM),
+                            )]));
+                        }
+                    }
+                }
             }
             ChatMsg::Delegated { summary, ok } => {
                 let (mark, mark_color) = if *ok {
@@ -584,25 +667,31 @@ pub struct ChatView {
 
 /// Build the conversation lines at the requested altitude, capped to
 /// `view.reveal` lines when set. `width` is the text column width for prose wrap.
+#[allow(clippy::too_many_arguments)]
 pub fn conversation_view(
     msgs: &[ChatMsg],
     view: &ChatView,
     streaming: bool,
     width: usize,
     question: Option<&crate::question::QuestionState>,
+    edit_diffs: &[(String, crate::state::RenderDiff)],
+    inline_k: usize,
 ) -> Vec<Line<'static>> {
-    conversation_view_indexed(msgs, view, streaming, width, question).0
+    conversation_view_indexed(msgs, view, streaming, width, question, edit_diffs, inline_k).0
 }
 
 /// Like `conversation_view`, but also returns `msg_starts` (length msgs.len()):
 /// the body line where each message's block begins at this altitude. Used for
 /// cross-zoom position anchoring.
+#[allow(clippy::too_many_arguments)]
 pub fn conversation_view_indexed(
     msgs: &[ChatMsg],
     view: &ChatView,
     streaming: bool,
     width: usize,
     question: Option<&crate::question::QuestionState>,
+    edit_diffs: &[(String, crate::state::RenderDiff)],
+    inline_k: usize,
 ) -> (Vec<Line<'static>>, Vec<usize>) {
     let mut starts: Vec<usize> = Vec::new();
     let mut lines: Vec<Line<'static>> = match view.zoom {
@@ -628,6 +717,8 @@ pub fn conversation_view_indexed(
                 &mut starts,
                 &mut Vec::new(),
                 question,
+                edit_diffs,
+                inline_k,
             )
         }
         Zoom::Detail => detail_lines(msgs, view.tz_offset_secs, width, &mut starts, question),
@@ -1076,7 +1167,7 @@ mod tests {
         ];
         for zoom in [Zoom::Summary, Zoom::Normal, Zoom::Detail] {
             let v = view(zoom);
-            let (lines, starts) = conversation_view_indexed(&msgs, &v, false, 80, None);
+            let (lines, starts) = conversation_view_indexed(&msgs, &v, false, 80, None, &[], 0);
             assert_eq!(
                 starts.len(),
                 msgs.len(),
@@ -1100,7 +1191,7 @@ mod tests {
 
     #[test]
     fn summary_collapses_to_one_line_per_turn() {
-        let lines = conversation_view(&seeded(), &view(Zoom::Summary), false, 80, None);
+        let lines = conversation_view(&seeded(), &view(Zoom::Summary), false, 80, None, &[], 0);
         // two turns → two digest lines, plus one trailing breathing-room blank
         assert_eq!(lines.len(), 3);
     }
@@ -1108,7 +1199,7 @@ mod tests {
     #[test]
     fn detail_highlights_file_tool_results() {
         use crate::tokens::color;
-        let lines = conversation_view(&seeded(), &view(Zoom::Detail), false, 80, None);
+        let lines = conversation_view(&seeded(), &view(Zoom::Detail), false, 80, None, &[], 0);
         // A keyword (`fn`/`let`) must carry the syntax keyword color — proves the
         // id→path→Rust resolution fired and highlighting actually ran, rather than
         // silently falling back to PlainText (which colors everything TXT).
@@ -1126,7 +1217,7 @@ mod tests {
     #[test]
     fn detail_collapses_function_bodies_to_signatures() {
         use crate::tokens::glyph;
-        let lines = conversation_view(&seeded(), &view(Zoom::Detail), false, 80, None);
+        let lines = conversation_view(&seeded(), &view(Zoom::Detail), false, 80, None, &[], 0);
         let text: Vec<String> = lines
             .iter()
             .map(|l| {
@@ -1153,7 +1244,7 @@ mod tests {
     #[test]
     fn normal_matches_conversation_lines() {
         let msgs = seeded();
-        let normal = conversation_view(&msgs, &view(Zoom::Normal), false, 80, None);
+        let normal = conversation_view(&msgs, &view(Zoom::Normal), false, 80, None, &[], 0);
         let baseline = conversation_lines(&msgs, false, true, 0, 80, None);
         // conversation_view appends one trailing breathing-room blank line.
         assert_eq!(normal.len(), baseline.len() + 1);
@@ -1163,7 +1254,7 @@ mod tests {
     fn reveal_caps_line_count() {
         let mut v = view(Zoom::Normal);
         v.reveal = Some(1);
-        let lines = conversation_view(&seeded(), &v, false, 80, None);
+        let lines = conversation_view(&seeded(), &v, false, 80, None, &[], 0);
         assert_eq!(lines.len(), 1);
     }
 
@@ -1342,5 +1433,59 @@ mod tests {
             !joined.contains("○ Retry"),
             "answered card does not re-render choices"
         );
+    }
+
+    #[test]
+    fn tool_result_renders_counts_and_inline_snippet_for_cached_edit() {
+        use crate::state::{RenderDiff, RenderDiffKind, RenderDiffLine};
+        use zoid_core::projection::ChatMsg;
+
+        let msgs = vec![ChatMsg::ToolResult {
+            id: "tc1".into(),
+            name: "edit".into(),
+            output: "edited f.rs (1 change(s))".into(),
+            is_error: false,
+            compacted: false,
+            ts: 0,
+        }];
+        let diff = RenderDiff {
+            path: "f.rs".into(),
+            added: 2,
+            removed: 1,
+            truncated_by: 0,
+            lines: vec![
+                RenderDiffLine { old_no: Some(2), new_no: None, kind: RenderDiffKind::Del, text: "b".into() },
+                RenderDiffLine { old_no: None, new_no: Some(2), kind: RenderDiffKind::Add, text: "B".into() },
+            ],
+        };
+        let cache = vec![("tc1".to_string(), diff)];
+        let lines = conversation_lines_with_diffs(&msgs, false, false, 0, 80, None, &cache, 5);
+        let text: String = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("+2"), "shows added count");
+        assert!(text.contains("-1") || text.contains("−1"), "shows removed count");
+        assert!(text.contains("B"), "shows the added line inline");
+        assert!(text.contains('b'), "shows the removed line inline");
+    }
+
+    #[test]
+    fn cached_edit_beyond_k_shows_counts_only_no_snippet() {
+        use crate::state::{RenderDiff, RenderDiffKind, RenderDiffLine};
+        use zoid_core::projection::ChatMsg;
+
+        let mk_res = |id: &str| ChatMsg::ToolResult {
+            id: id.into(), name: "edit".into(), output: "edited".into(),
+            is_error: false, compacted: false, ts: 0,
+        };
+        let mk_diff = |marker: &str| RenderDiff {
+            path: "f".into(), added: 1, removed: 0, truncated_by: 0,
+            lines: vec![RenderDiffLine { old_no: None, new_no: Some(1), kind: RenderDiffKind::Add, text: marker.into() }],
+        };
+        // Two edits; K=1 → only the LAST is inline.
+        let msgs = vec![mk_res("old"), mk_res("new")];
+        let cache = vec![("old".to_string(), mk_diff("OLDLINE")), ("new".to_string(), mk_diff("NEWLINE"))];
+        let lines = conversation_lines_with_diffs(&msgs, false, false, 0, 80, None, &cache, 1);
+        let text: String = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("NEWLINE"), "last edit is inline");
+        assert!(!text.contains("OLDLINE"), "older edit is counts-only, no snippet");
     }
 }

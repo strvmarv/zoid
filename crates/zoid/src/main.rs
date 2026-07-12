@@ -1382,12 +1382,15 @@ impl BodyCache {
     /// frame, so a key match is NOT a no-op — we fall through to the
     /// incremental re-render (re-render just the last message, O(1) per
     /// frame instead of O(n)), which counts as a render (returns `false`).
+    #[allow(clippy::too_many_arguments)]
     fn refresh(
         &mut self,
         key: BodyKey,
         msgs: &[zoid_core::projection::ChatMsg],
         width: usize,
         question: Option<&zoid_tui::question::QuestionState>,
+        edit_diffs: &[(String, zoid_tui::state::RenderDiff)],
+        inline_k: usize,
     ) -> RefreshKind {
         // Full no-op only when not streaming and nothing changed. `self.key ==
         // Some(&key)` is full equality (question_rev included), so a live
@@ -1429,6 +1432,8 @@ impl BodyCache {
                 streaming,
                 width,
                 question,
+                edit_diffs,
+                inline_k,
             );
             // conversation_view_indexed appends a trailing blank; we want it.
             self.body.extend(new_lines);
@@ -1439,8 +1444,9 @@ impl BodyCache {
             return RefreshKind::Incremental;
         }
         // Full rebuild.
-        let (body, starts) =
-            zoid_tui::chat::conversation_view_indexed(msgs, &view, streaming, width, question);
+        let (body, starts) = zoid_tui::chat::conversation_view_indexed(
+            msgs, &view, streaming, width, question, edit_diffs, inline_k,
+        );
         self.body = body;
         self.msg_starts = starts;
         self.msg_count = msgs.len();
@@ -2370,6 +2376,8 @@ where
                 &app.proj.msgs,
                 body_w,
                 app.shell.question.as_ref(),
+                &app.shell.edit_diffs,
+                zoid_tui::chat::DEFAULT_INLINE_K,
             );
             // Telemetry only distinguishes a pure hit (no render work) from a
             // render; both incremental and full rebuilds count as a miss.
@@ -5612,11 +5620,11 @@ mod tests {
 
         // Cold cache → full rebuild; identical inputs → pure hit.
         assert_eq!(
-            cache.refresh(mk_key(Some(&q)), &msgs, 80, Some(&q)),
+            cache.refresh(mk_key(Some(&q)), &msgs, 80, Some(&q), &[], 0),
             RefreshKind::Full
         );
         assert_eq!(
-            cache.refresh(mk_key(Some(&q)), &msgs, 80, Some(&q)),
+            cache.refresh(mk_key(Some(&q)), &msgs, 80, Some(&q), &[], 0),
             RefreshKind::Hit
         );
 
@@ -5634,7 +5642,7 @@ mod tests {
         // re-render only the last message (the card) — AND show the typed text.
         q.free_text.push_str("zoidberg");
         assert_eq!(
-            cache.refresh(mk_key(Some(&q)), &msgs, 80, Some(&q)),
+            cache.refresh(mk_key(Some(&q)), &msgs, 80, Some(&q), &[], 0),
             RefreshKind::Incremental,
             "a question keystroke must not rebuild the whole transcript"
         );
@@ -5647,7 +5655,7 @@ mod tests {
             q.free_text.pop();
         }
         assert_eq!(
-            cache.refresh(mk_key(Some(&q)), &msgs, 80, Some(&q)),
+            cache.refresh(mk_key(Some(&q)), &msgs, 80, Some(&q), &[], 0),
             RefreshKind::Incremental
         );
         assert!(body_text(&cache).contains("zoid"));
@@ -5662,7 +5670,9 @@ mod tests {
                 },
                 &msgs,
                 100,
-                Some(&q)
+                Some(&q),
+                &[],
+                0
             ),
             RefreshKind::Full
         );

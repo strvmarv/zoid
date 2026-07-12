@@ -170,7 +170,7 @@ fn draw_zoom(msgs: &[ChatMsg], zoom: Zoom, width: u16) -> String {
     };
     let backend = TestBackend::new(width, 12);
     let mut terminal = Terminal::new(backend).unwrap();
-    let lines = conversation_view(msgs, &view, false, width as usize, None);
+    let lines = conversation_view(msgs, &view, false, width as usize, None, &[], 0);
     terminal
         .draw(|f| f.render_widget(Paragraph::new(lines), f.area()))
         .unwrap();
