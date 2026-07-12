@@ -114,9 +114,11 @@ Expected: compile error — `EventKind::WakeScheduled` and `rebuild_pending_wake
 /// whose `wake_id` has no later `WakeFired`/`WakeCancelled`. Keyed by
 /// `(fire_at_ms, wake_id)` so the map is ordered by fire time (and same-ms
 /// schedules don't collide); the value is the note. Pure — rebuilt on load and
-/// unit-tested without timers.
-fn rebuild_pending_wakes(
-    events: &[zoid_core::event::Event],
+/// unit-tested without timers. Takes an iterator (not `&[Event]`) because the
+/// live `EventLog` stores `Vec<Arc<Event>>` and exposes only `iter()` — there is
+/// no contiguous `&[Event]` slice to borrow (C2).
+fn rebuild_pending_wakes<'a>(
+    events: impl IntoIterator<Item = &'a zoid_core::event::Event>,
 ) -> std::collections::BTreeMap<(i64, String), String> {
     use zoid_core::event::EventKind;
     // Fold to the latest state per wake_id, then materialize the survivors.
@@ -173,20 +175,21 @@ git commit -m "feat(wake): WakeScheduled/WakeFired/WakeCancelled events + pendin
     #[test]
     fn wake_enabled_defaults_true_and_merges() {
         // Default: enabled = true, provenance Default.
-        let (cfg, prov) = Config::from_layers(&[]);
+        let (cfg, prov) = merge(&[]);
         assert!(cfg.wake.enabled, "wake.enabled defaults to true");
         assert_eq!(prov.wake_enabled, Source::Default);
 
-        // A layer that turns it off is applied and recorded.
+        // A layer that turns it off is applied and recorded. Note the tuple is
+        // (Source, PartialConfig) — the order `merge` iterates (config.rs:423).
         let mut partial = PartialConfig::default();
         partial.wake.enabled = Some(false);
-        let (cfg, prov) = Config::from_layers(&[(partial, Source::File)]);
+        let (cfg, prov) = merge(&[(Source::File, partial)]);
         assert!(!cfg.wake.enabled, "an explicit false is merged");
         assert_eq!(prov.wake_enabled, Source::File);
     }
 ```
 
-> If the config test helper is named differently (e.g. `merge(...)` rather than `Config::from_layers`), match the existing `subagent` test's construction exactly — read the neighboring test first and mirror it.
+> The merge entry point is `pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance)` (config.rs:402). Read the neighboring `subagent` merge test first and mirror its exact construction/return-binding shape.
 
 - [ ] **Step 2: Run to verify it fails.**
 
@@ -371,23 +374,26 @@ In BOTH constructors (real `~:2123` after `wake_after_delegation: false,`; test 
 
 > `now_ms()` is the existing wall-clock helper used by `derive_session_name`. The watcher never busy-spins: with `None` it awaits `changed()` only; with `Some` it sleeps to the deadline then sends one `WakeDue`. After firing, the handler (Task 4) removes the wake and re-arms `next_wake_tx`, so a re-fire of the same instant can't loop.
 
-- [ ] **Step 7: Rebuild the pending set on load + arm the watcher.** At startup, right after the event log loads (`crates/zoid/src/main.rs:1878-1879`, after `events.clear_compacted_bodies()`), and again on interactive resume (`:3786`, after `app.events = …from_vec(loaded);`), set the field and arm the cell. At startup this is on the `events`/`App` being built; on resume it is on `app`:
+- [ ] **Step 7: Rebuild the pending set on load + arm the watcher.** `EventLog` stores `Vec<Arc<Event>>` and exposes only `iter() -> impl Iterator<Item = &Event>` (no `as_slice()`, no slice `Deref`), so `rebuild_pending_wakes` is called via `.iter()` (C2). Arming `next_wake_tx` after the rebuild is REQUIRED at BOTH sites — the constructor seeds the channel with `None`, so a future-dated wake loaded from the log would otherwise never be armed and never fire (I1).
 
-Startup (adapt to the local variable names in scope there — the pending set is computed from the just-loaded events and stored into the `App` being constructed):
+Startup: after the App is fully built AND the watcher is spawned (Step 6), before entering the main `select!` loop:
 
 ```rust
-    // (in the App { … } literal or right after construction)
-    pending_wakes = rebuild_pending_wakes(events.as_slice());
+    app.pending_wakes = rebuild_pending_wakes(app.events.iter());
+    // Arm the watcher for the earliest loaded wake (future ones; due ones are
+    // handled by the Task-4 catch-up drain). Race-free: the watcher already
+    // called `subscribe()` synchronously before it was spawned (Step 6).
+    let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
 ```
 
 Resume (`handle_action`, after the log swap at `:3786`):
 
 ```rust
-        app.pending_wakes = rebuild_pending_wakes(app.events.as_slice());
+        app.pending_wakes = rebuild_pending_wakes(app.events.iter());
         let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
 ```
 
-> If `EventLog` has no `as_slice()`, use its existing snapshot/iter accessor (the same one `spawn_turn` uses at `:5535`, `app.events.snapshot()`), passing a `&[Event]`. Match the accessor the file already uses.
+> `app.events.iter()` yields `&Event`; `rebuild_pending_wakes` takes `impl IntoIterator<Item = &Event>`, so this compiles directly. The Task-1 unit test passing `&evs` (a `&Vec<Event>`) and the Task-4/5 tests passing `&log` (a `&Vec<Event>` from `session.snapshot().await`) also satisfy the bound unchanged.
 
 - [ ] **Step 8: Run the crate + workspace.**
 
@@ -462,25 +468,34 @@ Expected: PASS.
 - [ ] **Step 5: Add the `drain_due_wakes` routine.** In `crates/zoid/src/main.rs`, near `spawn_turn`. It injects at most one turn's worth: it records ALL due wakes' `UserMessage` + `WakeFired` (so nothing is lost), removes them from `pending_wakes`, re-arms the watcher, and — only if idle and not yielded — spawns one turn to process them. Returns whether a turn was spawned:
 
 ```rust
-/// Drain every wake whose `fire_at_ms <= now`: record each as a synthetic
-/// UserMessage + a WakeFired marker (at-least-once: WakeFired is written only
-/// here), drop them from the pending set, and re-arm the watcher. When the
-/// orchestrator is idle and not yielded, spawn ONE continuation turn to process
-/// them. When busy, the records still land (they show once the turn ends) but no
-/// turn is spawned here — the TurnComplete drain handles the spawn. Returns
-/// whether a turn was spawned.
+/// Drain every wake whose `fire_at_ms <= now`. When the orchestrator is idle and
+/// not yielded: record each as a synthetic UserMessage + a WakeFired marker
+/// (at-least-once — WakeFired is written ONLY here), drop them from the pending
+/// set, re-arm the watcher, and spawn ONE continuation turn to process them.
+/// When BUSY: touch nothing except parking the watcher (send None) so it stops
+/// re-firing on the now-past deadline; the wakes stay pending and the
+/// `TurnComplete` drain fires them once the turn ends (in correct log order).
+/// Returns whether a turn was spawned.
 async fn drain_due_wakes(app: &mut App) -> anyhow::Result<bool> {
     let now = now_ms();
-    // Snapshot the due keys (fire_at <= now), smallest-first.
+    // Due keys (fire_at <= now), smallest-first. Exclusive upper bound at
+    // `now + 1` so a wake due at exactly `now` is included and `now+…` excluded.
     let due: Vec<(i64, String)> = app
         .pending_wakes
-        .range(..=(now, String::new()))
+        .range(..(now + 1, String::new()))
         .map(|((t, id), _)| (*t, id.clone()))
         .collect();
     if due.is_empty() {
         return Ok(false);
     }
     let idle = !app.streaming && app.in_flight_subagents.is_empty() && !app.yielded;
+    if !idle {
+        // Busy: leave the wakes pending and park the watcher so it does not spin
+        // on the past deadline. TurnComplete's drain fires them when idle.
+        let _ = app.next_wake_tx.send(None);
+        return Ok(false);
+    }
+    // Idle: fire them. Only now do we mutate the pending set + record events.
     for (fire_at, id) in &due {
         let note = app.pending_wakes.remove(&(*fire_at, id.clone())).unwrap_or_default();
         let text = wake_injection_text(&note, *fire_at, now);
@@ -489,16 +504,14 @@ async fn drain_due_wakes(app: &mut App) -> anyhow::Result<bool> {
     }
     // Re-arm the watcher to the next remaining deadline (or park).
     let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
-    if idle {
-        app.streaming = true;
-        spawn_turn(app);
-        return Ok(true);
-    }
-    Ok(false)
+    app.streaming = true;
+    spawn_turn(app);
+    Ok(true)
 }
 ```
 
-> `range(..=(now, String::new()))` is inclusive of every key with `fire_at <= now` (the empty string sorts before any real ULID at exactly `now`, so a wake due at precisely `now` is included via `<=`; ULIDs are non-empty). This mirrors the design's "fire_at ≤ now".
+> **Busy branch is side-effect-free (C1):** it does NOT record or remove — otherwise a wake arriving mid-turn would delete itself and its `UserMessage`/`WakeFired` would land mid-stream (ahead of the in-flight turn's own output) while `TurnComplete`'s drain, finding an empty set, never spawns. Parking the watcher (`send(None)`) stops it busy-spinning on the past deadline; the next re-arm happens when `TurnComplete`'s drain fires the wake while idle.
+> **Due bound (I2):** `..(now + 1, String::new())` is exclusive of `(now+1, "")`, so it includes every key with `fire_at <= now` (a real wake at `now` has key `(now, "01ABC…")` which is `< (now+1, "")`) and excludes `fire_at > now`. This matches the design's "fire_at ≤ now".
 
 - [ ] **Step 6: Handle `AgentUpdate::WakeDue` in the UI `select!`.** In `crates/zoid/src/main.rs`, add a new arm to the `match update { … }` (after the `WorktreeRequested` arm at `:3060`, before the match's closing brace):
 
@@ -766,7 +779,7 @@ In the Emitting dispatch region of the tool loop (beside the `enter_worktree`/`e
                 }
 ```
 
-> Match the exact `emit(...)` argument order used by the neighboring `enter_worktree` arm — read it first and copy the call shape (arg names/order may differ slightly from the sketch above).
+> Match the neighboring `enter_worktree` arm EXACTLY — read it first (agent.rs:1559-1611) and copy both the `emit(...)` argument order (arg names/order may differ slightly from the sketch above) AND its control-flow ending: the trailing `continue;` shown above is a harmless no-op because this dispatch `match` is the last statement in the loop body, so drop it if the neighbor arms omit it, or keep it if they use it — do whatever the neighbor does (M2).
 
 - [ ] **Step 7: Handle the requests in the main loop.** In `crates/zoid/src/main.rs`, add `ScheduleWake`/`CancelWake` arms to the UI `match update` (beside the `WakeDue` arm from Task 4) that call handlers beside `handle_worktree_request` (`:5432`):
 
