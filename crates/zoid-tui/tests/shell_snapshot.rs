@@ -923,6 +923,8 @@ fn config_overlay_frame() {
     let prov = Provenance {
         // all Default except model, shadowed by env.
         provider: Source::Default,
+        subagent_idle_timeout_secs: Source::Default,
+        subagent_hard_timeout_secs: Source::Default,
         base_url: Source::Default,
         model: Source::Env,
         context_target: Source::Default,
@@ -960,6 +962,8 @@ fn config_key_prompt_masks_entry() {
     let cfg = Config::default();
     let prov = Provenance {
         provider: Source::Default,
+        subagent_idle_timeout_secs: Source::Default,
+        subagent_hard_timeout_secs: Source::Default,
         base_url: Source::Default,
         model: Source::Default,
         context_target: Source::Default,
@@ -1003,6 +1007,8 @@ fn config_overlay_provider_picker() {
     let cfg = Config::default();
     let prov = Provenance {
         provider: Source::Default,
+        subagent_idle_timeout_secs: Source::Default,
+        subagent_hard_timeout_secs: Source::Default,
         base_url: Source::Default,
         model: Source::Default,
         context_target: Source::Default,
@@ -1058,6 +1064,8 @@ fn config_overlay_provider_picker_selection_styles() {
     let cfg = Config::default();
     let prov = Provenance {
         provider: Source::Default,
+        subagent_idle_timeout_secs: Source::Default,
+        subagent_hard_timeout_secs: Source::Default,
         base_url: Source::Default,
         model: Source::Default,
         context_target: Source::Default,
@@ -1132,6 +1140,8 @@ fn config_overlay_narrow_degrades() {
     let cfg = Config::default();
     let prov = Provenance {
         provider: Source::Default,
+        subagent_idle_timeout_secs: Source::Default,
+        subagent_hard_timeout_secs: Source::Default,
         base_url: Source::Default,
         model: Source::Default,
         context_target: Source::Default,
@@ -1176,6 +1186,8 @@ fn config_overlay_narrow_degrades_respects_focus() {
     let cfg = Config::default();
     let prov = Provenance {
         provider: Source::Default,
+        subagent_idle_timeout_secs: Source::Default,
+        subagent_hard_timeout_secs: Source::Default,
         base_url: Source::Default,
         model: Source::Default,
         context_target: Source::Default,

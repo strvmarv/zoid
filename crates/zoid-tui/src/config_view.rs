@@ -281,6 +281,8 @@ mod tests {
         // build_sections; this proves it now reflects provenance uniformly.
         let prov = Provenance {
             provider: Source::Default,
+            subagent_idle_timeout_secs: Source::Default,
+            subagent_hard_timeout_secs: Source::Default,
             base_url: Source::Default,
             model: Source::Env,
             context_target: Source::Default,
@@ -360,6 +362,8 @@ mod tests {
         let cfg = Config::default();
         let prov = Provenance {
             provider: Source::Default,
+            subagent_idle_timeout_secs: Source::Default,
+            subagent_hard_timeout_secs: Source::Default,
             base_url: Source::Default,
             model: Source::Default,
             context_target: Source::Default,
