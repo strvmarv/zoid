@@ -13,19 +13,16 @@
 *{box-sizing:border-box;}
 html,body{margin:0;background:var(--bg);color:var(--txt);font-family:var(--mono);
   font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;}
-.wrap{max-width:1500px;margin:0 auto;padding:48px 24px;}
+.wrap{max-width:1600px;margin:0 auto;padding:48px 24px;}
 h1{font-size:22px;font-weight:600;}
 .sub{color:var(--muted);margin:0 0 28px;}
-/* overflow-x:auto is the safety net for very narrow viewports; the responsive
-   font-size below is sized so the full 160-column grid normally fits without it. */
-.frame{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--bg);
-  box-shadow:0 8px 40px rgba(0,0,0,.4);}
-/* Fit the 160-col TUI to the viewport: JetBrains Mono advances 0.6ch per em, so
-   160 cols == 96*font-size px. Solve 96*F + chrome <= 100vw for F and clamp it
-   (cap so it isn't huge on ultrawide; floor so it stays legible — below the floor
-   the frame's overflow-x:auto scrolls, e.g. on phones where 160 cols can't fit). */
-pre.tui{margin:0;padding:14px 16px;font-family:var(--mono);
-  font-size:clamp(7px, calc((100vw - 90px) / 96), 13.5px);line-height:1.5;
+/* The frame shrink-wraps the render: it is exactly as wide as the 160-column
+   grid needs at the fixed font below — the page uses that much width and no more,
+   so there's no horizontal scroll on a screen that can hold it. overflow-x:auto is
+   only a fallback for viewports genuinely narrower than the render (e.g. phones). */
+.frame{width:max-content;max-width:100%;overflow-x:auto;border:1px solid var(--line);
+  border-radius:10px;background:var(--bg);box-shadow:0 8px 40px rgba(0,0,0,.4);}
+pre.tui{margin:0;padding:14px 16px;font-family:var(--mono);font-size:13px;line-height:1.5;
   color:var(--txt);background:var(--bg);white-space:pre;}
 
 /* Player: exactly one frame visible at a time. */
