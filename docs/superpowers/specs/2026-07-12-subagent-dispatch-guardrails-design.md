@@ -1,6 +1,24 @@
-# Subagent Dispatch Safety / Runtime Guardrails
+# Subagent Dispatch Safety — Umbrella Index
 
-**Status:** Idea — noted 2026-07-12, not yet specced. Circle back after opencode-zen ships.
+**Status:** Decomposed 2026-07-12 into three sibling specs (they share almost
+nothing at runtime; the seam is the `WakeTimer` primitive, which lives entirely
+in Spec 1). Build order 1 → 2 → 3.
+
+| Spec | Scope | Status |
+|------|-------|--------|
+| **1** | Subagent runtime guardrails — timeout, kill tool, Esc, `[subagent]` config → [`2026-07-12-subagent-guardrails-design.md`](2026-07-12-subagent-guardrails-design.md) | Design written |
+| **2** | Worktree tooling fixes — **WT-1 / WT-2** (see section below) | Not yet specced |
+| **3** | Scheduled wake-ups — agent self-scheduling subsystem (new `EventKind` + watcher + `select!` branch + synthetic-turn injection + model tool) | Not yet specced |
+
+The sections below are the original observations, retained as raw material for
+Specs 2 and 3. Note: the two "spin-out" incidents (#1, #2) were most likely
+observed in the *Claude Code* harness, not zoid (zoid caps subagents at 25
+iterations, has no `gilfoyle` agent) — but the *gaps* they point at are real in
+zoid, which is what Spec 1 addresses.
+
+---
+
+**Original status:** Idea — noted 2026-07-12, not yet specced. Circle back after opencode-zen ships.
 
 ## Observed failures (this session)
 
