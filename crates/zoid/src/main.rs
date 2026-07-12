@@ -6828,6 +6828,40 @@ mod tests {
         assert_eq!(app.pending_wakes.len(), 1, "it stays pending");
     }
 
+    #[tokio::test]
+    async fn busy_drain_is_side_effect_free_and_parks_watcher() {
+        // C1 invariant: when a turn is in flight, a due wake must NOT be recorded
+        // or removed — the drain only parks the watcher (send None) so it stops
+        // spinning on the past deadline; TurnComplete's drain fires it once idle.
+        let mut app = test_app().await;
+        app.streaming = true; // busy: a turn is in flight
+        let past = now_ms() - 10_000; // already due
+        app.pending_wakes
+            .insert((past, "w3".to_string()), "check later".to_string());
+        let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
+        let mut rx = app.next_wake_tx.subscribe();
+
+        let spawned = drain_due_wakes(&mut app).await.unwrap();
+
+        assert!(!spawned, "a busy orchestrator must not spawn a turn");
+        assert_eq!(
+            app.pending_wakes.len(),
+            1,
+            "busy drain must NOT remove the wake (side-effect-free)"
+        );
+        let log = app.session.snapshot().await.unwrap();
+        assert!(
+            !log.iter()
+                .any(|e| matches!(&e.kind, EventKind::WakeFired { .. })),
+            "busy drain must record no WakeFired (side-effect-free)"
+        );
+        assert_eq!(
+            *rx.borrow_and_update(),
+            None,
+            "busy drain parks the watcher (send None) so it stops spinning on the past deadline"
+        );
+    }
+
     #[test]
     fn projection_cache_recomputes_only_on_len_change() {
         use zoid_core::event::{Event, EventKind};
