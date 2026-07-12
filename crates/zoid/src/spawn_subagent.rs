@@ -35,6 +35,14 @@ fn delegation_fields(
     }
 }
 
+/// Build a summary line for an aborted (killed / timed-out) subagent.
+pub(crate) fn abort_summary(reason: Option<crate::agent::AbortReason>) -> String {
+    match reason {
+        Some(r) => format!("aborted ({})", r.label()),
+        None => "aborted".to_string(),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_subagent(
     task: String,
@@ -50,8 +58,29 @@ pub fn spawn_subagent(
     sub_id: String,
     wt: Option<crate::worktree::WorktreeGuard>,
     approval: zoid_core::config::ApprovalConfig,
+    cancel: tokio_util::sync::CancellationToken,
+    hard: tokio_util::sync::CancellationToken,
+    progress: std::sync::Arc<std::sync::atomic::AtomicI64>,
+    abort_reason: std::sync::Arc<std::sync::Mutex<Option<crate::agent::AbortReason>>>,
+    idle: Option<std::time::Duration>,
+    ceiling: Option<std::time::Duration>,
 ) {
     tokio::spawn(async move {
+        // Supervisor: trips `hard` (with a reason) on idle/ceiling breach. `done`
+        // stops it on normal completion so nothing is left spinning.
+        let done = tokio_util::sync::CancellationToken::new();
+        let _timer = crate::wake_timer::WakeTimer::spawn(
+            idle,
+            ceiling,
+            progress.clone(),
+            now,
+            crate::agent::AbortReason::IdleTimeout,
+            crate::agent::AbortReason::Ceiling,
+            abort_reason.clone(),
+            hard.clone(),
+            done.clone(),
+        );
+
         let res = crate::subagent::run_subagent(
             &task,
             &seed,
@@ -66,12 +95,28 @@ pub fn spawn_subagent(
             now,
             sub_id.clone(),
             approval,
+            cancel,
+            hard.clone(),
+            progress,
         )
         .await;
 
+        // Stop the supervisor now that the run has returned.
+        done.cancel();
+
+        // If a firer tripped `hard`, force the failure branch regardless of what
+        // the drained turn returned: label it with the abort reason and discard
+        // the worktree (partial work is not kept).
+        let res = if hard.is_cancelled() {
+            let reason = *abort_reason.lock().unwrap();
+            Err(anyhow::anyhow!(abort_summary(reason)))
+        } else {
+            res
+        };
+
         // Commit the subagent's working-tree changes on the success path,
         // then retain the branch (with commits) for subagent_diff retrieval.
-        // On error, drop the guard (full cleanup discards partial work).
+        // On error (incl. abort), drop the guard (full cleanup discards partial work).
         match &res {
             Ok(_) => {
                 if let Some(wt) = &wt {
@@ -139,5 +184,14 @@ mod tests {
             summary.contains("provider 400"),
             "the error reason should surface in the summary card"
         );
+    }
+
+    #[test]
+    fn abort_summary_uses_reason_label() {
+        // A killed/timed-out subagent must surface its reason in the summary.
+        let s = super::abort_summary(Some(crate::agent::AbortReason::IdleTimeout));
+        assert!(s.contains("idle timeout"), "summary carries the reason: {s}");
+        let s2 = super::abort_summary(None);
+        assert!(!s2.is_empty(), "a reasonless abort still has a summary");
     }
 }

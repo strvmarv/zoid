@@ -3,10 +3,12 @@
 //! orchestrator (the Chat loop) dispatches one at a time.
 
 use std::path::PathBuf;
+use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 
 use anyhow::Result;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
 use zoid_core::agent_profile::AgentProfile;
@@ -18,7 +20,7 @@ use zoid_core::session::SessionHandle;
 use zoid_provider::{CompletionRequest, Message, Provider};
 use zoid_tools::Tool;
 
-use crate::agent::{run_agent_turn, tool_specs, AgentUpdate, TurnConfig, WARN_GLYPH};
+use crate::agent::{run_agent_turn_cancellable, tool_specs, AgentUpdate, TurnConfig, WARN_GLYPH};
 
 /// Per-subagent max output tokens (mirrors the Chat loop's budget).
 const SUBAGENT_MAX_TOKENS: u32 = 4096;
@@ -122,6 +124,9 @@ pub async fn run_subagent(
     now: fn() -> i64,
     id: String,
     approval: zoid_core::config::ApprovalConfig,
+    cancel: CancellationToken,
+    hard: CancellationToken,
+    progress: Arc<AtomicI64>,
 ) -> Result<SubagentResult> {
     let sub_ulid = id.strip_prefix("sub-").unwrap_or(&id).to_string();
     let branch = BranchId(format!("subagent:{sub_ulid}"));
@@ -172,7 +177,7 @@ pub async fn run_subagent(
         max_iterations: Some(SUBAGENT_MAX_ITERATIONS),
         in_flight: None,
         reassert_interval: 0,
-        progress: None,
+        progress: Some(progress.clone()),
         subagent_idle: None,
         subagent_ceiling: None,
     };
@@ -191,7 +196,7 @@ pub async fn run_subagent(
             false, // interactive = false → Gate::Deny, not Gate::Prompt
         ))
     };
-    let produced = run_agent_turn(
+    let produced = run_agent_turn_cancellable(
         config,
         provider,
         tools,
@@ -203,6 +208,8 @@ pub async fn run_subagent(
         session_id,
         companion_hub,
         now,
+        cancel,
+        hard,
     )
     .await?;
 
@@ -474,6 +481,9 @@ mod tests {
             || 0,
             "sub-test".into(),
             zoid_core::config::ApprovalConfig::default(),
+            tokio_util::sync::CancellationToken::new(),
+            tokio_util::sync::CancellationToken::new(),
+            std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
         )
         .await
         .unwrap();

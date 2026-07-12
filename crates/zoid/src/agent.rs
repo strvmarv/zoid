@@ -1461,19 +1461,19 @@ async fn run_turn_inner(
                     // subagent can't emit DelegationResult (which removes the ID)
                     // before we insert it. Tokens are created here but not fired
                     // until the WakeTimer + firers are wired (Task 4).
-                    let _sub_cancel = CancellationToken::new();
-                    let _sub_hard = CancellationToken::new();
-                    let _sub_progress =
+                    let sub_cancel = CancellationToken::new();
+                    let sub_hard = CancellationToken::new();
+                    let sub_progress =
                         std::sync::Arc::new(std::sync::atomic::AtomicI64::new(now()));
-                    let _sub_abort_reason = std::sync::Arc::new(std::sync::Mutex::new(None));
+                    let sub_abort_reason = std::sync::Arc::new(std::sync::Mutex::new(None));
                     if let Some(reg) = &config.in_flight {
                         reg.lock().unwrap().insert(
                             sub_id.clone(),
                             SubagentHandle {
-                                cancel: _sub_cancel.clone(),
-                                hard: _sub_hard.clone(),
-                                progress: _sub_progress.clone(),
-                                abort_reason: _sub_abort_reason.clone(),
+                                cancel: sub_cancel.clone(),
+                                hard: sub_hard.clone(),
+                                progress: sub_progress.clone(),
+                                abort_reason: sub_abort_reason.clone(),
                             },
                         );
                     }
@@ -1492,6 +1492,12 @@ async fn run_turn_inner(
                         sub_id.clone(),
                         wt,
                         config.approval.clone(),
+                        sub_cancel,
+                        sub_hard,
+                        sub_progress,
+                        sub_abort_reason,
+                        config.subagent_idle,
+                        config.subagent_ceiling,
                     );
 
                     emit(

@@ -5424,6 +5424,12 @@ fn spawn_turn(app: &mut App) {
     turn_config.approval = app.config.approval.clone();
     turn_config.kill = kill.clone();
     turn_config.in_flight = Some(app.in_flight.clone());
+    // Subagent guardrail timeouts (0 = disabled → None). Only the chat turn
+    // dispatches subagents, so only it carries these.
+    turn_config.subagent_idle = (app.config.subagent.idle_timeout_secs > 0)
+        .then(|| std::time::Duration::from_secs(app.config.subagent.idle_timeout_secs));
+    turn_config.subagent_ceiling = (app.config.subagent.hard_timeout_secs > 0)
+        .then(|| std::time::Duration::from_secs(app.config.subagent.hard_timeout_secs));
     // Mint fresh cancellation tokens for this turn and keep clones so
     // `Action::CancelTurn` (Esc/Ctrl-C) can fire them. Cleared on `TurnComplete`.
     let cancel = tokio_util::sync::CancellationToken::new();
