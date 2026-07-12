@@ -2803,7 +2803,11 @@ where
                             // wake (a subagent finished mid-turn) so the orchestrator
                             // continues and sees the result. A queued message that DID
                             // run already carries the result in context, so just clear
-                            // the flag in that case.
+                            // the flag in that case. Note the ordering: a pending user
+                            // message takes priority here, so a bare delegation
+                            // continuation intentionally precedes a queued user message
+                            // only when no message was queued — a message queued while a
+                            // subagent ran executes on the following turn, never lost.
                             if spawned {
                                 app.wake_after_delegation = false;
                             } else if take_deferred_delegation_wake(app) {
@@ -6921,7 +6925,7 @@ mod tests {
             "a deferred wake must fire at TurnComplete"
         );
         assert!(app.streaming, "firing marks the continuation turn streaming");
-        assert!(app.wake_after_delegation == false, "the flag is cleared");
+        assert!(!app.wake_after_delegation, "the flag is cleared");
 
         app.streaming = false;
         assert!(
