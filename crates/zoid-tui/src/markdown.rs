@@ -142,7 +142,7 @@ fn table_col_widths(natural: &[usize], content_w: usize) -> Vec<usize> {
         // Widest column still above its floor; lowest index wins ties.
         let mut target: Option<usize> = None;
         for c in 0..ncols {
-            if widths[c] > floor[c] && target.map_or(true, |t| widths[c] > widths[t]) {
+            if widths[c] > floor[c] && target.is_none_or(|t| widths[c] > widths[t]) {
                 target = Some(c);
             }
         }
