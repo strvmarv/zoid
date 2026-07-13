@@ -9,8 +9,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
-# Readability extraction (arc90 port; no reqwest feature — we fetch ourselves).
-readability = "0.3"
+# Readability extraction (arc90 port). `default-features = false` drops the
+# crate's `reqwest` feature — we fetch ourselves via the workspace reqwest
+# (rustls). Its default `reqwest` feature pulls reqwest 0.11 → native-tls →
+# openssl-sys, which cannot cross-compile to x86_64-unknown-linux-musl and
+# broke the v0.4.0 release build. We only use `readability::extractor`, which
+# is not gated behind that feature.
+readability = { version = "0.3", default-features = false }
 # HTML → markdown (turndown.js-inspired).
 htmd = "0.5"
 # HTML parsing for DDG result extraction.
