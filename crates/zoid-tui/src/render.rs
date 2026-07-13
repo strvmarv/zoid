@@ -916,6 +916,8 @@ fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
                     Command::ModeImport(url) => format!("→ Import mode: {url}"),
                     Command::ModeUpdate(name) => format!("→ Update mode: {name}"),
                     Command::PluginInstall(arg) => format!("→ Install plugin: {arg}"),
+                    Command::PluginList => "→ List plugins".to_string(),
+                    Command::PluginCatalog => "→ Plugin catalog…".to_string(),
                     Command::RenameSession(name) => format!("→ Rename session: {name}"),
                     Command::Delegate(task) => format!("→ Delegate: {task}"),
                     Command::Quit => "→ Quit zoid".to_string(),

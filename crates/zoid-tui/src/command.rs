@@ -24,6 +24,10 @@ pub enum Command {
     /// `:mode install superpowers` is a retained alias that produces this with
     /// arg = "superpowers". Empty string = usage hint.
     PluginInstall(String),
+    /// List installed/available plugins (`:plugin list`).
+    PluginList,
+    /// Open the plugin catalog overlay (bare `:plugin`).
+    PluginCatalog,
     Quit,
     OpenDrawer(DrawerId),
     NewSession,
@@ -93,6 +97,8 @@ pub fn parse_command(raw: &str) -> Command {
             Command::PluginInstall(s["plugin install ".len()..].trim().to_string())
         }
         "plugin install" => Command::PluginInstall(String::new()),
+        "plugin list" => Command::PluginList,
+        "plugin" => Command::PluginCatalog,
         // --- :companion namespace ---
         "companion on" => Command::CompanionEnable,
         "companion off" => Command::CompanionDisable,
@@ -340,6 +346,17 @@ mod tests {
         assert_eq!(
             parse_command(":worktree"),
             Command::Worktree(String::new())
+        );
+    }
+
+    #[test]
+    fn parses_plugin_list_and_bare_plugin() {
+        assert_eq!(parse_command(":plugin list"), Command::PluginList);
+        assert_eq!(parse_command(":plugin"), Command::PluginCatalog);
+        assert_eq!(parse_command(":plugin "), Command::PluginCatalog);
+        assert_eq!(
+            parse_command(":plugin install ok-skills"),
+            Command::PluginInstall("ok-skills".into())
         );
     }
 }

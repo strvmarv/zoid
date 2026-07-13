@@ -5219,6 +5219,16 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             install_plugin(app, arg);
             Ok(false)
         }
+        // TODO(Task 5): wire async catalog load + overlay
+        Command::PluginCatalog => {
+            app.shell.status_hint = Some("plugin catalog — coming in this build".into());
+            Ok(false)
+        }
+        // TODO(Task 5): wire async catalog load + overlay
+        Command::PluginList => {
+            app.shell.status_hint = Some("plugin list — coming in this build".into());
+            Ok(false)
+        }
         Command::OpenDrawer(id) => {
             app.shell.open_drawer(id);
             Ok(false)
