@@ -5,7 +5,7 @@
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 HTML="$ROOT/public/index.html"
-SCENES="context-economy tools-models"
+SCENES="context-economy tools-models extensibility"
 
 for scene in $SCENES; do
   DIR="$ROOT/public/frames/$scene"

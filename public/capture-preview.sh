@@ -4,7 +4,7 @@
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 RUN="cargo run -q -p zoid-tui --features web-capture --example web_capture --"
-SCENES="context-economy tools-models"
+SCENES="context-economy tools-models extensibility"
 for scene in $SCENES; do
   OUT="$ROOT/public/frames/$scene"
   mkdir -p "$OUT"
