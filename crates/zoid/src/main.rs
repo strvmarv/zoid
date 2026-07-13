@@ -818,17 +818,16 @@ fn copy_to_clipboard_osc52(text: &str) {
     let _ = out.flush();
 }
 
-/// Flip "select mode" and surface a transient hint. The actual terminal
-/// mouse-capture change is applied by the run loop's per-frame reconcile (which
-/// holds the `terminal` backend); this only mutates state, so it is safe to call
-/// from `handle_action`/`exec_command` where the backend is out of scope.
+/// Flip "select mode". The always-visible SELECT pill in the status line
+/// (`render_status`) is the sole indicator, so this deliberately does NOT touch
+/// the shared `status_hint` slot — writing it here would clobber transient hints
+/// from other features (queued, "copied N lines", plugin progress) for no gain.
+/// The actual terminal mouse-capture change is applied by the run loop's
+/// per-frame reconcile (which holds the `terminal` backend); this only mutates
+/// state, so it is safe to call from `handle_action`/`exec_command` where the
+/// backend is out of scope.
 fn toggle_select_mode(app: &mut App) {
     app.shell.select_mode = !app.shell.select_mode;
-    app.shell.status_hint = Some(if app.shell.select_mode {
-        "select mode on — drag to select, copy with your terminal".into()
-    } else {
-        "select mode off".into()
-    });
 }
 
 /// Resolve a left-click in the conversation: focus it, and — at Normal altitude,

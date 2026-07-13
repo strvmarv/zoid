@@ -95,6 +95,10 @@ pub mod color {
     pub const TXT: Color = Color::Rgb(0xc9, 0xd1, 0xd9);
     pub const SEL_BG: Color = Color::Rgb(0x16, 0x33, 0x5c);
     pub const CHAT_BG: Color = Color::Rgb(0x0d, 0x2a, 0x4d);
+    /// Dark-purple fill for the SELECT pill — the purple sibling of `CHAT_BG`,
+    /// paired with the light-purple `BRANCH` glyph the way Chat pairs
+    /// `CHAT_ACCENT` (light blue) on `CHAT_BG` (dark blue).
+    pub const SELECT_BG: Color = Color::Rgb(0x2a, 0x1a, 0x4d);
     pub const BUILD_BG: Color = Color::Rgb(0x3d, 0x2a, 0x0a);
     // ⑤ context heat — reuse the status palette so the visual language stays uniform.
     pub const HEAT_HOT: Color = OK;
@@ -147,6 +151,7 @@ mod tests {
         assert_eq!(glyph::EXPANDED, '▾');
         assert_eq!(color::SEL_BG, Color::Rgb(0x16, 0x33, 0x5c));
         assert_eq!(color::CHAT_BG, Color::Rgb(0x0d, 0x2a, 0x4d));
+        assert_eq!(color::SELECT_BG, Color::Rgb(0x2a, 0x1a, 0x4d));
         assert_eq!(color::BUILD_BG, Color::Rgb(0x3d, 0x2a, 0x0a));
     }
 

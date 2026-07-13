@@ -370,14 +370,20 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
         chip,
         Style::new().fg(color::CHAT_ACCENT).bg(color::CHAT_BG),
     )];
-    // Always-visible SELECT pill, right of the mode pill. Purple when select
-    // mode is on (native selection/copy live), dimmed when off. Same padded /
-    // CHAT_BG style as the mode chip so they read as a matched pair.
-    let select_fg = if state.select_mode { color::BRANCH } else { color::DIM };
-    left.push(Span::styled(
-        " SELECT ",
-        Style::new().fg(select_fg).bg(color::CHAT_BG),
-    ));
+    // A blank cell separates the two pills — adjacent spans sharing a bg would
+    // merge into one block, so the gap is what makes them read as two badges.
+    left.push(Span::raw(" "));
+    // Always-visible SELECT pill, right of the mode pill. It's the purple
+    // sibling of the (blue) mode pill: ON = light-purple BRANCH glyph on the
+    // dark-purple SELECT_BG fill, mirroring CHAT_ACCENT-on-CHAT_BG. OFF drops
+    // the fill entirely (dim glyph on the bar background) so it reads as
+    // recessive, not a second lit badge.
+    let select_style = if state.select_mode {
+        Style::new().fg(color::BRANCH).bg(color::SELECT_BG)
+    } else {
+        Style::new().fg(color::DIM)
+    };
+    left.push(Span::styled(" SELECT ", select_style));
     // Transient ④ hint (e.g. "queued · runs as a subagent in P5"), set by a
     // verb pick (P4d T4). Pure-renderer-readable since it lives on ShellState.
     if let Some(hint) = &state.status_hint {
