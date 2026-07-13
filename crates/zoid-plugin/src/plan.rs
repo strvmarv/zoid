@@ -153,6 +153,8 @@ mod tests {
                 strip_prefix: "skills/".into(),
                 body: BodyStrategy::FromSkillFrontmatter,
                 description: "Superpowers — curated".into(),
+                body_intro: None,
+                body_outro: None,
             }),
             install: vec![Effect::Activate],
         }

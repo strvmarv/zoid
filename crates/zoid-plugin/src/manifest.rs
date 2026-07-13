@@ -29,6 +29,8 @@ pub struct ModeRecipe {
     pub strip_prefix: String,
     pub body: BodyStrategy,
     pub description: String,
+    pub body_intro: Option<String>,
+    pub body_outro: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -75,6 +77,10 @@ struct RawMode {
     body: String,
     #[serde(default)]
     description: String,
+    #[serde(default)]
+    body_intro: Option<String>,
+    #[serde(default)]
+    body_outro: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -138,6 +144,8 @@ pub fn parse_manifest(toml_src: &str) -> Result<PluginManifest, String> {
             strip_prefix: m.strip_prefix,
             body: body.expect("body set when mode present"),
             description: m.description,
+            body_intro: m.body_intro,
+            body_outro: m.body_outro,
         }),
         install,
     })
@@ -243,5 +251,25 @@ text = "Superpowers installed."
         let m = parse_manifest(&src).unwrap();
         let err = m.validate().unwrap_err();
         assert!(err.contains("mode"), "got: {err}");
+    }
+
+    #[test]
+    fn parses_mode_body_intro_outro() {
+        let src = GOOD.replace(
+            "body = \"from-skill-frontmatter\"",
+            "body = \"from-skill-frontmatter\"\nbody_intro = \"INTRO\"\nbody_outro = \"OUTRO\"",
+        );
+        let m = parse_manifest(&src).unwrap();
+        let mode = m.mode.as_ref().unwrap();
+        assert_eq!(mode.body_intro.as_deref(), Some("INTRO"));
+        assert_eq!(mode.body_outro.as_deref(), Some("OUTRO"));
+    }
+
+    #[test]
+    fn mode_body_intro_outro_default_to_none() {
+        let m = parse_manifest(GOOD).unwrap();
+        let mode = m.mode.as_ref().unwrap();
+        assert!(mode.body_intro.is_none());
+        assert!(mode.body_outro.is_none());
     }
 }

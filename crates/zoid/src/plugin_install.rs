@@ -136,7 +136,7 @@ mod tests {
         PluginManifest {
             id: "superpowers".into(), schema: 1, kind: vec!["mode".into()],
             name: "Superpowers".into(), description: "d".into(), source: None,
-            mode: Some(ModeRecipe { loader: "using-superpowers/SKILL.md".into(), strip_prefix: "skills/".into(), body: BodyStrategy::FromSkillFrontmatter, description: "desc".into() }),
+            mode: Some(ModeRecipe { loader: "using-superpowers/SKILL.md".into(), strip_prefix: "skills/".into(), body: BodyStrategy::FromSkillFrontmatter, description: "desc".into(), body_intro: None, body_outro: None }),
             install: effects,
         }
     }
