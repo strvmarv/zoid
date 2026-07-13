@@ -1,0 +1,23 @@
+name: catalog-index
+on:
+  push:
+    paths: [ "plugins/*.toml" ]
+permissions:
+  contents: write
+jobs:
+  regen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: python scripts/gen_index.py plugins
+      - name: Commit index if changed
+        run: |
+          if ! git diff --quiet plugins/index.json; then
+            git config user.name "catalog-bot"
+            git config user.email "catalog-bot@users.noreply.github.com"
+            git add plugins/index.json
+            git commit -m "chore(catalog): regenerate index.json"
+            git push
+          fi

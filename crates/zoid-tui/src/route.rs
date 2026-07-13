@@ -108,6 +108,16 @@ pub enum Action {
     SwitchCancel,
     /// Scroll the keyboard-shortcuts overlay by N rows (bin clamps the range).
     ScrollHelp(i32),
+    /// `:plugin catalog` overlay, List mode: Up(-1)/Down(1) move the cursor.
+    CatalogMove(i32),
+    /// `:plugin catalog` overlay, List mode: Enter — gate to the
+    /// provenance-confirm pane for the selected row.
+    CatalogEnterConfirm,
+    /// `:plugin catalog` overlay, Confirm mode: `y`/`Y` — close the overlay and
+    /// run the install path for the selected row's id (same as `:plugin install <id>`).
+    CatalogConfirmYes,
+    /// `:plugin catalog` overlay, Confirm mode: `n`/`N`/Esc — back to the list.
+    CatalogConfirmNo,
     Noop,
 }
 
@@ -177,6 +187,7 @@ pub fn route_paste(state: &ShellState) -> PasteTarget {
         | Overlay::Sessions
         | Overlay::Mcp
         | Overlay::Help
+        | Overlay::PluginCatalog
         | Overlay::ProviderSwitch => return PasteTarget::None,
         Overlay::None => {}
     }
@@ -217,6 +228,7 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
         Overlay::ProviderSwitch => return route_provider_switch_key(state, key),
         Overlay::Mcp => return route_mcp_key(state, key),
         Overlay::Help => return route_help_key(state, key),
+        Overlay::PluginCatalog => return route_plugin_catalog_key(state, key),
         Overlay::Feedback => {
             if let Some(fs) = &state.feedback {
                 return crate::feedback_view::route_feedback_key(fs, key);
@@ -380,6 +392,28 @@ fn route_mcp_key(_state: &ShellState, key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => Action::CloseOverlay,
         _ => Action::Noop,
+    }
+}
+
+/// Route keys while the `:plugin catalog` overlay is up. List mode: Up/Down
+/// move the cursor, Enter gates to the provenance-confirm pane, Esc closes.
+/// Confirm mode: `y`/`Y` confirms the install, `n`/`N`/Esc backs out to the
+/// list (the overlay stays open).
+fn route_plugin_catalog_key(state: &ShellState, key: KeyEvent) -> Action {
+    let mode = state.plugin_catalog.as_ref().map(|c| c.mode);
+    match mode {
+        Some(crate::state::CatalogMode::Confirm) => match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => Action::CatalogConfirmYes,
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Action::CatalogConfirmNo,
+            _ => Action::Noop,
+        },
+        _ => match key.code {
+            KeyCode::Up => Action::CatalogMove(-1),
+            KeyCode::Down => Action::CatalogMove(1),
+            KeyCode::Enter => Action::CatalogEnterConfirm,
+            KeyCode::Esc => Action::CloseOverlay,
+            _ => Action::Noop,
+        },
     }
 }
 

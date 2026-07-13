@@ -3145,6 +3145,9 @@ where
                             persist_active_mode(app).await;
                         }
                     }
+                    zoid::agent::AgentUpdate::CatalogLoaded(res) => {
+                        apply_catalog_loaded(app, res);
+                    }
                     zoid::agent::AgentUpdate::WorktreeRequested { action, reply } => {
                         handle_worktree_request(app, action, Some(reply));
                     }
@@ -4517,6 +4520,38 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::FeedbackSubmit => {
             handle_feedback_submit(app).await?;
         }
+        Action::CatalogMove(dir) => {
+            if let Some(cat) = app.shell.plugin_catalog.as_mut() {
+                if dir < 0 {
+                    cat.move_up();
+                } else if dir > 0 {
+                    cat.move_down();
+                }
+            }
+        }
+        Action::CatalogEnterConfirm => {
+            if let Some(cat) = app.shell.plugin_catalog.as_mut() {
+                cat.enter_confirm();
+            }
+        }
+        Action::CatalogConfirmNo => {
+            if let Some(cat) = app.shell.plugin_catalog.as_mut() {
+                cat.back_to_list();
+            }
+        }
+        Action::CatalogConfirmYes => {
+            let id = app
+                .shell
+                .plugin_catalog
+                .as_ref()
+                .and_then(|cat| cat.selected())
+                .map(|row| row.id.clone());
+            app.shell.plugin_catalog = None;
+            app.shell.overlay = Overlay::None;
+            if let Some(id) = id {
+                install_plugin(app, id);
+            }
+        }
         Action::Noop => {}
     }
     Ok(false)
@@ -4821,8 +4856,101 @@ fn disable_companion(app: &mut App) {
     }
 }
 
-/// Kick off a plugin install: resolve the manifest source, fetch the pinned
-/// tree off-thread, and hand the scan back via AgentUpdate::PluginScan.
+/// Kick off the async catalog index load shared by `:plugin catalog` (which
+/// populates the overlay) and `:plugin list` (which prints rows to the
+/// scrollback once the load resolves). The cache dir is resolved here on the
+/// main loop; only the resolved path (not any env access) crosses into the
+/// spawned task. Never blocks the main loop — the fetch itself runs entirely
+/// inside `tokio::spawn`.
+fn spawn_catalog_load(app: &App) {
+    let ui_tx = app.ui_tx.clone();
+    let cache_dir = resolve_cache_dir(|k| std::env::var(k).ok()).join("catalog");
+    tokio::spawn(async move {
+        let res: Result<Vec<zoid::catalog::CatalogEntry>, String> =
+            if let Some(v) = zoid::catalog::cache_if_fresh(
+                chrono::Utc::now(),
+                chrono::Duration::hours(24),
+                &cache_dir,
+            ) {
+                Ok(v)
+            } else {
+                match zoid::catalog::fetch_text(&zoid::catalog::catalog_index_url()).await {
+                    Ok(body) => zoid::catalog::store_and_parse(chrono::Utc::now(), &cache_dir, &body)
+                        .map_err(|e| e.to_string()),
+                    Err(e) => zoid::catalog::cached_any(&cache_dir)
+                        .ok_or_else(|| format!("catalog unavailable: {e}")),
+                }
+            };
+        let _ = ui_tx.send(zoid::agent::AgentUpdate::CatalogLoaded(res)).await;
+    });
+}
+
+/// Map a loaded catalog index (`AgentUpdate::CatalogLoaded`) to `PluginCatalogRow`s.
+/// Skips entries whose kind is not `mode`/`skills` (L4 — keeps the
+/// MCP-deferred boundary honest). `source_label` takes a char-safe (not byte)
+/// prefix of the source ref.
+fn map_catalog_entries(entries: Vec<zoid::catalog::CatalogEntry>) -> Vec<zoid_tui::state::PluginCatalogRow> {
+    entries
+        .into_iter()
+        .filter(|e| e.kind.iter().any(|k| k == "mode" || k == "skills"))
+        .map(|e| zoid_tui::state::PluginCatalogRow {
+            id: e.id,
+            name: e.name,
+            kind_label: e.kind.first().cloned().unwrap_or_default(),
+            description: e.description,
+            source_label: format!(
+                "{} @ {}",
+                e.source_repo,
+                e.source_ref.chars().take(7).collect::<String>()
+            ),
+            license: e.license,
+        })
+        .collect()
+}
+
+/// Handle `AgentUpdate::CatalogLoaded`: if the `:plugin catalog` overlay is
+/// open, populate it (Ready or Error); otherwise (the `:plugin list` path)
+/// summarize the rows to the status hint — the load never blocks the main
+/// loop either way.
+fn apply_catalog_loaded(app: &mut App, res: Result<Vec<zoid::catalog::CatalogEntry>, String>) {
+    if app.shell.overlay == zoid_tui::state::Overlay::PluginCatalog {
+        if let Some(cat) = app.shell.plugin_catalog.as_mut() {
+            match res {
+                Ok(entries) => {
+                    cat.rows = map_catalog_entries(entries);
+                    cat.cursor = 0;
+                    cat.status = zoid_tui::state::CatalogStatus::Ready;
+                }
+                Err(e) => {
+                    cat.status = zoid_tui::state::CatalogStatus::Error(e);
+                }
+            }
+        }
+        return;
+    }
+    match res {
+        Ok(entries) => {
+            let rows = map_catalog_entries(entries);
+            if rows.is_empty() {
+                app.shell.status_hint = Some("plugin catalog: (no plugins)".into());
+            } else {
+                let summary = rows
+                    .iter()
+                    .map(|r| format!("{}  [{}]  {}", r.id, r.kind_label, r.description))
+                    .collect::<Vec<_>>()
+                    .join("  ·  ");
+                app.shell.status_hint = Some(summary);
+            }
+        }
+        Err(e) => {
+            app.shell.status_hint = Some(format!("plugin catalog error: {e}"));
+        }
+    }
+}
+
+/// Kick off a plugin install: resolve the manifest source (bundled or catalog),
+/// fetch the pinned tree off-thread, and hand the scan back via
+/// AgentUpdate::PluginScan.
 fn install_plugin(app: &mut App, arg: String) {
     use zoid::plugin_install::parse_plugin_install_args;
     use zoid_plugin::resolve::{ManifestSource, PluginRef, classify_ref, resolve_source};
@@ -4836,59 +4964,99 @@ fn install_plugin(app: &mut App, arg: String) {
         return;
     }
     let r = classify_ref(&plugin_ref);
-    let source = resolve_source(&r, zoid_plugin::bundled::bundled_ids(), false, false);
-
-    // v1 supports the Bundled source (by id). Repo/.zoid and wizard fallback are
-    // deferred; report them clearly rather than silently doing nothing.
-    let (manifest, id) = match (&r, source) {
-        (PluginRef::Id(id), ManifestSource::Bundled) => (
-            zoid_plugin::bundled::bundled_manifest(id).expect("bundled id resolves"),
-            id.clone(),
-        ),
-        (PluginRef::Id(id), _) => {
-            app.shell.status_hint = Some(format!("unknown plugin '{id}' (no bundled manifest)"));
+    // Reject a bad id up front (M4): the Catalog branch interpolates id into a raw URL.
+    if let PluginRef::Id(id) = &r {
+        if !id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-')) {
+            app.shell.status_hint = Some(format!("invalid plugin id '{id}'"));
             return;
+        }
+    }
+    let ui_tx = app.ui_tx.clone();
+    match (&r, resolve_source(&r, zoid_plugin::bundled::bundled_ids(), false, false)) {
+        (PluginRef::Id(id), ManifestSource::Bundled) => {
+            let manifest = zoid_plugin::bundled::bundled_manifest(id).expect("bundled id resolves");
+            if let Err(e) = manifest.validate() {
+                app.shell.status_hint = Some(e);
+                return;
+            }
+            let Some(src) = manifest.source.clone() else {
+                app.shell.status_hint = Some(format!("plugin '{id}' has no [source]"));
+                return;
+            };
+            let parsed = match zoid::github_fetch::parse_github_url(&format!(
+                "github.com/{}/tree/{}/{}",
+                src.repo, src.ref_, src.subtree
+            )) {
+                Ok(p) => p,
+                Err(e) => {
+                    app.shell.status_hint = Some(e);
+                    return;
+                }
+            };
+            app.installing_plugin = true;
+            app.shell.status_hint = Some(format!("installing plugin '{id}'…"));
+            let (id, over) = (id.clone(), over);
+            tokio::spawn(async move {
+                let api = zoid::github_fetch::HttpGithubApi::new();
+                let res = zoid::github_fetch::fetch_tree(&api, &parsed)
+                    .await
+                    .map(|scan| (manifest, scan))
+                    .map_err(|e| format!("plugin fetch failed: {e}"));
+                let _ = ui_tx
+                    .send(zoid::agent::AgentUpdate::PluginScan {
+                        id,
+                        origin: "bundled".into(),
+                        over,
+                        res,
+                    })
+                    .await;
+            });
+        }
+        (PluginRef::Id(id), ManifestSource::Catalog) => {
+            app.installing_plugin = true;
+            app.shell.status_hint = Some(format!("installing plugin '{id}'…"));
+            let (id, over) = (id.clone(), over);
+            tokio::spawn(async move {
+                let res: Result<_, String> = async {
+                    // Async raw GET of <id>.toml (same async reqwest client style as fetch_tree).
+                    let body = zoid::catalog::fetch_text(&zoid::catalog::catalog_manifest_url(&id))
+                        .await
+                        .map_err(|e| format!("catalog manifest fetch failed: {e}"))?;
+                    let manifest = zoid_plugin::manifest::parse_manifest(&body).map_err(|e| e)?;
+                    manifest.validate().map_err(|e| e)?;
+                    let src = manifest
+                        .source
+                        .clone()
+                        .ok_or_else(|| format!("plugin '{id}' has no [source]"))?;
+                    let parsed = zoid::github_fetch::parse_github_url(&format!(
+                        "github.com/{}/tree/{}/{}",
+                        src.repo, src.ref_, src.subtree
+                    ))?;
+                    let api = zoid::github_fetch::HttpGithubApi::new();
+                    let scan = zoid::github_fetch::fetch_tree(&api, &parsed)
+                        .await
+                        .map_err(|e| format!("plugin fetch failed: {e}"))?;
+                    Ok((manifest, scan))
+                }
+                .await;
+                let _ = ui_tx
+                    .send(zoid::agent::AgentUpdate::PluginScan {
+                        id,
+                        origin: "catalog".into(),
+                        over,
+                        res,
+                    })
+                    .await;
+            });
         }
         (PluginRef::Url(_), _) => {
             app.shell.status_hint =
-                Some("installing plugins from a URL is not supported yet; use a bundled id".into());
-            return;
+                Some("installing plugins from a URL is not supported yet; use a catalog id".into());
         }
-    };
-    if let Err(e) = manifest.validate() {
-        app.shell.status_hint = Some(e);
-        return;
+        (PluginRef::Id(id), _) => {
+            app.shell.status_hint = Some(format!("unknown plugin '{id}'"));
+        }
     }
-    let Some(src) = manifest.source.clone() else {
-        app.shell.status_hint = Some(format!("plugin '{id}' has no [source] to fetch"));
-        return;
-    };
-    let url = format!("github.com/{}/tree/{}/{}", src.repo, src.ref_, src.subtree);
-    let parsed = match zoid::github_fetch::parse_github_url(&url) {
-        Ok(p) => p,
-        Err(e) => {
-            app.shell.status_hint = Some(e);
-            return;
-        }
-    };
-    app.installing_plugin = true;
-    app.shell.status_hint = Some(format!("installing plugin '{id}'…"));
-    let ui_tx = app.ui_tx.clone();
-    let id_for_msg = id.clone();
-    tokio::spawn(async move {
-        let api = zoid::github_fetch::HttpGithubApi::new();
-        let res = zoid::github_fetch::fetch_tree(&api, &parsed)
-            .await
-            .map_err(|e| format!("plugin fetch failed: {e}"));
-        let _ = ui_tx
-            .send(zoid::agent::AgentUpdate::PluginScan {
-                id: id_for_msg,
-                origin: "bundled".into(),
-                over,
-                res,
-            })
-            .await;
-    });
 }
 
 /// Apply a completed plugin fetch on the main loop: build the plan, materialize
@@ -4899,21 +5067,14 @@ fn apply_plugin_scan(
     id: String,
     origin: String,
     over: zoid::plugin_install::KindOverride,
-    res: Result<zoid_core::wizard::UpstreamScan, String>,
+    res: Result<(zoid_plugin::manifest::PluginManifest, zoid_core::wizard::UpstreamScan), String>,
 ) -> bool {
     use zoid::plugin_install::KindOverride;
     app.installing_plugin = false;
-    let scan = match res {
-        Ok(s) => s,
+    let (mut manifest, scan) = match res {
+        Ok(pair) => pair,
         Err(e) => {
             app.shell.status_hint = Some(e);
-            return false;
-        }
-    };
-    let mut manifest = match zoid_plugin::bundled::bundled_manifest(&id) {
-        Some(m) => m,
-        None => {
-            app.shell.status_hint = Some(format!("bundled manifest for '{id}' vanished"));
             return false;
         }
     };
@@ -5183,6 +5344,16 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
         }
         Command::PluginInstall(arg) => {
             install_plugin(app, arg);
+            Ok(false)
+        }
+        Command::PluginCatalog => {
+            app.shell.plugin_catalog = Some(zoid_tui::state::PluginCatalogState::loading());
+            app.shell.overlay = zoid_tui::state::Overlay::PluginCatalog;
+            spawn_catalog_load(app);
+            Ok(false)
+        }
+        Command::PluginList => {
+            spawn_catalog_load(app);
             Ok(false)
         }
         Command::OpenDrawer(id) => {
@@ -7033,12 +7204,13 @@ mod tests {
         };
 
         // Success path: the bundled manifest declares Activate + OnboardingHint.
+        let sp_manifest = zoid_plugin::bundled::bundled_manifest("superpowers").unwrap();
         let installed = apply_plugin_scan(
             &mut app,
             "superpowers".into(),
             "bundled".into(),
             zoid::plugin_install::KindOverride::None,
-            Ok(scan),
+            Ok((sp_manifest, scan)),
         );
         assert!(installed, "install + activation should succeed");
         assert!(!app.installing_plugin, "guard must clear");
@@ -7111,12 +7283,13 @@ mod tests {
             ],
         };
         // `--skills` override forces the skills-kind install path on the bundled (mode) manifest.
+        let sp_manifest = zoid_plugin::bundled::bundled_manifest("superpowers").unwrap();
         let activated = apply_plugin_scan(
             &mut app,
             "superpowers".into(),
             "bundled".into(),
             zoid::plugin_install::KindOverride::Skills,
-            Ok(scan),
+            Ok((sp_manifest, scan)),
         );
         assert!(!activated, "a skills install activates no mode");
         assert!(!app.installing_plugin, "guard must clear");
@@ -7134,6 +7307,72 @@ mod tests {
             prev_active,
             "skills install must not change the active mode"
         );
+    }
+
+    /// A catalog-sourced install carries its manifest through `PluginScan`
+    /// rather than looking it up via `bundled_manifest`; this proves
+    /// `apply_plugin_scan` installs correctly from a manifest that has no
+    /// bundled counterpart at all.
+    #[tokio::test]
+    async fn apply_plugin_scan_installs_a_carried_catalog_manifest() {
+        use zoid_core::wizard::{ScannedFile, UpstreamScan};
+        use zoid_plugin::effect::Effect;
+        use zoid_plugin::manifest::{BodyStrategy, ModeRecipe, PluginManifest, PluginSource};
+        fn skill(name: &str, desc: &str) -> String {
+            format!("---\nname: {name}\ndescription: {desc}\n---\nbody\n")
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = test_app().await;
+        app.mode_dirs = vec![tmp.path().join("modes")];
+        // scan MUST contain skills/using-demo/SKILL.md (the loader) so build_plan succeeds.
+        let scan = UpstreamScan {
+            url: "github.com/o/demo/tree/SHA/skills".into(),
+            repo: "o/demo".into(),
+            resolved_ref: "SHA".into(),
+            subtree_path: "skills".into(),
+            files: vec![
+                ScannedFile {
+                    upstream_path: "skills/using-demo/SKILL.md".into(),
+                    sha: "a".into(),
+                    content: skill("using-demo", "loader"),
+                },
+                ScannedFile {
+                    upstream_path: "skills/other/SKILL.md".into(),
+                    sha: "b".into(),
+                    content: skill("other", "another skill"),
+                },
+            ],
+        };
+        let manifest = PluginManifest {
+            id: "demo".into(),
+            schema: 1,
+            kind: vec!["mode".into()],
+            name: "Demo".into(),
+            description: "d".into(),
+            source: Some(PluginSource {
+                repo: "o/demo".into(),
+                ref_: "SHA".into(),
+                subtree: "skills".into(),
+            }),
+            mode: Some(ModeRecipe {
+                loader: "using-demo/SKILL.md".into(),
+                strip_prefix: "skills/".into(),
+                body: BodyStrategy::FromSkillFrontmatter,
+                description: "Demo mode".into(),
+                body_intro: None,
+                body_outro: None,
+            }),
+            install: vec![Effect::Activate],
+        };
+        let activated = apply_plugin_scan(
+            &mut app,
+            "demo".into(),
+            "catalog".into(),
+            zoid::plugin_install::KindOverride::None,
+            Ok((manifest, scan)),
+        );
+        assert!(activated);
+        assert!(app.modes.names().iter().any(|n| n == "Demo"));
     }
 
     /// `apply_models_fetched` replaces the OPEN model picker's options with the

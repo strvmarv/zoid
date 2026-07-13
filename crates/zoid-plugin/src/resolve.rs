@@ -14,6 +14,7 @@ pub enum ManifestSource {
     Bundled,
     Repo,
     WizardFallback,
+    Catalog,
 }
 
 /// A bare token is an id; anything that looks like a github URL is a Url.
@@ -44,7 +45,7 @@ pub fn resolve_source(
             if bundled_ids.contains(&id.as_str()) {
                 ManifestSource::Bundled
             } else {
-                ManifestSource::WizardFallback
+                ManifestSource::Catalog
             }
         }
         PluginRef::Url(_) => {
@@ -86,15 +87,15 @@ mod tests {
     }
 
     #[test]
-    fn unknown_id_has_no_source() {
-        // An unknown bare id can't be a URL and isn't bundled → wizard fallback
-        // is meaningless without a URL; caller treats WizardFallback for an Id as
-        // an error. resolve_source still returns WizardFallback; caller decides.
-        let r = PluginRef::Id("nope".into());
-        assert_eq!(
-            resolve_source(&r, &["superpowers"], false, false),
-            ManifestSource::WizardFallback
-        );
+    fn unknown_id_resolves_to_catalog() {
+        let r = PluginRef::Id("ok-skills".into());
+        assert_eq!(resolve_source(&r, &["superpowers"], false, false), ManifestSource::Catalog);
+    }
+
+    #[test]
+    fn known_id_still_bundled() {
+        let r = PluginRef::Id("superpowers".into());
+        assert_eq!(resolve_source(&r, &["superpowers"], false, false), ManifestSource::Bundled);
     }
 
     #[test]

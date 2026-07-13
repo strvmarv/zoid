@@ -247,6 +247,12 @@ pub fn render_shell(
         if let Some(p) = layout.palette {
             render_help_overlay(frame, state, p);
         }
+    } else if state.overlay == Overlay::PluginCatalog {
+        if let Some(cat) = &state.plugin_catalog {
+            if let Some(p) = layout.palette {
+                render_plugin_catalog_overlay(frame, state, p, cat);
+            }
+        }
     }
     conv_max_scroll
 }
@@ -922,6 +928,8 @@ fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
                     Command::ModeImport(url) => format!("→ Import mode: {url}"),
                     Command::ModeUpdate(name) => format!("→ Update mode: {name}"),
                     Command::PluginInstall(arg) => format!("→ Install plugin: {arg}"),
+                    Command::PluginList => "→ List plugins".to_string(),
+                    Command::PluginCatalog => "→ Plugin catalog…".to_string(),
                     Command::RenameSession(name) => format!("→ Rename session: {name}"),
                     Command::Delegate(task) => format!("→ Delegate: {task}"),
                     Command::Quit => "→ Quit zoid".to_string(),
@@ -1128,6 +1136,114 @@ fn render_mcp_overlay(frame: &mut Frame, state: &ShellState, area: Rect) {
     // out-of-range index so `list_overlay` neither highlights a row nor scrolls
     // away from the top (it treats an out-of-range index as "no selection").
     list_overlay(frame, area, " mcp servers ".to_string(), &rows, rows.len());
+}
+
+/// The `:plugin catalog` overlay (`Overlay::PluginCatalog`): List mode shows
+/// one row per catalog entry with a footer keybinding hint; Confirm mode gates
+/// install behind the selected row's provenance (source repo/ref, kind,
+/// license). `Loading`/`Error` render a single centered status line instead of
+/// the list/confirm body.
+fn render_plugin_catalog_overlay(
+    frame: &mut Frame,
+    _state: &ShellState,
+    area: Rect,
+    cat: &crate::state::PluginCatalogState,
+) {
+    use crate::state::CatalogMode;
+    use ratatui::widgets::Paragraph;
+
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(color::CHAT_ACCENT))
+        .title(Span::styled(" zoid plugins ", Style::new().fg(color::TXT)));
+    let inner = area.inner(ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    frame.render_widget(block, area);
+
+    match &cat.status {
+        crate::state::CatalogStatus::Loading => {
+            frame.render_widget(
+                Paragraph::new("Loading plugin catalog…")
+                    .alignment(ratatui::layout::Alignment::Center),
+                inner,
+            );
+            return;
+        }
+        crate::state::CatalogStatus::Error(msg) => {
+            frame.render_widget(
+                Paragraph::new(format!("Error: {msg}"))
+                    .style(Style::new().fg(color::ERROR))
+                    .alignment(ratatui::layout::Alignment::Center),
+                inner,
+            );
+            return;
+        }
+        crate::state::CatalogStatus::Ready => {}
+    }
+
+    match cat.mode {
+        CatalogMode::List => {
+            let rows: Vec<String> = if cat.rows.is_empty() {
+                vec!["(no plugins in the catalog)".to_string()]
+            } else {
+                cat.rows
+                    .iter()
+                    .map(|r| format!("{}  [{}]  {}", r.name, r.kind_label, r.description))
+                    .collect()
+            };
+            use ratatui::layout::{Constraint, Direction, Layout};
+            let split = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(1), Constraint::Length(1)])
+                .split(inner);
+            let vh = split[0].height as usize;
+            let off = cat.cursor.saturating_sub(vh.saturating_sub(1));
+            let lines: Vec<Line> = rows
+                .iter()
+                .enumerate()
+                .map(|(i, r)| {
+                    let style = if i == cat.cursor {
+                        Style::new().fg(color::TXT).bg(color::SEL_BG)
+                    } else {
+                        Style::new().fg(color::TXT)
+                    };
+                    Line::from(Span::styled(format!(" {r}"), style))
+                })
+                .collect();
+            frame.render_widget(Paragraph::new(lines).scroll((off as u16, 0)), split[0]);
+            frame.render_widget(
+                Paragraph::new("↑↓ select · ↵ install · esc close")
+                    .style(Style::new().fg(color::DIM)),
+                split[1],
+            );
+        }
+        CatalogMode::Confirm => {
+            if let Some(row) = cat.selected() {
+                let license = row.license.as_deref().unwrap_or("(none)");
+                let lines = vec![
+                    Line::from(Span::styled(row.name.clone(), Style::new().fg(color::TXT))),
+                    Line::from(Span::styled(row.source_label.clone(), Style::new().fg(color::DIM))),
+                    Line::from(Span::styled(
+                        format!("kind: {}", row.kind_label),
+                        Style::new().fg(color::DIM),
+                    )),
+                    Line::from(Span::styled(
+                        format!("license: {license}"),
+                        Style::new().fg(color::DIM),
+                    )),
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        "Install this pack? [y/N]",
+                        Style::new().fg(color::CHAT_ACCENT),
+                    )),
+                ];
+                frame.render_widget(Paragraph::new(lines), inner);
+            }
+        }
+    }
 }
 
 /// The read-only keyboard-shortcuts overlay (`Overlay::Help`). Scrolls via
