@@ -209,9 +209,15 @@ fn seeded_mcp_status() -> Vec<McpStatusRow> {
     ]
 }
 
-/// Provider options for the quick-switch — HAND-SEEDED to public providers only.
+/// Provider options for the quick-switch — HAND-SEEDED to the publicly-announced
+/// providers only. The 0.4.0 release notes name Ollama, Anthropic, OpenAI, Google
+/// Gemini, and OpenCode Zen; the latter three are reached through the `opencode-zen`
+/// gateway (its model catalog carries the `gpt-*`/`gemini-*`/`claude-*` ids), so
+/// Zen is the faithful provider row and its detail names those families. Ollama
+/// stays current so the downstream "chosen"/"runs" frames read coherently.
 /// Do NOT use config_view::provider_options(): it enumerates the whole registry,
-/// including internal/planned providers, and would leak them into the frame.
+/// including `zai` (not publicly announced) and any planned providers, and would
+/// leak them into the frame.
 fn seeded_switch_providers() -> Vec<PickOption> {
     vec![
         PickOption {
@@ -225,6 +231,13 @@ fn seeded_switch_providers() -> Vec<PickOption> {
             id: "anthropic".into(),
             label: "Anthropic".into(),
             detail: "cloud".into(),
+            selectable: true,
+            is_current: false,
+        },
+        PickOption {
+            id: "opencode-zen".into(),
+            label: "OpenCode Zen".into(),
+            detail: "openai · gemini · claude".into(),
             selectable: true,
             is_current: false,
         },
@@ -528,10 +541,13 @@ mod tests {
         );
         assert!(!seq[1].0.switch_providers.is_empty(), "providers seeded");
         assert!(!seq[1].0.switch_models.is_empty(), "models seeded");
-        // Leak guard: only Ollama + Anthropic may appear as providers.
+        // Leak guard: only publicly-announced providers may appear. The 0.4.0
+        // release notes name Ollama, Anthropic, OpenAI, Google Gemini, and
+        // OpenCode Zen (the latter three via the opencode-zen gateway). `zai`
+        // and any internal/planned provider ids must never reach a frame.
         for p in &seq[1].0.switch_providers {
             assert!(
-                p.id == "ollama" || p.id == "anthropic",
+                matches!(p.id.as_str(), "ollama" | "anthropic" | "opencode-zen"),
                 "public providers only; got leaked provider id {:?}",
                 p.id
             );
