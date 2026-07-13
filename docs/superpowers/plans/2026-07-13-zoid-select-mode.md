@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - `zoid-tui` is **pure**: routing/state/render only — no terminal I/O, no `execute!`. All terminal side-effects live in the `zoid` bin. (route.rs header, spec §13/§14.1.)
-- `crossterm` items come from `ratatui::crossterm::...` (already imported in `main.rs:4`).
+- Crate split for crossterm: the **bin** (`zoid`) imports crossterm **directly** (`use crossterm::{…}` at `main.rs:2`) — `execute!`, `EnableMouseCapture`, `DisableMouseCapture` are already in scope for the reconcile. The **`zoid-tui`** crate uses `ratatui::crossterm::…` (e.g. `route.rs:12`). Do not cross the two.
 - The `SELECT` pill reuses palette colors from `crate::tokens::color` (spec §16); no new color constants.
 - Do not touch the existing OSC 52 code-block copy (`copy_to_clipboard_osc52`, `handle_conversation_click`).
 - Follow existing house patterns: `Command` variants have a matching `parse_command` arm + `exec_command` arm; palette rows are `PaletteItem { label, command }`; route tests use the `key(code, mods)` helper; bin tests use `test_app().await` + `exec_command(&mut app, …)`.
@@ -37,7 +37,8 @@ Delivers a working `:select` command that really flips native selection. This is
 **Files:**
 - Modify: `crates/zoid-tui/src/state.rs:461` (Default impl; field decl near `:259`)
 - Modify: `crates/zoid-tui/src/command.rs` (enum `:55`, parser `:96`, tests `:115+`)
-- Modify: `crates/zoid/src/main.rs` (loop `:2340`, before-draw reconcile near `:2599`, `exec_command` `:4965`, helper near `:812`)
+- Modify: `crates/zoid-tui/src/render.rs:902` (the palette-preview `match cmd` — exhaustive, no `_`; needs a new arm or the crate won't build)
+- Modify: `crates/zoid/src/main.rs` (loop `:2340`, before-draw reconcile just before `let frame_start` at `:2606`, `exec_command` `:4965`, helper near `:812`)
 - Test: `crates/zoid-tui/src/command.rs` (inline `#[cfg(test)]`), `crates/zoid/src/main.rs` (inline `#[cfg(test)]`)
 
 **Interfaces:**
@@ -69,6 +70,14 @@ In `crates/zoid-tui/src/command.rs`, add to the `enum Command` (before `Unknown(
     /// Toggle "select mode": flip terminal mouse capture so the whole window
     /// supports native drag-select + terminal copy (`:select` / `:mouse`).
     ToggleSelectMode,
+```
+
+- [ ] **Step 3b: Add the palette-preview arm (REQUIRED — exhaustive match)**
+
+`crates/zoid-tui/src/render.rs` has a second `match cmd` at `:902` (the `:`-palette preview line) that enumerates **every** `Command` variant with no `_` fallback. Without a new arm the whole `zoid-tui` crate fails to build (`non-exhaustive patterns: Command::ToggleSelectMode not covered`) — so `cargo test -p zoid-tui` in Step 5 won't even compile. Add, alongside the other preview arms (after `Command::WorktreeExit => …`):
+
+```rust
+                    Command::ToggleSelectMode => "→ Toggle select mode".to_string(),
 ```
 
 - [ ] **Step 4: Add the parser arm**
@@ -141,7 +150,7 @@ In `crates/zoid/src/main.rs`, declare a tracker immediately before the main `loo
     let mut mouse_captured = true;
 ```
 
-Then inside the loop, immediately before `let frame_start = std::time::Instant::now();` (near `:2599`), add:
+Then inside the loop, immediately before `let frame_start = std::time::Instant::now();` (at `:2606`; `terminal` is a live `&mut` binding here — used by `terminal.draw` at `:2607` and `terminal.size()` at `:2690`, no conflicting borrow), add:
 
 ```rust
         // Reconcile terminal mouse capture with select mode: while select_mode is
@@ -189,7 +198,7 @@ Expected: PASS (and the workspace compiles — `exec_command`'s match is now exh
 - [ ] **Step 12: Commit**
 
 ```bash
-git add crates/zoid-tui/src/state.rs crates/zoid-tui/src/command.rs crates/zoid/src/main.rs
+git add crates/zoid-tui/src/state.rs crates/zoid-tui/src/command.rs crates/zoid-tui/src/render.rs crates/zoid/src/main.rs
 git commit -m "feat(tui): select mode — :select toggles runtime mouse capture"
 ```
 
@@ -287,25 +296,33 @@ git commit -m "feat(tui): Alt+M toggles select mode"
 
 - [ ] **Step 1: Write the failing render test**
 
-In `crates/zoid-tui/src/render.rs`, add (or extend) an inline test that builds a `ShellState`, renders `render_status` into a `ratatui::buffer::Buffer` via a `TestBackend`/`Terminal`, and asserts the ` SELECT ` cells carry `fg = color::BRANCH` when `select_mode = true` and `fg = color::DIM` when false. Follow the existing render/snapshot test style in this file. Minimal buffer-style assertion:
+In `crates/zoid-tui/src/render.rs`, add an inline test (same module as `render_status`, which is private — that's fine). `ChatView` has **no `Default`**; build it with the struct literal the file's existing tests use (copy the shape at `render.rs:1658`). Assert on cell style via `c.style().fg == Some(color::BRANCH)` — the convention this file already uses (`render.rs:1690`), not a bare `c.fg`:
 
 ```rust
     #[test]
     fn select_pill_color_tracks_mode() {
         use ratatui::{backend::TestBackend, Terminal};
+        let view = ChatView {
+            zoom: Zoom::Normal,
+            caret_on: false,
+            reveal: None,
+            tz_offset_secs: 0,
+        };
         let mut on = ShellState::new();
         on.select_mode = true;
-        let view = ChatView::default(); // or the test helper this file already uses
         let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
         term.draw(|f| render_status(f, &on, &view, f.area())).unwrap();
-        let buf = term.backend().buffer().clone();
-        // Find a cell inside the "SELECT" run and assert its style.
-        let has_branch = buf.content().iter().any(|c| c.fg == color::BRANCH);
+        let has_branch = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .any(|c| c.style().fg == Some(color::BRANCH));
         assert!(has_branch, "SELECT pill must use BRANCH fg when select_mode on");
     }
 ```
 
-(If `render_status` is private, mark the test in the same module; if `ChatView::default()` isn't available, reuse whatever view constructor the file's existing tests use.)
+(If the `ChatView` literal drifts from `render.rs:1658`, copy that current field set verbatim — do not invent fields. `Zoom` is `crate::state::Zoom`.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -413,7 +430,7 @@ Append `, state.select_mode` to each call. In `crates/zoid-tui/src/route.rs` and
     let items = all_items(&state.active_mode, &state.mode_names, state.companion_on, state.select_mode);
 ```
 
-In `crates/zoid/src/main.rs` (the palette-build call — search `all_items(`), add the same trailing `, <shell>.select_mode` argument, using whatever the shell binding is named at that call site.
+In `crates/zoid/src/main.rs` the `all_items(` call is at `:3555` and uses `app.shell.*`, so append `, app.shell.select_mode`.
 
 Update the existing companion/palette tests in `palette.rs` that call `all_items("Chat", &names(), …)` to pass a 4th `false` argument.
 
@@ -424,15 +441,17 @@ Expected: PASS (new + updated tests).
 
 - [ ] **Step 6: Write the failing help test**
 
-In `crates/zoid-tui/src/help.rs` `mod tests`, extend the shortcut assertion (`:98`) to require the new keys — add `"Alt+M"` and `":select"` to the list it checks. Example:
+The existing test `lists_core_shortcuts_and_sections` (`help.rs:98`) builds a joined `String` named **`s`** via a `joined()` helper (`help.rs:90`) and loops `for token in [ … ] { assert!(s.contains(token), …) }`. Append `"Alt+M"` and `":select"` to that existing token array — do not introduce a new `text` variable:
 
 ```rust
-        for needle in ["Ctrl+P", "Ctrl+Q", "Shift+Tab", "Alt+P", "Alt+M", ":select"] {
-            assert!(text.contains(needle), "help must mention {needle}");
+        for token in [
+            "Global", "Input", "Conversation", "Overlays", "Commands",
+            "Ctrl+P", "Ctrl+Q", "Shift+Tab", "Alt+P", "Esc", "?", ":help",
+            "Alt+M", ":select",
+        ] {
+            assert!(s.contains(token), "help must mention {token:?}: {s:?}");
         }
 ```
-
-(Match the existing test's actual variable names — it may build a joined `text` string; adapt accordingly.)
 
 - [ ] **Step 7: Run help test to verify it fails**
 
