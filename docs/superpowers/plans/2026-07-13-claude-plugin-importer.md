@@ -4,7 +4,7 @@
 
 **Goal:** Make any Claude Code plugin importable into zoid by generalizing the mode-body generator, adding a `skills` manifest kind, and building a deterministic hybrid converter (`crates/zoid-plugin-import`) that reads Claude plugin/marketplace manifests and emits zoid artifacts.
 
-**Architecture:** Two pure, IO-free changes in the existing `zoid-plugin` crate (manifest-driven mode body; `skills` kind), one install-side change in the `zoid` bin (skills materialize into the convention skills dir; `--mode`/`--skills` override flags), and a new workspace bin whose pure `classify`/`emit` core is fed by an effectful `fetch` shell. Emitted manifests are round-tripped through `zoid_plugin::parse_manifest` + `validate()` so nothing is produced that the installer cannot consume.
+**Architecture:** Two pure, IO-free changes in the existing `zoid-plugin` crate (manifest-driven mode body; `skills` kind), install-side changes in the `zoid` bin (skills materialize into per-pack dirs under the convention skills root, discovered by a one-level scanner descent; `--mode`/`--skills` override flags), and a new workspace bin whose pure `classify`/`emit` core is fed by an effectful `fetch` shell. Emitted manifests are round-tripped through `zoid_plugin::parse_manifest` + `validate()` so nothing is produced that the installer cannot consume.
 
 **Tech Stack:** Rust 2021, `serde`/`serde_json`/`toml`, `reqwest` (rustls) + `tokio` for GitHub API fetch, `git` CLI for `ls-remote`, `zoid-plugin` + `zoid-core` for types, `insta`/golden files + plain `#[test]` for tests.
 
@@ -29,8 +29,10 @@
 - `crates/zoid-plugin/manifests/superpowers.toml` — carry the exact intro/outro strings.
 
 **Modified (zoid bin):**
-- `crates/zoid/src/plugin_install.rs` — `finish_skills_install` (materialize into convention skills dir, no overlay).
-- `crates/zoid/src/cli.rs` — parse `--mode`/`--skills` on `:plugin install`.
+- `crates/zoid/src/plugin_install.rs` — `finish_skills_install` (materialize into a **per-pack private dir** `<cfg>/skills/<plugin_id>/`, no overlay); also patch its `#[cfg(test)]` `ModeRecipe` literal (~line 139).
+- `crates/zoid/src/skill_import.rs` — descend one level so `<cfg>/skills/<pack>/<skill>/SKILL.md` is discovered (per-pack dirs are scan roots).
+- `crates/zoid-tui/src/command.rs` — `:plugin install` keeps `Command::PluginInstall(String)` carrying the **raw arg incl. flags** (no enum change).
+- `crates/zoid/src/main.rs` — at the `PluginInstall` dispatch (~line 5100 / `install_plugin`), parse `--mode`/`--skills` and route to `finish_plugin_install` vs `finish_skills_install`.
 
 **Created (new bin):**
 - `crates/zoid-plugin-import/Cargo.toml`
@@ -122,17 +124,17 @@ In `parse_manifest`, in the `raw.mode.map(...)` closure, add the two fields:
         }),
 ```
 
-Update the existing `manifest()` test helpers in `plan.rs` if the compiler flags the two new fields as missing (add `body_intro: None, body_outro: None`).
+Update **every** `ModeRecipe { … }` struct literal for the two new fields (the compiler will flag them). There are exactly three (grep `ModeRecipe {`): the `plan.rs` `manifest()` test helper, the `manifest.rs` doc-comment example if any, and — critically — the `#[cfg(test)]` helper in `crates/zoid/src/plugin_install.rs` (~line 139). Add `body_intro: None, body_outro: None` to each. (Missing the `plugin_install.rs` one compiles under `-p zoid-plugin` but breaks `cargo test --workspace` in Task 12 — S1.)
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p zoid-plugin`
-Expected: PASS (new tests green; existing tests still compile/pass).
+Run: `cargo test -p zoid-plugin && cargo build -p zoid --tests`
+Expected: PASS (new tests green; the `zoid` bin test build still compiles with the patched helper).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/zoid-plugin/src/manifest.rs crates/zoid-plugin/src/plan.rs
+git add crates/zoid-plugin/src/manifest.rs crates/zoid-plugin/src/plan.rs crates/zoid/src/plugin_install.rs
 git commit -m "feat(zoid-plugin): add optional mode body_intro/body_outro to manifest"
 ```
 
@@ -261,35 +263,47 @@ fn generate_body_from_frontmatter(
 }
 ```
 
-- [ ] **Step 4: Move Superpowers' exact strings into its manifest to preserve the golden**
+- [ ] **Step 4: Set the exact Superpowers strings on the GOLDEN's source — the in-code `manifest()` helper**
 
-Open `crates/zoid-plugin/tests/superpowers_body_golden.txt` and copy the text **before** the first `- ` bullet into `body_intro`, and the text **after** the last bullet into `body_outro`, verbatim (including newlines). Add to the `[mode]` table of `manifests/superpowers.toml`:
+⚠️ The golden test `mode_body_matches_golden_snapshot` (`plan.rs:~198`) builds from the in-code `manifest()` **test helper** (`plan.rs:~143`) — **not** from `superpowers.toml`. So the byte-identical guarantee lives on that helper. In `plan.rs`'s `manifest()` helper, set the `ModeRecipe`'s `body_intro`/`body_outro` to the exact strings from `superpowers_body_golden.txt` (text before the first `- ` bullet → `body_intro`; text after the last bullet → `body_outro`, verbatim incl. newlines):
 
-```toml
-body_intro = """
-You are operating in "Superpowers" mode, imported from obra/superpowers.
-
-Before any task, check if an available skill applies and invoke it with invoke_skill. The skills are:
-"""
-body_outro = """
-
-Always check for an applicable skill before starting work. If multiple skills apply, invoke the most specific one first. After completing work, invoke verification-before-completion before claiming success.
-
-Skill work produces specs, plans, and debugging notes. Keep the running narration terse, and when the work is done do NOT reframe the whole effort in long paragraphs: close with a short recap of what changed and any next step.
-"""
+```rust
+        mode: Some(ModeRecipe {
+            loader: "using-superpowers/SKILL.md".into(),
+            strip_prefix: "skills/".into(),
+            body: BodyStrategy::FromSkillFrontmatter,
+            description: "Superpowers — curated".into(),
+            body_intro: Some("You are operating in \"Superpowers\" mode, imported from obra/superpowers.\n\nBefore any task, check if an available skill applies and invoke it with invoke_skill. The skills are:\n".into()),
+            body_outro: Some("\nAlways check for an applicable skill before starting work. If multiple skills apply, invoke the most specific one first. After completing work, invoke verification-before-completion before claiming success.\n\nSkill work produces specs, plans, and debugging notes. Keep the running narration terse, and when the work is done do NOT reframe the whole effort in long paragraphs: close with a short recap of what changed and any next step.\n".into()),
+        }),
 ```
 
-> Note: the generator inserts one `\n` before the bullets and expects `intro` to end without the blank line and `outro` to begin with the blank line. If the golden test in Step 5 shows a one-newline diff, adjust the trailing/leading newline of `body_intro`/`body_outro` (not the generator) until byte-identical.
+> The generator emits `intro + "\n" + bullets + outro`. If the golden shows a one-newline diff, adjust the trailing `\n` of `body_intro` / leading `\n` of `body_outro` (never the generator) until byte-identical. Copy the exact bytes from the golden file rather than retyping.
 
-- [ ] **Step 5: Run the golden + new tests**
+- [ ] **Step 5: Also carry the strings in the bundled `superpowers.toml`, and guard the real product path**
+
+Add the same `body_intro`/`body_outro` (TOML triple-quoted; note TOML trims one leading newline after `"""`) to the `[mode]` table of `manifests/superpowers.toml`, so the **bundled** install path (not just the test helper) reproduces the body. Then add a test in `bundled.rs` (or `plan.rs`) that proves it:
+
+```rust
+#[test]
+fn bundled_superpowers_reproduces_the_golden_body() {
+    let m = crate::bundled::bundled_manifest("superpowers").unwrap();
+    let plan = crate::plan::build_plan(&m, &scan()).unwrap(); // reuse plan.rs scan() (make it pub(crate) if needed)
+    let golden = include_str!("../tests/superpowers_body_golden.txt");
+    assert_eq!(plan.mapping.mode_body, golden,
+        "bundled superpowers.toml body drifted from the golden");
+}
+```
+
+- [ ] **Step 6: Run the golden + new tests**
 
 Run: `cargo test -p zoid-plugin`
-Expected: PASS — `mode_body_matches_golden_snapshot` still green (byte-identical), plus the two new tests.
+Expected: PASS — `mode_body_matches_golden_snapshot` **and** `bundled_superpowers_reproduces_the_golden_body` both green (byte-identical), plus Task 2 Steps 1–2 tests.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add crates/zoid-plugin/src/plan.rs crates/zoid-plugin/manifests/superpowers.toml
+git add crates/zoid-plugin/src/plan.rs crates/zoid-plugin/src/bundled.rs crates/zoid-plugin/manifests/superpowers.toml
 git commit -m "feat(zoid-plugin): manifest-driven mode body with generic name/repo default"
 ```
 
@@ -445,7 +459,7 @@ git commit -m "feat(zoid-plugin): add skills manifest kind (no mode overlay)"
 
 ---
 
-## Task 4: Install a skills-kind plan into the convention skills dir
+## Task 4: Install a skills-kind plan into a per-pack private dir
 
 **Files:**
 - Modify: `crates/zoid/src/plugin_install.rs`
@@ -453,57 +467,70 @@ git commit -m "feat(zoid-plugin): add skills manifest kind (no mode overlay)"
 
 **Interfaces:**
 - Consumes: `InstallPlan` (skills kind), `zoid_core::wizard::UpstreamScan`, `crate::mode_wizard::materialize`.
-- Produces: `finish_skills_install(plan: &InstallPlan, scan: &UpstreamScan, skills_root: &Path, plugin_id: &str, manifest_ref: &str, origin: &str) -> Result<InstalledPlugin, String>` — materializes each skill under `skills_root` (the convention dir `<cfg>/skills`), writes no `mode.md`, and records a `.zoid-plugin.json` sidecar under `skills_root/.zoid-plugins/<plugin_id>/`.
+- Produces: `finish_skills_install(plan: &InstallPlan, scan: &UpstreamScan, skills_root: &Path, plugin_id: &str, manifest_ref: &str, origin: &str) -> Result<InstalledPlugin, String>` — materializes each skill into the pack's **own private dir** `skills_root/<plugin_id>/` (so `materialize`'s file-set reconciliation stays scoped to this pack), writes no `mode.md`, and records `.zoid-plugin.json` inside that pack dir.
 
-- [ ] **Step 1: Write the failing test**
+> **Why per-pack (C3):** `mode_wizard::materialize` writes one `.zoid-provenance.json` at its `dest_dir` and, on a subsequent call, **deletes every canonical path in the old sidecar not present in the new mapping**. If two packs shared `<cfg>/skills`, installing pack B would delete pack A's files. Each pack gets its own dir; Task 4b teaches the scanner to descend into them.
+
+- [ ] **Step 1: Write the failing test (isolation is the key assertion)**
 
 In the `tests` module of `plugin_install.rs`:
 
 ```rust
-#[test]
-fn skills_install_materializes_into_convention_dir_no_mode_md() {
+fn skills_manifest(id: &str) -> zoid_plugin::manifest::PluginManifest {
     use zoid_plugin::manifest::{PluginManifest, PluginSource};
+    PluginManifest {
+        id: id.into(), schema: 1, kind: vec!["skills".into()],
+        name: id.into(), description: "d".into(),
+        source: Some(PluginSource { repo: "o/r".into(), ref_: "SHA".into(), subtree: "skills".into() }),
+        mode: None, install: vec![Effect::Activate],
+    }
+}
+
+#[test]
+fn skills_install_uses_private_pack_dir_no_mode_md() {
     let scan = scan(); // existing helper: brainstorming/SKILL.md etc.
-    let m = PluginManifest {
-        id: "doctools".into(),
-        schema: 1,
-        kind: vec!["skills".into()],
-        name: "Doc Tools".into(),
-        description: "d".into(),
-        source: Some(PluginSource { repo: "anthropics/skills".into(), ref_: "SHA".into(), subtree: "skills".into() }),
-        mode: None,
-        install: vec![Effect::Activate],
-    };
-    let plan = zoid_plugin::plan::build_plan(&m, &scan).unwrap();
+    let plan = zoid_plugin::plan::build_plan(&skills_manifest("doctools"), &scan).unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let skills_root = tmp.path().join("skills");
     let out = finish_skills_install(&plan, &scan, &skills_root, "doctools", "SHA", "url").unwrap();
-    // A skill landed as <skills_root>/brainstorming/SKILL.md
-    assert!(skills_root.join("brainstorming").join("SKILL.md").is_file());
-    // No mode.md anywhere under skills_root.
-    assert!(!skills_root.join("mode.md").exists());
-    // Sidecar recorded for uninstall.
-    assert!(skills_root.join(".zoid-plugins").join("doctools").join(".zoid-plugin.json").is_file());
+    // Skill landed under the PRIVATE pack dir: <skills_root>/doctools/brainstorming/SKILL.md
+    assert!(skills_root.join("doctools").join("brainstorming").join("SKILL.md").is_file());
+    assert!(!skills_root.join("doctools").join("mode.md").exists());
+    // Per-pack sidecar lives inside the pack dir.
+    assert!(skills_root.join("doctools").join(".zoid-plugin.json").is_file());
     assert!(out.safe_effects.contains(&Effect::Activate));
+}
+
+#[test]
+fn two_skills_packs_do_not_delete_each_other() {
+    let scan = scan();
+    let tmp = tempfile::tempdir().unwrap();
+    let skills_root = tmp.path().join("skills");
+    let plan_a = zoid_plugin::plan::build_plan(&skills_manifest("packA"), &scan).unwrap();
+    finish_skills_install(&plan_a, &scan, &skills_root, "packA", "SHA", "url").unwrap();
+    let plan_b = zoid_plugin::plan::build_plan(&skills_manifest("packB"), &scan).unwrap();
+    finish_skills_install(&plan_b, &scan, &skills_root, "packB", "SHA", "url").unwrap();
+    // Pack A survived installing Pack B (the C3 regression guard).
+    assert!(skills_root.join("packA").join("brainstorming").join("SKILL.md").is_file());
+    assert!(skills_root.join("packB").join("brainstorming").join("SKILL.md").is_file());
 }
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p zoid finish_skills_install 2>&1 | head` (or the test name)
+Run: `cargo test -p zoid skills_install_uses_private_pack_dir two_skills_packs_do_not_delete`
 Expected: FAIL — `finish_skills_install` is undefined.
 
 - [ ] **Step 3: Implement `finish_skills_install`**
 
-`materialize` writes canonical entries relative to a destination root and drops a `.zoid-provenance.json`. Reuse it with `skills_root` as the destination so `brainstorming/SKILL.md` lands at `<skills_root>/brainstorming/SKILL.md` — exactly where `resolve_skill_dirs` scans. Add:
+`materialize` writes canonical entries relative to a destination root and drops a `.zoid-provenance.json` there, reconciling against any prior sidecar **at that same root**. So each pack gets its **own** root `skills_root/<plugin_id>/`; `brainstorming/SKILL.md` lands at `<skills_root>/<plugin_id>/brainstorming/SKILL.md`, and reconciliation only ever touches that one pack. Add:
 
 ```rust
-/// Install a skills-kind plan into the convention skills dir. Unlike a mode
-/// install, there is no `mode.md` overlay and no activation of a mode; the
-/// materialized `<skill>/SKILL.md` files are auto-discovered by
-/// `skill_import::resolve_skill_dirs` (which scans `<cfg>/skills/*/SKILL.md`).
-/// v1 does NOT write config (SetConfig is gated off), so relying on the
-/// convention dir is the seam.
+/// Install a skills-kind plan into the pack's OWN dir under the convention
+/// skills root. No `mode.md` overlay, no mode activation. The pack dir
+/// `<skills_root>/<plugin_id>/` is discovered by the Task-4b scanner change
+/// (which scans `<cfg>/skills/<pack>/<skill>/SKILL.md`). v1 writes no config
+/// (SetConfig is gated off), so the on-disk convention IS the seam.
 pub fn finish_skills_install(
     plan: &InstallPlan,
     scan: &UpstreamScan,
@@ -521,14 +548,18 @@ pub fn finish_skills_install(
             return Err(format!("config effects are not yet supported: {e:?}"));
         }
     }
-    std::fs::create_dir_all(skills_root)
-        .map_err(|e| format!("create skills dir {}: {e}", skills_root.display()))?;
+    // Per-pack private dir: scopes materialize's file-set reconciliation to
+    // this pack alone (see C3), and mirrors how modes use <cfg>/modes/<id>/.
+    let pack_dir = skills_root.join(plugin_id);
+    if pack_dir.exists() {
+        std::fs::remove_dir_all(&pack_dir)
+            .map_err(|e| format!("remove old pack {}: {e}", pack_dir.display()))?;
+    }
+    std::fs::create_dir_all(&pack_dir)
+        .map_err(|e| format!("create pack dir {}: {e}", pack_dir.display()))?;
     let fetched_at = chrono::Utc::now().to_rfc3339();
-    materialize(&plan.mapping, scan, skills_root, &fetched_at).map_err(|e| e.problems.join("; "))?;
+    materialize(&plan.mapping, scan, &pack_dir, &fetched_at).map_err(|e| e.problems.join("; "))?;
 
-    let sidecar_dir = skills_root.join(".zoid-plugins").join(plugin_id);
-    std::fs::create_dir_all(&sidecar_dir)
-        .map_err(|e| format!("create sidecar dir: {e}"))?;
     let applied: Vec<AppliedEffect> = plan
         .effects
         .iter()
@@ -542,30 +573,114 @@ pub fn finish_skills_install(
         schema: 1,
         plugin: PluginStamp { id: plugin_id.to_string(), manifest_ref: manifest_ref.to_string(), installed_at: fetched_at.clone() },
         source: PluginProvSource { repo: scan.repo.clone(), ref_: scan.resolved_ref.clone(), subtree: scan.subtree_path.clone(), origin: origin.to_string() },
-        files: plan.mapping.canonical_paths().iter().map(|p| p.to_string()).collect(),
+        // C2: PluginProvenance.files is Vec<ProvenanceEntry>. The per-file
+        // list already lives in the pack dir's .zoid-provenance.json (written
+        // by materialize); mirror finish_plugin_install and leave this empty
+        // to avoid two sources of truth. Uninstall removes the whole pack_dir.
+        files: Vec::new(),
         effects_applied: applied,
     };
     let json = serde_json::to_string_pretty(&sidecar).map_err(|e| format!("serialize sidecar: {e}"))?;
-    std::fs::write(sidecar_dir.join(".zoid-plugin.json"), json)
+    std::fs::write(pack_dir.join(".zoid-plugin.json"), json)
         .map_err(|e| format!("write sidecar: {e}"))?;
 
     let safe_effects: Vec<Effect> = plan.effects.iter().filter(|e| e.risk() == RiskTier::Safe).cloned().collect();
-    Ok(InstalledPlugin { dest: skills_root.to_path_buf(), safe_effects })
+    Ok(InstalledPlugin { dest: pack_dir, safe_effects })
 }
 ```
 
-> `PluginProvenance.files` is populated here (unlike the mode path) because for skills there is no separate mode `.zoid-provenance.json` root to own the per-plugin file list for uninstall. If `PluginProvSource.files` field is named differently, match the struct in `zoid-plugin/src/provenance.rs`.
-
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p zoid finish_skills_install`
-Expected: PASS.
+Run: `cargo test -p zoid skills_install_uses_private_pack_dir two_skills_packs_do_not_delete`
+Expected: PASS — including the cross-pack regression guard.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add crates/zoid/src/plugin_install.rs
-git commit -m "feat(zoid): install skills-kind plans into the convention skills dir"
+git commit -m "feat(zoid): install skills-kind plans into per-pack private dirs"
+```
+
+---
+
+## Task 4b: Scanner descends into per-pack skill dirs
+
+**Files:**
+- Modify: `crates/zoid/src/skill_import.rs`
+- Test: `crates/zoid/src/skill_import.rs` (inline, tempdir)
+
+**Interfaces:**
+- Consumes: the on-disk layout `<skills_root>/<pack>/<skill>/SKILL.md` written by Task 4.
+- Produces: `import_skills` (or a new `import_skills_recursive`) discovers skills one level deeper — both bare `<root>/<skill>/SKILL.md` (existing) **and** `<root>/<pack>/<skill>/SKILL.md` (new), so per-pack packs are found without a config write.
+
+- [ ] **Step 1: Write the failing test**
+
+```rust
+#[test]
+fn imports_skills_from_per_pack_subdirs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    // Bare skill (existing convention).
+    let bare = root.join("bare-skill");
+    std::fs::create_dir_all(&bare).unwrap();
+    std::fs::write(bare.join("SKILL.md"), "---\nname: bare-skill\ndescription: d\n---\nb\n").unwrap();
+    // Per-pack skill: <root>/packA/nested/SKILL.md
+    let nested = root.join("packA").join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(nested.join("SKILL.md"), "---\nname: nested\ndescription: d\n---\nn\n").unwrap();
+    // A pack sidecar dir must NOT be mistaken for a skill (no SKILL.md in it).
+    let skills = import_skills(&[root.to_path_buf()]);
+    let names: std::collections::HashSet<String> = skills.iter().map(|s| s.name.clone()).collect();
+    assert!(names.contains("bare-skill"));
+    assert!(names.contains("nested"));
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cargo test -p zoid imports_skills_from_per_pack_subdirs`
+Expected: FAIL — `import_skills` only scans immediate `*/SKILL.md`, so `nested` is not found.
+
+- [ ] **Step 3: Extend `import_skills` to descend one level when a child has no `SKILL.md`**
+
+In the entry loop of `import_skills`, when an immediate child dir has **no** `SKILL.md` of its own, treat it as a pack dir and scan its immediate `*/SKILL.md` children too:
+
+```rust
+        for entry in entries.flatten() {
+            let skill_dir = entry.path();
+            if !skill_dir.is_dir() {
+                continue;
+            }
+            let md = skill_dir.join("SKILL.md");
+            if md.is_file() {
+                push_skill(&mut out, &skill_dir, &md);
+                continue;
+            }
+            // No SKILL.md here → maybe a pack dir; scan one level deeper.
+            if let Ok(inner) = std::fs::read_dir(&skill_dir) {
+                for e2 in inner.flatten() {
+                    let sub = e2.path();
+                    let sub_md = sub.join("SKILL.md");
+                    if sub.is_dir() && sub_md.is_file() {
+                        push_skill(&mut out, &sub, &sub_md);
+                    }
+                }
+            }
+        }
+```
+
+Refactor the existing read-parse-push body into a small `fn push_skill(out: &mut Vec<Skill>, skill_dir: &Path, md: &Path)` (moves the current `read_to_string` + `parse_skill_md` + `canonicalize` + `out.push(Skill{..})` block verbatim) so both call sites share it. A pack's `.zoid-plugin.json` / `.zoid-provenance.json` are files (not dirs) and are naturally ignored.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cargo test -p zoid import_ skills`
+Expected: PASS — the existing `import_reads_valid_skills_and_skips_malformed` still green, plus the new nested test.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/zoid/src/skill_import.rs
+git commit -m "feat(zoid): discover skills in per-pack subdirs of the skills root"
 ```
 
 ---
@@ -573,74 +688,74 @@ git commit -m "feat(zoid): install skills-kind plans into the convention skills 
 ## Task 5: `:plugin install` gains `--mode` / `--skills` override flags
 
 **Files:**
-- Modify: `crates/zoid/src/cli.rs`
-- Test: `crates/zoid/src/cli.rs` (inline)
+- Verify (likely no change): `crates/zoid-tui/src/command.rs` — `:plugin install <rest>` already stores `Command::PluginInstall(rest.trim())` (a raw `String`). Confirm it keeps the **whole** tail including flags (it does: `s["plugin install ".len()..].trim()`), so `--mode`/`--skills` ride along untouched. **Do not change the enum.**
+- Create/modify: `crates/zoid/src/plugin_install.rs` — add pure `parse_plugin_install_args`.
+- Modify: `crates/zoid/src/main.rs` — at the `Command::PluginInstall(arg)` dispatch (~line 5100 → `install_plugin`), split flags off `arg`, flip the resolved manifest's kind, and route to `finish_plugin_install` vs `finish_skills_install`.
+- Test: `crates/zoid/src/plugin_install.rs` (inline, for the pure parser).
 
 **Interfaces:**
-- Produces: the parsed `:plugin install` command exposes an override enum `KindOverride { None, Mode, Skills }` (or two bools) that the install dispatcher reads to pick `finish_plugin_install` vs `finish_skills_install`, and to flip the manifest kind before `build_plan`.
+- Produces: `parse_plugin_install_args(raw: &str) -> (String, KindOverride)` where `pub enum KindOverride { None, Mode, Skills }`. The dispatcher consumes it to flip `manifest.kind` before `build_plan` and to pick the finisher.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing test (pure parser)**
 
-Locate the existing `:plugin`/`install` parse test in `cli.rs` (near `parses_uninstall_and_purge`) and add:
+In `plugin_install.rs` tests:
 
 ```rust
 #[test]
 fn parses_plugin_install_mode_and_skills_flags() {
-    assert_eq!(parse_plugin_install("superpowers --mode"), Some(("superpowers".into(), KindOverride::Mode)));
-    assert_eq!(parse_plugin_install("anthropics/skills --skills"), Some(("anthropics/skills".into(), KindOverride::Skills)));
-    assert_eq!(parse_plugin_install("superpowers"), Some(("superpowers".into(), KindOverride::None)));
+    assert_eq!(parse_plugin_install_args("superpowers --mode"), ("superpowers".into(), KindOverride::Mode));
+    assert_eq!(parse_plugin_install_args("anthropics/skills --skills"), ("anthropics/skills".into(), KindOverride::Skills));
+    assert_eq!(parse_plugin_install_args("superpowers"), ("superpowers".into(), KindOverride::None));
+    // Last flag wins; ref is the sole non-flag token.
+    assert_eq!(parse_plugin_install_args("x --skills --mode"), ("x".into(), KindOverride::Mode));
 }
 ```
-
-> Adapt to the file's actual parse-entry shape: if `:plugin install` is parsed inside a larger `parse_command`, add a focused helper `parse_plugin_install(rest: &str) -> Option<(String, KindOverride)>` and test that, then call it from the command parser.
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p zoid parses_plugin_install_mode_and_skills`
-Expected: FAIL — `KindOverride` / `parse_plugin_install` undefined.
+Expected: FAIL — `KindOverride` / `parse_plugin_install_args` undefined.
 
-- [ ] **Step 3: Implement the parse**
+- [ ] **Step 3: Implement the pure parser**
+
+Keeping the enum untouched (C4) means the flag split happens here, off the raw string:
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KindOverride { None, Mode, Skills }
 
-/// Parse the argument tail of `:plugin install`. Returns the plugin ref (id or
-/// url) and any kind override. `--mode` and `--skills` are mutually exclusive;
-/// if both appear, the last one wins (documented, not an error, to match zoid's
-/// permissive flag stance).
-pub fn parse_plugin_install(rest: &str) -> Option<(String, KindOverride)> {
-    let mut plugin_ref: Option<String> = None;
+/// Split a raw `:plugin install` argument string into (plugin_ref, override).
+/// Flags may appear on either side of the ref; the last of --mode/--skills
+/// wins (permissive, matching zoid's flag stance). The first non-flag token is
+/// the ref; later bare tokens are ignored (the ref is a single id/url).
+pub fn parse_plugin_install_args(raw: &str) -> (String, KindOverride) {
+    let mut plugin_ref = String::new();
     let mut over = KindOverride::None;
-    for tok in rest.split_whitespace() {
+    for tok in raw.split_whitespace() {
         match tok {
             "--mode" => over = KindOverride::Mode,
             "--skills" => over = KindOverride::Skills,
-            other if other.starts_with("--") => return None, // unknown flag
-            other => {
-                if plugin_ref.is_some() {
-                    return None; // a second bare token is a parse error
-                }
-                plugin_ref = Some(other.to_string());
-            }
+            other if other.starts_with("--") => {} // unknown flag: ignore
+            other if plugin_ref.is_empty() => plugin_ref = other.to_string(),
+            _ => {}
         }
     }
-    plugin_ref.map(|r| (r, over))
+    (plugin_ref, over)
 }
 ```
 
-Wire `KindOverride` into the install dispatcher: after resolving the manifest, if `over == Mode` set `manifest.kind = vec!["mode".into()]` (and if it had no `[mode]`, `build_plan` uses the generic default body); if `over == Skills` set `manifest.kind = vec!["skills".into()]` and `manifest.mode = None`. Then choose `finish_plugin_install` (mode) or `finish_skills_install` (skills) by the resulting kind.
+Then in `main.rs`'s `install_plugin` (reached from the `Command::PluginInstall(arg)` arm ~line 5100): call `let (plugin_ref, over) = parse_plugin_install_args(&arg);` and use `plugin_ref` where the code currently uses the whole `arg`. After the manifest is resolved and before `build_plan`, apply the override: `KindOverride::Mode` → `manifest.kind = vec!["mode".into()]` (if it had no `[mode]` table, `build_plan`'s generic default body covers it); `KindOverride::Skills` → `manifest.kind = vec!["skills".into()]`, `manifest.mode = None`. Then branch: skills-kind → `finish_skills_install(&plan, &scan, &skills_root, id, ref_, origin)` with `skills_root = <cfg>/skills`; else the existing `finish_plugin_install` with `dest = <cfg>/modes/<id>`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Run test to verify it passes; confirm no enum ripple**
 
-Run: `cargo test -p zoid parses_plugin_install`
-Expected: PASS.
+Run: `cargo test -p zoid parses_plugin_install_mode && cargo build -p zoid-tui -p zoid`
+Expected: PASS + clean build (command.rs/palette.rs/render.rs untouched — the enum still carries one `String`).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/zoid/src/cli.rs
-git commit -m "feat(zoid): --mode/--skills override on :plugin install"
+git add crates/zoid/src/plugin_install.rs crates/zoid/src/main.rs
+git commit -m "feat(zoid): --mode/--skills override at the :plugin install dispatch"
 ```
 
 ---
@@ -701,14 +816,14 @@ publish = false
 
 [dependencies]
 zoid-plugin = { path = "../zoid-plugin" }
-zoid-core = { path = "../zoid-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-toml = { workspace = true }
 anyhow = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true }
 ```
+
+> N1: `zoid-core` and `toml` are intentionally omitted — the converter formats TOML as strings and re-validates via `zoid_plugin::parse_manifest` (which owns the `toml` dep). Add `zoid-core` only if a later task needs `UpstreamScan` directly.
 
 In root `Cargo.toml`, add `"crates/zoid-plugin-import"` to `[workspace].members`.
 
@@ -909,6 +1024,13 @@ fn no_loader_defaults_to_skills() {
 }
 
 #[test]
+fn loader_match_is_anchored_not_substring() {
+    // S2: `reusing-context` contains "using-" but is NOT a loader.
+    let t = tree(&["skills/reusing-context/SKILL.md", "skills/foo/SKILL.md"]);
+    assert!(matches!(classify(&t, KindPref::Auto).kind, TargetKind::Skills));
+}
+
+#[test]
 fn pref_overrides_default() {
     let t = tree(&["skills/using-p/SKILL.md"]);
     assert!(matches!(classify(&t, KindPref::Skills).kind, TargetKind::Skills));
@@ -968,16 +1090,19 @@ pub struct Classification {
     pub mcp_skipped_http: Vec<String>,
 }
 
-const LOADER_HINTS: &[&str] = &["using-", "find-skills", "-overview"];
+/// A loader/index skill name. Tightened (S2): anchored matches only — a bare
+/// `contains("using-")` would misclassify `reusing-context`, `focusing-…`, etc.
+fn is_loader_name(name: &str) -> bool {
+    name.starts_with("using-") || name == "find-skills" || name.ends_with("-overview")
+}
 
 fn find_loader(files: &[String]) -> Option<String> {
-    // A loader is a skills/<name>/SKILL.md whose <name> matches a hint.
+    // A loader is a skills/<name>/SKILL.md whose <name> is a loader name.
     for f in files {
         let Some(rel) = f.strip_prefix("skills/") else { continue };
         let segs: Vec<&str> = rel.split('/').collect();
         if segs.len() != 2 || segs[1] != "SKILL.md" { continue; }
-        let name = segs[0];
-        if LOADER_HINTS.iter().any(|h| name.starts_with(h) || name.ends_with(h) || name.contains(h)) {
+        if is_loader_name(segs[0]) {
             return Some(f.clone());
         }
     }
@@ -1153,13 +1278,15 @@ pub fn emit(
     let plugin_toml = match &class.kind {
         TargetKind::Mode { loader } => {
             let loader_rel = strip_subtree(loader, subtree);
+            // N2: an empty subtree must not yield strip_prefix = "/".
+            let strip = if subtree.is_empty() { String::new() } else { format!("{subtree}/") };
             Some(format!(
                 "[plugin]\nid = \"{id}\"\nschema = 1\nkind = [\"mode\"]\nname = \"{name}\"\ndescription = \"{desc}\"\n\n\
                  [source]\nrepo = \"{repo}\"\nref = \"{sha}\"\nsubtree = \"{subtree}\"\n\n\
-                 [mode]\nloader = \"{loader_rel}\"\nstrip_prefix = \"{subtree}/\"\nbody = \"from-skill-frontmatter\"\ndescription = \"{desc}\"\n\n\
+                 [mode]\nloader = \"{loader_rel}\"\nstrip_prefix = \"{strip}\"\nbody = \"from-skill-frontmatter\"\ndescription = \"{desc}\"\n\n\
                  [[install]]\neffect = \"activate\"\n",
                 id = slug(name), name = name, desc = description.replace('"', "'"),
-                repo = repo, sha = sha, subtree = subtree, loader_rel = loader_rel,
+                repo = repo, sha = sha, subtree = subtree, loader_rel = loader_rel, strip = strip,
             ))
         }
         TargetKind::Skills => Some(format!(
@@ -1523,12 +1650,17 @@ git commit --allow-empty -m "chore(plugin-import): workspace build + test green"
 
 ---
 
-## Self-Review Notes (author)
+## Self-Review Notes (author) — incl. gilfoyle review resolution (2026-07-13)
 
-- **Spec §3.1a (body generalization):** Tasks 1–2. Golden preserved (Task 2 Step 4/5, Task 12 Step 3).
+- **Spec §3.1a (body generalization):** Tasks 1–2. **C1 fixed:** the golden builds from the in-code `manifest()` helper, so Task 2 Step 4 sets intro/outro there (not on `superpowers.toml`); Step 5 adds a bundled-repro guard so the real product path is also proven byte-identical.
 - **Spec §3.1b (skills kind):** Task 3.
-- **Spec §3.3 (install side + `--mode`/`--skills`):** Tasks 4–5. Note the deliberate deviation from the spec's "register via `skills.source_dirs` set_config": v1 gates SetConfig off, so skills materialize into the convention dir instead (documented in Task 4 Step 3).
-- **Spec §3.2 + §4 (converter + classification):** Tasks 6–11.
-- **Spec §5 (testing):** fixtures + `roundtrip.rs` in Task 11; workspace gate in Task 12.
-- **Type consistency:** `PluginTree`, `KindPref`, `TargetKind`, `Classification`, `Emitted` names are used identically across Tasks 8–11. `KindOverride` (install CLI, Task 5) is intentionally distinct from `KindPref` (converter, Task 8) — different layers.
-- **Known limitation (deferred to Spec 3):** flat convention-dir skills install can collide skill names across packs; registry first-wins dedup bounds the blast radius for v1's small wholesale packs.
+- **Spec §3.3 (install side + `--mode`/`--skills`):** Tasks 4, 4b, 5.
+  - **C3 fixed (design):** `mode_wizard::materialize` reconciles/deletes against a prior sidecar at its `dest_dir`, so a **shared** `<cfg>/skills` dir would make packs delete each other. Each pack now installs into its **own** dir `<cfg>/skills/<plugin_id>/` (Task 4), and Task 4b teaches the scanner to descend one level to discover them. This preserves the v1 no-`set_config` constraint. Supersedes the spec's "register via `skills.source_dirs`" wording — a spec note has been added.
+  - **C2 fixed:** `PluginProvenance.files` is `Vec<ProvenanceEntry>`; Task 4 uses `files: Vec::new()` (per-file list lives in the pack dir's `.zoid-provenance.json`).
+  - **C4 fixed:** `:plugin install` is parsed in `zoid-tui/src/command.rs` into `Command::PluginInstall(String)`. Task 5 keeps that enum unchanged (no palette/render/command-test ripple) and splits `--mode`/`--skills` at the `main.rs` dispatch via the pure `parse_plugin_install_args`.
+  - **S1 fixed:** Task 1 also patches the `ModeRecipe` literal in `plugin_install.rs` (~139).
+- **Spec §3.2 + §4 (converter + classification):** Tasks 6–11. **S2 fixed:** loader match is anchored (`starts_with("using-") || == "find-skills" || ends_with("-overview")`) with a negative test.
+- **Spec §5 (testing):** fixtures + `roundtrip.rs` in Task 11; workspace gate in Task 12 (Step 3 asserts the golden file is byte-unmodified).
+- **S3 (scope clarity):** the converter's emitted `.mcp.json` is a **Spec 2 catalog artifact** — zoid discovers MCP only from `<user>/mcp.json` and `<cwd>/.mcp.json` (`zoid-mcp::discover`), never from a plugin dir. Spec 1 does not install MCP; it only produces the normalized snippet for the catalog to host.
+- **Type consistency:** `PluginTree`, `KindPref`, `TargetKind`, `Classification`, `Emitted` used identically across Tasks 8–11. `KindOverride` (install, Task 5) is intentionally distinct from `KindPref` (converter, Task 8) — different layers.
+- **Known limitation (deferred to Spec 3):** per-pack dirs prevent cross-pack file deletion, but two packs can still register skills with the same `name`; the registry's first-wins dedup bounds this for v1's small wholesale packs.
