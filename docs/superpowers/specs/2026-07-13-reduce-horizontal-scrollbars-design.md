@@ -56,6 +56,19 @@ Applied as `class="figure bleed"` on the three `.figure` elements. `.frame` is u
 now resolves against the 100vw band instead of the 1072px column. On a viewport ≥ the
 render width the frame sits fully centered; on a narrower one it scrolls internally.
 
+**Load-bearing detail (not merely "unchanged"):** the narrow-screen fallback works *only*
+because `.frame` has `overflow-x:auto`. As a flex item of `.bleed`, that `overflow` resets
+the frame's automatic flex minimum to 0, letting it shrink below its ~1282px `max-content`
+down to `max-width:100%` and scroll internally. If `overflow-x` is ever stripped from
+`.frame`, the flex minimum reverts to ~1282px, the frame stops shrinking and overhangs the
+`100vw` band (clipped, unreachable, no scrollbar). The implementation adds a short comment
+on `.bleed` recording this dependency.
+
+**Note:** the two-column `.section{display:grid}` / `.section.rev .figure{order:-1}` rules
+(≈ lines 64–76) are **dead code** — `class="section"` appears zero times in the document;
+every player lives in a `.section-full` block or the hero. So `.bleed`'s `display:flex`
+cannot fight any grid.
+
 **Why not restructure the DOM (move figures out of `.wrap`):** rejected — real DOM surgery
 on hero + two `.section-full` blocks, higher regression risk near the `<!--FRAMES:*-->`
 capture markers, same visual result. The `.bleed` class is the minimal DRY change.
@@ -67,29 +80,44 @@ breaking typography.
 ### Component 2 — One-liner: fit-and-center (the bash command)
 
 The one-liner (~850px) fits inside `.wrap` (1072px); it only scrolls because it is
-`width:100%` inside the 760px `.cta`. Change it to size-to-content and center, and let it
-exceed the 760px measure (its own `max-width`, since the button/blurb should stay at 760px):
+`width:100%` inside the 760px `.cta`. **`.cta` is a `display:flex; flex-direction:column;
+align-items:center; max-width:760px` column with no horizontal padding** — so its content
+box is exactly 760px. That is the load-bearing constraint: any `%`- or `fit-content`-based
+width resolves *against* that 760px containing block and clamps to 760, which cannot show
+the ~850px command. Only an **intrinsic** width (`max-content`) is allowed to overflow the
+containing block, and only flex centering (`align-items:center`) centers an *overflowing*
+item — `margin-inline:auto` collapses to 0 under negative free space and jams the box to
+the left edge. So:
 
 ```css
 .oneliner{
   display:block;
-  width:fit-content;          /* was width:100% */
-  max-width:min(100%, 900px); /* show the full ~850px command; still bounded */
-  margin-inline:auto;         /* center within the CTA */
-  overflow-x:auto;            /* narrow-screen (<~900px) fallback only */
-  white-space:pre;            /* unchanged, plus existing bg/border/padding/color */
+  width:max-content;                 /* was width:100% — intrinsic, may exceed the 760px .cta */
+  max-width:min(100vw - 48px, 900px);/* cap below the viewport (minus .wrap's 48px padding); ~900 ceiling on desktop */
+  overflow-x:auto;                   /* narrow-screen (<~900px) fallback only */
+  white-space:pre;                   /* unchanged, plus existing bg/border/padding/color */
 }
 ```
 
-`.cta` keeps `max-width:760px` for the button and beta note; the one-liner is allowed to
-render wider (up to 900px) and center. No `.bleed` needed — it never exceeds `.wrap`.
+Do **not** add `margin-inline:auto` — `.cta`'s existing `align-items:center` centers the
+(now overflowing) one-liner correctly, including when it is wider than the 760px column.
+`.cta` keeps `max-width:760px` for the button and beta note; the one-liner deliberately
+renders wider (up to ~850px, capped at 900px) and centers. No `.bleed` needed — at ~850px
+it stays inside `.wrap`'s 1072px, so the page never scrolls.
 
-### Component 3 — `100vw` offset neutralizer
+### Component 3 — `scrollbar-gutter:stable` (layout-stability polish)
 
-Add `scrollbar-gutter: stable` to the root element so `100vw` and the visible viewport
-width agree when a vertical scrollbar is present, keeping the centered frames from
-shifting a few px off-center. `body{overflow-x:hidden}` remains as the page-scroll
-backstop (already present).
+Add `scrollbar-gutter: stable` to the root element. **Correction from review:** this does
+*not* make `100vw == visible width` — `100vw` always includes the scrollbar gutter. The
+frames center correctly regardless, because `margin-left:calc(50% - 50vw)` uses `50%` of
+the *actual* `.wrap` content width, which places the bleed box's center on the visible
+center at every viewport. What `scrollbar-gutter:stable` actually buys us is **preventing
+horizontal layout shift / scrollbar-flash** when a vertical scrollbar appears or disappears,
+and a symmetric gutter across pages. It is polish, not a correctness dependency.
+
+The real page-scroll backstop is **`body{overflow-x:hidden}`** (already present): it clips
+the ~15px that `.bleed{width:100vw}` overhangs the content area, so no page-level horizontal
+scrollbar ever appears. Do not remove it.
 
 ## Verification
 
@@ -98,17 +126,24 @@ do not move. `cargo test -p zoid-tui --features web-capture --example web_captur
 still pass (confirms nothing in the capture path was disturbed).
 
 **Browser gate (the real acceptance check),** served locally via `python3 -m http.server`
-against the assembled `public/index.html`:
+against `public/index.html`. Note `pageHScroll === 0` alone is *near-tautological* because
+`body{overflow-x:hidden}` clips overflow so `scrollWidth` under-reports — it proves "no page
+scrollbar," not "nothing clipped off-screen." So each width also asserts a real **breakout
+check**: for every `.bleed`, its rendered right edge does not exceed the viewport
+(`getBoundingClientRect().right ≤ clientWidth + 1`) AND its box is centered
+(`|(left+right)/2 − clientWidth/2| < 4`).
 
-- **Wide viewport (≥1300px):** `document.documentElement.scrollWidth === clientWidth`
-  (no page horizontal scroll) AND for each `.frame`, `frame.scrollWidth === frame.clientWidth`
-  (no per-frame scrollbar). The `.oneliner` is fully visible and centered.
-- **Mid viewport (~1000px):** page still does not scroll horizontally; each `.frame`
-  scrolls internally (`scrollWidth > clientWidth`); frames remain centered within their band.
-- **Narrow viewport (~390px):** page does not scroll horizontally; frames and one-liner
-  scroll internally as the single fallback.
+- **Wide viewport (≥1300px):** page does not scroll horizontally; every `.frame` has
+  `scrollWidth === clientWidth` (no per-frame scrollbar); every `.bleed` passes the breakout
+  + centering check; the `.oneliner` is fully visible (`scrollWidth === clientWidth`) and
+  centered (`|center − viewportCenter| < 24`).
+- **Narrow viewport (~600px):** page does not scroll horizontally; each `.frame` **and** the
+  `.oneliner` scroll internally (`scrollWidth > clientWidth`) as the single fallback; `.bleed`
+  boxes still pass the breakout check (right edge within the viewport).
 
-Mirrors the `pageHScroll: 0` browser check used in the prior §2 rework.
+600px is chosen as the single narrow width because it exercises the fallback scrollbar on
+*both* the frames (<~1300px) and the one-liner (<~900px) at once. Mirrors the `pageHScroll: 0`
+browser check used in the prior §2 rework, hardened with the breakout assertion.
 
 ## Out of scope (YAGNI)
 
