@@ -84,11 +84,20 @@ features.
 
 ### Feedback
 
-- **Persistent indicator** while `select_mode` is on, rendered in the footer/
-  status area in `render.rs` from `state.select_mode` (distinct from the
-  transient `status_hint` used for "copied N lines"): a short marker such as
-  `SELECT`. It must be persistent because this is a *mode* — otherwise the user
-  cannot tell why click/scroll gestures stopped responding.
+- **Always-visible `SELECT` pill** in the status line (`render_status`,
+  `render.rs:360`), placed immediately to the **right of the mode pill** — a
+  second `Span` pushed onto the `left` vec right after the mode chip span
+  (`render.rs:369`). Same style as the mode pill: ` SELECT ` padded, on
+  `bg(color::CHAT_BG)`. Color conveys state (read from `state.select_mode`):
+  - **on** → `fg(color::BRANCH)` (purple `#bc8cff`) — the one palette accent not
+    tied to a status meaning (OK/WARN/ERROR/CHAT_ACCENT are all taken), so it
+    reads as a mode marker, not a health signal.
+  - **off** → `fg(color::DIM)` (`#6e7681`) — same pill, dimmed.
+
+  The pill is always present (not appear/disappear) so the control is
+  discoverable and the mode is unambiguous — the user can always see whether
+  mouse click/scroll gestures are live. This is distinct from the transient
+  `status_hint` (` · …`) used for "copied N lines".
 - **Help entry:** one line in `help.rs` — "Alt+M — select mode: native text
   selection & copy (suspends mouse click/scroll)".
 - **Exit:** no restore logic needed — the existing teardown
@@ -102,8 +111,9 @@ features.
 - **palette unit test:** `all_items(..)` includes the select-mode row, and it
   offers the opposite label for `select_mode` true vs false (mirrors the
   existing companion-row test).
-- **snapshot test:** footer shows the `SELECT` indicator when
-  `select_mode == true` and hides it when false.
+- **snapshot test:** the `SELECT` pill is always rendered to the right of the
+  mode pill; it uses the BRANCH (on) vs DIM (off) foreground depending on
+  `select_mode` (two snapshots, or one asserting the styled span's color).
 - **manual verification (Kitty on CachyOS):** toggle on → drag-select arbitrary
   text and confirm `copy_on_select`/`Ctrl+Shift+C` copies it; toggle off →
   confirm click-to-copy-code and scroll-wheel return.
