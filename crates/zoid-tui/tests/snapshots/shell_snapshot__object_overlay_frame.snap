@@ -44,7 +44,7 @@ Buffer {
         "┌ message ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐",
         "│                                                                                                                                                              │",
         "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘",
-        " CHAT                                                         ⊟ compact     ● idle      ◐ tool                                                      zoom normal ",
+        " CHAT  SELECT                                                 ⊟ compact     ● idle      ◐ tool                                                      zoom normal ",
     ],
     styles: [
         x: 0, y: 0, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
@@ -353,7 +353,8 @@ Buffer {
         x: 2, y: 37, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 159, y: 37, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 39, fg: Rgb(88, 166, 255), bg: Rgb(13, 42, 77), underline: Reset, modifier: NONE,
-        x: 6, y: 39, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 6, y: 39, fg: Rgb(110, 118, 129), bg: Rgb(13, 42, 77), underline: Reset, modifier: NONE,
+        x: 14, y: 39, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 62, y: 39, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 71, y: 39, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 75, y: 39, fg: Rgb(63, 185, 80), bg: Reset, underline: Reset, modifier: NONE,

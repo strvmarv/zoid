@@ -339,7 +339,12 @@ pub struct PaletteItem {
 /// `companion_on` is the live companion-server state (source of truth: the bin's
 /// running server); the companion row offers the *opposite* action, mirroring
 /// how the mode rows offer every mode other than the active one.
-pub fn all_items(active_mode: &str, mode_names: &[String], companion_on: bool) -> Vec<PaletteItem> {
+pub fn all_items(
+    active_mode: &str,
+    mode_names: &[String],
+    companion_on: bool,
+    select_mode: bool,
+) -> Vec<PaletteItem> {
     use crate::state::DrawerId;
 
     // One "Switch to <mode>" row per mode other than the active one, in order,
@@ -420,6 +425,15 @@ pub fn all_items(active_mode: &str, mode_names: &[String], companion_on: bool) -
     items.push(PaletteItem {
         label: companion_label.to_string(),
         command: companion_cmd,
+    });
+    let select_label = if select_mode {
+        "Disable select mode"
+    } else {
+        "Enable select mode"
+    };
+    items.push(PaletteItem {
+        label: select_label.to_string(),
+        command: Command::ToggleSelectMode,
     });
     items.push(PaletteItem {
         label: "Quit zoid".to_string(),
@@ -506,7 +520,7 @@ mod tests {
 
     #[test]
     fn all_items_is_flat_curated() {
-        let items = all_items("Chat", &names(), false);
+        let items = all_items("Chat", &names(), false, false);
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         assert_eq!(
             labels,
@@ -527,19 +541,32 @@ mod tests {
                 "Keyboard shortcuts…",
                 "Submit feedback…",
                 "Enable companion",
+                "Enable select mode",
                 "Quit zoid",
             ]
         );
         // With the companion running, the row offers the opposite action.
-        let items_on = all_items("Chat", &names(), true);
+        let items_on = all_items("Chat", &names(), true, false);
         let on: Vec<&str> = items_on.iter().map(|i| i.label.as_str()).collect();
         assert!(on.contains(&"Disable companion"));
         assert!(!on.contains(&"Enable companion"));
     }
 
     #[test]
+    fn all_items_offers_opposite_select_label() {
+        let off = all_items("Chat", &names(), false, false);
+        assert!(off
+            .iter()
+            .any(|i| i.label == "Enable select mode" && i.command == Command::ToggleSelectMode));
+        let on = all_items("Chat", &names(), false, true);
+        assert!(on
+            .iter()
+            .any(|i| i.label == "Disable select mode" && i.command == Command::ToggleSelectMode));
+    }
+
+    #[test]
     fn mode_rows_offer_every_other_mode_plus_reload() {
-        let items = all_items("Chat", &names(), false);
+        let items = all_items("Chat", &names(), false, false);
         // A "Switch to <name>" row for every mode other than the active one.
         assert_eq!(
             items
@@ -556,7 +583,7 @@ mod tests {
         assert!(items.iter().any(|i| i.command == Command::ReloadModes));
 
         // From Build, Chat gets the switch row instead.
-        let items = all_items("Build", &names(), false);
+        let items = all_items("Build", &names(), false, false);
         assert_eq!(
             items
                 .iter()
@@ -568,14 +595,14 @@ mod tests {
 
     #[test]
     fn empty_query_returns_all_rows_in_order() {
-        let items = all_items("Chat", &names(), false);
+        let items = all_items("Chat", &names(), false, false);
         let idxs = selectable_matches(&items, "");
         assert_eq!(idxs, (0..items.len()).collect::<Vec<_>>());
     }
 
     #[test]
     fn typing_reranks_best_match_first() {
-        let items = all_items("Chat", &names(), false);
+        let items = all_items("Chat", &names(), false, false);
         let idxs = selectable_matches(&items, "comp");
         assert_eq!(items[idxs[0]].label, "Enable companion");
         let idxs = selectable_matches(&items, "build");

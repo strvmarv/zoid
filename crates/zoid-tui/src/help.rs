@@ -28,6 +28,7 @@ pub fn help_lines() -> Vec<Line<'static>> {
             ("Tab", "change focus"),
             ("Alt+P", "switch provider / model"),
             ("Alt+Left / Right", "semantic zoom"),
+            ("Alt+M", "select mode (native copy)"),
             ("?", "this help (conversation)"),
         ]),
         ("Input", &[
@@ -54,6 +55,7 @@ pub fn help_lines() -> Vec<Line<'static>> {
             (":compact", "condense the session"),
             (":config", "settings"),
             (":feedback", "send feedback"),
+            (":select", "toggle select mode"),
             (":mode install superpowers", "install skills"),
             (":q", "quit"),
         ]),
@@ -100,6 +102,7 @@ mod tests {
         for token in [
             "Global", "Input", "Conversation", "Overlays", "Commands",
             "Ctrl+P", "Ctrl+Q", "Shift+Tab", "Alt+P", "Esc", "?", ":help",
+            "Alt+M", ":select",
         ] {
             assert!(s.contains(token), "help must mention {token:?}: {s:?}");
         }
