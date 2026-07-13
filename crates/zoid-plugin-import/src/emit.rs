@@ -40,7 +40,8 @@ pub fn emit(
     class: &Classification, mcp_json_src: Option<&str>,
 ) -> anyhow::Result<Emitted> {
     let mut report = String::new();
-    report.push_str(&format!("# {name} ({repo}@{})\n", &sha[..sha.len().min(8)]));
+    let sha_short = sha.chars().take(8).collect::<String>();
+    report.push_str(&format!("# {name} ({repo}@{sha_short})\n"));
     for d in &class.dropped { report.push_str(&format!("- DROPPED {d}\n")); }
     for s in &class.mcp_skipped_http { report.push_str(&format!("- SKIPPED http MCP server '{s}' (needs HttpTransport)\n")); }
 
@@ -54,16 +55,17 @@ pub fn emit(
                  [source]\nrepo = \"{repo}\"\nref = \"{sha}\"\nsubtree = \"{subtree}\"\n\n\
                  [mode]\nloader = \"{loader_rel}\"\nstrip_prefix = \"{strip}\"\nbody = \"from-skill-frontmatter\"\ndescription = \"{desc}\"\n\n\
                  [[install]]\neffect = \"activate\"\n",
-                id = slug(name), name = name, desc = toml_escape(description),
-                repo = repo, sha = sha, subtree = subtree, loader_rel = loader_rel, strip = strip,
+                id = slug(name), name = toml_escape(name), desc = toml_escape(description),
+                repo = toml_escape(repo), sha = toml_escape(sha), subtree = toml_escape(subtree),
+                loader_rel = toml_escape(&loader_rel), strip = strip,
             ))
         }
         TargetKind::Skills => Some(format!(
             "[plugin]\nid = \"{id}\"\nschema = 1\nkind = [\"skills\"]\nname = \"{name}\"\ndescription = \"{desc}\"\n\n\
              [source]\nrepo = \"{repo}\"\nref = \"{sha}\"\nsubtree = \"{subtree}\"\n\n\
              [[install]]\neffect = \"activate\"\n",
-            id = slug(name), name = name, desc = toml_escape(description),
-            repo = repo, sha = sha, subtree = subtree,
+            id = slug(name), name = toml_escape(name), desc = toml_escape(description),
+            repo = toml_escape(repo), sha = toml_escape(sha), subtree = toml_escape(subtree),
         )),
         TargetKind::McpOnly | TargetKind::Unsupported => None,
     };
@@ -160,5 +162,23 @@ mod tests {
         assert!(!mcp.contains("\"gh\""));
         assert!(e.report.contains("gh"));
         assert!(e.plugin_toml.is_none()); // McpOnly emits no plugin.toml
+    }
+
+    #[test]
+    fn emits_valid_manifest_when_name_contains_a_quote() {
+        let e = emit("he said \"hi\"", "d", "obra/superpowers", "SHA", "skills",
+            &cls(TargetKind::Mode { loader: "skills/using-superpowers/SKILL.md".into() }), None).unwrap();
+        let toml = e.plugin_toml.expect("plugin_toml");
+        let m = zoid_plugin::manifest::parse_manifest(&toml).unwrap();
+        m.validate().unwrap();
+        assert_eq!(m.name, "he said \"hi\"");
+    }
+
+    #[test]
+    fn emit_report_does_not_panic_on_multibyte_sha() {
+        // Each 😀 is 4 bytes; a byte-slice at 8 would split a char and panic.
+        let e = emit("n", "d", "r", "😀😀😀😀😀", "skills",
+            &cls(TargetKind::Skills), None).unwrap();
+        assert!(!e.report.is_empty());
     }
 }

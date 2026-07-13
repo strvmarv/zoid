@@ -4952,6 +4952,19 @@ fn apply_plugin_scan(
         }
     };
 
+    // Skills packs live in a separate registry built once at startup; the
+    // runtime installer materializes them to disk but cannot hot-reload
+    // `app.skills`. Report honestly and skip the mode-registry/Activate path —
+    // its "could not be activated" message is meaningless for a skills pack,
+    // which has no mode to activate. (Live hot-reload is deferred to a later spec.)
+    if is_skills_kind {
+        let n = scan.files.iter().filter(|f| f.upstream_path.ends_with("/SKILL.md")).count();
+        app.shell.status_hint = Some(format!(
+            "plugin '{id}' installed ({n} skills). Restart zoid to load them."
+        ));
+        return false;
+    }
+
     // Rebuild registry so the new mode is visible.
     let prev = app.modes.active_name().to_string();
     app.modes = zoid::mode_import::build_mode_registry(&app.base_profile, &app.mode_dirs);
@@ -7025,6 +7038,66 @@ mod tests {
             "error path must also clear the guard"
         );
         assert_eq!(app.shell.status_hint.as_deref(), Some("fetch failed: boom"));
+    }
+
+    /// A skills-kind install has no mode to activate; `apply_plugin_scan` must
+    /// report an honest "installed, restart to load" status instead of running
+    /// the mode-registry/Activate reconciliation (whose "could not be
+    /// activated" message would be misleading for a skills pack).
+    #[tokio::test]
+    async fn apply_plugin_scan_skills_kind_reports_restart_hint_not_activation_error() {
+        use zoid_core::wizard::{ScannedFile, UpstreamScan};
+        fn skill(name: &str, desc: &str) -> String {
+            format!("---\nname: {name}\ndescription: {desc}\n---\nbody\n")
+        }
+        let cfg = tempfile::tempdir().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", cfg.path());
+        std::env::set_var("HOME", cfg.path());
+        let mut app = test_app().await;
+        let prev_active = app.modes.active_name().to_string();
+        app.installing_plugin = true;
+        let scan = UpstreamScan {
+            url: "u".into(),
+            repo: "obra/superpowers".into(),
+            resolved_ref: "SHA".into(),
+            subtree_path: "skills".into(),
+            files: vec![
+                ScannedFile {
+                    upstream_path: "skills/using-superpowers/SKILL.md".into(),
+                    sha: "a".into(),
+                    content: skill("using-superpowers", "loader"),
+                },
+                ScannedFile {
+                    upstream_path: "skills/brainstorming/SKILL.md".into(),
+                    sha: "b".into(),
+                    content: skill("brainstorming", "before creative work"),
+                },
+            ],
+        };
+        // `--skills` override forces the skills-kind install path on the bundled (mode) manifest.
+        let activated = apply_plugin_scan(
+            &mut app,
+            "superpowers".into(),
+            "bundled".into(),
+            zoid::plugin_install::KindOverride::Skills,
+            Ok(scan),
+        );
+        assert!(!activated, "a skills install activates no mode");
+        assert!(!app.installing_plugin, "guard must clear");
+        let hint = app.shell.status_hint.as_deref().unwrap_or("");
+        assert!(
+            hint.contains("Restart") && hint.contains("installed"),
+            "got: {hint}"
+        );
+        assert!(
+            !hint.contains("could not be activated"),
+            "must not show the misleading mode-activation error; got: {hint}"
+        );
+        assert_eq!(
+            app.modes.active_name(),
+            prev_active,
+            "skills install must not change the active mode"
+        );
     }
 
     /// `apply_models_fetched` replaces the OPEN model picker's options with the

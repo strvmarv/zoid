@@ -20,7 +20,7 @@ fn frontend_design_imports_as_skills_and_reparses() {
 #[test]
 fn github_mcp_is_http_and_skipped() {
     let src = include_str!("fixtures/github-mcp/.mcp.json");
-    let mut tree = PluginTree { files: vec![], mcp_json: Some(src.to_string()),
+    let tree = PluginTree { files: vec![], mcp_json: Some(src.to_string()),
         plugin_json: PluginJson { name: "github".into(), description: "gh".into() } };
     let c = classify(&tree, KindPref::Auto);
     assert!(!c.mcp_skipped_http.is_empty());
@@ -28,5 +28,4 @@ fn github_mcp_is_http_and_skipped() {
     assert!(e.plugin_toml.is_none());
     assert!(e.mcp_json.is_none()); // only http server present → nothing to normalize
     assert!(e.report.to_lowercase().contains("http"));
-    let _ = &mut tree;
 }
