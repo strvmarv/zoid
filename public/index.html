@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>zoid — the coding agent that adapts as fast as the ecosystem</title>
-<meta name="description" content="zoid — a terminal-native AI coding agent built in Rust. Active context management, bring-your-own-tools (MCP), your choice of model. Now in beta.">
+<meta name="description" content="zoid — a terminal-native AI coding agent built in Rust. Active context management, bring-your-own-tools (MCP), and your choice of model — Ollama, Anthropic, OpenAI, Google Gemini, OpenCode Zen. Now in beta.">
 <style>
 :root{
   --bg:#0d1117; --panel:#161b22; --gutter:#0b0e13; --line:#30363d; --line2:#21262d;
@@ -57,6 +57,8 @@ h2{font-size:clamp(21px,3vw,29px);margin:0 0 14px;font-weight:600;line-height:1.
 h2 em{color:var(--acc2);font-style:normal;}
 .lead{color:var(--muted);margin:0;max-width:54ch;}
 .lead strong{color:var(--txt);font-weight:600;}
+.lead code{color:var(--acc2);background:var(--line2);padding:1px 6px;border-radius:5px;
+  font-size:.92em;white-space:nowrap;}
 
 /* Alternating feature rows: text-first in the DOM; CSS swaps columns on wide. */
 .section{display:grid;gap:48px;grid-template-columns:1fr 1fr;align-items:center;
@@ -285,8 +287,8 @@ pre.tui{margin:0;padding:14px 16px;font-family:var(--mono);font-size:13px;line-h
 <header class="wrap hero" role="banner">
   <div class="wordmark"><span class="type">zoid</span></div>
   <h1 class="fade d1">The coding agent that <span class="thesis">adapts as fast as the ecosystem</span>.</h1>
-  <p class="sub fade d2">Terminal-native · Built in Rust · One ~13&nbsp;MB binary</p>
-  <p class="beta fade d3"><span class="chip">Now in beta · v0.3.2</span></p>
+  <p class="sub fade d2">Terminal-native · Built in Rust · One ~16&nbsp;MB binary</p>
+  <p class="beta fade d3"><span class="chip">Now in beta · v0.4.0</span></p>
   <div class="cta fade d3">
     <a class="btn" href="https://github.com/strvmarv/zoid-releases/releases/latest">Install zoid</a>
     <code class="oneliner">curl --proto '=https' --tlsv1.2 -LsSf https://github.com/strvmarv/zoid-releases/releases/latest/download/zoid-installer.sh | sh</code>
@@ -473,12 +475,12 @@ pre.tui{margin:0;padding:14px 16px;font-family:var(--mono);font-size:13px;line-h
     <div class="fw-head">
       <p class="eyebrow c2">your tools, your models</p>
       <h2>Bring your own <em>tools</em>. Choose your own <em>model</em>.</h2>
-      <p class="lead">Connect any <strong>MCP server's tools</strong> alongside zoid's built-ins — configured tools appear automatically. Point zoid at the provider you want: <strong>Ollama</strong> (local &amp; cloud) or <strong>Anthropic</strong>. And <strong>on-device semantic recall</strong> means nothing has to leave your machine.</p>
+      <p class="lead">Connect any <strong>MCP server's tools</strong> alongside zoid's built-ins — configured tools appear automatically. Point zoid at the provider you want: <strong>Ollama</strong> (local &amp; cloud), <strong>Anthropic</strong>, or the <strong>OpenCode Zen</strong> gateway for <strong>OpenAI</strong>, <strong>Google Gemini</strong>, and a large model catalog. And <strong>on-device semantic recall</strong> means nothing has to leave your machine.</p>
     </div>
     <div class="figure">
       <div class="frame">
         <div class="player nojs" role="img"
-             aria-label="zoid: MCP servers connected and contributing tools, the provider/model quick-switch, then a tool call running on the chosen model.">
+             aria-label="zoid: MCP servers connected and contributing tools, the provider/model quick-switch spanning Ollama, Anthropic, and the OpenCode Zen gateway, then a tool call running on the chosen model.">
 <!--FRAMES:tools-models:BEGIN-->
         <div class="tui-frame"><pre class="tui"><span style="color:#6e7681">v0.4.0</span>                                                                        <span style="color:#6e7681">zoid</span>                                        <span style="color:#6e7681">Esc interrupt </span><span style="display:inline-block;width:1ch;text-align:center;color:#6e7681">·</span><span style="color:#6e7681"> : command </span><span style="display:inline-block;width:1ch;text-align:center;color:#6e7681">·</span><span style="color:#6e7681"> ^P palette</span>
   <span style="color:#6e7681">00:00 </span><span style="display:inline-block;width:1ch;text-align:center;color:#58a6ff">›</span><span style="color:#58a6ff"> </span><span style="color:#c9d1d9">any open issues about the login flow?</span>                                                                   <span style="color:#58a6ff">█</span> <span style="color:#58a6ff">╭ </span><span style="display:inline-block;width:1ch;text-align:center;color:#58a6ff">▾</span><span style="color:#58a6ff"> repo ─────────────────────────────────╮</span> 
@@ -651,7 +653,7 @@ pre.tui{margin:0;padding:14px 16px;font-family:var(--mono);font-size:13px;line-h
     <div>
       <p class="eyebrow br">extensible by design</p>
       <h2>As the market shifts, so does zoid.</h2>
-      <p class="lead">Rich-import <strong>any</strong> skill set and it becomes a first-class <strong>mode</strong> — switch between them with <strong>Shift+Tab</strong>. One command installs <strong>Superpowers</strong>, a curated skill set — TDD, systematic debugging, code review, planning — as a ready-to-use mode in a single step. No hardcoded feature surface, no waiting on a release: drop in a folder (or paste a URL) and zoid gains a capability. The core stays thin; the frontier moves.</p>
+      <p class="lead">Rich-import <strong>any</strong> skill set and it becomes a first-class <strong>mode</strong> — switch between them with <strong>Shift+Tab</strong>. Install curated add-ons in one step: <code>:plugin install superpowers</code> drops in <strong>Superpowers</strong> — TDD, systematic debugging, code review, planning — as a ready-to-use mode. No hardcoded feature surface, no waiting on a release: add a plugin (or drop in a folder) and zoid gains a capability. The core stays thin; the frontier moves.</p>
       <p class="kbd"><b>Shift+Tab</b> <span aria-hidden="true">⇄</span> <span class="modes"><span class="mode g0">CHAT</span><span class="mode g1">PLAN</span><span class="mode g2">REVIEW</span></span></p>
     </div>
     <div class="figure">
@@ -755,9 +757,9 @@ pre.tui{margin:0;padding:14px 16px;font-family:var(--mono);font-size:13px;line-h
   <section class="rust">
     <p class="eyebrow ok">no runtime to install</p>
     <h2>One binary. Cold-starts in milliseconds.</h2>
-    <p class="lead">A single ~13&nbsp;MB static binary per platform (Linux x86_64, macOS Apple Silicon, Windows x86_64) — about a 5&nbsp;MB download — with a ~10&nbsp;ms cold start and checksum-verified self-update. Nothing to install around it.</p>
+    <p class="lead">A single ~16&nbsp;MB static binary per platform (Linux x86_64, macOS Apple Silicon, Windows x86_64) — about a 6&nbsp;MB download — with a ~10&nbsp;ms cold start and checksum-verified self-update. Nothing to install around it.</p>
     <div class="stats">
-      <div class="stat"><div class="stat-n">~13&nbsp;MB</div><div class="stat-l">one static binary · ~5&nbsp;MB download</div></div>
+      <div class="stat"><div class="stat-n">~16&nbsp;MB</div><div class="stat-l">one static binary · ~6&nbsp;MB download</div></div>
       <div class="stat"><div class="stat-n">~10&nbsp;ms</div><div class="stat-l">cold start</div></div>
       <div class="stat"><div class="stat-n">1M</div><div class="stat-l">context window</div></div>
       <div class="stat"><div class="stat-n">3&nbsp;OS</div><div class="stat-l">Linux x86_64 · macOS Apple Silicon · Windows x86_64</div></div>
@@ -770,7 +772,9 @@ pre.tui{margin:0;padding:14px 16px;font-family:var(--mono);font-size:13px;line-h
   <p style="margin:0;">
     <span class="g" aria-hidden="true">⎇</span> event-sourced spine (the conversation is a database) &nbsp;·&nbsp;
     modal (mode-based) interaction &nbsp;·&nbsp;
-    multi-provider (Ollama local &amp; cloud, Anthropic) &nbsp;·&nbsp;
+    multi-provider (Ollama, Anthropic, OpenAI, Google Gemini, OpenCode Zen) &nbsp;·&nbsp;
+    one-command plugins &nbsp;·&nbsp;
+    steerable, integrity-checked subagents &nbsp;·&nbsp;
     importable skill-set modes
   </p>
 </section>
