@@ -53,7 +53,7 @@ pub fn build_plan(manifest: &PluginManifest, scan: &UpstreamScan) -> Result<Inst
 
     let mode_body = match mode.body {
         BodyStrategy::FromSkillFrontmatter => {
-            generate_body_from_frontmatter(scan, &loader_full, &mode.strip_prefix)
+            generate_body_from_frontmatter(manifest, scan, &loader_full, &mode.strip_prefix)
         }
     };
 
@@ -68,11 +68,20 @@ pub fn build_plan(manifest: &PluginManifest, scan: &UpstreamScan) -> Result<Inst
     })
 }
 
-/// Ported verbatim (behavior-preserving) from the now-deleted bespoke
-/// Superpowers installer's `generate_mode_body`: the skill bullet list is the
-/// name+description frontmatter of each top-level `<skill>/SKILL.md` under the
-/// stripped subtree (loader excluded), alphabetical by name.
-fn generate_body_from_frontmatter(scan: &UpstreamScan, loader_full: &str, strip_prefix: &str) -> String {
+/// Builds the mode body from the manifest's `[mode]` recipe. The skill bullet
+/// list is the name+description frontmatter of each top-level
+/// `<skill>/SKILL.md` under the stripped subtree (loader excluded),
+/// alphabetical by name. The intro/outro come from the manifest's
+/// `body_intro`/`body_outro` when present; otherwise a generic default is
+/// synthesized from the manifest's name and source repo. For Superpowers,
+/// whose manifest carries the exact ported strings, this reproduces the
+/// original bespoke installer's output byte-for-byte.
+fn generate_body_from_frontmatter(
+    manifest: &PluginManifest,
+    scan: &UpstreamScan,
+    loader_full: &str,
+    strip_prefix: &str,
+) -> String {
     let mut skills: Vec<(String, String)> = Vec::new();
     for f in &scan.files {
         if f.upstream_path == loader_full {
@@ -91,32 +100,39 @@ fn generate_body_from_frontmatter(scan: &UpstreamScan, loader_full: &str, strip_
     }
     skills.sort_by(|a, b| a.0.cmp(&b.0));
 
+    let mode = manifest.mode.as_ref().expect("mode present in build_plan");
+    let repo = manifest
+        .source
+        .as_ref()
+        .map(|s| s.repo.as_str())
+        .unwrap_or("an upstream repository");
+
+    let intro = mode.body_intro.clone().unwrap_or_else(|| {
+        format!(
+            "You are operating in \"{}\" mode, imported from {}.\n\n\
+             Before any task, check if an available skill applies and invoke it with \
+             invoke_skill. The skills are:\n",
+            manifest.name, repo
+        )
+    });
+    let outro = mode.body_outro.clone().unwrap_or_else(|| {
+        "\nAlways check for an applicable skill before starting work. If multiple skills \
+         apply, invoke the most specific one first.\n"
+            .to_string()
+    });
+
     let mut body = String::new();
-    body.push_str(
-        "You are operating in \"Superpowers\" mode, imported from obra/superpowers.\n\n",
-    );
-    body.push_str(
-        "Before any task, check if an available skill applies and invoke it with \
-invoke_skill. The skills are:\n\n",
-    );
+    body.push_str(&intro);
+    body.push('\n');
     for (name, desc) in &skills {
         body.push_str(&format!("- {name}: {desc}\n"));
     }
-    body.push_str(
-        "\nAlways check for an applicable skill before starting work. If multiple \
-skills apply, invoke the most specific one first. After completing work, invoke \
-verification-before-completion before claiming success.\n",
-    );
-    body.push_str(
-        "\nSkill work produces specs, plans, and debugging notes. Keep the running \
-narration terse, and when the work is done do NOT reframe the whole effort in \
-long paragraphs: close with a short recap of what changed and any next step.\n",
-    );
+    body.push_str(&outro);
     body
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::effect::Effect;
     use crate::manifest::{BodyStrategy, ModeRecipe, PluginManifest};
@@ -126,7 +142,7 @@ mod tests {
         format!("---\nname: {name}\ndescription: {desc}\n---\nbody for {name}\n")
     }
 
-    fn scan() -> UpstreamScan {
+    pub(crate) fn scan() -> UpstreamScan {
         UpstreamScan {
             url: "u".into(),
             repo: "obra/superpowers".into(),
@@ -153,8 +169,8 @@ mod tests {
                 strip_prefix: "skills/".into(),
                 body: BodyStrategy::FromSkillFrontmatter,
                 description: "Superpowers — curated".into(),
-                body_intro: None,
-                body_outro: None,
+                body_intro: Some("You are operating in \"Superpowers\" mode, imported from obra/superpowers.\n\nBefore any task, check if an available skill applies and invoke it with invoke_skill. The skills are:\n".into()),
+                body_outro: Some("\nAlways check for an applicable skill before starting work. If multiple skills apply, invoke the most specific one first. After completing work, invoke verification-before-completion before claiming success.\n\nSkill work produces specs, plans, and debugging notes. Keep the running narration terse, and when the work is done do NOT reframe the whole effort in long paragraphs: close with a short recap of what changed and any next step.\n".into()),
             }),
             install: vec![Effect::Activate],
         }
@@ -202,5 +218,38 @@ mod tests {
         let golden = include_str!("../tests/superpowers_body_golden.txt");
         assert_eq!(plan.mapping.mode_body, golden,
             "body generator drifted; if intentional, regenerate the golden file");
+    }
+
+    #[test]
+    fn body_uses_manifest_intro_outro_when_present() {
+        let mut m = manifest();
+        let mode = m.mode.as_mut().unwrap();
+        mode.body_intro = Some("CUSTOM INTRO\n".to_string());
+        mode.body_outro = Some("\nCUSTOM OUTRO\n".to_string());
+        let plan = build_plan(&m, &scan()).unwrap();
+        assert!(plan.mapping.mode_body.starts_with("CUSTOM INTRO"));
+        assert!(plan.mapping.mode_body.contains("- brainstorming: Use before creative work"));
+        assert!(plan.mapping.mode_body.trim_end().ends_with("CUSTOM OUTRO"));
+    }
+
+    #[test]
+    fn body_falls_back_to_generic_default_using_name_and_repo() {
+        let mut m = manifest();
+        m.name = "Robotics".to_string();
+        m.source = Some(crate::manifest::PluginSource {
+            repo: "arpitg1304/robotics-agent-skills".into(),
+            ref_: "SHA".into(),
+            subtree: "skills".into(),
+        });
+        // No intro/outro on the recipe.
+        let mode = m.mode.as_mut().unwrap();
+        mode.body_intro = None;
+        mode.body_outro = None;
+        let plan = build_plan(&m, &scan()).unwrap();
+        assert!(plan.mapping.mode_body.contains("operating in \"Robotics\" mode"));
+        assert!(plan.mapping.mode_body.contains("imported from arpitg1304/robotics-agent-skills"));
+        assert!(plan.mapping.mode_body.contains("invoke_skill"));
+        // The generic default must NOT carry Superpowers-specific text.
+        assert!(!plan.mapping.mode_body.contains("verification-before-completion"));
     }
 }

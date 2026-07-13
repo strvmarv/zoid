@@ -37,4 +37,13 @@ mod tests {
             assert!(bundled_manifest(id).is_some(), "bundled id {id} has no manifest");
         }
     }
+
+    #[test]
+    fn bundled_superpowers_reproduces_the_golden_body() {
+        let m = crate::bundled::bundled_manifest("superpowers").unwrap();
+        let plan = crate::plan::build_plan(&m, &crate::plan::tests::scan()).unwrap();
+        let golden = include_str!("../tests/superpowers_body_golden.txt");
+        assert_eq!(plan.mapping.mode_body, golden,
+            "bundled superpowers.toml body drifted from the golden");
+    }
 }
