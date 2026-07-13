@@ -3587,6 +3587,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                     &app.shell.active_mode,
                     &app.shell.mode_names,
                     app.shell.companion_on,
+                    app.shell.select_mode,
                 );
                 zoid_tui::palette::selectable_matches(&items, &app.shell.palette.query).len()
             };

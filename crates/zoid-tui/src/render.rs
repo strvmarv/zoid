@@ -966,7 +966,12 @@ fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
             frame.render_widget(Paragraph::new(lines).scroll((off as u16, 0)), inner);
         }
         Phase::Pick => {
-            let items = all_items(&state.active_mode, &state.mode_names, state.companion_on);
+            let items = all_items(
+                &state.active_mode,
+                &state.mode_names,
+                state.companion_on,
+                state.select_mode,
+            );
             let matches = selectable_matches(&items, &state.palette.query);
             let sel = nav(state.palette.selected, 0, matches.len());
 
