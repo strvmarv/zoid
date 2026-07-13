@@ -14,6 +14,9 @@ pub struct InstallPlan {
 }
 
 pub fn build_plan(manifest: &PluginManifest, scan: &UpstreamScan) -> Result<InstallPlan, String> {
+    if manifest.kind.iter().any(|k| k == "skills") && !manifest.kind.iter().any(|k| k == "mode") {
+        return build_skills_plan(manifest, scan);
+    }
     let mode = manifest
         .mode
         .as_ref()
@@ -66,6 +69,43 @@ pub fn build_plan(manifest: &PluginManifest, scan: &UpstreamScan) -> Result<Inst
         },
         effects: manifest.install.clone(),
     })
+}
+
+fn build_skills_plan(manifest: &PluginManifest, scan: &UpstreamScan) -> Result<InstallPlan, String> {
+    // Skills packs have no loader/overlay: every `<skill>/SKILL.md` (plus its
+    // sibling files) is materialized under its canonical (stripped) path.
+    let strip = scan_strip_prefix(manifest, scan);
+    let mut entries = Vec::new();
+    for f in &scan.files {
+        let canonical = match f.upstream_path.strip_prefix(strip.as_str()) {
+            Some(c) => c.to_string(),
+            None => continue,
+        };
+        entries.push(MappingEntry::Materialize {
+            canonical_path: canonical,
+            source: f.upstream_path.clone(),
+            summary: String::new(),
+        });
+    }
+    Ok(InstallPlan {
+        mapping: ModeMapping {
+            mode_name: manifest.name.clone(),
+            mode_description: manifest.description.clone(),
+            mode_body: String::new(),
+            entries,
+        },
+        effects: manifest.install.clone(),
+    })
+}
+
+/// The prefix stripped from upstream paths for a skills pack. A skills manifest
+/// has no `[mode]`, so derive it from the scan's subtree (e.g. "skills/").
+fn scan_strip_prefix(_manifest: &PluginManifest, scan: &UpstreamScan) -> String {
+    if scan.subtree_path.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", scan.subtree_path)
+    }
 }
 
 /// Builds the mode body from the manifest's `[mode]` recipe. The skill bullet
@@ -210,6 +250,19 @@ pub(crate) mod tests {
         let mut m = manifest();
         m.mode = None;
         assert!(build_plan(&m, &scan()).is_err());
+    }
+
+    #[test]
+    fn build_plan_skills_kind_has_no_mode_md_and_empty_body() {
+        let mut m = manifest();
+        m.kind = vec!["skills".into()];
+        m.mode = None;
+        let plan = build_plan(&m, &scan()).unwrap();
+        assert!(plan.mapping.mode_body.is_empty());
+        let pairs: Vec<(&str, &str)> = plan.mapping.materialize_entries();
+        assert!(!pairs.iter().any(|(c, _)| *c == "mode.md"));
+        // Skill files are still materialized under their stripped canonical paths.
+        assert!(pairs.iter().any(|(c, _)| *c == "brainstorming/SKILL.md"));
     }
 
     #[test]

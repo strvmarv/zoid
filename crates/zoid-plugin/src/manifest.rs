@@ -163,9 +163,9 @@ impl PluginManifest {
             ));
         }
         for k in &self.kind {
-            if k != "mode" {
+            if k != "mode" && k != "skills" {
                 return Err(format!(
-                    "plugin '{}' declares unsupported kind '{}' (v1 supports only 'mode')",
+                    "plugin '{}' declares unsupported kind '{}' (v1 supports 'mode' and 'skills')",
                     self.id, k
                 ));
             }
@@ -271,5 +271,26 @@ text = "Superpowers installed."
         let mode = m.mode.as_ref().unwrap();
         assert!(mode.body_intro.is_none());
         assert!(mode.body_outro.is_none());
+    }
+
+    #[test]
+    fn accepts_skills_kind_without_mode_table() {
+        let src = r#"
+[plugin]
+id = "doctools"
+schema = 1
+kind = ["skills"]
+name = "Doc Tools"
+description = "on-demand skills"
+
+[source]
+repo = "anthropics/skills"
+ref = "SHA"
+subtree = "skills"
+"#;
+        let m = parse_manifest(src).unwrap();
+        m.validate().unwrap();
+        assert_eq!(m.kind, vec!["skills".to_string()]);
+        assert!(m.mode.is_none());
     }
 }
