@@ -212,6 +212,30 @@ fn seeded_tools_models_turn() -> Vec<ChatMsg> {
         },
     ]
 }
+
+/// Tasks for the tools-models scene's Tasks drawer — coherent with the story
+/// (a server connected, a model chosen). Two tasks, matching the base state's
+/// `tasks_len = 2`, so the drawer shows real rows, not empty reserved space.
+fn seeded_tools_models_tasks() -> Vec<zoid_core::tasks::TaskItem> {
+    use zoid_core::tasks::{TaskItem, TaskStatus};
+    vec![
+        TaskItem { text: "connect the github MCP server".into(), status: TaskStatus::Done },
+        TaskItem { text: "switch to glm-5.2:cloud".into(),       status: TaskStatus::Active },
+    ]
+}
+```
+
+Then extend `scene_tasks` so the new scene's drawer is populated (mirrors how
+`"economy" | "context-economy"` already map to `seeded_tasks()`):
+
+```rust
+fn scene_tasks(name: &str) -> Vec<zoid_core::tasks::TaskItem> {
+    match name {
+        "economy" | "context-economy" => seeded_tasks(),
+        "tools-models" => seeded_tools_models_tasks(),
+        _ => vec![],
+    }
+}
 ```
 
 - [ ] **Step 4: Add the `tools-models` sequence arm**
@@ -256,11 +280,15 @@ Extend `scene_seq` in the same file. Build a base enriched state (reuse the
             f3.busy = true;
             f3.active_tool = Some("github.search_issues".into());
 
+            // F3 shows the tool genuinely in flight: the assistant's tool CALL
+            // is visible (turn[..2]) but its result is NOT yet on screen, so the
+            // "running" status indicator is coherent (not paired with a returned
+            // result). The ToolResult (turn[2]) intentionally stays unrevealed.
             vec![
                 (f0, turn[..1].to_vec(), empty_economy()),
                 (f1, turn[..1].to_vec(), empty_economy()),
                 (f2, turn[..1].to_vec(), seeded_economy()),
-                (f3, turn[..3].to_vec(), seeded_economy()),
+                (f3, turn[..2].to_vec(), seeded_economy()),
             ]
         }
 ```
@@ -363,7 +391,7 @@ slots contain a single static placeholder frame so the page is viewable.
 | hero `.soon` (line 238) | "Coming soon" | remove; replace with the beta chip + CTA block below |
 | built band (line 484) | "modal (vim-like) interaction" | "modal (mode-based) interaction" |
 | footer (line 491) | "Coming soon." | remove; replace with the footer CTA + beta note |
-| §4 lead + stats (binary size) | "~6 MB" (×2) | the **measured** size from Task 5 (placeholder `~11 MB` until Task 5 confirms) |
+| binary size, **all 3 occurrences**: hero sub (line ~237, `One ~6&nbsp;MB binary`), §4 lead (line ~469), stat tile (line ~471) | "~6 MB" / "6&nbsp;MB" (×3) | the **measured** size from Task 5 (placeholder `~11 MB` until Task 5 confirms) |
 | §4 / stats | (no context stat) | add a "1M" context stat (the default model's real window) |
 | proof/stat platforms | "Linux · macOS · Windows" | "Linux x86_64 · macOS Apple Silicon · Windows x86_64" |
 
@@ -608,8 +636,9 @@ outcome in the report.
 
 - [ ] **Step 3: Apply the measured size + verified CTA to `index.html`**
 
-Update the two size references and the stat tile to the measured figure (or the
-no-number copy). If Step 2 failed, remove the `<code class="oneliner">` line.
+Update **all three** size references to the measured figure (or the no-number
+copy): the hero sub-line (~237, `One ~6&nbsp;MB binary`), the §4 lead (~469), and
+the stat tile (~471). If Step 2 failed, remove the `<code class="oneliner">` line.
 
 - [ ] **Step 4: Verify**
 
@@ -651,8 +680,9 @@ Confirm in-browser:
 
 - [ ] **Step 3: Leak + accuracy scan**
 
-Run: `grep -inE 'coming soon|vim-like|zai|opencode|gemini|openai_compat|~6 ?MB' public/index.html || echo "clean"`
-Expected: `clean`.
+Run: `grep -inE 'coming soon|vim-like|zai|opencode|gemini|openai_compat|~6 ?MB|6&nbsp;MB' public/index.html || echo "clean"`
+Expected: `clean`. (The `6&nbsp;MB` alternative is essential — the page stores the
+size as an HTML entity, so a bare `~6 ?MB` would silently pass on the real encoding.)
 Run: `grep -n 'strvmarv/zoid[^-]' public/index.html || echo "no private-repo refs"`
 Expected: `no private-repo refs` (only `strvmarv/zoid-releases`).
 
