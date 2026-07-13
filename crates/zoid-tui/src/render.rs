@@ -923,6 +923,7 @@ fn render_palette(frame: &mut Frame, state: &ShellState, area: Rect) {
                     Command::OpenHelp => "→ Keyboard shortcuts".to_string(),
                     Command::Worktree(name) => format!("→ Enter worktree: {name}"),
                     Command::WorktreeExit => "→ Exit worktree".to_string(),
+                    Command::ToggleSelectMode => "→ Toggle select mode".to_string(),
                 };
                 lines.push(Line::styled(preview, Style::new().fg(color::DIM)));
             }

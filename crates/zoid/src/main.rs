@@ -818,6 +818,19 @@ fn copy_to_clipboard_osc52(text: &str) {
     let _ = out.flush();
 }
 
+/// Flip "select mode" and surface a transient hint. The actual terminal
+/// mouse-capture change is applied by the run loop's per-frame reconcile (which
+/// holds the `terminal` backend); this only mutates state, so it is safe to call
+/// from `handle_action`/`exec_command` where the backend is out of scope.
+fn toggle_select_mode(app: &mut App) {
+    app.shell.select_mode = !app.shell.select_mode;
+    app.shell.status_hint = Some(if app.shell.select_mode {
+        "select mode on — drag to select, copy with your terminal".into()
+    } else {
+        "select mode off".into()
+    });
+}
+
 /// Resolve a left-click in the conversation: focus it, and — at Normal altitude,
 /// where transcript rows map 1:1 to lines — copy the clicked code block's raw
 /// source via OSC 52 (each code block is click-to-copy). Off-block clicks just
@@ -2226,6 +2239,7 @@ async fn run<B: ratatui::backend::Backend>(
 ) -> Result<()>
 where
     <B as ratatui::backend::Backend>::Error: Send + Sync + 'static,
+    B: std::io::Write,
 {
     let mut term_events = EventStream::new();
 
@@ -2336,6 +2350,10 @@ where
 
     // Catch-up: fire any wakes whose fire_at already passed while closed.
     let _ = drain_due_wakes(app).await?;
+
+    // Actual terminal mouse-capture state (true at startup — EnableMouseCapture
+    // ran during terminal setup). Reconciled against `shell.select_mode` below.
+    let mut mouse_captured = true;
 
     loop {
         if let Some(ev) = app.pending_adjust.take() {
@@ -2601,6 +2619,19 @@ where
                 .unwrap_or(0);
             let max = zoid_tui::help::help_lines().len().saturating_sub(vh);
             app.shell.help_scroll = app.shell.help_scroll.min(max);
+        }
+
+        // Reconcile terminal mouse capture with select mode: while select_mode is
+        // on we release the mouse to the terminal for native selection; otherwise
+        // we hold it (click-to-copy code, choice clicks, scroll routing).
+        let want_capture = !app.shell.select_mode;
+        if want_capture != mouse_captured {
+            let _ = if want_capture {
+                execute!(terminal.backend_mut(), EnableMouseCapture)
+            } else {
+                execute!(terminal.backend_mut(), DisableMouseCapture)
+            };
+            mouse_captured = want_capture;
         }
 
         let frame_start = std::time::Instant::now();
@@ -5293,6 +5324,10 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             disable_companion(app);
             Ok(false)
         }
+        Command::ToggleSelectMode => {
+            toggle_select_mode(app);
+            Ok(false)
+        }
         Command::CompactNow => {
             if app.shell.compacting {
                 app.shell.status_hint = Some("already compacting".into());
@@ -7636,6 +7671,21 @@ mod tests {
             Some("already compacting"),
             ":compact while compacting should surface the hint"
         );
+    }
+
+    #[tokio::test]
+    async fn select_command_toggles_select_mode() {
+        let mut app = test_app().await;
+        assert!(!app.shell.select_mode);
+        let quit = exec_command(&mut app, zoid_tui::command::Command::ToggleSelectMode)
+            .await
+            .unwrap();
+        assert!(!quit);
+        assert!(app.shell.select_mode, ":select must turn select mode on");
+        let _ = exec_command(&mut app, zoid_tui::command::Command::ToggleSelectMode)
+            .await
+            .unwrap();
+        assert!(!app.shell.select_mode, ":select again must turn it off");
     }
 
     #[tokio::test]

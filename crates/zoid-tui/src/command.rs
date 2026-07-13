@@ -52,6 +52,9 @@ pub enum Command {
     Worktree(String),
     /// Exit the current worktree (`:worktree exit`).
     WorktreeExit,
+    /// Toggle "select mode": flip terminal mouse capture so the whole window
+    /// supports native drag-select + terminal copy (`:select` / `:mouse`).
+    ToggleSelectMode,
     Unknown(String),
 }
 
@@ -99,6 +102,7 @@ pub fn parse_command(raw: &str) -> Command {
         "feedback" => Command::Feedback,
         "config" => Command::OpenConfig,
         "help" => Command::OpenHelp,
+        "select" | "mouse" => Command::ToggleSelectMode,
         rest if rest == "delegate" || rest.starts_with("delegate ") => {
             Command::Delegate(rest.strip_prefix("delegate").unwrap().trim().to_string())
         }
@@ -120,6 +124,13 @@ mod tests {
     fn parses_compact_command() {
         assert_eq!(parse_command(":compact"), Command::CompactNow);
         assert_eq!(parse_command("compact"), Command::CompactNow);
+    }
+
+    #[test]
+    fn parses_select_mode_command() {
+        assert_eq!(parse_command(":select"), Command::ToggleSelectMode);
+        assert_eq!(parse_command("select"), Command::ToggleSelectMode);
+        assert_eq!(parse_command(":mouse"), Command::ToggleSelectMode);
     }
 
     #[test]

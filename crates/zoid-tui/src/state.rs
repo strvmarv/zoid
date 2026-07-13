@@ -257,6 +257,10 @@ pub struct ShellState {
     /// pure renderer and palette can offer the opposite action ("Enable" vs
     /// "Disable companion") without reaching into `App`.
     pub companion_on: bool,
+    /// When true, terminal mouse capture is released so the user can natively
+    /// select + copy arbitrary text. Toggled by `Alt+M` / `:select`. The bin
+    /// reconciles the real capture state against this each frame.
+    pub select_mode: bool,
     /// Transient one-line hint shown in the status bar (e.g. the ④ "queued · P5"
     /// notice). Lives on `ShellState` (not `App`) so the pure renderer can read
     /// it directly. Setting/clearing it on a verb pick is bin wiring (P4d T4).
@@ -459,6 +463,7 @@ impl ShellState {
             reduced_motion: false,
             zoom: Zoom::Normal,
             companion_on: false,
+            select_mode: false,
             status_hint: None,
             input_rows: 1,
             input_empty: true,
