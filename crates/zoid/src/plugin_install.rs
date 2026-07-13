@@ -13,6 +13,32 @@ use zoid_plugin::provenance::{AppliedEffect, PluginProvSource, PluginProvenance,
 
 use crate::mode_wizard::materialize;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KindOverride {
+    None,
+    Mode,
+    Skills,
+}
+
+/// Split a raw `:plugin install` argument string into (plugin_ref, override).
+/// Flags may appear on either side of the ref; the last of --mode/--skills
+/// wins (permissive, matching zoid's flag stance). The first non-flag token is
+/// the ref; later bare tokens are ignored (the ref is a single id/url).
+pub fn parse_plugin_install_args(raw: &str) -> (String, KindOverride) {
+    let mut plugin_ref = String::new();
+    let mut over = KindOverride::None;
+    for tok in raw.split_whitespace() {
+        match tok {
+            "--mode" => over = KindOverride::Mode,
+            "--skills" => over = KindOverride::Skills,
+            other if other.starts_with("--") => {} // unknown flag: ignore
+            other if plugin_ref.is_empty() => plugin_ref = other.to_string(),
+            _ => {}
+        }
+    }
+    (plugin_ref, over)
+}
+
 #[derive(Debug)]
 pub struct InstalledPlugin {
     pub dest: PathBuf,
@@ -180,6 +206,27 @@ mod tests {
     use zoid_plugin::effect::Effect;
     use zoid_plugin::manifest::{BodyStrategy, ModeRecipe, PluginManifest};
     use zoid_plugin::plan::build_plan;
+
+    #[test]
+    fn parses_plugin_install_mode_and_skills_flags() {
+        assert_eq!(
+            parse_plugin_install_args("superpowers --mode"),
+            ("superpowers".into(), KindOverride::Mode)
+        );
+        assert_eq!(
+            parse_plugin_install_args("anthropics/skills --skills"),
+            ("anthropics/skills".into(), KindOverride::Skills)
+        );
+        assert_eq!(
+            parse_plugin_install_args("superpowers"),
+            ("superpowers".into(), KindOverride::None)
+        );
+        // Last flag wins; ref is the sole non-flag token.
+        assert_eq!(
+            parse_plugin_install_args("x --skills --mode"),
+            ("x".into(), KindOverride::Mode)
+        );
+    }
 
     fn skill_md(name: &str, desc: &str) -> String {
         format!("---\nname: {name}\ndescription: {desc}\n---\nbody\n")

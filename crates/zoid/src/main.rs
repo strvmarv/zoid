@@ -3110,8 +3110,8 @@ where
                             }
                         }
                     }
-                    zoid::agent::AgentUpdate::PluginScan { id, origin, res } => {
-                        if apply_plugin_scan(app, id, origin, res) {
+                    zoid::agent::AgentUpdate::PluginScan { id, origin, over, res } => {
+                        if apply_plugin_scan(app, id, origin, over, res) {
                             persist_active_mode(app).await;
                         }
                     }
@@ -4792,16 +4792,18 @@ fn disable_companion(app: &mut App) {
 /// Kick off a plugin install: resolve the manifest source, fetch the pinned
 /// tree off-thread, and hand the scan back via AgentUpdate::PluginScan.
 fn install_plugin(app: &mut App, arg: String) {
+    use zoid::plugin_install::parse_plugin_install_args;
     use zoid_plugin::resolve::{ManifestSource, PluginRef, classify_ref, resolve_source};
-    if arg.trim().is_empty() {
-        app.shell.status_hint = Some("usage: :plugin install <id|github-url>".into());
+    let (plugin_ref, over) = parse_plugin_install_args(&arg);
+    if plugin_ref.trim().is_empty() {
+        app.shell.status_hint = Some("usage: :plugin install <id|github-url> [--mode|--skills]".into());
         return;
     }
     if app.installing_plugin {
         app.shell.status_hint = Some("a plugin install is already in progress…".into());
         return;
     }
-    let r = classify_ref(&arg);
+    let r = classify_ref(&plugin_ref);
     let source = resolve_source(&r, zoid_plugin::bundled::bundled_ids(), false, false);
 
     // v1 supports the Bundled source (by id). Repo/.zoid and wizard fallback are
@@ -4850,6 +4852,7 @@ fn install_plugin(app: &mut App, arg: String) {
             .send(zoid::agent::AgentUpdate::PluginScan {
                 id: id_for_msg,
                 origin: "bundled".into(),
+                over,
                 res,
             })
             .await;
@@ -4863,8 +4866,10 @@ fn apply_plugin_scan(
     app: &mut App,
     id: String,
     origin: String,
+    over: zoid::plugin_install::KindOverride,
     res: Result<zoid_core::wizard::UpstreamScan, String>,
 ) -> bool {
+    use zoid::plugin_install::KindOverride;
     app.installing_plugin = false;
     let scan = match res {
         Ok(s) => s,
@@ -4873,23 +4878,30 @@ fn apply_plugin_scan(
             return false;
         }
     };
-    let manifest = match zoid_plugin::bundled::bundled_manifest(&id) {
+    let mut manifest = match zoid_plugin::bundled::bundled_manifest(&id) {
         Some(m) => m,
         None => {
             app.shell.status_hint = Some(format!("bundled manifest for '{id}' vanished"));
             return false;
         }
     };
+    // Apply the `--mode`/`--skills` override (if any) to the freshly-resolved
+    // manifest before planning, so build_plan (and the branch below) see the
+    // overridden kind rather than the manifest's declared default.
+    match over {
+        KindOverride::Mode => manifest.kind = vec!["mode".into()],
+        KindOverride::Skills => {
+            manifest.kind = vec!["skills".into()];
+            manifest.mode = None;
+        }
+        KindOverride::None => {}
+    }
     let plan = match zoid_plugin::plan::build_plan(&manifest, &scan) {
         Ok(p) => p,
         Err(e) => {
             app.shell.status_hint = Some(format!("plugin plan failed: {e}"));
             return false;
         }
-    };
-    let Some(dest) = app.mode_dirs.first().map(|d| d.join(&id)) else {
-        app.shell.status_hint = Some("no modes directory configured".into());
-        return false;
     };
     // The declared pin comes from the manifest's [source].ref; fall back to the
     // resolved fetch ref if a manifest somehow omitted it.
@@ -4898,18 +4910,45 @@ fn apply_plugin_scan(
         .as_ref()
         .map(|s| s.ref_.clone())
         .unwrap_or_else(|| scan.resolved_ref.clone());
-    let installed = match zoid::plugin_install::finish_plugin_install(
-        &plan,
-        &scan,
-        &dest,
-        &id,
-        &manifest_ref,
-        &origin,
-    ) {
-        Ok(out) => out,
-        Err(e) => {
-            app.shell.status_hint = Some(format!("plugin install failed: {e}"));
+    // Mirrors build_plan's own kind test (zoid-plugin/src/plan.rs): "skills"
+    // without "mode" routes to the skills-pack installer; everything else
+    // (including a bare mode-recipe manifest) installs as a mode.
+    let is_skills_kind =
+        manifest.kind.iter().any(|k| k == "skills") && !manifest.kind.iter().any(|k| k == "mode");
+    let installed = if is_skills_kind {
+        let skills_root = resolve_config_dir(|k| std::env::var(k).ok()).join("skills");
+        match zoid::plugin_install::finish_skills_install(
+            &plan,
+            &scan,
+            &skills_root,
+            &id,
+            &manifest_ref,
+            &origin,
+        ) {
+            Ok(out) => out,
+            Err(e) => {
+                app.shell.status_hint = Some(format!("plugin install failed: {e}"));
+                return false;
+            }
+        }
+    } else {
+        let Some(dest) = app.mode_dirs.first().map(|d| d.join(&id)) else {
+            app.shell.status_hint = Some("no modes directory configured".into());
             return false;
+        };
+        match zoid::plugin_install::finish_plugin_install(
+            &plan,
+            &scan,
+            &dest,
+            &id,
+            &manifest_ref,
+            &origin,
+        ) {
+            Ok(out) => out,
+            Err(e) => {
+                app.shell.status_hint = Some(format!("plugin install failed: {e}"));
+                return false;
+            }
         }
     };
 
@@ -6945,8 +6984,13 @@ mod tests {
         };
 
         // Success path: the bundled manifest declares Activate + OnboardingHint.
-        let installed =
-            apply_plugin_scan(&mut app, "superpowers".into(), "bundled".into(), Ok(scan));
+        let installed = apply_plugin_scan(
+            &mut app,
+            "superpowers".into(),
+            "bundled".into(),
+            zoid::plugin_install::KindOverride::None,
+            Ok(scan),
+        );
         assert!(installed, "install + activation should succeed");
         assert!(!app.installing_plugin, "guard must clear");
         assert!(
@@ -6972,6 +7016,7 @@ mod tests {
             &mut app,
             "superpowers".into(),
             "bundled".into(),
+            zoid::plugin_install::KindOverride::None,
             Err("fetch failed: boom".into()),
         );
         assert!(!installed2);
