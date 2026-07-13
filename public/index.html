@@ -61,12 +61,26 @@ h2 em{color:var(--acc2);font-style:normal;}
 /* Alternating feature rows: text-first in the DOM; CSS swaps columns on wide. */
 .section{display:grid;gap:48px;grid-template-columns:1fr 1fr;align-items:center;
   padding:80px 0;border-top:1px solid var(--line2);}
+/* Grid items default to min-width:auto and won't shrink below their content's
+   intrinsic size. The animated player's pre.tui is a fixed ~160ch grid, so
+   without this the figure column forces the whole section past the .wrap and
+   the PAGE scrolls horizontally. min-width:0 lets the column shrink and the
+   .frame's own overflow-x:auto handle the scroll internally (same fix already
+   used on .zoom-grid > div and .term-log). */
+.section > *{min-width:0;}
 .section.rev .figure{order:-1;}
 @media (max-width:860px){
   .section{grid-template-columns:1fr;gap:30px;padding:60px 0;}
   .section.rev .figure{order:0;}
   .lead{max-width:none;}
 }
+/* Full-width band for an animated-player beat: the fixed ~160ch TUI render needs
+   the whole content column (a half-grid column crops the centered overlay cards).
+   Header text stays in a readable measure; the player figure spans full width and
+   the .frame handles any overflow internally (overflow-x:auto). */
+.section-full{padding:80px 0;border-top:1px solid var(--line2);}
+.section-full .fw-head{max-width:640px;margin:0 0 34px;}
+.section-full .figure{min-width:0;}
 
 /* ---- Terminal component --------------------------------------------------
    Structure via real CSS borders (not box-drawing glyphs), so it aligns at
@@ -454,9 +468,9 @@ pre.tui{margin:0;padding:14px 16px;font-family:var(--mono);font-size:13px;line-h
 
 <main class="wrap" role="main">
 
-  <!-- §1 Your tools, your models -->
-  <section class="section rev">
-    <div>
+  <!-- §1 Your tools, your models (full-width animated player) -->
+  <section class="section-full">
+    <div class="fw-head">
       <p class="eyebrow c2">your tools, your models</p>
       <h2>Bring your own <em>tools</em>. Choose your own <em>model</em>.</h2>
       <p class="lead">Connect any <strong>MCP server's tools</strong> alongside zoid's built-ins — configured tools appear automatically. Point zoid at the provider you want: <strong>Ollama</strong> (local &amp; cloud) or <strong>Anthropic</strong>. And <strong>on-device semantic recall</strong> means nothing has to leave your machine.</p>
