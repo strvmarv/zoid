@@ -639,4 +639,48 @@ mod tests {
         let snap = session.snapshot().await.unwrap();
         assert!(snap.iter().any(|e| e.branch.0 == res.branch));
     }
+
+    #[test]
+    fn distill_orphan_and_errored_compose() {
+        let evs = vec![
+            assistant("tried"),
+            call("c1", "a.rs"),
+            ev(EventKind::ToolResult {
+                id: "c1".into(),
+                name: "read_file".into(),
+                output: "boom".into(),
+                is_error: true,
+            }),
+            call("c2", "b.rs"), // orphan — no matching result
+        ];
+        let (summary, ok) = distill(&evs);
+        assert!(!ok, "errored + orphan must be not-ok");
+        assert!(summary.contains("errored"), "errored note present: {summary}");
+        assert!(
+            summary.contains("produced no result") && summary.contains("c2"),
+            "orphan note names c2: {summary}"
+        );
+    }
+
+    #[test]
+    fn assembled_tools_exclude_emitting() {
+        // Mirrors assembled_tools_exclude_interactive_ask_user's construction of
+        // the subagent tool set, then asserts no Emitting tools are present:
+        // verify_execution's orphan check would false-positive on a tool that
+        // emits its own events instead of a paired ToolResult.
+        let profile = AgentProfile::builtin();
+        let tools: Vec<Box<dyn Tool>> = zoid_tools::registry()
+            .into_iter()
+            .filter(|t| profile.allows(t.name()))
+            .filter(|t| t.kind() != zoid_tools::ToolKind::Interactive)
+            .collect();
+        for t in &tools {
+            assert_ne!(
+                t.kind(),
+                zoid_tools::ToolKind::Emitting,
+                "subagent profile must contain no Emitting tools (would break verify_execution): {}",
+                t.name()
+            );
+        }
+    }
 }
