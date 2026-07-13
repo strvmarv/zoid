@@ -5225,6 +5225,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoid-plugin-import"
+version = "0.4.0"
+dependencies = [
+ "anyhow",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "zoid-plugin",
+]
+
+[[package]]
 name = "zoid-provider"
 version = "0.4.0"
 dependencies = [

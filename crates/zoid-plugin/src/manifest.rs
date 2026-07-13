@@ -29,6 +29,8 @@ pub struct ModeRecipe {
     pub strip_prefix: String,
     pub body: BodyStrategy,
     pub description: String,
+    pub body_intro: Option<String>,
+    pub body_outro: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -75,6 +77,10 @@ struct RawMode {
     body: String,
     #[serde(default)]
     description: String,
+    #[serde(default)]
+    body_intro: Option<String>,
+    #[serde(default)]
+    body_outro: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -138,6 +144,8 @@ pub fn parse_manifest(toml_src: &str) -> Result<PluginManifest, String> {
             strip_prefix: m.strip_prefix,
             body: body.expect("body set when mode present"),
             description: m.description,
+            body_intro: m.body_intro,
+            body_outro: m.body_outro,
         }),
         install,
     })
@@ -155,9 +163,9 @@ impl PluginManifest {
             ));
         }
         for k in &self.kind {
-            if k != "mode" {
+            if k != "mode" && k != "skills" {
                 return Err(format!(
-                    "plugin '{}' declares unsupported kind '{}' (v1 supports only 'mode')",
+                    "plugin '{}' declares unsupported kind '{}' (v1 supports 'mode' and 'skills')",
                     self.id, k
                 ));
             }
@@ -243,5 +251,46 @@ text = "Superpowers installed."
         let m = parse_manifest(&src).unwrap();
         let err = m.validate().unwrap_err();
         assert!(err.contains("mode"), "got: {err}");
+    }
+
+    #[test]
+    fn parses_mode_body_intro_outro() {
+        let src = GOOD.replace(
+            "body = \"from-skill-frontmatter\"",
+            "body = \"from-skill-frontmatter\"\nbody_intro = \"INTRO\"\nbody_outro = \"OUTRO\"",
+        );
+        let m = parse_manifest(&src).unwrap();
+        let mode = m.mode.as_ref().unwrap();
+        assert_eq!(mode.body_intro.as_deref(), Some("INTRO"));
+        assert_eq!(mode.body_outro.as_deref(), Some("OUTRO"));
+    }
+
+    #[test]
+    fn mode_body_intro_outro_default_to_none() {
+        let m = parse_manifest(GOOD).unwrap();
+        let mode = m.mode.as_ref().unwrap();
+        assert!(mode.body_intro.is_none());
+        assert!(mode.body_outro.is_none());
+    }
+
+    #[test]
+    fn accepts_skills_kind_without_mode_table() {
+        let src = r#"
+[plugin]
+id = "doctools"
+schema = 1
+kind = ["skills"]
+name = "Doc Tools"
+description = "on-demand skills"
+
+[source]
+repo = "anthropics/skills"
+ref = "SHA"
+subtree = "skills"
+"#;
+        let m = parse_manifest(src).unwrap();
+        m.validate().unwrap();
+        assert_eq!(m.kind, vec!["skills".to_string()]);
+        assert!(m.mode.is_none());
     }
 }

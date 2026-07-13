@@ -1,0 +1,13 @@
+[package]
+name = "zoid-plugin-import"
+edition = "2021"
+version.workspace = true
+publish = false
+
+[dependencies]
+zoid-plugin = { path = "../zoid-plugin" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }

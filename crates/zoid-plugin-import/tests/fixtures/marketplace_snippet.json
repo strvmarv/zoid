@@ -1,0 +1,10 @@
+{
+  "name": "test-market",
+  "plugins": [
+    { "name": "a-external", "description": "d1",
+      "source": { "source": "git-subdir", "url": "https://github.com/o/r.git", "path": "plugins/a", "ref": "main", "sha": "1111111111111111111111111111111111111111" } },
+    { "name": "b-inrepo", "description": "d2", "source": "./plugins/b" },
+    { "name": "c-github", "description": "d3",
+      "source": { "source": "github", "repo": "o2/r2", "commit": "deadbeef", "sha": "2222222222222222222222222222222222222222" } }
+  ]
+}

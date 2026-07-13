@@ -362,6 +362,10 @@ pub enum AgentUpdate {
     PluginScan {
         id: String,
         origin: String,
+        /// `--mode`/`--skills` override from the `:plugin install` invocation,
+        /// carried across the async fetch so `apply_plugin_scan` can flip the
+        /// freshly-resolved manifest's kind before `build_plan`.
+        over: crate::plugin_install::KindOverride,
         res: Result<zoid_core::wizard::UpstreamScan, String>,
     },
     /// The agent (or user via `:worktree`) requested a worktree relocation.

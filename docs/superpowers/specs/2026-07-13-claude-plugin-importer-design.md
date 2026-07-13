@@ -77,7 +77,8 @@ Always check for an applicable skill before starting work. If multiple skills ap
 
 **3.1b — Add `kind = ["skills"]` (`manifest.rs`, `plan.rs`).**
 - `validate()` accepts `"skills"` alongside `"mode"`. A `skills` plugin requires **no `[mode]` table**.
-- `build_plan` gains a skills branch: materialize every `<skill>/SKILL.md` (plus sibling files) under `strip_prefix`, with **no `mode.md` entry and no overlay body**. The plan's effects register the destination via the already-`Safe` `skills.source_dirs` config key (applied through the existing `skill_import` path — see §3.3).
+- `build_plan` gains a skills branch: materialize every `<skill>/SKILL.md` (plus sibling files) under `strip_prefix`, with **no `mode.md` entry and no overlay body**.
+- **Install mechanism (revised after plan review, 2026-07-13):** the original wording here — "register via the `Safe` `skills.source_dirs` config key" — does **not** hold in v1: `finish_plugin_install` deliberately rejects *all* `SetConfig` effects while config application is deferred. Instead, each skills pack materializes into its **own private dir** `<cfg>/skills/<plugin_id>/`, and the skills scanner (`skill_import`) descends one level to discover `<cfg>/skills/<pack>/<skill>/SKILL.md`. This is required for correctness, not just convenience: `mode_wizard::materialize` reconciles (deletes) against any prior sidecar at its destination, so a *shared* skills dir would make each pack install delete the previous one. Per-pack dirs scope reconciliation to a single pack. (`skills.source_dirs` remains `Safe`-classified for when config application is un-deferred.)
 - A manifest may declare `kind = ["mode"]` **or** `["skills"]` (v1 does not combine them for one install; the converter picks one per §2 decision 4 + §4).
 
 ### 3.2 The converter bin (`crates/zoid-plugin-import`)

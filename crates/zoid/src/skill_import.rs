@@ -64,33 +64,50 @@ pub fn import_skills(dirs: &[PathBuf]) -> Vec<Skill> {
                 continue;
             }
             let md = skill_dir.join("SKILL.md");
-            if !md.is_file() {
+            if md.is_file() {
+                push_skill(&mut out, &skill_dir, &md);
                 continue;
             }
-            let text = match std::fs::read_to_string(&md) {
-                Ok(t) => t,
-                Err(e) => {
-                    eprintln!("zoid: skipping {}: {e}", md.display());
-                    continue;
-                }
-            };
-            match parse_skill_md(&text) {
-                Ok(p) => {
-                    let base = std::fs::canonicalize(&skill_dir).unwrap_or(skill_dir);
-                    out.push(Skill {
-                        name: p.name,
-                        description: p.description,
-                        body: p.body,
-                        base_dir: Some(base),
-                    });
-                }
-                Err(reason) => {
-                    eprintln!("zoid: skipping {}: {reason}", md.display());
+            // No SKILL.md here → maybe a pack dir; scan one level deeper.
+            if let Ok(inner) = std::fs::read_dir(&skill_dir) {
+                for e2 in inner.flatten() {
+                    let sub = e2.path();
+                    let sub_md = sub.join("SKILL.md");
+                    if sub.is_dir() && sub_md.is_file() {
+                        push_skill(&mut out, &sub, &sub_md);
+                    }
                 }
             }
         }
     }
     out
+}
+
+/// Read, parse, and push a single `<skill_dir>/SKILL.md` onto `out`. Shared by
+/// both the bare `<root>/<skill>/SKILL.md` and the per-pack
+/// `<root>/<pack>/<skill>/SKILL.md` call sites in `import_skills`.
+fn push_skill(out: &mut Vec<Skill>, skill_dir: &Path, md: &Path) {
+    let text = match std::fs::read_to_string(md) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("zoid: skipping {}: {e}", md.display());
+            return;
+        }
+    };
+    match parse_skill_md(&text) {
+        Ok(p) => {
+            let base = std::fs::canonicalize(skill_dir).unwrap_or_else(|_| skill_dir.to_path_buf());
+            out.push(Skill {
+                name: p.name,
+                description: p.description,
+                body: p.body,
+                base_dir: Some(base),
+            });
+        }
+        Err(reason) => {
+            eprintln!("zoid: skipping {}: {reason}", md.display());
+        }
+    }
 }
 
 /// Build the session's skill registry: the built-ins plus every importable
@@ -148,6 +165,34 @@ mod tests {
         for s in &skills {
             assert!(s.base_dir.as_ref().unwrap().is_absolute());
         }
+    }
+
+    #[test]
+    fn imports_skills_from_per_pack_subdirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // Bare skill (existing convention).
+        let bare = root.join("bare-skill");
+        std::fs::create_dir_all(&bare).unwrap();
+        std::fs::write(
+            bare.join("SKILL.md"),
+            "---\nname: bare-skill\ndescription: d\n---\nb\n",
+        )
+        .unwrap();
+        // Per-pack skill: <root>/packA/nested/SKILL.md
+        let nested = root.join("packA").join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(
+            nested.join("SKILL.md"),
+            "---\nname: nested\ndescription: d\n---\nn\n",
+        )
+        .unwrap();
+        // A pack sidecar dir must NOT be mistaken for a skill (no SKILL.md in it).
+        let skills = import_skills(&[root.to_path_buf()]);
+        let names: std::collections::HashSet<String> =
+            skills.iter().map(|s| s.name.clone()).collect();
+        assert!(names.contains("bare-skill"));
+        assert!(names.contains("nested"));
     }
 
     #[test]

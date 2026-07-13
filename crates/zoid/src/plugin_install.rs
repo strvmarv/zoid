@@ -13,6 +13,32 @@ use zoid_plugin::provenance::{AppliedEffect, PluginProvSource, PluginProvenance,
 
 use crate::mode_wizard::materialize;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KindOverride {
+    None,
+    Mode,
+    Skills,
+}
+
+/// Split a raw `:plugin install` argument string into (plugin_ref, override).
+/// Flags may appear on either side of the ref; the last of --mode/--skills
+/// wins (permissive, matching zoid's flag stance). The first non-flag token is
+/// the ref; later bare tokens are ignored (the ref is a single id/url).
+pub fn parse_plugin_install_args(raw: &str) -> (String, KindOverride) {
+    let mut plugin_ref = String::new();
+    let mut over = KindOverride::None;
+    for tok in raw.split_whitespace() {
+        match tok {
+            "--mode" => over = KindOverride::Mode,
+            "--skills" => over = KindOverride::Skills,
+            other if other.starts_with("--") => {} // unknown flag: ignore
+            other if plugin_ref.is_empty() => plugin_ref = other.to_string(),
+            _ => {}
+        }
+    }
+    (plugin_ref, over)
+}
+
 #[derive(Debug)]
 pub struct InstalledPlugin {
     pub dest: PathBuf,
@@ -111,6 +137,68 @@ pub fn finish_plugin_install(
     })
 }
 
+/// Install a skills-kind plan into the pack's OWN dir under the convention
+/// skills root. No `mode.md` overlay, no mode activation. The pack dir
+/// `<skills_root>/<plugin_id>/` is discovered by the Task-4b scanner change
+/// (which scans `<cfg>/skills/<pack>/<skill>/SKILL.md`). v1 writes no config
+/// (SetConfig is gated off), so the on-disk convention IS the seam.
+pub fn finish_skills_install(
+    plan: &InstallPlan,
+    scan: &UpstreamScan,
+    skills_root: &Path,
+    plugin_id: &str,
+    manifest_ref: &str,
+    origin: &str,
+) -> Result<InstalledPlugin, String> {
+    // Same v1 effect gate as finish_plugin_install.
+    for e in &plan.effects {
+        if e.risk() == RiskTier::Dangerous {
+            return Err(format!("effect requires confirmation, not yet supported: {e:?}"));
+        }
+        if matches!(e, Effect::SetConfig { .. }) {
+            return Err(format!("config effects are not yet supported: {e:?}"));
+        }
+    }
+    // Per-pack private dir: scopes materialize's file-set reconciliation to
+    // this pack alone (see C3), and mirrors how modes use <cfg>/modes/<id>/.
+    let pack_dir = skills_root.join(plugin_id);
+    if pack_dir.exists() {
+        std::fs::remove_dir_all(&pack_dir)
+            .map_err(|e| format!("remove old pack {}: {e}", pack_dir.display()))?;
+    }
+    std::fs::create_dir_all(&pack_dir)
+        .map_err(|e| format!("create pack dir {}: {e}", pack_dir.display()))?;
+    let fetched_at = chrono::Utc::now().to_rfc3339();
+    materialize(&plan.mapping, scan, &pack_dir, &fetched_at).map_err(|e| e.problems.join("; "))?;
+
+    let applied: Vec<AppliedEffect> = plan
+        .effects
+        .iter()
+        .map(|e| match e {
+            Effect::Activate => AppliedEffect::Activate,
+            Effect::OnboardingHint { text } => AppliedEffect::OnboardingHint { text: text.clone() },
+            Effect::SetConfig { .. } => unreachable!("SetConfig rejected at the gate"),
+        })
+        .collect();
+    let sidecar = PluginProvenance {
+        schema: 1,
+        plugin: PluginStamp { id: plugin_id.to_string(), manifest_ref: manifest_ref.to_string(), installed_at: fetched_at.clone() },
+        source: PluginProvSource { repo: scan.repo.clone(), ref_: scan.resolved_ref.clone(), subtree: scan.subtree_path.clone(), origin: origin.to_string() },
+        // C2: PluginProvenance.files is Vec<ProvenanceEntry>. The per-file
+        // list already lives in the pack dir's .zoid-provenance.json (written
+        // by materialize); mirror finish_plugin_install and leave this empty
+        // to avoid two sources of truth. Uninstall removes the whole pack_dir.
+        files: Vec::new(),
+        effects_applied: applied,
+    };
+    let json = serde_json::to_string_pretty(&sidecar).map_err(|e| format!("serialize sidecar: {e}"))?;
+    std::fs::write(pack_dir.join(".zoid-plugin.json"), json)
+        .map_err(|e| format!("write sidecar: {e}"))?;
+
+    let safe_effects: Vec<Effect> = plan.effects.iter().filter(|e| e.risk() == RiskTier::Safe).cloned().collect();
+    Ok(InstalledPlugin { dest: pack_dir, safe_effects })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,6 +206,27 @@ mod tests {
     use zoid_plugin::effect::Effect;
     use zoid_plugin::manifest::{BodyStrategy, ModeRecipe, PluginManifest};
     use zoid_plugin::plan::build_plan;
+
+    #[test]
+    fn parses_plugin_install_mode_and_skills_flags() {
+        assert_eq!(
+            parse_plugin_install_args("superpowers --mode"),
+            ("superpowers".into(), KindOverride::Mode)
+        );
+        assert_eq!(
+            parse_plugin_install_args("anthropics/skills --skills"),
+            ("anthropics/skills".into(), KindOverride::Skills)
+        );
+        assert_eq!(
+            parse_plugin_install_args("superpowers"),
+            ("superpowers".into(), KindOverride::None)
+        );
+        // Last flag wins; ref is the sole non-flag token.
+        assert_eq!(
+            parse_plugin_install_args("x --skills --mode"),
+            ("x".into(), KindOverride::Mode)
+        );
+    }
 
     fn skill_md(name: &str, desc: &str) -> String {
         format!("---\nname: {name}\ndescription: {desc}\n---\nbody\n")
@@ -136,7 +245,7 @@ mod tests {
         PluginManifest {
             id: "superpowers".into(), schema: 1, kind: vec!["mode".into()],
             name: "Superpowers".into(), description: "d".into(), source: None,
-            mode: Some(ModeRecipe { loader: "using-superpowers/SKILL.md".into(), strip_prefix: "skills/".into(), body: BodyStrategy::FromSkillFrontmatter, description: "desc".into() }),
+            mode: Some(ModeRecipe { loader: "using-superpowers/SKILL.md".into(), strip_prefix: "skills/".into(), body: BodyStrategy::FromSkillFrontmatter, description: "desc".into(), body_intro: None, body_outro: None }),
             install: effects,
         }
     }
@@ -206,5 +315,44 @@ mod tests {
         std::fs::write(dest.join("STALE.md"), "old").unwrap();
         finish_plugin_install(&plan, &scan, &dest, "superpowers", "d884ae0", "bundled").unwrap();
         assert!(!dest.join("STALE.md").exists());
+    }
+
+    fn skills_manifest(id: &str) -> zoid_plugin::manifest::PluginManifest {
+        use zoid_plugin::manifest::{PluginManifest, PluginSource};
+        PluginManifest {
+            id: id.into(), schema: 1, kind: vec!["skills".into()],
+            name: id.into(), description: "d".into(),
+            source: Some(PluginSource { repo: "o/r".into(), ref_: "SHA".into(), subtree: "skills".into() }),
+            mode: None, install: vec![Effect::Activate],
+        }
+    }
+
+    #[test]
+    fn skills_install_uses_private_pack_dir_no_mode_md() {
+        let scan = scan(); // existing helper: brainstorming/SKILL.md etc.
+        let plan = zoid_plugin::plan::build_plan(&skills_manifest("doctools"), &scan).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let skills_root = tmp.path().join("skills");
+        let out = finish_skills_install(&plan, &scan, &skills_root, "doctools", "SHA", "url").unwrap();
+        // Skill landed under the PRIVATE pack dir: <skills_root>/doctools/brainstorming/SKILL.md
+        assert!(skills_root.join("doctools").join("brainstorming").join("SKILL.md").is_file());
+        assert!(!skills_root.join("doctools").join("mode.md").exists());
+        // Per-pack sidecar lives inside the pack dir.
+        assert!(skills_root.join("doctools").join(".zoid-plugin.json").is_file());
+        assert!(out.safe_effects.contains(&Effect::Activate));
+    }
+
+    #[test]
+    fn two_skills_packs_do_not_delete_each_other() {
+        let scan = scan();
+        let tmp = tempfile::tempdir().unwrap();
+        let skills_root = tmp.path().join("skills");
+        let plan_a = zoid_plugin::plan::build_plan(&skills_manifest("packA"), &scan).unwrap();
+        finish_skills_install(&plan_a, &scan, &skills_root, "packA", "SHA", "url").unwrap();
+        let plan_b = zoid_plugin::plan::build_plan(&skills_manifest("packB"), &scan).unwrap();
+        finish_skills_install(&plan_b, &scan, &skills_root, "packB", "SHA", "url").unwrap();
+        // Pack A survived installing Pack B (the C3 regression guard).
+        assert!(skills_root.join("packA").join("brainstorming").join("SKILL.md").is_file());
+        assert!(skills_root.join("packB").join("brainstorming").join("SKILL.md").is_file());
     }
 }
