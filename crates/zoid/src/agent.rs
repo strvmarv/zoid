@@ -366,7 +366,12 @@ pub enum AgentUpdate {
         /// carried across the async fetch so `apply_plugin_scan` can flip the
         /// freshly-resolved manifest's kind before `build_plan`.
         over: crate::plugin_install::KindOverride,
-        res: Result<zoid_core::wizard::UpstreamScan, String>,
+        /// The resolved manifest folded into `Ok` alongside the scan: the
+        /// catalog manifest is fetched/parsed/validated inside the spawned
+        /// task, so a manifest-stage failure must be representable as
+        /// `Err(String)` and travel back through the SAME message that
+        /// clears the `installing_plugin` guard.
+        res: Result<(zoid_plugin::manifest::PluginManifest, zoid_core::wizard::UpstreamScan), String>,
     },
     /// The agent (or user via `:worktree`) requested a worktree relocation.
     /// `reply` carries the new absolute cwd (or an error) back to the awaiting

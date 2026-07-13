@@ -73,6 +73,12 @@ pub fn catalog_manifest_url(id: &str) -> String {
     format!("{CATALOG_BASE}/{id}.toml")
 }
 
+/// One-shot async raw GET of a public zoid-releases text file (unauthenticated).
+pub async fn fetch_text(url: &str) -> anyhow::Result<String> {
+    let client = reqwest::Client::builder().user_agent("zoid").build()?;
+    Ok(client.get(url).send().await?.error_for_status()?.text().await?)
+}
+
 pub trait IndexFetcher {
     fn get(&self, url: &str) -> anyhow::Result<String>;
 }
