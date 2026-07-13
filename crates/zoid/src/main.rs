@@ -3666,6 +3666,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::ScrollbarDrag(row) => scrollbar_row_to_offset(app, row),
         Action::ScrollbarRelease => app.shell.scrollbar_drag = false,
+        Action::ToggleMouseCapture => toggle_select_mode(app),
         // Conversation clicks are resolved in the event loop (where the layout is
         // available) via `handle_conversation_click`; this arm keeps the match
         // exhaustive and never fires from the keyboard.

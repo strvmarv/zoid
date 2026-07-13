@@ -43,6 +43,9 @@ pub enum Action {
     ConversationClick(u16),
     ZoomIn,
     ZoomOut,
+    /// Toggle terminal mouse capture ("select mode"). Applied by the bin's run
+    /// loop (needs the terminal backend); flips `ShellState.select_mode`.
+    ToggleMouseCapture,
     Submit,
     /// Esc / Ctrl-C while a turn is in flight: cooperatively cancel it. The bin
     /// fires the turn's cancellation token; a no-op if no cancellable turn.
@@ -254,6 +257,9 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
     }
     if alt(&key, 'p') {
         return Action::OpenProviderSwitch;
+    }
+    if alt(&key, 'm') {
+        return Action::ToggleMouseCapture;
     }
     match key.code {
         KeyCode::BackTab => return Action::CycleMode,
@@ -1331,6 +1337,15 @@ mod tests {
         let s = ShellState::new(); // overlay None, focus Input
         let a = route_key(&s, KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT));
         assert!(matches!(a, Action::OpenProviderSwitch));
+    }
+
+    #[test]
+    fn alt_m_toggles_mouse_capture() {
+        let s = ShellState::new();
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('m'), KeyModifiers::ALT)),
+            Action::ToggleMouseCapture
+        );
     }
 
     #[test]
