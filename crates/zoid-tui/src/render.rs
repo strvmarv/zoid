@@ -370,6 +370,14 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
         chip,
         Style::new().fg(color::CHAT_ACCENT).bg(color::CHAT_BG),
     )];
+    // Always-visible SELECT pill, right of the mode pill. Purple when select
+    // mode is on (native selection/copy live), dimmed when off. Same padded /
+    // CHAT_BG style as the mode chip so they read as a matched pair.
+    let select_fg = if state.select_mode { color::BRANCH } else { color::DIM };
+    left.push(Span::styled(
+        " SELECT ",
+        Style::new().fg(select_fg).bg(color::CHAT_BG),
+    ));
     // Transient ④ hint (e.g. "queued · runs as a subagent in P5"), set by a
     // verb pick (P4d T4). Pure-renderer-readable since it lives on ShellState.
     if let Some(hint) = &state.status_hint {
@@ -1693,6 +1701,30 @@ mod tests {
             has_compact_color,
             "at least one cell must use color::BRANCH (purple) for the compaction indicator"
         );
+    }
+
+    /// The SELECT pill must render in `color::BRANCH` (purple) when
+    /// `select_mode` is on.
+    #[test]
+    fn select_pill_color_tracks_mode() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let view = ChatView {
+            zoom: Zoom::Normal,
+            caret_on: false,
+            reveal: None,
+            tz_offset_secs: 0,
+        };
+        let mut on = ShellState::new();
+        on.select_mode = true;
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        term.draw(|f| render_status(f, &on, &view, f.area())).unwrap();
+        let has_branch = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .any(|c| c.style().fg == Some(color::BRANCH));
+        assert!(has_branch, "SELECT pill must use BRANCH fg when select_mode on");
     }
 
     /// When `compacting: false`, the compaction segment must NOT appear —
