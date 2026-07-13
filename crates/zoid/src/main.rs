@@ -4857,7 +4857,6 @@ fn disable_companion(app: &mut App) {
     }
 }
 
-/// Kick off a plugin install: resolve the manifest source, fetch the pinned
 /// Kick off the async catalog index load shared by `:plugin catalog` (which
 /// populates the overlay) and `:plugin list` (which prints rows to the
 /// scrollback once the load resolves). The cache dir is resolved here on the
@@ -4950,7 +4949,9 @@ fn apply_catalog_loaded(app: &mut App, res: Result<Vec<zoid::catalog::CatalogEnt
     }
 }
 
-/// tree off-thread, and hand the scan back via AgentUpdate::PluginScan.
+/// Kick off a plugin install: resolve the manifest source (bundled or catalog),
+/// fetch the pinned tree off-thread, and hand the scan back via
+/// AgentUpdate::PluginScan.
 fn install_plugin(app: &mut App, arg: String) {
     use zoid::plugin_install::parse_plugin_install_args;
     use zoid_plugin::resolve::{ManifestSource, PluginRef, classify_ref, resolve_source};
