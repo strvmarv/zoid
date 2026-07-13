@@ -275,9 +275,11 @@ fn verify_execution(branch_events: &[Event]) -> ExecReport {
 
 /// Distill a subagent's branch events into a summary + ok flag.
 /// - summary = last non-empty assistant text, or a warn-glyph placeholder.
-/// - ok = summary doesn't start with warn glyph AND no errored tool results.
+/// - ok = summary doesn't start with warn glyph AND no errored tool results AND no orphan calls.
+/// - orphan tool calls (produced but never executed) flip ok to false.
+/// - zero tool calls issues an advisory note only (never flips ok).
 fn distill(branch_events: &[Event]) -> (String, bool) {
-    let summary = conversation(branch_events)
+    let mut summary = conversation(branch_events)
         .iter()
         .rev()
         .find_map(|m| match m {
@@ -290,13 +292,27 @@ fn distill(branch_events: &[Event]) -> (String, bool) {
         .iter()
         .any(|e| matches!(&e.kind, EventKind::ToolResult { is_error: true, .. }));
 
-    let ok = !summary.starts_with(WARN_GLYPH) && !has_errors;
+    let report = verify_execution(branch_events);
+    let has_orphans = !report.orphan_ids.is_empty();
 
-    let summary = if has_errors && !summary.starts_with(WARN_GLYPH) {
-        format!("{summary}\n\n{WARN_GLYPH} one or more tool calls errored")
-    } else {
-        summary
-    };
+    let ok = !summary.starts_with(WARN_GLYPH) && !has_errors && !has_orphans;
+
+    if has_errors && !summary.starts_with(WARN_GLYPH) {
+        summary = format!("{summary}\n\n{WARN_GLYPH} one or more tool calls errored");
+    }
+    if has_orphans {
+        summary = format!(
+            "{summary}\n\n{WARN_GLYPH} {} tool call(s) produced no result: {}",
+            report.orphan_ids.len(),
+            report.orphan_ids.join(", ")
+        );
+    }
+    if report.tool_call_count == 0 {
+        summary = format!(
+            "{summary}\n\nnote: subagent emitted no tool calls — if this task \
+             required file or shell changes, its results are unverified"
+        );
+    }
     (summary, ok)
 }
 
@@ -323,6 +339,12 @@ mod tests {
             name: "read_file".into(),
             output: out.into(),
             is_error: false,
+        })
+    }
+    // Helper: an assistant text event (canonical assistant-text variant).
+    fn assistant(text: &str) -> Event {
+        ev(EventKind::AssistantMessage {
+            text: text.into(),
         })
     }
 
@@ -481,7 +503,55 @@ mod tests {
         ];
         let (summary, ok) = distill(&evs);
         assert!(ok, "normal output must be success");
-        assert_eq!(summary, "refactored successfully");
+        assert!(summary.contains("refactored successfully"));
+    }
+
+    #[test]
+    fn distill_orphan_call_forces_not_ok() {
+        let evs = vec![assistant("did the thing"), call("c1", "a.rs")]; // no result
+        let (summary, ok) = distill(&evs);
+        assert!(!ok, "orphan tool call must force ok=false");
+        assert!(
+            summary.contains("produced no result") && summary.contains("c1"),
+            "summary must name the orphan id: {summary}"
+        );
+    }
+
+    #[test]
+    fn distill_zero_calls_stays_ok_with_advisory() {
+        // KEY false-positive-safety test: a legitimate text-only subagent.
+        let evs = vec![assistant("here is your summary")];
+        let (summary, ok) = distill(&evs);
+        assert!(ok, "zero tool calls must NOT flip ok for a text-only subagent");
+        assert!(
+            summary.contains("emitted no tool calls"),
+            "advisory note must be present: {summary}"
+        );
+    }
+
+    #[test]
+    fn distill_paired_calls_stay_ok() {
+        let evs = vec![assistant("done"), call("c1", "a.rs"), result("c1", "ok")];
+        let (_summary, ok) = distill(&evs);
+        assert!(ok, "a healthy subagent with paired calls stays ok");
+    }
+
+    #[test]
+    fn distill_errored_result_still_not_ok() {
+        // Regression guard: existing behavior preserved.
+        let evs = vec![
+            assistant("tried"),
+            call("c1", "a.rs"),
+            ev(EventKind::ToolResult {
+                id: "c1".into(),
+                name: "read_file".into(),
+                output: "boom".into(),
+                is_error: true,
+            }),
+        ];
+        let (summary, ok) = distill(&evs);
+        assert!(!ok);
+        assert!(summary.contains("errored"), "keeps existing errored note: {summary}");
     }
 
     #[test]
