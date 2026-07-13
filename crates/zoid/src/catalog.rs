@@ -173,6 +173,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_index_reads_fixture_catalog() {
+        let fixture = include_str!("../tests/fixtures/catalog/index.json");
+        let v = parse_index(fixture).unwrap();
+        assert!(v.len() >= 1, "fixture catalog must have at least one entry");
+        let superpowers = v.iter().find(|e| e.id == "superpowers")
+            .expect("fixture catalog must contain the superpowers entry");
+        assert_eq!(superpowers.name, "Superpowers");
+        assert_eq!(superpowers.kind, vec!["mode".to_string()]);
+        assert_eq!(superpowers.source_repo, "obra/superpowers");
+        assert_eq!(superpowers.source_ref, "d884ae04edebef577e82ff7c4e143debd0bbec99");
+        let ok_skills = v.iter().find(|e| e.id == "ok-skills")
+            .expect("fixture catalog must contain the ok-skills entry");
+        assert_eq!(ok_skills.license.as_deref(), Some("MIT"));
+    }
+
+    #[test]
     fn urls_are_raw_unauthenticated() {
         assert_eq!(catalog_index_url(),
             "https://raw.githubusercontent.com/strvmarv/zoid-releases/main/plugins/index.json");

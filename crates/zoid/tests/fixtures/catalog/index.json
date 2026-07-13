@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "plugins": [
+    {
+      "id": "ok-skills",
+      "name": "OK Skills",
+      "kind": [
+        "skills"
+      ],
+      "description": "Curated pack.",
+      "source": {
+        "repo": "mxyhi/ok-skills",
+        "ref": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
+      },
+      "license": "MIT"
+    },
+    {
+      "id": "superpowers",
+      "name": "Superpowers",
+      "kind": [
+        "mode"
+      ],
+      "description": "A curated skill set for structured software engineering workflows.",
+      "source": {
+        "repo": "obra/superpowers",
+        "ref": "d884ae04edebef577e82ff7c4e143debd0bbec99"
+      }
+    }
+  ]
+}
