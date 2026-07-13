@@ -2,14 +2,17 @@
 //! (Files under `examples/<dir>/` are modules, not example binaries.)
 
 use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::text::Line;
 use ratatui::{backend::TestBackend, Terminal};
 use ratatui_textarea::TextArea;
 use zoid_core::projection::{ChatMsg, ToolCallRef};
 use zoid_tui::chat::ChatView;
 use zoid_tui::config_view::PickOption;
+use zoid_tui::layout::{compute, conv_text_width};
 use zoid_tui::render_shell;
 use zoid_tui::state::{DrawerId, McpStatusRow, Overlay, ShellState, SwitchPane, Zoom};
-use zoid_tui::EconomyView;
+use zoid_tui::{onboarding, EconomyView};
 
 pub fn seeded() -> Vec<ChatMsg> {
     vec![
@@ -311,6 +314,26 @@ fn seeded_tools_models_tasks() -> Vec<zoid_core::tasks::TaskItem> {
     ]
 }
 
+/// The brainstorming skill firing inside the Superpowers mode: the assistant
+/// announces the skill (as `using-superpowers` instructs) and asks a single
+/// focused design question (brainstorming's one-question-at-a-time rule). Seeded
+/// transcript — the same staging discipline as the other scenes; the SUPERPOWERS
+/// mode chip (real state) is what marks the mode in use.
+fn seeded_brainstorm_turn() -> Vec<ChatMsg> {
+    vec![
+        ChatMsg::User {
+            text: "let's add rate limiting to the API".into(),
+            ts: 0,
+        },
+        ChatMsg::Assistant {
+            thinking: None,
+            text: "Using the brainstorming skill to turn this into a design — one question at a time.\n\nFirst: should limits be per-API-key, per-IP, or global?".into(),
+            tool_calls: vec![],
+            ts: 0,
+        },
+    ]
+}
+
 /// Tasks a scene renders into the Tasks drawer (empty for scenes without tasks).
 fn scene_tasks(name: &str) -> Vec<zoid_core::tasks::TaskItem> {
     match name {
@@ -379,6 +402,10 @@ pub fn render_one(
     msgs: &[ChatMsg],
     economy: &EconomyView,
     tasks: &[zoid_core::tasks::TaskItem],
+    // Pre-rendered conversation body, when the frame supplies one (the
+    // extensibility scene's first-run frame injects the real onboarding
+    // empty-state here). `None` lets render_shell render `msgs` itself.
+    body: Option<&[Line<'static>]>,
     w: u16,
     h: u16,
 ) -> Buffer {
@@ -393,10 +420,38 @@ pub fn render_one(
     };
     terminal
         .draw(|f| {
-            render_shell(f, state, economy, msgs, None, tasks, &input, false, &view);
+            render_shell(f, state, economy, msgs, body, tasks, &input, false, &view);
         })
         .unwrap();
     terminal.backend().buffer().clone()
+}
+
+/// The real first-run empty-state body. The app paints this (via
+/// `onboarding::empty_state_lines`) into the conversation pane whenever a
+/// session has no messages; we reproduce it here — at the same
+/// `conv_text_width` the app uses — so the capture shows the genuine
+/// "Run :plugin install superpowers …" hint rather than a hand-drawn mock.
+fn onboarding_body(state: &ShellState, w: u16, h: u16) -> Vec<Line<'static>> {
+    let area = Rect {
+        x: 0,
+        y: 0,
+        width: w,
+        height: h,
+    };
+    let layout = compute(area, state);
+    let body_w = conv_text_width(layout.conversation.width) as usize;
+    // first_time_user = true, offer_superpowers = true: the new-user path that
+    // surfaces the Superpowers install hint.
+    onboarding::empty_state_lines(true, true, body_w)
+}
+
+/// Per-frame pre-rendered body, if the scene/frame supplies one. Only the
+/// extensibility scene's first-run frame (index 0) does.
+fn scene_frame_body(name: &str, idx: usize, state: &ShellState, w: u16, h: u16) -> Option<Vec<Line<'static>>> {
+    match (name, idx) {
+        ("extensibility", 0) => Some(onboarding_body(state, w, h)),
+        _ => None,
+    }
 }
 
 /// Render a shell scene and return a clone of the rendered buffer.
@@ -406,7 +461,7 @@ pub fn render_one(
 #[allow(dead_code)]
 pub fn render_shell_scene(name: &str, w: u16, h: u16) -> Buffer {
     let (state, msgs, economy) = scene(name);
-    render_one(&state, &msgs, &economy, &scene_tasks(name), w, h)
+    render_one(&state, &msgs, &economy, &scene_tasks(name), None, w, h)
 }
 
 /// The context-economy story as an ordered set of states. Reuses the enriched
@@ -476,6 +531,39 @@ pub fn scene_seq(name: &str) -> Vec<(ShellState, Vec<ChatMsg>, EconomyView)> {
                 (f3, turn[..2].to_vec(), seeded_economy()),
             ]
         }
+        "extensibility" => {
+            // F0 — first run: an empty session. `msgs` is empty, so
+            // render_shell_scene_seq injects the real onboarding empty-state
+            // (the "Run :plugin install superpowers …" hint) as the body. Chat
+            // is the non-removable floor mode.
+            let mut f0 = ShellState::new();
+            f0.first_time_user = true;
+            f0.repo_name = "api".into();
+            f0.branch = "main".into();
+            // active_mode defaults to "Chat"; mode_names defaults to ["Chat"].
+
+            // F1 — Superpowers installed & active: the mode chip flips to
+            // SUPERPOWERS and the brainstorming skill fires. Enriched rail so
+            // the frame reads as a real session.
+            let mut f1 = ShellState::new();
+            f1.active_mode = "Superpowers".into();
+            f1.mode_names = vec!["Chat".into(), "Superpowers".into()];
+            f1.session_name = "rate limiting".into();
+            f1.model = "glm-5.2".into();
+            f1.provider = "ollama".into();
+            f1.session_tokens = 12_800;
+            f1.cached_tokens = 8_100;
+            f1.cache_supported = true;
+            f1.ctx_used = 9_000;
+            f1.ctx_ceiling = 128_000;
+            f1.repo_name = "api".into();
+            f1.branch = "main".into();
+
+            vec![
+                (f0, vec![], empty_economy()),
+                (f1, seeded_brainstorm_turn(), empty_economy()),
+            ]
+        }
         _ => vec![scene(name)],
     }
 }
@@ -486,7 +574,11 @@ pub fn render_shell_scene_seq(name: &str, w: u16, h: u16) -> Vec<Buffer> {
     let tasks = scene_tasks(name);
     scene_seq(name)
         .into_iter()
-        .map(|(state, msgs, economy)| render_one(&state, &msgs, &economy, &tasks, w, h))
+        .enumerate()
+        .map(|(idx, (state, msgs, economy))| {
+            let body = scene_frame_body(name, idx, &state, w, h);
+            render_one(&state, &msgs, &economy, &tasks, body.as_deref(), w, h)
+        })
         .collect()
 }
 
@@ -565,5 +657,54 @@ mod tests {
         // Renders at the required min size.
         let frames = render_shell_scene_seq("tools-models", 160, 40);
         assert_eq!(frames.len(), 4);
+    }
+
+    /// Read a rendered buffer back to a flat string (row-major) for text asserts.
+    fn buffer_text(buf: &Buffer) -> String {
+        let area = *buf.area();
+        (0..area.height)
+            .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+            .map(|(x, y)| buf[(x, y)].symbol().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn extensibility_sequence_onboarding_then_superpowers_firing() {
+        let seq = scene_seq("extensibility");
+        assert_eq!(seq.len(), 2, "expected a 2-frame extensibility sequence");
+
+        // F0 — first run: empty session (onboarding body injected at render), Chat floor.
+        assert!(seq[0].1.is_empty(), "frame 0 is the empty-state (onboarding)");
+        assert_eq!(seq[0].0.active_mode, "Chat", "frame 0 mode is the Chat floor");
+
+        // F1 — Superpowers mode active with the brainstorming turn.
+        assert_eq!(
+            seq[1].0.active_mode, "Superpowers",
+            "frame 1 mode is Superpowers"
+        );
+        assert!(
+            seq[1].0.mode_names.iter().any(|n| n == "Superpowers"),
+            "Superpowers is an installed mode"
+        );
+        assert!(!seq[1].1.is_empty(), "frame 1 has the brainstorming turn");
+
+        // Rendered frames carry the REAL onboarding hint (F0) and the SUPERPOWERS
+        // mode chip (F1) — not hand-authored mock text.
+        let frames = render_shell_scene_seq("extensibility", 160, 40);
+        assert_eq!(frames.len(), 2);
+        let f0 = buffer_text(&frames[0]);
+        assert!(
+            f0.contains(":plugin install superpowers"),
+            "frame 0 must render the real onboarding install hint"
+        );
+        let f1 = buffer_text(&frames[1]);
+        assert!(
+            f1.contains("SUPERPOWERS"),
+            "frame 1 must render the SUPERPOWERS mode chip"
+        );
+        assert!(
+            f1.contains("brainstorming"),
+            "frame 1 must show the brainstorming skill firing"
+        );
     }
 }
