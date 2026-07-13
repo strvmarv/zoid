@@ -1653,7 +1653,7 @@ struct App {
     tool_complete: bool,
     /// Set when this process's session was taken over by another instance; the
     /// in-flight turn was cancelled and no further turns may start against it.
-    /// The user can `:new` or `:resume` elsewhere, or quit. Spec §2.4.
+    /// The user can `:session new` or `:session resume` elsewhere, or quit. Spec §2.4.
     yielded: bool,
     /// A message queued while the agent was busy; auto-submitted when the
     /// current turn ends and no subagents are in flight. ESC (CancelTurn)
@@ -3710,9 +3710,9 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             .scroll_to_offset(app.last_conv_max_scroll, app.last_conv_max_scroll),
         Action::Submit => {
             // Yielded always blocks (even when not busy) — a taken-over session
-            // can't accept new turns until the user :new or :resume.
+            // can't accept new turns until the user :session new or :session resume.
             if app.yielded {
-                app.shell.status_hint = Some("session taken over — :new or :resume".into());
+                app.shell.status_hint = Some("session taken over — :session new or :session resume".into());
                 return Ok(false);
             }
             // Busy (streaming or delegating) but not yielded: stash the message
@@ -3911,8 +3911,8 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                     app.session_started_ms = info.created_ts;
                 }
                 // Claim the resumed session and clear any yielded state from
-                // the prior (taken-over) session — `:resume` is the documented
-                // yield escape hatch (symmetric with `:new`). Spec §3.2.
+                // the prior (taken-over) session — `:session resume` is the documented
+                // yield escape hatch (symmetric with `:session new`). Spec §3.2.
                 app.yielded = false;
                 app.pending_message = None;
                 app.shell.status_hint = None;
@@ -7706,7 +7706,7 @@ mod tests {
         app.textarea = make_input(ratatui_textarea::TextArea::default());
         let _ = handle_action(&mut app, zoid_tui::route::Action::Submit).await;
         assert!(
-            app.shell.status_hint.as_deref() != Some("session taken over — :new or :resume"),
+            app.shell.status_hint.as_deref() != Some("session taken over — :session new or :session resume"),
             "after :new, Submit must not surface the yielded hint"
         );
     }

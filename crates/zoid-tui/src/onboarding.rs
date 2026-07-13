@@ -19,7 +19,7 @@ const NEW_USER_PROMPTS: &[&str] = &[
 ];
 /// The hint shown to a returning user with an empty session.
 const RETURNING_HINT: &str =
-    "welcome back — type a message, or :resume to pick up another session";
+    "welcome back — type a message, or :session resume to pick up another session";
 /// The instructional line offering the Superpowers skill set install, shown
 /// to first-time users who haven't installed it yet.
 const SUPERPOWERS_OFFER: &str =
