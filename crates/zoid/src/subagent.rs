@@ -235,6 +235,44 @@ pub async fn run_subagent(
     })
 }
 
+/// Structural tool-execution report for a subagent's own branch events.
+/// Pure (no I/O); drives `distill`'s `ok` flag + advisory notes.
+struct ExecReport {
+    tool_call_count: usize,
+    /// `ToolCall` ids that never produced a matching `ToolResult`, in
+    /// first-seen order, de-duplicated.
+    orphan_ids: Vec<String>,
+}
+
+/// A `ToolCall` whose id has no matching `ToolResult` is "claimed but never
+/// executed". Subagents carry only paired tools (read/write/edit/grep/glob/
+/// ls/shell — see `AgentProfile::builtin`), so an orphan is a genuine anomaly.
+fn verify_execution(branch_events: &[Event]) -> ExecReport {
+    use std::collections::HashSet;
+    let mut call_ids: Vec<String> = Vec::new();
+    let mut result_ids: HashSet<String> = HashSet::new();
+    for e in branch_events {
+        match &e.kind {
+            EventKind::ToolCall { id, .. } => call_ids.push(id.clone()),
+            EventKind::ToolResult { id, .. } => {
+                result_ids.insert(id.clone());
+            }
+            _ => {}
+        }
+    }
+    let mut seen: HashSet<String> = HashSet::new();
+    let orphan_ids = call_ids
+        .iter()
+        .filter(|id| !result_ids.contains(*id))
+        .filter(|id| seen.insert((*id).clone()))
+        .cloned()
+        .collect();
+    ExecReport {
+        tool_call_count: call_ids.len(),
+        orphan_ids,
+    }
+}
+
 /// Distill a subagent's branch events into a summary + ok flag.
 /// - summary = last non-empty assistant text, or a warn-glyph placeholder.
 /// - ok = summary doesn't start with warn glyph AND no errored tool results.
@@ -444,6 +482,39 @@ mod tests {
         let (summary, ok) = distill(&evs);
         assert!(ok, "normal output must be success");
         assert_eq!(summary, "refactored successfully");
+    }
+
+    #[test]
+    fn verify_execution_flags_orphan_call() {
+        let evs = vec![call("c1", "a.rs"), result("c1", "ok"), call("c2", "b.rs")];
+        let r = verify_execution(&evs);
+        assert_eq!(r.tool_call_count, 2);
+        assert_eq!(r.orphan_ids, vec!["c2".to_string()]);
+    }
+
+    #[test]
+    fn verify_execution_no_orphans_when_all_paired() {
+        let evs = vec![call("c1", "a.rs"), result("c1", "ok")];
+        let r = verify_execution(&evs);
+        assert_eq!(r.tool_call_count, 1);
+        assert!(r.orphan_ids.is_empty());
+    }
+
+    #[test]
+    fn verify_execution_counts_zero_calls() {
+        let evs = vec![ev(EventKind::UserMessage { text: "hi".into() })];
+        let r = verify_execution(&evs);
+        assert_eq!(r.tool_call_count, 0);
+        assert!(r.orphan_ids.is_empty());
+    }
+
+    #[test]
+    fn verify_execution_dedups_orphan_ids() {
+        // Same call id emitted twice with no result — reported once.
+        let evs = vec![call("c1", "a.rs"), call("c1", "a.rs")];
+        let r = verify_execution(&evs);
+        assert_eq!(r.tool_call_count, 2);
+        assert_eq!(r.orphan_ids, vec!["c1".to_string()]);
     }
 
     #[tokio::test]
