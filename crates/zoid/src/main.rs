@@ -3146,6 +3146,9 @@ where
                             persist_active_mode(app).await;
                         }
                     }
+                    zoid::agent::AgentUpdate::CatalogLoaded(res) => {
+                        apply_catalog_loaded(app, res);
+                    }
                     zoid::agent::AgentUpdate::WorktreeRequested { action, reply } => {
                         handle_worktree_request(app, action, Some(reply));
                     }
@@ -4518,6 +4521,38 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::FeedbackSubmit => {
             handle_feedback_submit(app).await?;
         }
+        Action::CatalogMove(dir) => {
+            if let Some(cat) = app.shell.plugin_catalog.as_mut() {
+                if dir < 0 {
+                    cat.move_up();
+                } else if dir > 0 {
+                    cat.move_down();
+                }
+            }
+        }
+        Action::CatalogEnterConfirm => {
+            if let Some(cat) = app.shell.plugin_catalog.as_mut() {
+                cat.enter_confirm();
+            }
+        }
+        Action::CatalogConfirmNo => {
+            if let Some(cat) = app.shell.plugin_catalog.as_mut() {
+                cat.back_to_list();
+            }
+        }
+        Action::CatalogConfirmYes => {
+            let id = app
+                .shell
+                .plugin_catalog
+                .as_ref()
+                .and_then(|cat| cat.selected())
+                .map(|row| row.id.clone());
+            app.shell.plugin_catalog = None;
+            app.shell.overlay = Overlay::None;
+            if let Some(id) = id {
+                install_plugin(app, id);
+            }
+        }
         Action::Noop => {}
     }
     Ok(false)
@@ -4823,6 +4858,98 @@ fn disable_companion(app: &mut App) {
 }
 
 /// Kick off a plugin install: resolve the manifest source, fetch the pinned
+/// Kick off the async catalog index load shared by `:plugin catalog` (which
+/// populates the overlay) and `:plugin list` (which prints rows to the
+/// scrollback once the load resolves). The cache dir is resolved here on the
+/// main loop; only the resolved path (not any env access) crosses into the
+/// spawned task. Never blocks the main loop — the fetch itself runs entirely
+/// inside `tokio::spawn`.
+fn spawn_catalog_load(app: &App) {
+    let ui_tx = app.ui_tx.clone();
+    let cache_dir = resolve_cache_dir(|k| std::env::var(k).ok()).join("catalog");
+    tokio::spawn(async move {
+        let res: Result<Vec<zoid::catalog::CatalogEntry>, String> =
+            if let Some(v) = zoid::catalog::cache_if_fresh(
+                chrono::Utc::now(),
+                chrono::Duration::hours(24),
+                &cache_dir,
+            ) {
+                Ok(v)
+            } else {
+                match zoid::catalog::fetch_text(&zoid::catalog::catalog_index_url()).await {
+                    Ok(body) => zoid::catalog::store_and_parse(chrono::Utc::now(), &cache_dir, &body)
+                        .map_err(|e| e.to_string()),
+                    Err(e) => zoid::catalog::cached_any(&cache_dir)
+                        .ok_or_else(|| format!("catalog unavailable: {e}")),
+                }
+            };
+        let _ = ui_tx.send(zoid::agent::AgentUpdate::CatalogLoaded(res)).await;
+    });
+}
+
+/// Map a loaded catalog index (`AgentUpdate::CatalogLoaded`) to `PluginCatalogRow`s.
+/// Skips entries whose kind is not `mode`/`skills` (L4 — keeps the
+/// MCP-deferred boundary honest). `source_label` takes a char-safe (not byte)
+/// prefix of the source ref.
+fn map_catalog_entries(entries: Vec<zoid::catalog::CatalogEntry>) -> Vec<zoid_tui::state::PluginCatalogRow> {
+    entries
+        .into_iter()
+        .filter(|e| e.kind.iter().any(|k| k == "mode" || k == "skills"))
+        .map(|e| zoid_tui::state::PluginCatalogRow {
+            id: e.id,
+            name: e.name,
+            kind_label: e.kind.first().cloned().unwrap_or_default(),
+            description: e.description,
+            source_label: format!(
+                "{} @ {}",
+                e.source_repo,
+                e.source_ref.chars().take(7).collect::<String>()
+            ),
+            license: e.license,
+        })
+        .collect()
+}
+
+/// Handle `AgentUpdate::CatalogLoaded`: if the `:plugin catalog` overlay is
+/// open, populate it (Ready or Error); otherwise (the `:plugin list` path)
+/// summarize the rows to the status hint — the load never blocks the main
+/// loop either way.
+fn apply_catalog_loaded(app: &mut App, res: Result<Vec<zoid::catalog::CatalogEntry>, String>) {
+    if app.shell.overlay == zoid_tui::state::Overlay::PluginCatalog {
+        if let Some(cat) = app.shell.plugin_catalog.as_mut() {
+            match res {
+                Ok(entries) => {
+                    cat.rows = map_catalog_entries(entries);
+                    cat.cursor = 0;
+                    cat.status = zoid_tui::state::CatalogStatus::Ready;
+                }
+                Err(e) => {
+                    cat.status = zoid_tui::state::CatalogStatus::Error(e);
+                }
+            }
+        }
+        return;
+    }
+    match res {
+        Ok(entries) => {
+            let rows = map_catalog_entries(entries);
+            if rows.is_empty() {
+                app.shell.status_hint = Some("plugin catalog: (no plugins)".into());
+            } else {
+                let summary = rows
+                    .iter()
+                    .map(|r| format!("{}  [{}]  {}", r.id, r.kind_label, r.description))
+                    .collect::<Vec<_>>()
+                    .join("  ·  ");
+                app.shell.status_hint = Some(summary);
+            }
+        }
+        Err(e) => {
+            app.shell.status_hint = Some(format!("plugin catalog error: {e}"));
+        }
+    }
+}
+
 /// tree off-thread, and hand the scan back via AgentUpdate::PluginScan.
 fn install_plugin(app: &mut App, arg: String) {
     use zoid::plugin_install::parse_plugin_install_args;
@@ -5219,14 +5346,14 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             install_plugin(app, arg);
             Ok(false)
         }
-        // TODO(Task 5): wire async catalog load + overlay
         Command::PluginCatalog => {
-            app.shell.status_hint = Some("plugin catalog — coming in this build".into());
+            app.shell.plugin_catalog = Some(zoid_tui::state::PluginCatalogState::loading());
+            app.shell.overlay = zoid_tui::state::Overlay::PluginCatalog;
+            spawn_catalog_load(app);
             Ok(false)
         }
-        // TODO(Task 5): wire async catalog load + overlay
         Command::PluginList => {
-            app.shell.status_hint = Some("plugin list — coming in this build".into());
+            spawn_catalog_load(app);
             Ok(false)
         }
         Command::OpenDrawer(id) => {

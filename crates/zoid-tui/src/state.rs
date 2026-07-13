@@ -55,6 +55,7 @@ pub enum Overlay {
     Mcp,
     Feedback,
     Help,
+    PluginCatalog,
 }
 
 /// Read-only snapshot row for one MCP server, refreshed by the bin each tick
@@ -105,6 +106,82 @@ impl FeedbackState {
             body: String::new(),
             status: FeedbackStatus::Idle,
         }
+    }
+}
+
+/// Read-only snapshot row for one catalog entry, mapped by the bin from
+/// `zoid::catalog::CatalogEntry` (zoid-tui does not depend on the catalog
+/// crate types, so the bin maps them to plain strings here, mirroring
+/// `McpStatusRow`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginCatalogRow {
+    pub id: String,
+    pub name: String,
+    /// "mode" | "skills"
+    pub kind_label: String,
+    pub description: String,
+    /// e.g. "mxyhi/ok-skills @ a1b2c3d"
+    pub source_label: String,
+    pub license: Option<String>,
+}
+
+/// Which pane the `:plugin catalog` overlay is showing: the browsable list,
+/// or the provenance-confirm gate for the selected row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatalogMode {
+    List,
+    Confirm,
+}
+
+/// Load status for the `:plugin catalog` overlay's async fetch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CatalogStatus {
+    Loading,
+    Ready,
+    Error(String),
+}
+
+/// State for the `:plugin catalog` overlay (`Overlay::PluginCatalog`): a
+/// browsable list of catalog entries with a provenance-confirm gate before
+/// install. Seeded `loading()` by the command; populated by the bin from
+/// `AgentUpdate::CatalogLoaded`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginCatalogState {
+    pub rows: Vec<PluginCatalogRow>,
+    pub cursor: usize,
+    pub mode: CatalogMode,
+    pub status: CatalogStatus,
+}
+
+impl PluginCatalogState {
+    pub fn loading() -> Self {
+        Self { rows: vec![], cursor: 0, mode: CatalogMode::List, status: CatalogStatus::Loading }
+    }
+
+    pub fn selected(&self) -> Option<&PluginCatalogRow> {
+        self.rows.get(self.cursor)
+    }
+
+    pub fn move_up(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        if self.cursor + 1 < self.rows.len() {
+            self.cursor += 1;
+        }
+    }
+
+    pub fn enter_confirm(&mut self) {
+        if self.selected().is_some() {
+            self.mode = CatalogMode::Confirm;
+        }
+    }
+
+    pub fn back_to_list(&mut self) {
+        self.mode = CatalogMode::List;
     }
 }
 
@@ -398,6 +475,10 @@ pub struct ShellState {
     pub switch_models: Vec<crate::config_view::PickOption>,
     /// Read-only snapshot of MCP servers, refreshed by the bin each tick.
     pub mcp_status: Vec<McpStatusRow>,
+    /// The `:plugin catalog` overlay's state, or `None` when the overlay is
+    /// closed. Set to `Some(PluginCatalogState::loading())` on open; populated
+    /// by the bin from `AgentUpdate::CatalogLoaded`.
+    pub plugin_catalog: Option<PluginCatalogState>,
     /// Scroll offset (rows) into the read-only keyboard-shortcuts overlay
     /// (`Overlay::Help`). Incremented/decremented by `Action::ScrollHelp`; the
     /// bin clamps the upper bound per-frame against the real rect height
@@ -508,6 +589,7 @@ impl ShellState {
             switch_providers: Vec::new(),
             switch_models: Vec::new(),
             mcp_status: Vec::new(),
+            plugin_catalog: None,
         }
     }
 
@@ -561,6 +643,7 @@ impl ShellState {
         self.sessions_live.clear();
         self.session_selected = 0;
         self.help_scroll = 0;
+        self.plugin_catalog = None;
     }
 
     /// Increase detail (Overview → Summary → Normal → Detail), saturating. A
@@ -1024,5 +1107,41 @@ mod tests {
         s.push_edit_diff("x".into(), mk(9));
         assert_eq!(s.edit_diffs.len(), 1, "same id updates, does not duplicate");
         assert_eq!(s.edit_diff("x").unwrap().added, 9);
+    }
+
+    #[test]
+    fn catalog_state_transitions_and_confirm_gate() {
+        let mut s = PluginCatalogState {
+            rows: vec![
+                PluginCatalogRow {
+                    id: "a".into(),
+                    name: "A".into(),
+                    kind_label: "mode".into(),
+                    description: "d".into(),
+                    source_label: "o/a @ dead".into(),
+                    license: None,
+                },
+                PluginCatalogRow {
+                    id: "b".into(),
+                    name: "B".into(),
+                    kind_label: "skills".into(),
+                    description: "d".into(),
+                    source_label: "o/b @ beef".into(),
+                    license: Some("MIT".into()),
+                },
+            ],
+            cursor: 0,
+            mode: CatalogMode::List,
+            status: CatalogStatus::Ready,
+        };
+        s.move_down();
+        assert_eq!(s.cursor, 1);
+        s.move_down();
+        assert_eq!(s.cursor, 1, "clamps at end");
+        assert_eq!(s.selected().unwrap().id, "b");
+        s.enter_confirm();
+        assert_eq!(s.mode, CatalogMode::Confirm);
+        s.back_to_list();
+        assert_eq!(s.mode, CatalogMode::List);
     }
 }

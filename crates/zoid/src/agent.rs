@@ -394,6 +394,11 @@ pub enum AgentUpdate {
         id: Option<String>,
         reply: tokio::sync::oneshot::Sender<Result<String, String>>,
     },
+    /// The async plugin catalog index load finished (fresh cache, network
+    /// fetch, or a stale-cache fallback). Drives both `:plugin catalog`
+    /// (populates the overlay) and `:plugin list` (prints rows once resolved;
+    /// no blocking fetch on the main loop either way).
+    CatalogLoaded(Result<Vec<crate::catalog::CatalogEntry>, String>),
 }
 
 /// The tool specs to advertise to the provider.
