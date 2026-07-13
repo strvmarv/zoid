@@ -10,6 +10,26 @@
 
 # Release Notes
 
+## 0.4.0
+
+The biggest release yet — more model providers to choose from, one-command add-ons, subagents you can steer and trust, and a clearer view of every edit.
+
+### New
+
+- **More model providers** — beyond the existing options, zoid now speaks to **OpenAI**, **Google Gemini**, and **OpenCode Zen**, with a large built-in catalog of models to pick from. Point zoid at the backend you already use.
+- **Plugins** — install curated add-ons in one step with the new `:plugin install` command (also on the command palette). The **Superpowers** engineering skill set ships bundled, so `:plugin install superpowers` sets you up instantly.
+- **Scheduled wake-ups** — the assistant can now schedule itself to pick a task back up later and resume on its own, instead of stalling while it waits.
+- **Steer your subagents** — cancel a running delegated task at any time (press `Esc` to escalate to a stop), and delegations now enforce sensible idle and overall time limits so a stuck subagent can't hang your session.
+- **Trustworthy delegation** — subagent results are now checked for tool-execution integrity: if a delegated task claims work it didn't actually perform, that's flagged instead of silently passing.
+- **Inline edit diffs** — when the assistant edits a file you now see `+N −M` line counts and an inline preview of the change, toggleable in settings.
+
+### Fixes
+
+- **Worktree edits land where they should** — commits made while working in a git worktree now reliably go to the worktree's branch, and entering/leaving a worktree keeps tooling responsive.
+- **Steadier subagent dispatch** — resolved errors and display corruption that could occur when delegating work, and the main view now wakes promptly when a delegated result arrives.
+
+> **Beta note:** builds are for evaluation and expire ~30 days after release — run `zoid update` periodically to stay current.
+
 ## 0.3.2
 
 ### New

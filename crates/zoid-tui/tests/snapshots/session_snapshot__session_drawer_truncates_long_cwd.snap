@@ -2,7 +2,7 @@
 source: crates/zoid-tui/tests/session_snapshot.rs
 expression: out
 ---
-"v0.3.2                                                                        zoid                                        Esc interrupt · : command · ^P palette"
+"v0.4.0                                                                        zoid                                        Esc interrupt · : command · ^P palette"
 "    (no messages yet)                                                                                             █ ╭ ▾ repo ─────────────────────────────────╮ "
 "                                                                                                                  █ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(118, " ")]
 "                                                                                                                  █ │🔧 worktree (none)                       │ " Hidden by multi-width symbols: [(118, " ")]

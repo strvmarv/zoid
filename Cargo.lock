@@ -5511,7 +5511,7 @@ checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 [[package]]
 name = "zoid"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5550,7 +5550,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-companion"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -5559,7 +5559,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-core"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5611,11 +5611,11 @@ dependencies = [
 
 [[package]]
 name = "zoid-model"
-version = "0.3.2"
+version = "0.4.0"
 
 [[package]]
 name = "zoid-plugin"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -5625,7 +5625,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-provider"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5641,7 +5641,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-syntax"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "proptest",
  "tree-sitter",
@@ -5665,7 +5665,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-tools"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "globset",
  "nix",
@@ -5680,7 +5680,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-tui"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "insta",
  "pulldown-cmark",
@@ -5695,7 +5695,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-web"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "htmd",

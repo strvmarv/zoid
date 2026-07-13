@@ -6,6 +6,73 @@
 > notes (what ships to the public releases repo) live in the root
 > `RELEASES.md`.
 
+## 0.4.0
+
+Largest feature release since 0.2.0: three new model providers + a large model
+registry, a manifest-driven plugin system, agent-schedulable wake-ups, subagent
+guardrails/cancellation/verification, worktree tooling correctness, and inline
+edit diffs. ~190 commits since v0.3.2 (marketing-site/web-capture commits are
+docs-only and do not ship in the binary).
+
+Providers & models.
+- New `OpenAiResponsesProvider` (`crates/zoid-provider/src/openai.rs`): request
+  body builder, SSE parse, streaming accumulator, `Provider` impl.
+- New Google `GeminiProvider` (`crates/zoid-provider/src/gemini.rs`):
+  `request_body`, `parse_chunk`, `Provider` impl.
+- New `OpenCodeZenProvider` with 4-way wire-shape routing + secret
+  prettification (`zai` etc.) and bin wiring.
+- `zoid-model` registry gains the opencode-zen entry and real model caps (~52
+  models total across providers).
+- Context-economy re-assertion: `[economy].reassert_interval_tokens` (default
+  100k, 0 disables); `TurnConfig.reassert_interval` + `wrap_reassertion`; turn
+  loop fires a preflight-accounted, calibration-safe re-floor; providers render
+  the reassert as a trailing system message (ollama-native, openai-compat/zai).
+
+Plugin system.
+- New `zoid-plugin` crate (pure, IO-free schema + planning): `manifest`,
+  `resolve`, `plan`, `effect` (with `classify_config_key`/`RiskTier` gate),
+  `provenance`, `bundled`. Spec: 2026-07-09-zoid-plugin-support-design.md.
+- Effectful installer core wired into the main loop via `PluginScan`:
+  `:plugin install` command + command-palette row + onboarding retargeted to
+  `:plugin install superpowers`. Superpowers ships as a bundled, byte-identical
+  manifest (golden-guarded). Provenance sidecar `.zoid-plugin.json`. `SetConfig`
+  rejected at the v1 effect gate.
+
+Scheduled wake-ups (Spec 3 of subagent-dispatch-safety).
+- `schedule_wake`/`cancel_wake` Emitting tools (main-Chat-only) with
+  floor/cap/enabled guards and an i64-overflow delay cap.
+- `WakeScheduled`/`WakeFired`/`WakeCancelled` events + pending-wake projection;
+  `[wake] enabled` config (`WakeConfig`, layered merge + provenance);
+  watch-driven watcher task with rebuild-on-load; due wakes fire by injecting a
+  `UserMessage` + `WakeFired`, with catch-up on load and drain at
+  `TurnComplete`.
+
+Subagent safety, reliability & verification.
+- Guardrails: `cancel_subagent` kill tool + `fire_subagent_kill` handler; Esc
+  escalation kills subagents (no-turn armed confirm); the subagent observes the
+  hard token during streaming and at top-of-turn so guardrails stop a parked
+  subagent; `WakeTimer` timeout supervisor + `[subagent]` idle/hard timeout
+  config; registry handle types + heartbeat; `in_flight` HashSet→HashMap.
+- Fixes: repaired 400s + TUI corruption on dispatch; wake the idle orchestrator
+  when a `DelegationResult` arrives.
+- Tool-execution verification (this release's final feature): `verify_execution`
+  in `crates/zoid/src/subagent.rs` computes orphan `ToolCall`s (call id with no
+  matching `ToolResult`) and tool-call count; `distill` flips `ok=false` + notes
+  on orphans, and appends an advisory note (ok unchanged) when a subagent
+  emitted zero tool calls. Guarded by `assembled_tools_exclude_emitting`.
+
+Worktree tooling correctness (Spec 2 — WT-1..WT-4).
+- Synchronous enter/exit switch so commits land on the worktree branch and exit
+  keeps tooling alive (WT-1/WT-2); worktree-aware, change-driven git poller so
+  the rail reflects the active worktree (WT-3); redundant hints dropped (WT-4).
+
+TUI.
+- Inline edit diffs: `edit`/`write` attach an ephemeral `FileDiff` to
+  `ToolOutput`; capped line-diff core (`compute_file_diff`); agent forwards
+  ephemeral edit diffs to a bounded in-memory TUI cache; render `+N −M` counts
+  and inline last-K edit diffs; `[ui] edit_diff` toggle + `edit_diff_inline`
+  (K). Adaptive table column widths (fit natural, shrink widest first).
+
 ## 0.3.2
 
 Discoverability: an in-app keyboard-shortcuts help overlay.
