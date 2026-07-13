@@ -109,16 +109,29 @@ animation shows it, the copy names it.
 
 ### 4.2 New scene — "Your tools, your models" (combined 4-frame sequence)
 A new seeded fixture + `scene_seq` in the Rust renderer, captured through the
-exact Phase-1 pipeline into `public/frames/tools-models/NN.html`. Storyboard:
+exact Phase-1 pipeline into `public/frames/tools-models/NN.html`.
 
-1. **Built-ins.** A chat session; the tool set shows zoid's built-in tools.
-2. **Bring your own tools.** An MCP server connects; **its tools appear
-   alongside the built-ins** ("configured tools appear automatically").
-3. **Your models.** The model/provider is chosen via the palette — Ollama
-   local ↔ cloud ↔ Anthropic.
-4. **It runs, locally.** A tool call executes (an MCP tool); the answer streams;
-   the rail reflects on-device / local semantic recall ("nothing leaves your
-   machine").
+**Fidelity constraint (verified against the renderer):** the TUI has **no**
+"tools catalog" and does **not** distinguish MCP tools from built-ins anywhere in
+renderable state — building that would mean new TUI code for a marketing frame,
+which is out of scope. So the scene stages *only what the real TUI shows*, and the
+**prose** (not a faked frame) carries the "tools alongside built-ins" capability.
+Faithful staging, composed entirely from existing `ShellState` state:
+
+1. **Your tools** — `overlay = Overlay::Mcp`; seed `mcp_status` with connected
+   MCP servers + their tool counts (the real MCP-servers overlay). Copy: "Connect
+   any MCP server's tools alongside zoid's built-ins."
+2. **Your models** — `overlay = Overlay::ProviderSwitch`; seed `switch_providers`
+   / `switch_models` (**hand-seeded to Ollama + Anthropic only — never call
+   `config_view::provider_options()`, which enumerates internal providers**),
+   `switch_pane = Model`, a highlighted current model. The real quick-switch
+   picker. Copy: "Choose your provider — Ollama local & cloud, or Anthropic."
+3. **Chosen.** `overlay = None`; the Session drawer shows the chosen
+   `model · provider`; the user asks a question (conversation `ChatMsg`s).
+4. **It runs, locally.** `overlay = None`, `busy = true`, `active_tool = Some(…)`,
+   plus an assistant `ChatMsg` with a `ToolCallRef` (and a `ToolResult`) so the
+   inline tool card + status-bar tool indicator render. Rail reflects on-device
+   context. Copy: "on-device semantic recall — nothing leaves your machine."
 
 Fixtures stay deterministic (seeded) so captures are reproducible. The scene must
 pass the same in-browser fidelity bar as Phase 1 (scrollbar column straight, no
