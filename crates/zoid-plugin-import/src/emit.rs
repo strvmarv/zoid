@@ -7,6 +7,25 @@ pub struct Emitted {
     pub report: String,
 }
 
+/// Escape a string for a TOML basic (double-quoted) string per the TOML spec:
+/// backslash and double-quote are escaped, and control chars use their TOML
+/// escapes (\n, \t, \r) or \uXXXX. Everything else is passed through.
+fn toml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c if (c as u32) < 0x20 || c == '\u{7f}' => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn slug(name: &str) -> String {
     name.to_lowercase()
         .chars()
@@ -35,7 +54,7 @@ pub fn emit(
                  [source]\nrepo = \"{repo}\"\nref = \"{sha}\"\nsubtree = \"{subtree}\"\n\n\
                  [mode]\nloader = \"{loader_rel}\"\nstrip_prefix = \"{strip}\"\nbody = \"from-skill-frontmatter\"\ndescription = \"{desc}\"\n\n\
                  [[install]]\neffect = \"activate\"\n",
-                id = slug(name), name = name, desc = description.replace('"', "'"),
+                id = slug(name), name = name, desc = toml_escape(description),
                 repo = repo, sha = sha, subtree = subtree, loader_rel = loader_rel, strip = strip,
             ))
         }
@@ -43,7 +62,7 @@ pub fn emit(
             "[plugin]\nid = \"{id}\"\nschema = 1\nkind = [\"skills\"]\nname = \"{name}\"\ndescription = \"{desc}\"\n\n\
              [source]\nrepo = \"{repo}\"\nref = \"{sha}\"\nsubtree = \"{subtree}\"\n\n\
              [[install]]\neffect = \"activate\"\n",
-            id = slug(name), name = name, desc = description.replace('"', "'"),
+            id = slug(name), name = name, desc = toml_escape(description),
             repo = repo, sha = sha, subtree = subtree,
         )),
         TargetKind::McpOnly | TargetKind::Unsupported => None,
@@ -117,6 +136,16 @@ mod tests {
         m.validate().unwrap();
         assert_eq!(m.kind, vec!["skills".to_string()]);
         assert!(m.mode.is_none());
+    }
+
+    #[test]
+    fn emits_valid_manifest_with_backslash_and_quote_in_description() {
+        let desc = r#"matches \d+ and a "quote""#;
+        let e = emit("Superpowers", desc, "obra/superpowers", "SHA", "skills",
+            &cls(TargetKind::Mode { loader: "skills/using-superpowers/SKILL.md".into() }), None).unwrap();
+        let toml = e.plugin_toml.expect("plugin_toml should be Some");
+        let m = zoid_plugin::manifest::parse_manifest(&toml).unwrap();
+        m.validate().unwrap();
     }
 
     #[test]
