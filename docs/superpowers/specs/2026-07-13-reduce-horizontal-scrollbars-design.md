@@ -78,7 +78,7 @@ The implementation records this dependency in a comment on `.bleed`.
 
 **Note:** the two-column `.section{display:grid}` / `.section.rev .figure{order:-1}` rules
 (≈ lines 64–76) are **dead code** — `class="section"` appears zero times in the document;
-every player lives in a `.section-full` block or the hero. So `.bleed`'s `display:flex`
+every player lives in a `.section-full` block or the hero. So `.bleed` (block layout)
 cannot fight any grid.
 
 **Why not restructure the DOM (move figures out of `.wrap`):** rejected — real DOM surgery

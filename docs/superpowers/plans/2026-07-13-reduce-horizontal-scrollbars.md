@@ -35,7 +35,7 @@ Break the three fixed-width player figures out of the 1072px `.wrap` column so t
 
 **Interfaces:**
 - Consumes: existing `.frame{width:max-content;max-width:100%;overflow-x:auto;...}` (unchanged) and `body{overflow-x:hidden}` (unchanged).
-- Produces: a reusable `.bleed` class (`width:100vw;margin-left:calc(50% - 50vw);display:flex;justify-content:center;`) applied to `.figure` elements. Task 2 does not depend on this.
+- Produces: a reusable `.bleed` class (`width:100vw;margin-left:calc(50% - 50vw);` — block layout) plus `.bleed > .frame{margin-inline:auto;}` to center the frame, applied to `.figure` elements. (See the Step 1 correction below — block replaces the originally-planned flex centering.) Task 2 does not depend on this.
 
 - [ ] **Step 1: Add the `.bleed` class and root scrollbar-gutter**
 
@@ -227,4 +227,4 @@ git commit -m "fix(site): fit-and-center install one-liner, drop its default scr
 - There is no unit-test-first cycle here because the change is pure presentational CSS with no JS logic to assert against. The honest test is the **browser measurement** in each task (page/frame/one-liner `scrollWidth − clientWidth`), plus the `cargo` capture-path regression guard in Task 1. Treat a non-zero `pageHScroll` at any tested width, or a non-zero frame/one-liner scroll at the wide viewport, as a **failing** check — fix before committing.
 - The `100vw` breakout depends on `body{overflow-x:hidden}` staying in place; if a page-level scrollbar ever appears at a wide viewport, the first suspect is that rule being removed or a `.bleed` child adding intrinsic width beyond `100vw`.
 - If the browser tool is unavailable, the fallback acceptance is a manual resize check by the human at ~1440px and ~600px against the same expected values.
-- The two-column `.section{display:grid}` / `.section.rev .figure{order:-1}` rules (≈ lines 64–76) are **dead code** — `class="section"` appears zero times; all players are in `.section-full` or the hero. So `.bleed`'s `display:flex` cannot collide with a grid. Do not touch those rules in this plan (out of scope), but don't be alarmed by them either.
+- The two-column `.section{display:grid}` / `.section.rev .figure{order:-1}` rules (≈ lines 64–76) are **dead code** — `class="section"` appears zero times; all players are in `.section-full` or the hero. So `.bleed` (block layout) cannot collide with a grid. Do not touch those rules in this plan (out of scope), but don't be alarmed by them either.
