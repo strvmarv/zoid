@@ -40,29 +40,41 @@ figure on narrow screens. No scaling engine, no JS, no new frames (YAGNI).
 
 ### Component 1 — Shared `.bleed` wrapper (the three frames)
 
-New reusable class:
+New reusable class (**block layout, deliberately not flex** — see correction below):
 
 ```css
 .bleed{
   width:100vw;
   margin-left:calc(50% - 50vw);   /* escape .wrap's cap, align to viewport left edge */
-  display:flex;
-  justify-content:center;          /* center the native-width frame in the viewport */
+}
+.bleed > .frame{
+  margin-inline:auto;              /* center the native-width frame in the 100vw band */
 }
 ```
 
-Applied as `class="figure bleed"` on the three `.figure` elements. `.frame` is unchanged
-— it already carries `width:max-content; max-width:100%; overflow-x:auto`, and `max-width:100%`
-now resolves against the 100vw band instead of the 1072px column. On a viewport ≥ the
-render width the frame sits fully centered; on a narrower one it scrolls internally.
+Applied as `class="figure bleed"` on the three `.figure` elements. `.frame` is otherwise
+unchanged — it already carries `width:max-content; max-width:100%; overflow-x:auto`, and
+`max-width:100%` now resolves against the 100vw band instead of the 1072px column. On a
+viewport ≥ the render width the frame sits at its `max-content` width, centered by
+`margin-inline:auto`; on a narrower one `max-width:100%` caps it and its `overflow-x:auto`
+scrolls it internally.
 
-**Load-bearing detail (not merely "unchanged"):** the narrow-screen fallback works *only*
-because `.frame` has `overflow-x:auto`. As a flex item of `.bleed`, that `overflow` resets
-the frame's automatic flex minimum to 0, letting it shrink below its ~1282px `max-content`
-down to `max-width:100%` and scroll internally. If `overflow-x` is ever stripped from
-`.frame`, the flex minimum reverts to ~1282px, the frame stops shrinking and overhangs the
-`100vw` band (clipped, unreachable, no scrollbar). The implementation adds a short comment
-on `.bleed` recording this dependency.
+**Correction from browser verification (2026-07-13):** the original design used
+`display:flex; justify-content:center` on `.bleed`. The browser acceptance gate found this
+**clips the hero figure**: in the hero's `<header class="wrap hero">` formatting context,
+flexbox shrank the hero `.frame` from its ~1264px content width to ~979px — leaving a ~285px
+horizontal scrollbar on the hero even at wide viewports (the other two figures, in
+`<section class="section-full">`, were unaffected). This violated the "no scrollbar on
+desktop" goal. Block layout does not shrink the child below its `width:max-content`, so all
+three figures show fully and centered on wide screens; `max-width:100%` still caps the frame
+on narrow screens for the scroll fallback. Fix verified: wide `frames:[0,0,0]`, all centered,
+`pageHScroll:0`; a 600px band shrinks each frame to ~598px with internal scroll and no
+overhang. User approved the switch from flex to block on 2026-07-13.
+
+**Load-bearing detail:** the narrow-screen fallback works *only* because `.frame` has
+`overflow-x:auto` and `max-width:100%`. If `overflow-x` is ever stripped from `.frame`, the
+frame stops scrolling and overhangs the `100vw` band (clipped, unreachable, no scrollbar).
+The implementation records this dependency in a comment on `.bleed`.
 
 **Note:** the two-column `.section{display:grid}` / `.section.rev .figure{order:-1}` rules
 (≈ lines 64–76) are **dead code** — `class="section"` appears zero times in the document;
@@ -92,18 +104,26 @@ the left edge. So:
 ```css
 .oneliner{
   display:block;
-  width:max-content;                 /* was width:100% — intrinsic, may exceed the 760px .cta */
-  max-width:min(100vw - 48px, 900px);/* cap below the viewport (minus .wrap's 48px padding); ~900 ceiling on desktop */
-  overflow-x:auto;                   /* narrow-screen (<~900px) fallback only */
-  white-space:pre;                   /* unchanged, plus existing bg/border/padding/color */
+  width:max-content;                  /* was width:100% — intrinsic, may exceed the 760px .cta */
+  max-width:min(100vw - 48px, 1040px);/* cap below the viewport (minus .wrap's 48px padding); 1040 ceiling on desktop */
+  overflow-x:auto;                    /* narrow-screen (<~992px) fallback only */
+  white-space:pre;                    /* unchanged, plus existing bg/border/padding/color */
 }
 ```
 
 Do **not** add `margin-inline:auto` — `.cta`'s existing `align-items:center` centers the
 (now overflowing) one-liner correctly, including when it is wider than the 760px column.
 `.cta` keeps `max-width:760px` for the button and beta note; the one-liner deliberately
-renders wider (up to ~850px, capped at 900px) and centers. No `.bleed` needed — at ~850px
-it stays inside `.wrap`'s 1072px, so the page never scrolls.
+renders wider and centers. No `.bleed` needed — at ~944px it stays inside `.wrap`'s 1072px,
+so the page never scrolls.
+
+**Correction from browser verification (2026-07-13):** the command is **127 chars → ~944px**
+intrinsic, not the ~118 chars/~850px first assumed, so the original 900px ceiling clipped it
+by ~44px (`onelinerHScroll` was 44 at wide, failing the gate). The ceiling was raised to
+**1040px** — above the real 944px width (headroom for cross-machine font variance) yet still
+below the 1072px `.wrap` column, so the page can never scroll horizontally. Verified: wide
+`onelinerHScroll:0`, full command shown and centered, `pageHScroll:0`; a 552px cap (≈600px
+viewport) scrolls internally.
 
 ### Component 3 — `scrollbar-gutter:stable` (layout-stability polish)
 

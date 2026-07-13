@@ -43,14 +43,25 @@ In the CSS, immediately after the `.wrap` rule (currently `public/index.html:22`
 
 ```css
 /* Full-bleed: let a fixed-width figure escape .wrap's column and center on the
-   viewport. On viewports wider than the figure it shows fully with no scrollbar;
-   narrower, the figure's own overflow-x:auto is the single fallback. body's
-   overflow-x:hidden keeps the page itself from ever scrolling sideways.
-   LOAD-BEARING: the narrow-screen fallback works only because .frame has
-   overflow-x:auto — that resets its flex min-size to 0 so it can shrink below its
-   ~1282px content width inside this 100vw band. Do not strip overflow-x off .frame. */
-.bleed{width:100vw;margin-left:calc(50% - 50vw);display:flex;justify-content:center;}
+   viewport. Block layout (not flex) is deliberate — flexbox shrinks the figure
+   below its content width in the hero's <header> formatting context, clipping it
+   (a ~285px scrollbar on the hero) even when there is room. As a block child,
+   .frame keeps width:max-content on wide screens (shown fully, no scrollbar) and
+   margin-inline:auto centers it in the 100vw band; on viewports narrower than the
+   figure, .frame's max-width:100% caps it and its own overflow-x:auto scrolls it
+   internally — the single fallback. body{overflow-x:hidden} keeps the page itself
+   from ever scrolling sideways; do not strip overflow-x off .frame or the narrow
+   fallback breaks. */
+.bleed{width:100vw;margin-left:calc(50% - 50vw);}
+.bleed > .frame{margin-inline:auto;}
 ```
+
+> **Correction (browser-verified 2026-07-13):** the original plan used
+> `.bleed{...display:flex;justify-content:center;}`. The Step 4 browser gate found flex
+> centering clips the hero frame (~979px vs ~1264px content → a 285px scrollbar) in the
+> hero's `<header>` formatting context, failing this task's own acceptance. Block layout +
+> `margin-inline:auto` on the child frame fixes it (wide `frames:[0,0,0]`, all centered;
+> 600px band shrinks each frame to ~598px with internal scroll). User approved the switch.
 
 Then, immediately after the `body{overflow-x:hidden;}` rule (currently `public/index.html:19`), add:
 
@@ -157,11 +168,16 @@ Replace the width declaration in the `.oneliner` rule (currently `public/index.h
 New (only `width:100%` becomes two declarations — `width:max-content` plus a `max-width`; everything else on the line and the wrapped line below stays byte-for-byte identical). **Do NOT add `margin-inline:auto`** — under negative free space it collapses to 0 and jams the box to the left edge, defeating centering; `.cta`'s `align-items:center` is what centers the overflowing one-liner:
 
 ```css
-.oneliner{display:block;width:max-content;max-width:min(100vw - 48px,900px);overflow-x:auto;white-space:pre;background:var(--panel);
+.oneliner{display:block;width:max-content;max-width:min(100vw - 48px,1040px);overflow-x:auto;white-space:pre;background:var(--panel);
 ```
 
-- `width:max-content` → the command's intrinsic ~850px, permitted to exceed the 760px `.cta`.
-- `max-width:min(100vw - 48px, 900px)` → caps below the viewport (minus `.wrap`'s 48px padding) so it shrinks and `overflow-x:auto` becomes the fallback on narrow screens; ~900px ceiling on desktop. `%`/`fit-content` are deliberately avoided because they resolve against the 760px `.cta`.
+- `width:max-content` → the command's intrinsic ~944px (127 chars), permitted to exceed the 760px `.cta`.
+- `max-width:min(100vw - 48px, 1040px)` → caps below the viewport (minus `.wrap`'s 48px padding) so it shrinks and `overflow-x:auto` becomes the fallback on narrow screens; 1040px ceiling on desktop. `%`/`fit-content` are deliberately avoided because they resolve against the 760px `.cta`.
+
+> **Correction (browser-verified 2026-07-13):** the plan first used a 900px ceiling on a ~850px
+> estimate. The command is actually 127 chars/~944px, so 900px clipped it (`onelinerHScroll` was
+> 44 at wide). Raised to 1040px — above the real 944px width, still below the 1072px `.wrap`
+> column so the page never scrolls. Verified wide `onelinerHScroll:0`, narrow scrolls internally.
 
 - [ ] **Step 2: Serve the page and measure the one-liner**
 
@@ -178,14 +194,14 @@ At a **wide** viewport (≥1300px), run in the page console:
   const r = o.getBoundingClientRect(), vw = document.documentElement.clientWidth;
   return JSON.stringify({
     onelinerHScroll: o.scrollWidth - o.clientWidth,          // 0 = fully visible, no scrollbar
-    widthPx: Math.round(r.width),                            // expect ~850 (full command), not ~760
+    widthPx: Math.round(r.width),                            // expect ~944 (full command), not ~760
     centered: Math.abs((r.left + r.right)/2 - vw/2) < 24,    // true = centered within ~24px
     pageHScroll: document.documentElement.scrollWidth - vw   // must stay 0
   }); })()
 ```
 
 Expected at ≥1300px: `onelinerHScroll` is `0` (full command visible, no scrollbar),
-`widthPx` is ~850 (**not** clamped to ~760 — that clamp is the SEV-1 failure mode),
+`widthPx` is ~944 (**not** clamped to ~760 — that clamp is the SEV-1 failure mode),
 `centered` is `true`, and `pageHScroll` is `0`.
 
 Then resize to **~600px** wide and re-run.
