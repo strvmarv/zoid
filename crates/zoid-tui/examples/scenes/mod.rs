@@ -6,8 +6,9 @@ use ratatui::{backend::TestBackend, Terminal};
 use ratatui_textarea::TextArea;
 use zoid_core::projection::{ChatMsg, ToolCallRef};
 use zoid_tui::chat::ChatView;
+use zoid_tui::config_view::PickOption;
 use zoid_tui::render_shell;
-use zoid_tui::state::{DrawerId, Overlay, ShellState, Zoom};
+use zoid_tui::state::{DrawerId, McpStatusRow, Overlay, ShellState, SwitchPane, Zoom};
 use zoid_tui::EconomyView;
 
 pub fn seeded() -> Vec<ChatMsg> {
@@ -186,10 +187,122 @@ fn seeded_tasks() -> Vec<zoid_core::tasks::TaskItem> {
     ]
 }
 
+/// Connected MCP servers for the "your tools" frame (server list + tool counts —
+/// the only MCP state the renderer shows; it does not list individual tools).
+fn seeded_mcp_status() -> Vec<McpStatusRow> {
+    vec![
+        McpStatusRow {
+            name: "filesystem".into(),
+            state: "ready".into(),
+            tool_count: 8,
+        },
+        McpStatusRow {
+            name: "github".into(),
+            state: "ready".into(),
+            tool_count: 12,
+        },
+        McpStatusRow {
+            name: "postgres".into(),
+            state: "ready".into(),
+            tool_count: 6,
+        },
+    ]
+}
+
+/// Provider options for the quick-switch — HAND-SEEDED to public providers only.
+/// Do NOT use config_view::provider_options(): it enumerates the whole registry,
+/// including internal/planned providers, and would leak them into the frame.
+fn seeded_switch_providers() -> Vec<PickOption> {
+    vec![
+        PickOption {
+            id: "ollama".into(),
+            label: "Ollama".into(),
+            detail: "local & cloud".into(),
+            selectable: true,
+            is_current: true,
+        },
+        PickOption {
+            id: "anthropic".into(),
+            label: "Anthropic".into(),
+            detail: "cloud".into(),
+            selectable: true,
+            is_current: false,
+        },
+    ]
+}
+
+/// Models shown for the highlighted (Ollama) provider. Real registry ids; the
+/// default `glm-5.2:cloud` (a 1M-context model) is current.
+fn seeded_switch_models() -> Vec<PickOption> {
+    vec![
+        PickOption {
+            id: "glm-5.2:cloud".into(),
+            label: "glm-5.2:cloud".into(),
+            detail: "1M context".into(),
+            selectable: true,
+            is_current: true,
+        },
+        PickOption {
+            id: "glm-5.2".into(),
+            label: "glm-5.2".into(),
+            detail: "local".into(),
+            selectable: true,
+            is_current: false,
+        },
+    ]
+}
+
+/// A short, realistic turn that calls an MCP-provided tool (dotted name signals
+/// it comes from the `github` server — reinforcing "your tools").
+fn seeded_tools_models_turn() -> Vec<ChatMsg> {
+    vec![
+        ChatMsg::User {
+            text: "any open issues about the login flow?".into(),
+            ts: 0,
+        },
+        ChatMsg::Assistant {
+            thinking: None,
+            text: "checking the github MCP server".into(),
+            tool_calls: vec![ToolCallRef {
+                id: "t1".into(),
+                name: "github.search_issues".into(),
+                args: r#"{"q":"login flow"}"#.into(),
+            }],
+            ts: 0,
+        },
+        ChatMsg::ToolResult {
+            id: "t1".into(),
+            name: "github.search_issues".into(),
+            output: "#412 login redirect loop\n#419 2FA prompt after logout".into(),
+            is_error: false,
+            compacted: false,
+            ts: 0,
+        },
+    ]
+}
+
+/// Tasks for the tools-models scene's Tasks drawer — coherent with the story
+/// (a server connected, a model chosen). Two tasks, matching the base state's
+/// `tasks_len = 2`, so the drawer shows real rows, not empty reserved space.
+fn seeded_tools_models_tasks() -> Vec<zoid_core::tasks::TaskItem> {
+    use zoid_core::tasks::{TaskItem, TaskStatus};
+    vec![
+        TaskItem {
+            text: "connect the github MCP server".into(),
+            status: TaskStatus::Done,
+        },
+        TaskItem {
+            text: "switch to glm-5.2:cloud".into(),
+            status: TaskStatus::Active,
+        },
+    ]
+}
+
 /// Tasks a scene renders into the Tasks drawer (empty for scenes without tasks).
 fn scene_tasks(name: &str) -> Vec<zoid_core::tasks::TaskItem> {
     match name {
         "economy" | "context-economy" => seeded_tasks(),
+        "tools-models" => seeded_tools_models_tasks(),
         _ => vec![],
     }
 }
@@ -304,6 +417,52 @@ pub fn scene_seq(name: &str) -> Vec<(ShellState, Vec<ChatMsg>, EconomyView)> {
                 (base(), turn[..4].to_vec(), seeded_economy()),
             ]
         }
+        "tools-models" => {
+            // Enriched right-rail (repo/session), reused across frames.
+            let base = || {
+                let (s, _m, _e) = scene("economy");
+                s
+            };
+            let turn = seeded_tools_models_turn();
+
+            // F0 — your tools: the MCP servers overlay.
+            let mut f0 = base();
+            f0.overlay = Overlay::Mcp;
+            f0.mcp_status = seeded_mcp_status();
+
+            // F1 — your models: the provider/model quick-switch, Model pane.
+            let mut f1 = base();
+            f1.overlay = Overlay::ProviderSwitch;
+            f1.switch_providers = seeded_switch_providers();
+            f1.switch_models = seeded_switch_models();
+            f1.switch_pane = SwitchPane::Model;
+            f1.switch_provider_sel = 0; // Ollama
+            f1.switch_model_sel = 0; // glm-5.2:cloud (current)
+
+            // F2 — chosen: overlay closed, session drawer shows model·provider,
+            // the user asks a question.
+            let mut f2 = base();
+            f2.model = "glm-5.2:cloud".into();
+            f2.provider = "ollama".into();
+
+            // F3 — it runs, locally: a tool is executing.
+            let mut f3 = base();
+            f3.model = "glm-5.2:cloud".into();
+            f3.provider = "ollama".into();
+            f3.busy = true;
+            f3.active_tool = Some("github.search_issues".into());
+
+            // F3 shows the tool genuinely in flight: the assistant's tool CALL
+            // is visible (turn[..2]) but its result is NOT yet on screen, so the
+            // "running" status indicator is coherent (not paired with a returned
+            // result). The ToolResult (turn[2]) intentionally stays unrevealed.
+            vec![
+                (f0, turn[..1].to_vec(), empty_economy()),
+                (f1, turn[..1].to_vec(), empty_economy()),
+                (f2, turn[..1].to_vec(), seeded_economy()),
+                (f3, turn[..2].to_vec(), seeded_economy()),
+            ]
+        }
         _ => vec![scene(name)],
     }
 }
@@ -349,6 +508,46 @@ mod tests {
 
         // And each frame renders to a buffer at the required min size.
         let frames = render_shell_scene_seq("context-economy", 160, 40);
+        assert_eq!(frames.len(), 4);
+    }
+
+    #[test]
+    fn tools_models_sequence_stages_tools_then_models_then_run() {
+        let seq = scene_seq("tools-models");
+        assert_eq!(seq.len(), 4, "expected a 4-frame tools-models sequence");
+
+        // F0: the MCP servers overlay (your tools).
+        assert_eq!(seq[0].0.overlay, Overlay::Mcp, "frame 0 shows MCP overlay");
+        assert!(!seq[0].0.mcp_status.is_empty(), "frame 0 has MCP servers");
+
+        // F1: the provider/model quick-switch (your models).
+        assert_eq!(
+            seq[1].0.overlay,
+            Overlay::ProviderSwitch,
+            "frame 1 shows the quick-switch picker"
+        );
+        assert!(!seq[1].0.switch_providers.is_empty(), "providers seeded");
+        assert!(!seq[1].0.switch_models.is_empty(), "models seeded");
+        // Leak guard: only Ollama + Anthropic may appear as providers.
+        for p in &seq[1].0.switch_providers {
+            assert!(
+                p.id == "ollama" || p.id == "anthropic",
+                "public providers only; got leaked provider id {:?}",
+                p.id
+            );
+        }
+
+        // F2/F3: overlays closed; F3 shows a tool running.
+        assert_eq!(seq[2].0.overlay, Overlay::None, "frame 2 overlay closed");
+        assert_eq!(seq[3].0.overlay, Overlay::None, "frame 3 overlay closed");
+        assert!(seq[3].0.busy, "frame 3 is busy (a tool is running)");
+        assert!(
+            seq[3].0.active_tool.is_some(),
+            "frame 3 names the running tool"
+        );
+
+        // Renders at the required min size.
+        let frames = render_shell_scene_seq("tools-models", 160, 40);
         assert_eq!(frames.len(), 4);
     }
 }
