@@ -17,9 +17,29 @@
 html,body{margin:0;background:var(--bg);color:var(--txt);font-family:var(--mono);
   font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;}
 body{overflow-x:hidden;}
+
+/* Reserve the vertical-scrollbar gutter to prevent horizontal layout shift /
+   scrollbar-flash when a scrollbar appears/disappears. NOTE: this does NOT shrink
+   100vw (100vw always includes the gutter); centering is correct regardless because
+   .bleed's 50% tracks the actual content width. body{overflow-x:hidden} is what
+   clips the ~15px 100vw overhang and prevents any page-level horizontal scroll. */
+html{scrollbar-gutter:stable;}
 a{color:var(--acc);}
 a:focus-visible,.term:focus-visible{outline:2px solid var(--acc);outline-offset:3px;}
 .wrap{max-width:1120px;margin:0 auto;padding:0 24px;}
+
+/* Full-bleed: let a fixed-width figure escape .wrap's column and center on the
+   viewport. Block layout (not flex) is deliberate — flexbox shrinks the figure
+   below its content width in the hero's <header> formatting context, clipping it
+   (a ~285px scrollbar on the hero) even when there is room. As a block child,
+   .frame keeps width:max-content on wide screens (shown fully, no scrollbar) and
+   margin-inline:auto centers it in the 100vw band; on viewports narrower than the
+   figure, .frame's max-width:100% caps it and its own overflow-x:auto scrolls it
+   internally — the single fallback. body{overflow-x:hidden} keeps the page itself
+   from ever scrolling sideways; do not strip overflow-x off .frame or the narrow
+   fallback breaks. */
+.bleed{width:100vw;margin-left:calc(50% - 50vw);}
+.bleed > .frame{margin-inline:auto;}
 
 /* ---- Type & structure ----------------------------------------------------
    In a terminal, hierarchy comes from intensity, not weight. The text ramp
@@ -296,7 +316,7 @@ pre.tui{margin:0;padding:14px 16px;font-family:var(--mono);font-size:13px;line-h
   </div>
 
   <!-- Hero: the context-economy animated player -->
-  <div class="figure">
+  <div class="figure bleed">
     <div class="frame">
       <div class="player nojs" role="img"
            aria-label="zoid diagnosing a 500: the turn streams in while the context-economy rail fills — context as a managed, measured resource.">
@@ -477,7 +497,7 @@ pre.tui{margin:0;padding:14px 16px;font-family:var(--mono);font-size:13px;line-h
       <h2>Bring your own <em>tools</em>. Choose your own <em>model</em>.</h2>
       <p class="lead">Connect any <strong>MCP server's tools</strong> alongside zoid's built-ins — configured tools appear automatically. Point zoid at the provider you want: <strong>Ollama</strong> (local &amp; cloud), <strong>Anthropic</strong>, or the <strong>OpenCode Zen</strong> gateway for <strong>OpenAI</strong>, <strong>Google Gemini</strong>, and a large model catalog. And <strong>on-device semantic recall</strong> means nothing has to leave your machine.</p>
     </div>
-    <div class="figure">
+    <div class="figure bleed">
       <div class="frame">
         <div class="player nojs" role="img"
              aria-label="zoid: MCP servers connected and contributing tools, the provider/model quick-switch spanning Ollama, Anthropic, and the OpenCode Zen gateway, then a tool call running on the chosen model.">
@@ -656,7 +676,7 @@ pre.tui{margin:0;padding:14px 16px;font-family:var(--mono);font-size:13px;line-h
       <p class="lead">Extend zoid without waiting on a release. <code>:plugin install superpowers</code> installs <strong>Superpowers</strong> — an open-source skill set by <a href="https://github.com/obra/superpowers" target="_blank" rel="noopener">Obra</a> — as a first-class <strong>mode</strong>: structured TDD, systematic debugging, planning, and code review. Modes are importable skill sets (<strong>Chat</strong> is always the floor); cycle them with <strong>Shift+Tab</strong>. The core stays thin; the frontier moves.</p>
       <p class="kbd"><b>Shift+Tab</b> <span aria-hidden="true">⇄</span> <span class="modes"><span class="mode g0">CHAT</span><span class="mode g1">SUPERPOWERS</span></span></p>
     </div>
-    <div class="figure">
+    <div class="figure bleed">
       <div class="frame">
         <div class="player nojs" role="img"
              aria-label="zoid on first run suggests running :plugin install superpowers; after installing, the SUPERPOWERS mode is active and the brainstorming skill fires — announcing itself and asking a single focused design question.">
