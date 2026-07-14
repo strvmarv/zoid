@@ -246,6 +246,7 @@ mod tests {
             id: "superpowers".into(), schema: 1, kind: vec!["mode".into()],
             name: "Superpowers".into(), description: "d".into(), source: None,
             mode: Some(ModeRecipe { loader: "using-superpowers/SKILL.md".into(), strip_prefix: "skills/".into(), body: BodyStrategy::FromSkillFrontmatter, description: "desc".into(), body_intro: None, body_outro: None }),
+            mcp: None,
             install: effects,
         }
     }
@@ -323,7 +324,7 @@ mod tests {
             id: id.into(), schema: 1, kind: vec!["skills".into()],
             name: id.into(), description: "d".into(),
             source: Some(PluginSource { repo: "o/r".into(), ref_: "SHA".into(), subtree: "skills".into() }),
-            mode: None, install: vec![Effect::Activate],
+            mode: None, mcp: None, install: vec![Effect::Activate],
         }
     }
 

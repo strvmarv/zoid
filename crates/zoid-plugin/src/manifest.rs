@@ -1,5 +1,7 @@
 //! The `.zoid/plugin.toml` manifest schema (schema = 1) + parse + validate.
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 
 use crate::effect::Effect;
@@ -13,6 +15,7 @@ pub struct PluginManifest {
     pub description: String,
     pub source: Option<PluginSource>,
     pub mode: Option<ModeRecipe>,
+    pub mcp: Option<McpManifest>,
     pub install: Vec<Effect>,
 }
 
@@ -38,6 +41,18 @@ pub enum BodyStrategy {
     FromSkillFrontmatter,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct McpServerSpec {
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct McpManifest {
+    pub servers: BTreeMap<String, McpServerSpec>,
+}
+
 // --- Raw serde shapes (mirror the TOML layout), converted into the public
 // types above so the public API isn't coupled to serde field naming. ---
 
@@ -46,6 +61,7 @@ struct RawManifest {
     plugin: RawPlugin,
     source: Option<RawSource>,
     mode: Option<RawMode>,
+    mcp: Option<RawMcp>,
     #[serde(default)]
     install: Vec<RawEffect>,
 }
@@ -81,6 +97,21 @@ struct RawMode {
     body_intro: Option<String>,
     #[serde(default)]
     body_outro: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RawMcp {
+    #[serde(default)]
+    servers: BTreeMap<String, RawMcpServer>,
+}
+
+#[derive(Deserialize)]
+struct RawMcpServer {
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -147,6 +178,18 @@ pub fn parse_manifest(toml_src: &str) -> Result<PluginManifest, String> {
             body_intro: m.body_intro,
             body_outro: m.body_outro,
         }),
+        mcp: raw.mcp.map(|m| McpManifest {
+            servers: m
+                .servers
+                .into_iter()
+                .map(|(name, s)| {
+                    (
+                        name,
+                        McpServerSpec { command: s.command, args: s.args, env: s.env },
+                    )
+                })
+                .collect(),
+        }),
         install,
     })
 }
@@ -162,10 +205,37 @@ impl PluginManifest {
                 self.id, self.schema
             ));
         }
+        let is_mcp = self.kind.iter().any(|k| k == "mcp");
+        if is_mcp {
+            // mcp is not composable with the tree-materializing kinds; the
+            // install dispatch can only route one way.
+            if self.kind != ["mcp"] {
+                return Err(format!(
+                    "plugin '{}' mixes 'mcp' with other kinds; 'mcp' must be the only kind",
+                    self.id
+                ));
+            }
+            if self.source.is_some() || self.mode.is_some() {
+                return Err(format!(
+                    "plugin '{}' is kind 'mcp' and must not declare [source] or [mode]",
+                    self.id
+                ));
+            }
+            match self.mcp.as_ref().map(|m| m.servers.len()) {
+                Some(1) => {}
+                _ => {
+                    return Err(format!(
+                        "plugin '{}' (kind 'mcp') must declare exactly one server",
+                        self.id
+                    ));
+                }
+            }
+            return Ok(());
+        }
         for k in &self.kind {
             if k != "mode" && k != "skills" {
                 return Err(format!(
-                    "plugin '{}' declares unsupported kind '{}' (v1 supports 'mode' and 'skills')",
+                    "plugin '{}' declares unsupported kind '{}' (v1 supports 'mode', 'skills', 'mcp')",
                     self.id, k
                 ));
             }
@@ -292,5 +362,68 @@ subtree = "skills"
         m.validate().unwrap();
         assert_eq!(m.kind, vec!["skills".to_string()]);
         assert!(m.mode.is_none());
+    }
+
+    const MCP_GOOD: &str = r#"
+[plugin]
+id = "github"
+schema = 1
+kind = ["mcp"]
+name = "GitHub MCP"
+description = "GitHub over MCP"
+
+[mcp.servers.github]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env = { GITHUB_TOKEN = "${GITHUB_TOKEN}" }
+"#;
+
+    #[test]
+    fn parses_and_validates_an_mcp_manifest() {
+        let m = parse_manifest(MCP_GOOD).unwrap();
+        m.validate().unwrap();
+        assert_eq!(m.kind, vec!["mcp".to_string()]);
+        assert!(m.source.is_none() && m.mode.is_none());
+        let mcp = m.mcp.as_ref().unwrap();
+        assert_eq!(mcp.servers.len(), 1);
+        let s = mcp.servers.get("github").unwrap();
+        assert_eq!(s.command, "npx");
+        assert_eq!(s.args, vec!["-y", "@modelcontextprotocol/server-github"]);
+        assert_eq!(s.env.get("GITHUB_TOKEN").unwrap(), "${GITHUB_TOKEN}");
+    }
+
+    #[test]
+    fn rejects_mcp_mixed_with_other_kinds() {
+        let src = MCP_GOOD.replace(r#"kind = ["mcp"]"#, r#"kind = ["mcp", "skills"]"#);
+        let m = parse_manifest(&src).unwrap();
+        assert!(m.validate().unwrap_err().contains("mcp"));
+    }
+
+    #[test]
+    fn rejects_mcp_without_a_server() {
+        let src = "\n[plugin]\nid = \"x\"\nschema = 1\nkind = [\"mcp\"]\nname = \"X\"\ndescription = \"d\"\n";
+        let m = parse_manifest(src).unwrap();
+        assert!(m.validate().unwrap_err().contains("server"));
+    }
+
+    #[test]
+    fn rejects_mcp_with_more_than_one_server() {
+        let src = format!("{MCP_GOOD}\n[mcp.servers.second]\ncommand = \"foo\"\n");
+        let m = parse_manifest(&src).unwrap();
+        assert!(m.validate().unwrap_err().contains("one server"));
+    }
+
+    #[test]
+    fn rejects_mcp_with_source_or_mode() {
+        let src = format!("{MCP_GOOD}\n[source]\nrepo = \"a/b\"\nref = \"s\"\nsubtree = \"x\"\n");
+        let m = parse_manifest(&src).unwrap();
+        assert!(m.validate().unwrap_err().contains("source"));
+    }
+
+    #[test]
+    fn rejects_mcp_server_missing_command() {
+        // `command` is required by the RawMcpServer serde shape → parse error.
+        let src = "\n[plugin]\nid=\"x\"\nschema=1\nkind=[\"mcp\"]\nname=\"X\"\ndescription=\"d\"\n[mcp.servers.s]\nargs=[\"a\"]\n";
+        assert!(parse_manifest(src).is_err());
     }
 }

@@ -7362,6 +7362,7 @@ mod tests {
                 body_intro: None,
                 body_outro: None,
             }),
+            mcp: None,
             install: vec![Effect::Activate],
         };
         let activated = apply_plugin_scan(
