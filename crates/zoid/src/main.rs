@@ -4556,16 +4556,25 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             }
         }
         Action::CatalogConfirmYes => {
-            let id = app
-                .shell
-                .plugin_catalog
-                .as_ref()
-                .and_then(|cat| cat.selected())
-                .map(|row| row.id.clone());
-            app.shell.plugin_catalog = None;
-            app.shell.overlay = Overlay::None;
-            if let Some(id) = id {
-                install_plugin(app, id);
+            // mcp path: install from the carried confirm. Must NOT re-enter
+            // install_plugin — its catalog id-path requires [source].
+            let mcp = app.shell.plugin_catalog.as_ref().and_then(|c| c.mcp.clone());
+            if let Some(confirm) = mcp {
+                app.shell.plugin_catalog = None;
+                app.shell.overlay = Overlay::None;
+                install_mcp_server(app, &confirm);
+            } else {
+                let id = app
+                    .shell
+                    .plugin_catalog
+                    .as_ref()
+                    .and_then(|cat| cat.selected())
+                    .map(|row| row.id.clone());
+                app.shell.plugin_catalog = None;
+                app.shell.overlay = Overlay::None;
+                if let Some(id) = id {
+                    install_plugin(app, id);
+                }
             }
         }
         Action::CatalogTargetToggle => {
@@ -5178,6 +5187,53 @@ fn install_plugin(app: &mut App, arg: String) {
             app.shell.status_hint = Some(format!("unknown plugin '{id}'"));
         }
     }
+}
+
+/// Resolve the `.mcp.json` an mcp install writes to. Pure (dirs injected) for tests.
+fn mcp_target_path(
+    target: zoid_tui::state::McpTarget,
+    config_dir: &std::path::Path,
+    cwd: &std::path::Path,
+) -> std::path::PathBuf {
+    match target {
+        zoid_tui::state::McpTarget::User => config_dir.join("mcp.json"),
+        zoid_tui::state::McpTarget::Project => cwd.join(".mcp.json"),
+    }
+}
+
+/// Write the confirmed mcp server into the chosen `.mcp.json` (additive, atomic,
+/// skip-on-collision) and report the outcome + a restart hint. Uses the carried
+/// confirm — never re-enters `install_plugin` (whose catalog id-path requires
+/// `[source]`, which an mcp manifest lacks).
+fn install_mcp_server(app: &mut App, confirm: &zoid_tui::state::McpConfirm) {
+    let config_dir = resolve_config_dir(|k| std::env::var(k).ok());
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let path = mcp_target_path(confirm.target, &config_dir, &cwd);
+
+    let server = zoid_mcp::config::McpServerConfig {
+        command: confirm.command.clone(),
+        args: confirm.args.clone(),
+        env: confirm
+            .env
+            .iter()
+            .map(|e| (e.key.clone(), e.value.clone()))
+            .collect(),
+    };
+
+    let hint = match zoid_mcp::config::merge_server(&path, &confirm.server_name, &server) {
+        Ok(zoid_mcp::config::MergeOutcome::Inserted) => format!(
+            "✓ wrote '{}' to {} · restart zoid to connect",
+            confirm.server_name,
+            path.display()
+        ),
+        Ok(zoid_mcp::config::MergeOutcome::SkippedExisting) => format!(
+            "ℹ '{}' already configured in {} — left unchanged",
+            confirm.server_name,
+            path.display()
+        ),
+        Err(e) => format!("mcp install failed: {e}"),
+    };
+    app.shell.status_hint = Some(hint);
 }
 
 /// Apply a completed plugin fetch on the main loop: build the plan, materialize
@@ -8756,5 +8812,23 @@ mod mcp_confirm_guard_tests {
         cat.begin_confirm_loading();
         assert!(catalog_confirm_awaits(&cat, "b")); // the row whose fetch we spawned
         assert!(!catalog_confirm_awaits(&cat, "a")); // a stale fetch for "a" is dropped
+    }
+}
+
+#[cfg(test)]
+mod mcp_install_tests {
+    use super::mcp_target_path;
+    use zoid_tui::state::McpTarget;
+
+    #[test]
+    fn user_target_is_config_mcp_json() {
+        let p = mcp_target_path(McpTarget::User, std::path::Path::new("/cfg"), std::path::Path::new("/repo"));
+        assert_eq!(p, std::path::Path::new("/cfg/mcp.json"));
+    }
+
+    #[test]
+    fn project_target_is_cwd_dot_mcp_json() {
+        let p = mcp_target_path(McpTarget::Project, std::path::Path::new("/cfg"), std::path::Path::new("/repo"));
+        assert_eq!(p, std::path::Path::new("/repo/.mcp.json"));
     }
 }
