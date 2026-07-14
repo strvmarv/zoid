@@ -1830,10 +1830,28 @@ mod tests {
         );
     }
 
-    /// The SELECT pill must render in `color::BRANCH` (purple) when
-    /// `select_mode` is on.
-    #[test]
-    fn select_pill_color_tracks_mode() {
+    /// Locate the ` SELECT ` pill and return the style of its first glyph
+    /// (`S`). Scans the buffer for the "SELECT" glyph run, guarding against a
+    /// run that would straddle a row boundary. `None` if the pill is absent.
+    fn select_pill_style(
+        buf: &ratatui::buffer::Buffer,
+    ) -> Option<ratatui::style::Style> {
+        let w = buf.area.width as usize;
+        let cells = buf.content();
+        for start in 0..cells.len().saturating_sub(6) {
+            if start % w > w - 6 {
+                continue; // the 6-glyph run would wrap to the next row
+            }
+            let word: String =
+                (0..6).map(|k| cells[start + k].symbol()).collect();
+            if word == "SELECT" {
+                return Some(cells[start].style());
+            }
+        }
+        None
+    }
+
+    fn status_buffer(select_mode: bool) -> ratatui::buffer::Buffer {
         use ratatui::{backend::TestBackend, Terminal};
         let view = ChatView {
             zoom: Zoom::Normal,
@@ -1841,17 +1859,56 @@ mod tests {
             reveal: None,
             tz_offset_secs: 0,
         };
-        let mut on = ShellState::new();
-        on.select_mode = true;
+        let mut state = ShellState::new();
+        state.select_mode = select_mode;
         let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        term.draw(|f| render_status(f, &on, &view, f.area())).unwrap();
-        let has_branch = term
-            .backend()
-            .buffer()
+        term.draw(|f| render_status(f, &state, &view, f.area()))
+            .unwrap();
+        term.backend().buffer().clone()
+    }
+
+    /// ON: the SELECT pill is the filled purple badge — `BRANCH` glyph on the
+    /// `SELECT_BG` fill (the purple sibling of the mode pill's blue pair).
+    #[test]
+    fn select_pill_on_is_filled_purple() {
+        let buf = status_buffer(true);
+        let style = select_pill_style(&buf).expect("SELECT pill must be present");
+        assert_eq!(
+            style.fg,
+            Some(color::BRANCH),
+            "ON pill glyph must be BRANCH (purple)"
+        );
+        assert_eq!(
+            style.bg,
+            Some(color::SELECT_BG),
+            "ON pill must fill with SELECT_BG (dark purple)"
+        );
+    }
+
+    /// OFF: the pill is recessive — `DIM` glyphs with no fill. `SELECT_BG` must
+    /// appear on no cell, so it never reads as a second lit badge.
+    #[test]
+    fn select_pill_off_is_recessive_no_fill() {
+        let buf = status_buffer(false);
+        let style = select_pill_style(&buf).expect("SELECT pill must be present");
+        assert_eq!(
+            style.fg,
+            Some(color::DIM),
+            "OFF pill glyph must be DIM"
+        );
+        assert_ne!(
+            style.bg,
+            Some(color::SELECT_BG),
+            "OFF pill glyph must not carry the SELECT_BG fill"
+        );
+        let any_fill = buf
             .content()
             .iter()
-            .any(|c| c.style().fg == Some(color::BRANCH));
-        assert!(has_branch, "SELECT pill must use BRANCH fg when select_mode on");
+            .any(|c| c.style().bg == Some(color::SELECT_BG));
+        assert!(
+            !any_fill,
+            "OFF pill must not fill any cell with SELECT_BG"
+        );
     }
 
     /// When `compacting: false`, the compaction segment must NOT appear —
