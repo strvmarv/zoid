@@ -230,6 +230,16 @@ impl PluginManifest {
                     ));
                 }
             }
+            if let Some(m) = self.mcp.as_ref() {
+                for (name, s) in &m.servers {
+                    if s.command.trim().is_empty() {
+                        return Err(format!(
+                            "plugin '{}' (kind 'mcp') server '{}' has an empty command",
+                            self.id, name
+                        ));
+                    }
+                }
+            }
             return Ok(());
         }
         for k in &self.kind {
@@ -425,5 +435,12 @@ env = { GITHUB_TOKEN = "${GITHUB_TOKEN}" }
         // `command` is required by the RawMcpServer serde shape → parse error.
         let src = "\n[plugin]\nid=\"x\"\nschema=1\nkind=[\"mcp\"]\nname=\"X\"\ndescription=\"d\"\n[mcp.servers.s]\nargs=[\"a\"]\n";
         assert!(parse_manifest(src).is_err());
+    }
+
+    #[test]
+    fn rejects_mcp_server_with_empty_command() {
+        let src = MCP_GOOD.replace(r#"command = "npx""#, r#"command = """#);
+        let m = parse_manifest(&src).unwrap();
+        assert!(m.validate().unwrap_err().contains("command"));
     }
 }
