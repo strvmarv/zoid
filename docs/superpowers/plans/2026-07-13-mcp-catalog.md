@@ -241,17 +241,28 @@ Replace it with:
 
 (Leave the rest of `validate` — the `[mode]` table check and `Ok(())` — unchanged.)
 
-Any existing test or bundled manifest that builds a `PluginManifest` literal now needs `mcp: None`. Search and fix: `rg -n "install:\s*Vec::new\(\)|PluginManifest \{" crates/` — add `mcp: None,` to each literal (notably `crates/zoid-plugin/src/bundled.rs` if it builds a literal; if it calls `parse_manifest`, nothing to change).
+Adding the `mcp` field breaks **every** `PluginManifest` struct literal in the workspace — they must each gain `mcp: None`. There are exactly four (all test helpers), in **three crates** (so Task 1 must build the whole workspace, not just `zoid-plugin`, to catch them):
 
-- [ ] **Step 5: Run tests to verify they pass**
+- `crates/zoid-plugin/src/plan.rs:200` (in `fn manifest()`)
+- `crates/zoid/src/plugin_install.rs:245` (in `fn manifest(...)`)
+- `crates/zoid/src/plugin_install.rs:322` (in `fn skills_manifest(...)`)
+- `crates/zoid/src/main.rs:7346` (in a `#[cfg(test)]`)
+
+Add `mcp: None,` to each (next to the existing `install: ...` field). Do **not** touch `bundled.rs` — it calls `parse_manifest`, not a literal. Verify with a workspace grep that none remain: `rg -n "PluginManifest \{" crates/ | grep -v "pub struct"` should show only the two in `manifest.rs` (the `parse_manifest` return, which Step 3 already gave an `mcp:` field, and the `impl` line).
+
+- [ ] **Step 5: Run tests to verify they pass (whole workspace — the field touches 3 crates)**
 
 Run: `cargo test -p zoid-plugin --lib 2>&1 | tail -8`
 Expected: PASS — all new mcp tests green; existing `parses_a_good_manifest`, `accepts_skills_kind_without_mode_table`, `rejects_unknown_kind` still pass.
 
+Run: `cargo test --workspace --no-run 2>&1 | tail -6`
+Expected: compiles clean — confirms all four `PluginManifest` literals (across `zoid-plugin` and `zoid`) got `mcp: None`. A missed literal fails here, not silently in a later task.
+
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/zoid-plugin/src/manifest.rs crates/zoid-plugin/src/bundled.rs
+git add crates/zoid-plugin/src/manifest.rs crates/zoid-plugin/src/plan.rs \
+        crates/zoid/src/plugin_install.rs crates/zoid/src/main.rs
 git commit -m "feat(zoid-plugin): [mcp] manifest kind — parse + exclusive-kind validate"
 ```
 
@@ -448,6 +459,8 @@ git commit -m "feat(zoid-mcp): merge_server — first .mcp.json writer (atomic, 
 **Files:**
 - Modify: `crates/zoid-tui/src/state.rs`
 - Modify: `crates/zoid-tui/src/route.rs`
+- Modify: `crates/zoid-tui/src/render.rs` (temporary `ConfirmLoading => {}` arm — see Step 5)
+- Modify: `crates/zoid/src/main.rs` (the `CatalogTargetToggle` dispatch arm — see Step 4; the bin's `match action` is exhaustive, so a new `Action` variant must get its arm in this same commit or the `zoid` crate stops compiling)
 
 **Interfaces:**
 - Consumes: existing `PluginCatalogState`, `CatalogMode`, `route_plugin_catalog_key` (`route.rs:402`), `Action` enum.
@@ -665,21 +678,39 @@ fn route_plugin_catalog_key(state: &ShellState, key: KeyEvent) -> Action {
 }
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 5: Add the two arms that keep both crates compiling**
 
-Run: `cargo test -p zoid-tui --lib 2>&1 | tail -8`
-Expected: PASS. (`render.rs`'s exhaustive `match cat.mode` will now FAIL TO COMPILE — that is expected and fixed in Task 4. If you need a green checkpoint before Task 4, temporarily this task's crate won't build; commit the state+route together with Task 4, OR add the render arm now. Per the plan, commit state+route here and let Task 4's reviewer see the compile gap closed — see note.)
+`CatalogMode::ConfirmLoading` and `Action::CatalogTargetToggle` each break an exhaustive `match`. Both arms land in **this** commit:
 
-> Compile note: adding `ConfirmLoading` makes `render_plugin_catalog_overlay`'s `match cat.mode` non-exhaustive, so `zoid-tui` won't compile until Task 4. To keep each commit compiling, **fold Steps of Task 4 into this commit** OR add a minimal `CatalogMode::ConfirmLoading => {}` arm now and flesh it out in Task 4. Choose the minimal-arm approach: add to the `match cat.mode` in `render.rs` a temporary `CatalogMode::ConfirmLoading => {}` so the crate compiles; Task 4 replaces it.
+1. **`crates/zoid-tui/src/render.rs`** — `render_plugin_catalog_overlay`'s `match cat.mode` is now non-exhaustive. Add a **temporary** arm (Task 4 replaces it with the real render):
 
-Apply the temporary arm, then re-run:
+```rust
+        CatalogMode::ConfirmLoading => {}
+```
+
+2. **`crates/zoid/src/main.rs`** — the bin's `match action` is exhaustive (ends `Action::Noop => {}`, `main.rs:4555`, no wildcard), so the new `Action::CatalogTargetToggle` must get its handler now (it only needs `toggle_target` from Step 3). Add next to the other `Catalog*` arms:
+
+```rust
+        Action::CatalogTargetToggle => {
+            if let Some(cat) = app.shell.plugin_catalog.as_mut() {
+                cat.toggle_target();
+            }
+        }
+```
+
+- [ ] **Step 6: Verify both crates compile + state tests pass**
+
 Run: `cargo test -p zoid-tui --lib 2>&1 | tail -6`
-Expected: PASS.
+Expected: PASS (`match cat.mode` exhaustive via the temp arm; new state tests green).
 
-- [ ] **Step 6: Commit**
+Run: `cargo build -p zoid 2>&1 | tail -4`
+Expected: Finished — the bin's `match action` is exhaustive again with the `CatalogTargetToggle` arm.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add crates/zoid-tui/src/state.rs crates/zoid-tui/src/route.rs crates/zoid-tui/src/render.rs
+git add crates/zoid-tui/src/state.rs crates/zoid-tui/src/route.rs \
+        crates/zoid-tui/src/render.rs crates/zoid/src/main.rs
 git commit -m "feat(zoid-tui): mcp confirm state machine — ConfirmLoading + McpConfirm + target toggle"
 ```
 
@@ -811,18 +842,13 @@ In `crates/zoid/src/agent.rs`, add to `AgentUpdate` (after `CatalogLoaded`):
 
 - [ ] **Step 2: Write the id-guard unit test**
 
-The guard logic is pure enough to test on `ShellState`. Add to `crates/zoid/src/main.rs`'s test module (find `mod tests` / `#[cfg(test)]`; if the guard predicate is factored into a free fn it is directly testable). Factor the guard into a free fn and test it:
+The id-guard is the consent-integrity property (a stale fetch must not populate the confirm), so it must be a **real** unit test that drives the **production** predicate — not a copy of it. Write the test against `catalog_confirm_awaits`, the shared free fn that `apply_mcp_manifest_fetched` (Step 5) also calls. Add to `crates/zoid/src/main.rs`'s test module:
 
 ```rust
 #[cfg(test)]
 mod mcp_confirm_guard_tests {
-    use zoid_tui::state::{CatalogMode, PluginCatalogRow, PluginCatalogState};
-
-    // mirrors the guard used in apply_mcp_manifest_fetched
-    fn accepts(cat: &PluginCatalogState, arrived_id: &str) -> bool {
-        cat.mode == CatalogMode::ConfirmLoading
-            && cat.selected().map(|r| r.id.as_str()) == Some(arrived_id)
-    }
+    use super::catalog_confirm_awaits;
+    use zoid_tui::state::{PluginCatalogRow, PluginCatalogState};
 
     fn row(id: &str) -> PluginCatalogRow {
         PluginCatalogRow {
@@ -832,20 +858,15 @@ mod mcp_confirm_guard_tests {
     }
 
     #[test]
-    fn drops_result_for_a_row_the_user_left() {
+    fn awaits_only_the_selected_loading_row() {
         let mut cat = PluginCatalogState::loading();
         cat.rows = vec![row("a"), row("b")];
-        cat.cursor = 1; // now on "b"
+        cat.cursor = 1; // on "b"
+        // List mode → not awaiting any fetch yet.
+        assert!(!catalog_confirm_awaits(&cat, "b"));
         cat.begin_confirm_loading();
-        assert!(accepts(&cat, "b"));
-        assert!(!accepts(&cat, "a")); // stale fetch for "a" dropped
-    }
-
-    #[test]
-    fn drops_when_not_loading() {
-        let mut cat = PluginCatalogState::loading();
-        cat.rows = vec![row("a")];
-        assert!(!accepts(&cat, "a")); // mode == List
+        assert!(catalog_confirm_awaits(&cat, "b")); // the row whose fetch we spawned
+        assert!(!catalog_confirm_awaits(&cat, "a")); // a stale fetch for "a" is dropped
     }
 }
 ```
@@ -853,7 +874,7 @@ mod mcp_confirm_guard_tests {
 - [ ] **Step 3: Run to verify failure**
 
 Run: `cargo test -p zoid --lib mcp_confirm_guard 2>&1 | tail -12`
-Expected: FAIL to compile until `begin_confirm_loading` etc. are in scope (they are, from Task 3) — if Task 3 is merged this test compiles and passes trivially; its purpose is to lock the guard semantics the real `apply_mcp_manifest_fetched` must mirror. If it passes immediately, that is fine — proceed.
+Expected: FAIL to compile — `cannot find function catalog_confirm_awaits` (it is added in Step 5). This is a real red: the test exercises production code that does not exist yet.
 
 - [ ] **Step 4: Include mcp in the catalog filter**
 
@@ -868,6 +889,20 @@ In `crates/zoid/src/main.rs`, `map_catalog_entries` (`main.rs:4895`), change the
 Add these free functions in `crates/zoid/src/main.rs` near `spawn_catalog_load`:
 
 ```rust
+/// A confirm-time mcp fetch result should populate the overlay only while it is
+/// still awaiting THAT row's manifest: mode is `ConfirmLoading` and the selected
+/// row's id equals the fetched id. This is the consent-integrity guard — it drops
+/// a stale fetch for a row the user navigated away from. Correct because
+/// `route_plugin_catalog_key`'s `ConfirmLoading` arm freezes the cursor (only Esc
+/// is live; Up/Down → Noop), so `selected()` is still the row whose fetch we spawned.
+pub(crate) fn catalog_confirm_awaits(
+    cat: &zoid_tui::state::PluginCatalogState,
+    arrived_id: &str,
+) -> bool {
+    cat.mode == zoid_tui::state::CatalogMode::ConfirmLoading
+        && cat.selected().map(|r| r.id.as_str()) == Some(arrived_id)
+}
+
 /// True if `value` references at least one `${VAR}` whose variable is unset.
 /// A literal (no `${}`) is never flagged.
 fn env_ref_unset(value: &str, get: &dyn Fn(&str) -> Option<String>) -> bool {
@@ -914,12 +949,13 @@ fn apply_mcp_manifest_fetched(
     id: String,
     res: Result<zoid_plugin::manifest::PluginManifest, String>,
 ) {
-    use zoid_tui::state::{CatalogMode, McpConfirm, McpEnvEntry, McpTarget};
+    use zoid_tui::state::{McpConfirm, McpEnvEntry, McpTarget};
     let matches = app.shell.overlay == zoid_tui::state::Overlay::PluginCatalog
-        && app.shell.plugin_catalog.as_ref().map_or(false, |c| {
-            c.mode == CatalogMode::ConfirmLoading
-                && c.selected().map(|r| r.id.as_str()) == Some(id.as_str())
-        });
+        && app
+            .shell
+            .plugin_catalog
+            .as_ref()
+            .map_or(false, |c| catalog_confirm_awaits(c, &id));
     if !matches {
         return;
     }
@@ -1092,7 +1128,7 @@ fn install_mcp_server(app: &mut App, confirm: &zoid_tui::state::McpConfirm) {
 }
 ```
 
-- [ ] **Step 4: Branch `CatalogConfirmYes` + handle `CatalogTargetToggle`**
+- [ ] **Step 4: Branch `CatalogConfirmYes` (the `CatalogTargetToggle` handler already landed in Task 3)**
 
 Replace the `Action::CatalogConfirmYes` handler (`main.rs:4542`) with:
 
@@ -1121,15 +1157,7 @@ Replace the `Action::CatalogConfirmYes` handler (`main.rs:4542`) with:
         }
 ```
 
-Add a `CatalogTargetToggle` handler next to the other `Catalog*` arms:
-
-```rust
-        Action::CatalogTargetToggle => {
-            if let Some(cat) = app.shell.plugin_catalog.as_mut() {
-                cat.toggle_target();
-            }
-        }
-```
+(The `Action::CatalogTargetToggle` dispatch arm was added in Task 3 Step 5 to keep the bin compiling — do not add it again here.)
 
 - [ ] **Step 5: Run tests + full workspace build/test**
 
