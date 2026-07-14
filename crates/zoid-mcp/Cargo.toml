@@ -15,9 +15,10 @@ zoid-tools = { path = "../zoid-tools" }
 zoid-provider = { path = "../zoid-provider" }
 tokio = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["preserve_order"] }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+tempfile = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

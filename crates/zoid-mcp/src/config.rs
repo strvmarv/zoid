@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,6 +119,73 @@ pub fn discover(
         .collect()
 }
 
+/// Outcome of a `merge_server` call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeOutcome {
+    Inserted,
+    SkippedExisting,
+}
+
+/// Additively merge one named stdio server into the `.mcp.json` at `path`.
+/// Atomic (temp file + rename) and order-preserving. Skips an existing name
+/// without writing; aborts (never clobbers) a malformed target file. `${VAR}`
+/// placeholders in `server.env` are written verbatim.
+pub fn merge_server(
+    path: &Path,
+    name: &str,
+    server: &McpServerConfig,
+) -> anyhow::Result<MergeOutcome> {
+    use serde_json::{Map, Value};
+
+    let mut root: Value = match std::fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str(&text)
+            .map_err(|e| anyhow::anyhow!("{} is not valid JSON: {e}", path.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Value::Object(Map::new()),
+        Err(e) => return Err(anyhow::anyhow!("cannot read {}: {}", path.display(), e.kind())),
+    };
+
+    let obj = root
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("{} root is not a JSON object", path.display()))?;
+    let servers = obj
+        .entry("mcpServers")
+        .or_insert_with(|| Value::Object(Map::new()));
+    let servers = servers
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("{} 'mcpServers' is not a JSON object", path.display()))?;
+
+    if servers.contains_key(name) {
+        return Ok(MergeOutcome::SkippedExisting);
+    }
+
+    // Build the server object with a stable key order (command, args, env).
+    let mut sv = Map::new();
+    sv.insert("command".into(), Value::String(server.command.clone()));
+    sv.insert(
+        "args".into(),
+        Value::Array(server.args.iter().cloned().map(Value::String).collect()),
+    );
+    let mut env = Map::new();
+    for (k, v) in &server.env {
+        env.insert(k.clone(), Value::String(v.clone()));
+    }
+    sv.insert("env".into(), Value::Object(env));
+    servers.insert(name.to_string(), Value::Object(sv));
+
+    let mut text = serde_json::to_string_pretty(&root)?;
+    text.push('\n');
+
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    // Atomic: write a temp file in the SAME directory, then rename over the target.
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(text.as_bytes())?;
+    tmp.flush()?;
+    tmp.persist(path)
+        .map_err(|e| anyhow::anyhow!("atomic rename failed: {e}"))?;
+    Ok(MergeOutcome::Inserted)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +253,66 @@ mod tests {
         let git = servers.iter().find(|(n, _)| n == "git").unwrap();
         assert_eq!(git.1.command, "proj-git"); // project wins
         assert!(servers.iter().any(|(n, _)| n == "fs")); // user-only kept
+    }
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+
+    fn cfg(cmd: &str) -> McpServerConfig {
+        McpServerConfig {
+            command: cmd.into(),
+            args: vec!["-y".into()],
+            env: BTreeMap::from([("TOKEN".to_string(), "${TOKEN}".to_string())]),
+        }
+    }
+
+    #[test]
+    fn inserts_into_missing_file_creating_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("mcp.json");
+        let out = merge_server(&path, "github", &cfg("npx")).unwrap();
+        assert!(matches!(out, MergeOutcome::Inserted));
+        let back = parse_mcp_json(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].0, "github");
+        // ${VAR} written verbatim, not expanded.
+        assert_eq!(back[0].1.env.get("TOKEN").unwrap(), "${TOKEN}");
+    }
+
+    #[test]
+    fn preserves_siblings_and_their_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".mcp.json");
+        // Hand-written, deliberately non-alphabetical order.
+        std::fs::write(&path, "{\n  \"mcpServers\": {\n    \"zeta\": { \"command\": \"z\" },\n    \"alpha\": { \"command\": \"a\" }\n  }\n}\n").unwrap();
+        merge_server(&path, "github", &cfg("npx")).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        // Original siblings kept in original (non-alphabetical) order; new one appended.
+        let zi = text.find("zeta").unwrap();
+        let ai = text.find("alpha").unwrap();
+        let gi = text.find("github").unwrap();
+        assert!(zi < ai && ai < gi, "order not preserved: {text}");
+    }
+
+    #[test]
+    fn skips_existing_name_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".mcp.json");
+        std::fs::write(&path, "{ \"mcpServers\": { \"github\": { \"command\": \"mine\" } } }").unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+        let out = merge_server(&path, "github", &cfg("npx")).unwrap();
+        assert!(matches!(out, MergeOutcome::SkippedExisting));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before, "must not rewrite on skip");
+    }
+
+    #[test]
+    fn aborts_on_malformed_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".mcp.json");
+        std::fs::write(&path, "not json at all").unwrap();
+        assert!(merge_server(&path, "github", &cfg("npx")).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "not json at all", "must not clobber");
     }
 }
