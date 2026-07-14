@@ -3148,6 +3148,9 @@ where
                     zoid::agent::AgentUpdate::CatalogLoaded(res) => {
                         apply_catalog_loaded(app, res);
                     }
+                    zoid::agent::AgentUpdate::McpManifestFetched { id, res } => {
+                        apply_mcp_manifest_fetched(app, id, res);
+                    }
                     zoid::agent::AgentUpdate::WorktreeRequested { action, reply } => {
                         handle_worktree_request(app, action, Some(reply));
                     }
@@ -4530,8 +4533,21 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             }
         }
         Action::CatalogEnterConfirm => {
-            if let Some(cat) = app.shell.plugin_catalog.as_mut() {
-                cat.enter_confirm();
+            let sel = app
+                .shell
+                .plugin_catalog
+                .as_ref()
+                .and_then(|c| c.selected())
+                .map(|r| (r.id.clone(), r.kind_label.clone()));
+            if let Some((id, kind)) = sel {
+                if kind == "mcp" {
+                    if let Some(cat) = app.shell.plugin_catalog.as_mut() {
+                        cat.begin_confirm_loading();
+                    }
+                    spawn_mcp_manifest_fetch(app, id);
+                } else if let Some(cat) = app.shell.plugin_catalog.as_mut() {
+                    cat.enter_confirm();
+                }
             }
         }
         Action::CatalogConfirmNo => {
@@ -4890,14 +4906,114 @@ fn spawn_catalog_load(app: &App) {
     });
 }
 
+/// A confirm-time mcp fetch result should populate the overlay only while it is
+/// still awaiting THAT row's manifest: mode is `ConfirmLoading` and the selected
+/// row's id equals the fetched id. This is the consent-integrity guard — it drops
+/// a stale fetch for a row the user navigated away from. Correct because
+/// `route_plugin_catalog_key`'s `ConfirmLoading` arm freezes the cursor (only Esc
+/// is live; Up/Down → Noop), so `selected()` is still the row whose fetch we spawned.
+pub(crate) fn catalog_confirm_awaits(
+    cat: &zoid_tui::state::PluginCatalogState,
+    arrived_id: &str,
+) -> bool {
+    cat.mode == zoid_tui::state::CatalogMode::ConfirmLoading
+        && cat.selected().map(|r| r.id.as_str()) == Some(arrived_id)
+}
+
+/// True if `value` references at least one `${VAR}` whose variable is unset.
+/// A literal (no `${}`) is never flagged.
+fn env_ref_unset(value: &str, get: &dyn Fn(&str) -> Option<String>) -> bool {
+    let mut rest = value;
+    while let Some(pos) = rest.find("${") {
+        let after = &rest[pos + 2..];
+        if let Some(end) = after.find('}') {
+            if get(&after[..end]).is_none() {
+                return true;
+            }
+            rest = &after[end + 1..];
+        } else {
+            break;
+        }
+    }
+    false
+}
+
+/// Confirm-time async fetch of an mcp plugin's `<id>.toml`. Sends
+/// `McpManifestFetched`; the main loop applies it under the id guard.
+fn spawn_mcp_manifest_fetch(app: &App, id: String) {
+    let ui_tx = app.ui_tx.clone();
+    tokio::spawn(async move {
+        let res: Result<zoid_plugin::manifest::PluginManifest, String> = async {
+            let body = zoid::catalog::fetch_text(&zoid::catalog::catalog_manifest_url(&id))
+                .await
+                .map_err(|e| format!("catalog manifest fetch failed: {e}"))?;
+            let manifest = zoid_plugin::manifest::parse_manifest(&body)?;
+            manifest.validate()?;
+            Ok(manifest)
+        }
+        .await;
+        let _ = ui_tx
+            .send(zoid::agent::AgentUpdate::McpManifestFetched { id, res })
+            .await;
+    });
+}
+
+/// Apply a confirm-time manifest fetch to the open overlay — but only if the
+/// overlay is still the catalog, still ConfirmLoading, and still on the SAME
+/// row id (else the user navigated away → drop, protecting consent integrity).
+fn apply_mcp_manifest_fetched(
+    app: &mut App,
+    id: String,
+    res: Result<zoid_plugin::manifest::PluginManifest, String>,
+) {
+    use zoid_tui::state::{McpConfirm, McpEnvEntry, McpTarget};
+    let matches = app.shell.overlay == zoid_tui::state::Overlay::PluginCatalog
+        && app
+            .shell
+            .plugin_catalog
+            .as_ref()
+            .map_or(false, |c| catalog_confirm_awaits(c, &id));
+    if !matches {
+        return;
+    }
+    let Some(cat) = app.shell.plugin_catalog.as_mut() else {
+        return;
+    };
+    match res {
+        Ok(manifest) => {
+            let server = manifest.mcp.as_ref().and_then(|m| m.servers.iter().next());
+            let Some((name, spec)) = server else {
+                cat.set_confirm_error("manifest declares no server".into());
+                return;
+            };
+            let env = spec
+                .env
+                .iter()
+                .map(|(k, v)| McpEnvEntry {
+                    key: k.clone(),
+                    value: v.clone(),
+                    unset: env_ref_unset(v, &|x| std::env::var(x).ok()),
+                })
+                .collect();
+            cat.set_mcp_confirm(McpConfirm {
+                server_name: name.clone(),
+                command: spec.command.clone(),
+                args: spec.args.clone(),
+                env,
+                target: McpTarget::User, // default: user scope (safe)
+            });
+        }
+        Err(e) => cat.set_confirm_error(e),
+    }
+}
+
 /// Map a loaded catalog index (`AgentUpdate::CatalogLoaded`) to `PluginCatalogRow`s.
-/// Skips entries whose kind is not `mode`/`skills` (L4 — keeps the
-/// MCP-deferred boundary honest). `source_label` takes a char-safe (not byte)
-/// prefix of the source ref.
+/// Skips entries whose kind is not `mode`/`skills`/`mcp`. `source_label` takes
+/// a char-safe (not byte) prefix of the source ref.
 fn map_catalog_entries(entries: Vec<zoid::catalog::CatalogEntry>) -> Vec<zoid_tui::state::PluginCatalogRow> {
     entries
         .into_iter()
-        .filter(|e| e.kind.iter().any(|k| k == "mode" || k == "skills"))
+        .filter(|e| e.kind.iter().any(|k| k == "mode" || k == "skills" || k == "mcp"))
         .map(|e| zoid_tui::state::PluginCatalogRow {
             id: e.id,
             name: e.name,
@@ -8615,5 +8731,30 @@ mod worktree_switch_tests {
         let repo = init_repo();
         let b = current_branch_at(repo.path());
         assert!(b == "main" || b == "master", "init default branch, got: {b}");
+    }
+}
+
+#[cfg(test)]
+mod mcp_confirm_guard_tests {
+    use super::catalog_confirm_awaits;
+    use zoid_tui::state::{PluginCatalogRow, PluginCatalogState};
+
+    fn row(id: &str) -> PluginCatalogRow {
+        PluginCatalogRow {
+            id: id.into(), name: id.into(), kind_label: "mcp".into(),
+            description: String::new(), source_label: String::new(), license: None,
+        }
+    }
+
+    #[test]
+    fn awaits_only_the_selected_loading_row() {
+        let mut cat = PluginCatalogState::loading();
+        cat.rows = vec![row("a"), row("b")];
+        cat.cursor = 1; // on "b"
+        // List mode → not awaiting any fetch yet.
+        assert!(!catalog_confirm_awaits(&cat, "b"));
+        cat.begin_confirm_loading();
+        assert!(catalog_confirm_awaits(&cat, "b")); // the row whose fetch we spawned
+        assert!(!catalog_confirm_awaits(&cat, "a")); // a stale fetch for "a" is dropped
     }
 }

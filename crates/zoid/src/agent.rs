@@ -399,6 +399,14 @@ pub enum AgentUpdate {
     /// (populates the overlay) and `:plugin list` (prints rows once resolved;
     /// no blocking fetch on the main loop either way).
     CatalogLoaded(Result<Vec<crate::catalog::CatalogEntry>, String>),
+    /// A confirm-time fetch of an mcp plugin's `<id>.toml` finished. Tagged with
+    /// `id` so a stale fetch (user navigated to another row) is dropped — same
+    /// stale-drop discipline as `ModelsFetched`/`PluginScan`. Populates the
+    /// already-open confirm; it does NOT install.
+    McpManifestFetched {
+        id: String,
+        res: Result<zoid_plugin::manifest::PluginManifest, String>,
+    },
 }
 
 /// The tool specs to advertise to the provider.
