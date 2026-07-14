@@ -130,7 +130,37 @@ pub struct PluginCatalogRow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CatalogMode {
     List,
+    ConfirmLoading,
     Confirm,
+}
+
+/// Write target for an mcp-server install. `User` (default) writes the global
+/// `<config>/mcp.json`; `Project` writes the repo's tracked `cwd/.mcp.json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpTarget {
+    User,
+    Project,
+}
+
+/// One env var of an mcp-server confirm card. `value` is the raw manifest
+/// value (may contain `${VAR}` — written verbatim on install); `unset` flags
+/// that a referenced `${VAR}` is absent from the current environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpEnvEntry {
+    pub key: String,
+    pub value: String,
+    pub unset: bool,
+}
+
+/// The command card shown when confirming an `mcp`-kind install. Mapped by the
+/// bin from a fetched `PluginManifest` (zoid-tui holds no plugin/mcp types).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpConfirm {
+    pub server_name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: Vec<McpEnvEntry>,
+    pub target: McpTarget,
 }
 
 /// Load status for the `:plugin catalog` overlay's async fetch.
@@ -151,11 +181,22 @@ pub struct PluginCatalogState {
     pub cursor: usize,
     pub mode: CatalogMode,
     pub status: CatalogStatus,
+    /// Some when confirming an mcp row whose manifest has been fetched.
+    pub mcp: Option<McpConfirm>,
+    /// Some when the mcp manifest fetch failed (rendered in Confirm mode).
+    pub confirm_error: Option<String>,
 }
 
 impl PluginCatalogState {
     pub fn loading() -> Self {
-        Self { rows: vec![], cursor: 0, mode: CatalogMode::List, status: CatalogStatus::Loading }
+        Self {
+            rows: vec![],
+            cursor: 0,
+            mode: CatalogMode::List,
+            status: CatalogStatus::Loading,
+            mcp: None,
+            confirm_error: None,
+        }
     }
 
     pub fn selected(&self) -> Option<&PluginCatalogRow> {
@@ -182,6 +223,39 @@ impl PluginCatalogState {
 
     pub fn back_to_list(&mut self) {
         self.mode = CatalogMode::List;
+        self.mcp = None;
+        self.confirm_error = None;
+    }
+
+    /// mcp row selected: enter the loading pane while the manifest fetches.
+    pub fn begin_confirm_loading(&mut self) {
+        self.mode = CatalogMode::ConfirmLoading;
+        self.mcp = None;
+        self.confirm_error = None;
+    }
+
+    /// The fetched manifest resolved into a command card.
+    pub fn set_mcp_confirm(&mut self, confirm: McpConfirm) {
+        self.mcp = Some(confirm);
+        self.confirm_error = None;
+        self.mode = CatalogMode::Confirm;
+    }
+
+    /// The manifest fetch failed; show the error in the confirm pane.
+    pub fn set_confirm_error(&mut self, msg: String) {
+        self.mcp = None;
+        self.confirm_error = Some(msg);
+        self.mode = CatalogMode::Confirm;
+    }
+
+    /// Toggle the write target on the active mcp confirm (no-op otherwise).
+    pub fn toggle_target(&mut self) {
+        if let Some(m) = self.mcp.as_mut() {
+            m.target = match m.target {
+                McpTarget::User => McpTarget::Project,
+                McpTarget::Project => McpTarget::User,
+            };
+        }
     }
 }
 
@@ -1133,6 +1207,8 @@ mod tests {
             cursor: 0,
             mode: CatalogMode::List,
             status: CatalogStatus::Ready,
+            mcp: None,
+            confirm_error: None,
         };
         s.move_down();
         assert_eq!(s.cursor, 1);
@@ -1143,5 +1219,44 @@ mod tests {
         assert_eq!(s.mode, CatalogMode::Confirm);
         s.back_to_list();
         assert_eq!(s.mode, CatalogMode::List);
+    }
+
+    #[test]
+    fn mcp_confirm_flow_and_target_toggle() {
+        let mut s = PluginCatalogState::loading();
+        s.rows = vec![PluginCatalogRow {
+            id: "github".into(), name: "GitHub".into(), kind_label: "mcp".into(),
+            description: "d".into(), source_label: String::new(), license: None,
+        }];
+        s.status = CatalogStatus::Ready;
+        s.begin_confirm_loading();
+        assert_eq!(s.mode, CatalogMode::ConfirmLoading);
+        assert!(s.mcp.is_none() && s.confirm_error.is_none());
+
+        s.set_mcp_confirm(McpConfirm {
+            server_name: "github".into(), command: "npx".into(),
+            args: vec!["-y".into()],
+            env: vec![McpEnvEntry { key: "TOKEN".into(), value: "${TOKEN}".into(), unset: true }],
+            target: McpTarget::User,
+        });
+        assert_eq!(s.mode, CatalogMode::Confirm);
+        assert_eq!(s.mcp.as_ref().unwrap().target, McpTarget::User);
+        s.toggle_target();
+        assert_eq!(s.mcp.as_ref().unwrap().target, McpTarget::Project);
+
+        s.back_to_list();
+        assert_eq!(s.mode, CatalogMode::List);
+        assert!(s.mcp.is_none() && s.confirm_error.is_none());
+    }
+
+    #[test]
+    fn confirm_error_sets_confirm_mode() {
+        let mut s = PluginCatalogState::loading();
+        s.status = CatalogStatus::Ready;
+        s.begin_confirm_loading();
+        s.set_confirm_error("boom".into());
+        assert_eq!(s.mode, CatalogMode::Confirm);
+        assert_eq!(s.confirm_error.as_deref(), Some("boom"));
+        assert!(s.mcp.is_none());
     }
 }

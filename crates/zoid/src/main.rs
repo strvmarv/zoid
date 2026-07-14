@@ -4552,6 +4552,11 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 install_plugin(app, id);
             }
         }
+        Action::CatalogTargetToggle => {
+            if let Some(cat) = app.shell.plugin_catalog.as_mut() {
+                cat.toggle_target();
+            }
+        }
         Action::Noop => {}
     }
     Ok(false)

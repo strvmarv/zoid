@@ -118,6 +118,8 @@ pub enum Action {
     CatalogConfirmYes,
     /// `:plugin catalog` overlay, Confirm mode: `n`/`N`/Esc — back to the list.
     CatalogConfirmNo,
+    /// `:plugin catalog` overlay, mcp Confirm mode: `u`/`p` — toggle the write target.
+    CatalogTargetToggle,
     Noop,
 }
 
@@ -405,6 +407,14 @@ fn route_plugin_catalog_key(state: &ShellState, key: KeyEvent) -> Action {
         Some(crate::state::CatalogMode::Confirm) => match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => Action::CatalogConfirmYes,
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Action::CatalogConfirmNo,
+            KeyCode::Char('u') | KeyCode::Char('U') | KeyCode::Char('p') | KeyCode::Char('P') => {
+                Action::CatalogTargetToggle
+            }
+            _ => Action::Noop,
+        },
+        // While the manifest is fetching, only Esc (cancel) is live.
+        Some(crate::state::CatalogMode::ConfirmLoading) => match key.code {
+            KeyCode::Esc => Action::CatalogConfirmNo,
             _ => Action::Noop,
         },
         _ => match key.code {

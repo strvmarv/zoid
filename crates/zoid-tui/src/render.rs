@@ -1220,6 +1220,7 @@ fn render_plugin_catalog_overlay(
                 split[1],
             );
         }
+        CatalogMode::ConfirmLoading => {}
         CatalogMode::Confirm => {
             if let Some(row) = cat.selected() {
                 let license = row.license.as_deref().unwrap_or("(none)");
