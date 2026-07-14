@@ -196,20 +196,26 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
     // the rail (overlays draw last and would otherwise clip the rail's drawers).
     // `centered` clamps the width to its area, so the box shrinks to fit a narrow
     // stream rather than bleeding right into the rail.
-    let palette = if matches!(
-        state.overlay,
-        Overlay::Palette | Overlay::Objects | Overlay::Verbs | Overlay::Sessions | Overlay::Mcp
+    // Exhaustive match (NOT `matches!`/`if`): every overlay must declare its
+    // modal-rect policy here. A new `Overlay` variant that captures keys but
+    // forgets its rect would render nothing (invisible overlay) — the compiler
+    // now rejects that omission instead of silently falling through to `None`.
+    let palette = match state.overlay {
+        Overlay::Palette
+        | Overlay::Objects
+        | Overlay::Verbs
+        | Overlay::Sessions
+        | Overlay::Mcp
         | Overlay::Feedback
-    ) {
-        Some(centered(conversation, 72, 18))
-    } else if state.overlay == Overlay::Help {
-        Some(centered(
+        | Overlay::PluginCatalog => Some(centered(conversation, 72, 18)),
+        Overlay::Help => Some(centered(
             conversation,
             crate::help::HELP_RECT_W,
             crate::help::HELP_RECT_H,
-        ))
-    } else {
-        None
+        )),
+        // Config and ProviderSwitch draw full-frame (`frame.area()`), so they
+        // need no centered palette rect; None has no overlay at all.
+        Overlay::Config | Overlay::ProviderSwitch | Overlay::None => None,
     };
 
     ShellLayout {
@@ -338,6 +344,7 @@ mod tests {
             Overlay::Sessions,
             Overlay::Mcp,
             Overlay::Help,
+            Overlay::PluginCatalog,
         ] {
             let mut s = ShellState::new();
             s.overlay = ov;
