@@ -403,7 +403,22 @@ fn route_mcp_key(_state: &ShellState, key: KeyEvent) -> Action {
 /// list (the overlay stays open).
 fn route_plugin_catalog_key(state: &ShellState, key: KeyEvent) -> Action {
     let mode = state.plugin_catalog.as_ref().map(|c| c.mode);
+    let confirm_error_present = state
+        .plugin_catalog
+        .as_ref()
+        .is_some_and(|c| c.confirm_error.is_some());
     match mode {
+        // The fetch-failed pane: there is nothing to confirm, so y/Y must
+        // dismiss like n/Esc instead of re-entering the mcp-confirm flow
+        // (which would fall through to install_plugin with mcp=None).
+        Some(crate::state::CatalogMode::Confirm) if confirm_error_present => match key.code {
+            KeyCode::Char('y')
+            | KeyCode::Char('Y')
+            | KeyCode::Char('n')
+            | KeyCode::Char('N')
+            | KeyCode::Esc => Action::CatalogConfirmNo,
+            _ => Action::Noop,
+        },
         Some(crate::state::CatalogMode::Confirm) => match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => Action::CatalogConfirmYes,
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Action::CatalogConfirmNo,
@@ -646,6 +661,39 @@ mod tests {
             }],
         }];
         s
+    }
+
+    // ---- route_plugin_catalog_key: confirm-error pane must dismiss, not confirm ----
+
+    #[test]
+    fn catalog_confirm_error_pane_dismisses_on_y_instead_of_confirming() {
+        // Regression: when the async manifest fetch fails, set_confirm_error
+        // leaves mode=Confirm with mcp=None and confirm_error=Some(..). There
+        // is nothing to confirm — y/Y must dismiss (CatalogConfirmNo), not
+        // route to CatalogConfirmYes (which would fall through to the
+        // non-mcp install_plugin path with mcp=None).
+        use crate::state::PluginCatalogState;
+        let mut s = ShellState::new();
+        let mut catalog = PluginCatalogState::loading();
+        catalog.set_confirm_error("boom".into());
+        s.plugin_catalog = Some(catalog);
+
+        assert_eq!(
+            route_plugin_catalog_key(&s, pick_key(KeyCode::Char('y'))),
+            Action::CatalogConfirmNo
+        );
+        assert_eq!(
+            route_plugin_catalog_key(&s, pick_key(KeyCode::Char('Y'))),
+            Action::CatalogConfirmNo
+        );
+        assert_eq!(
+            route_plugin_catalog_key(&s, pick_key(KeyCode::Esc)),
+            Action::CatalogConfirmNo
+        );
+        assert_eq!(
+            route_plugin_catalog_key(&s, pick_key(KeyCode::Char('u'))),
+            Action::Noop
+        );
     }
 
     // ---- route_paste: bracketed paste follows the same precedence as keys ----
