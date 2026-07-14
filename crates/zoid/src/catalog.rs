@@ -38,7 +38,10 @@ struct RawEntry {
     description: String,
     #[serde(default)]
     license: Option<String>,
-    source: RawSource,
+    /// Absent for `mcp` entries (an mcp manifest declares no `[source]`); the
+    /// manifest is fetched + validated separately at confirm time.
+    #[serde(default)]
+    source: Option<RawSource>,
 }
 
 #[derive(Deserialize)]
@@ -54,14 +57,20 @@ pub fn parse_index(json: &str) -> anyhow::Result<Vec<CatalogEntry>> {
     let raw: RawIndex = serde_json::from_str(json)
         .map_err(|e| anyhow::anyhow!("catalog index parse error: {e}"))?;
     anyhow::ensure!(raw.schema == 1, "unsupported catalog index schema {}", raw.schema);
-    Ok(raw.plugins.into_iter().map(|e| CatalogEntry {
-        id: e.id,
-        name: e.name,
-        kind: e.kind,
-        description: e.description,
-        license: e.license,
-        source_repo: e.source.repo,
-        source_ref: e.source.ref_,
+    Ok(raw.plugins.into_iter().map(|e| {
+        let (source_repo, source_ref) = match e.source {
+            Some(s) => (s.repo, s.ref_),
+            None => (String::new(), String::new()),
+        };
+        CatalogEntry {
+            id: e.id,
+            name: e.name,
+            kind: e.kind,
+            description: e.description,
+            license: e.license,
+            source_repo,
+            source_ref,
+        }
     }).collect())
 }
 
@@ -167,9 +176,15 @@ mod tests {
     }
 
     #[test]
-    fn parse_index_rejects_missing_source() {
-        let bad = r#"{ "schema": 1, "plugins": [ { "id": "x", "name": "X", "kind": ["mode"], "description": "d" } ] }"#;
-        assert!(parse_index(bad).is_err());
+    fn parse_index_allows_source_less_mcp_entry() {
+        // mcp manifests declare no [source], so the index entry omits it too.
+        // Installability is validated later when the manifest itself is fetched.
+        let idx = r#"{ "schema": 1, "plugins": [ { "id": "github", "name": "GitHub MCP", "kind": ["mcp"], "description": "GitHub over MCP" } ] }"#;
+        let v = parse_index(idx).unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].kind, vec!["mcp".to_string()]);
+        assert_eq!(v[0].source_repo, "");
+        assert_eq!(v[0].source_ref, "");
     }
 
     #[test]

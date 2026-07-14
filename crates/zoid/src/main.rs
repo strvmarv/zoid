@@ -5028,11 +5028,16 @@ fn map_catalog_entries(entries: Vec<zoid::catalog::CatalogEntry>) -> Vec<zoid_tu
             name: e.name,
             kind_label: e.kind.first().cloned().unwrap_or_default(),
             description: e.description,
-            source_label: format!(
-                "{} @ {}",
-                e.source_repo,
-                e.source_ref.chars().take(7).collect::<String>()
-            ),
+            // mcp entries carry no source; leave the label blank for them.
+            source_label: if e.source_repo.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "{} @ {}",
+                    e.source_repo,
+                    e.source_ref.chars().take(7).collect::<String>()
+                )
+            },
             license: e.license,
         })
         .collect()
