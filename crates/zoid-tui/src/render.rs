@@ -1220,9 +1220,55 @@ fn render_plugin_catalog_overlay(
                 split[1],
             );
         }
-        CatalogMode::ConfirmLoading => {}
+        CatalogMode::ConfirmLoading => {
+            frame.render_widget(
+                Paragraph::new("Fetching manifest…")
+                    .alignment(ratatui::layout::Alignment::Center),
+                inner,
+            );
+        }
         CatalogMode::Confirm => {
-            if let Some(row) = cat.selected() {
+            if let Some(err) = &cat.confirm_error {
+                frame.render_widget(
+                    Paragraph::new(format!("fetch failed: {err}"))
+                        .style(Style::new().fg(color::ERROR)),
+                    inner,
+                );
+            } else if let Some(mcp) = &cat.mcp {
+                let cmd = if mcp.args.is_empty() {
+                    mcp.command.clone()
+                } else {
+                    format!("{} {}", mcp.command, mcp.args.join(" "))
+                };
+                let mut lines = vec![
+                    Line::from(Span::styled(mcp.server_name.clone(), Style::new().fg(color::TXT))),
+                    Line::from(Span::styled(cmd, Style::new().fg(color::DIM))),
+                ];
+                for e in &mcp.env {
+                    let mut spans = vec![Span::styled(
+                        format!("env: {} = {}", e.key, e.value),
+                        Style::new().fg(color::DIM),
+                    )];
+                    if e.unset {
+                        spans.push(Span::styled("  ⚠ not set", Style::new().fg(color::ERROR)));
+                    }
+                    lines.push(Line::from(spans));
+                }
+                let (u, p) = match mcp.target {
+                    crate::state::McpTarget::User => ("[u] user", " p  project"),
+                    crate::state::McpTarget::Project => (" u  user", "[p] project"),
+                };
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    format!("target: {u} / {p}   (u/p to change)"),
+                    Style::new().fg(color::DIM),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "Install this MCP server? [y/N]",
+                    Style::new().fg(color::CHAT_ACCENT),
+                )));
+                frame.render_widget(Paragraph::new(lines), inner);
+            } else if let Some(row) = cat.selected() {
                 let license = row.license.as_deref().unwrap_or("(none)");
                 let lines = vec![
                     Line::from(Span::styled(row.name.clone(), Style::new().fg(color::TXT))),
