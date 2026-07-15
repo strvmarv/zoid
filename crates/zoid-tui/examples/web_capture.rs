@@ -1,7 +1,10 @@
-//! Render a shell scene to a faithful colored HTML fragment for the marketing
-//! site. Reuses the shared scene fixtures and the feature-gated converter.
+//! Render a shell scene's frames to faithful colored HTML fragments for the
+//! marketing site. Reuses the shared scene fixtures and the feature-gated
+//! converter. Driven by `public/capture-preview.sh`, which strips the version
+//! from each frame — see `public/README.md`.
 //!
-//!   cargo run -p zoid-tui --features web-capture --example web_capture -- [scene] [w] [h]
+//!   cargo run -p zoid-tui --features web-capture --example web_capture -- --count <scene>
+//!   cargo run -p zoid-tui --features web-capture --example web_capture -- --frame <i> <scene> [w] [h]
 
 mod scenes;
 
@@ -25,13 +28,14 @@ fn main() {
                 .unwrap_or_else(|| panic!("frame {i} out of range (have {})", frames.len()));
             print!("{}", zoid_tui::web_capture::buffer_to_html(buf));
         }
-        // Single still (back-compat): <scene> [w] [h]. Default size ≥ MIN.
-        _ => {
-            let name = args.first().map(String::as_str).unwrap_or("chat");
-            let w: u16 = args.get(1).and_then(|a| a.parse().ok()).unwrap_or(160);
-            let h: u16 = args.get(2).and_then(|a| a.parse().ok()).unwrap_or(40);
-            let buf = scenes::render_shell_scene(name, w, h);
-            print!("{}", zoid_tui::web_capture::buffer_to_html(&buf));
+        other => {
+            eprintln!(
+                "usage: web_capture --count <scene>\n       web_capture --frame <i> <scene> [w] [h]"
+            );
+            if let Some(a) = other {
+                eprintln!("unrecognized argument: {a}");
+            }
+            std::process::exit(2);
         }
     }
 }

@@ -454,16 +454,6 @@ fn scene_frame_body(name: &str, idx: usize, state: &ShellState, w: u16, h: u16) 
     }
 }
 
-/// Render a shell scene and return a clone of the rendered buffer.
-// This module is compiled into both the `preview` and `web_capture` example
-// crates; `preview` never calls this (only `web_capture` does), so it is dead
-// code from `preview`'s build. Each consumer uses a subset — expected.
-#[allow(dead_code)]
-pub fn render_shell_scene(name: &str, w: u16, h: u16) -> Buffer {
-    let (state, msgs, economy) = scene(name);
-    render_one(&state, &msgs, &economy, &scene_tasks(name), None, w, h)
-}
-
 /// The context-economy story as an ordered set of states. Reuses the enriched
 /// `economy` ShellState and progressively reveals the seeded turn; the context
 /// rail fills once the compaction event lands (frame 2), so the player animates
