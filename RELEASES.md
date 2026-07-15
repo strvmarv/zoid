@@ -10,6 +10,24 @@
 
 # Release Notes
 
+## 0.5.0
+
+Add-ons open up: browse a community catalog from inside zoid, set up an MCP server in a few keystrokes — always seeing exactly what you're about to trust — and hand the mouse back to your terminal when you just want to copy some text.
+
+### New
+
+- **Plugin catalog** — type `:plugin` to browse a curated catalog of community add-ons without leaving zoid. Nothing is installed until you confirm, and before you do, zoid shows you what you're about to trust: for skill packs, the upstream project, the exact pinned commit, and its license when one is declared. The catalog is public and open to contributions. `:plugin list` opens the same catalog as a read-only listing when you just want to look.
+- **Connect MCP servers from the catalog** — set up a Model Context Protocol server straight from the catalog. Before anything is written, zoid shows you the **exact command it will run** and every environment variable the server expects, flagging the ones that aren't set on your machine. Pick whether it lands in your personal setup or just this project. Setup only ever adds — a server you already configured is never overwritten — and zoid never asks for or stores your secrets: credentials stay as references to your own environment variables. The server connects the next time you start zoid.
+- **Select mode** — press `Alt+M` (or `:select`) to hand the mouse back to your terminal, so drag-select and your terminal's own copy work anywhere on screen. A SELECT indicator sits in the status bar so you always know which mode you're in.
+- **Skill packs** — install an add-on as a full mode or as a plain set of skills with `--mode` / `--skills`. Each pack keeps to its own space, so installing one never disturbs another.
+
+### Fixes
+
+- **Accurate install feedback** — installing a skill pack now reports honestly how many skills landed and tells you a restart is needed to load them, rather than implying they were live immediately.
+- **Correct new-session hint** — the empty-session hint now points at `:session resume`, the command that actually exists.
+
+> **Beta note:** builds are for evaluation and expire ~30 days after release — run `zoid update` periodically to stay current.
+
 ## 0.4.0
 
 The biggest release yet — more model providers to choose from, one-command add-ons, subagents you can steer and trust, and a clearer view of every edit.

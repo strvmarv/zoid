@@ -6,6 +6,139 @@
 > notes (what ships to the public releases repo) live in the root
 > `RELEASES.md`.
 
+## 0.5.0
+
+Plugin distribution lands: a deterministic Claude-plugin converter (Spec 1), a
+community catalog served from the public `zoid-releases` repo (Spec 2), MCP
+catalog entries + the first `.mcp.json` writer (Spec 2.5), and a runtime
+mouse-capture toggle. ~68 commits since v0.4.0; only ~42 touch `crates/` (the
+rest are specs/plans and marketing-site work that does not ship in the binary).
+
+Claude-plugin importer (Spec 1). Spec:
+2026-07-13-claude-plugin-importer-design.md.
+- New `zoid-plugin-import` bin crate (`publish = false`, maintainer-only — it is
+  how catalog manifests are authored, never an end-user surface): parses Claude
+  `marketplace.json` / `plugin.json`, pure capability classification
+  (`classify.rs`), emits a validated `plugin.toml` + normalized `mcp.json`
+  (`emit.rs`), github tree/blob fetch + `git ls-remote` sha resolve, bulk/repo
+  front-ends, golden round-trip tests.
+- Hardening: `git ls-remote` argv-injection guard, error on truncated tree,
+  TOML-escape of plugin descriptions (backslash/control chars), sha-slice panic
+  guard, all emit fields escaped.
+- Plugin generalization: `zoid-plugin` manifest gains a `skills` kind (no mode
+  overlay) and optional `[mode] body_intro`/`body_outro`; the mode body is now
+  manifest-driven with a generic name/repo default (Superpowers is no longer
+  special-cased in the body text).
+
+Skills-kind installs.
+- `install_skills_plan` lands packs in per-pack private dirs
+  (`<config_dir>/skills/<plugin-id>/<skill>/SKILL.md`) with their own
+  `.zoid-plugin.json` sidecar, so installing pack B cannot delete pack A
+  (regression-tested); the skill scanner (`skill_import.rs`) now discovers both
+  `<root>/<skill>/SKILL.md` and `<root>/<pack>/<skill>/SKILL.md`.
+- `--mode` / `--skills` override at the `:plugin install` dispatch
+  (`parse_plugin_install_args`, last flag wins); `--skills` clears the mode
+  recipe so no `mode.md` is written.
+- Honest skills-install status: reports `(<n> skills). Restart zoid to load
+  them.` instead of the mode-activation messaging (skills packs are built into a
+  registry at startup and cannot hot-reload).
+
+Community plugin catalog (Spec 2). Spec: 2026-07-13-plugin-catalog-design.md.
+- New `crates/zoid/src/catalog.rs`: index types + pure parse, raw
+  unauthenticated `raw.githubusercontent.com` URL builders
+  (`catalog_index_url`/`catalog_manifest_url`), and a 24h TTL cache with
+  injected clock/env/fetcher (testable seam) plus stale-cache fallback on
+  network failure. `store_and_parse` parses before writing, so a malformed
+  `index.json` never clobbers a good cache.
+- `Overlay::PluginCatalog` browse + provenance confirm gate (`repo@sha`, kind,
+  license) built from already-loaded index data, so the card is instant and
+  nothing is fetched or written pre-consent. Bundled ids still resolve locally
+  first and skip the catalog. Catalog ids resolve to a manifest carried through
+  `PluginScan`.
+- `contrib/zoid-releases-catalog/`: the publishing kit (`gen_index.py`,
+  `catalog-index.yml` CI workflow, seed manifest, contributor README) copied
+  into the public repo; `index.json` is CI-generated there from `plugins/*.toml`
+  and must not be hand-edited. The local seed is a seed only — it drifts from
+  the live index by design.
+- Index entries may omit `[source]` (mcp rows carry none).
+- `:plugin list` now opens the **same overlay, read-only**
+  (`PluginCatalogState::loading_read_only()` → `read_only: bool`), instead of
+  joining every entry into one `status_hint` line. That hint is a single `Span`
+  in the status bar's `left` vec (`render.rs:395`) — embedded newlines do not
+  wrap, so a listing never fit there; the overlay is the only surface that
+  renders one row per entry. `read_only` gates the `Enter` key route, **both**
+  confirm doors in `PluginCatalogState` (`enter_confirm` for mode/skills rows
+  and `begin_confirm_loading` for mcp rows — the dispatcher branches between
+  them, so gating only the former would leave mcp rows reachable), and the
+  `CatalogEnterConfirm` handler itself (so a read-only listing can never spawn
+  the mcp manifest fetch). Footer swaps to `↑↓ scroll · esc close`. Mouse needs
+  no gate: `route_mouse` already no-ops every click while an overlay is up.
+- `apply_catalog_loaded`'s status-hint fallback is deleted: both openers now
+  raise the overlay *before* spawning the load, so a result arriving after the
+  overlay closed is stale and dropped.
+  Fixes two doc comments that described behavior the code never had
+  (`spawn_catalog_load` claimed `:plugin list` "prints rows to the scrollback").
+  **Design-doc conflict, unresolved:** the 2026-07-09 plan (§1811) specs
+  `:plugin list` as a read-only overlay of *installed* plugins, while Spec 2
+  (§169) specs it as printing the *catalog*. This change implements Spec 2's
+  content on the plan's surface. A genuine no-TTY scripting surface would be a
+  `zoid plugin list` CLI subcommand writing stdout — a `:` command inside the
+  TUI can never be one. Deferred.
+
+MCP catalog entries (Spec 2.5). Spec: 2026-07-13-mcp-catalog-design.md.
+- `zoid-plugin`: `[mcp]` manifest kind — parse + exclusive-kind validate; a
+  server with an empty `command` is rejected (stdio requires an executable).
+  Exactly one stdio server per manifest; http/SSE rejected at validate
+  (`zoid-mcp` ships only `StdioTransport`).
+- `zoid-mcp::config::merge_server` — the **first `.mcp.json` writer** (the
+  module was read-only until now): additive, atomic (temp + rename),
+  order-preserving (`serde_json/preserve_order`), skip-on-name-collision.
+  Unknown top-level keys survive; a malformed target aborts without
+  overwriting.
+- Confirm-time manifest fetch (the full command is not in the index): an
+  id-guarded carrier (`AgentUpdate::McpManifestFetched`) so a slow fetch for row
+  A can never populate row B's confirm card. TUI gains `ConfirmLoading` /
+  `McpConfirm` states + a `u`/`p` target toggle (default user →
+  `<config_dir>/mcp.json`; project → `<cwd>/.mcp.json`), rendering the exact
+  command and `env: KEY = ${VAR}` lines with a `⚠ not set` marker for absent
+  vars. `${VAR}` placeholders are written verbatim — no install-time secret
+  entry, no plaintext secrets written.
+- No hot-connect: `install_mcp_server` reports a restart hint; the server
+  connects on next startup via the existing `discover` + `spawn_connect_all`.
+- Fix: the catalog confirm-error pane dismisses on `y` instead of re-entering
+  `install_plugin`.
+
+Select mode (runtime mouse-capture toggle). Spec:
+2026-07-13-zoid-select-mode-design.md.
+- `:select` / `:mouse`, `Alt+M`, and a state-aware command-palette row toggle
+  `shell.select_mode`; the run loop reconciles terminal mouse capture against it
+  each iteration. While on, zoid's mouse features (click-to-copy code blocks,
+  choice clicks, scroll routing) are suspended and the terminal's native
+  drag-select/copy works unmodified. Not persisted — capture is always on at
+  startup.
+- Always-visible SELECT status pill, a purple sibling right of the mode pill
+  (ON = `BRANCH` glyphs on `SELECT_BG` fill; OFF = `DIM`, no fill), so mouse
+  state is never ambiguous. Style asserted by test.
+
+Site / docs (not shipped in the binary).
+- §2 reworked into a real onboarding→Superpowers-mode player; extensibility
+  scene added; both scenes re-captured at v0.4.0; copy refreshed; tools-models
+  picker re-seeded with OpenCode Zen. Full-bleed breakout removes frame
+  scrollbars on desktop; install one-liner fit-and-centered.
+- **Known drift:** `public/` still renders the v0.4.0 status bar and beta chip;
+  the site is decoupled from the tag and is refreshed separately.
+
+Known gaps (specced, deliberately not shipped in 0.5.0).
+- Stale-cache indicator: the catalog falls back to a stale cache offline, but
+  the overlay footer is hardcoded (`↑↓ select · ↵ install · esc close`), so
+  offline-with-cache is visually identical to online. Spec §Error handling asked
+  for `(cached)` / last-updated.
+- The MCP confirm card shows neither the resolved target paths nor the spec's
+  "shared with collaborators" warning for a tracked project `.mcp.json`; the
+  path only appears post-write in the status hint.
+- No select-mode transient status hint (`toggle_select_mode` only flips the
+  bool); the pill is the only feedback.
+
 ## 0.4.0
 
 Largest feature release since 0.2.0: three new model providers + a large model
