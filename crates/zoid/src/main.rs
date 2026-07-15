@@ -3829,6 +3829,9 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             app.shell.objects.verb_selected =
                 zoid_tui::palette::nav(app.shell.objects.verb_selected, d, n);
         }
+        // Disabled stub, not a dispatch path: the verb prompt is built and then
+        // dropped, and this hint is a refusal, not subagent status. See
+        // `Command::Delegate` — re-enabling must route to the Subagents drawer.
         Action::VerbPick => {
             let objs = zoid_tui::objects::selectable_objects(&conversation(app.events.iter()));
             let osel = zoid_tui::palette::nav(app.shell.objects.obj_selected, 0, objs.len());
@@ -5628,6 +5631,11 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             app.shell.overlay = zoid_tui::Overlay::Sessions;
             Ok(false)
         }
+        // Disabled stub, not a dispatch path: `_task` is parsed and dropped, and
+        // this hint is a refusal, not subagent status. The one live dispatch is
+        // the model calling the delegation tool (`agent.rs` → `SubagentStarted`
+        // → the right-rail Subagents drawer). Re-enabling this must route there,
+        // not to `status_hint`.
         Command::Delegate(_task) => {
             app.shell.status_hint = Some("delegation is temporarily disabled".into());
             Ok(false)

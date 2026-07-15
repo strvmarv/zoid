@@ -390,8 +390,12 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
         Style::new().fg(color::DIM)
     };
     left.push(Span::styled(" SELECT ", select_style));
-    // Transient ④ hint (e.g. "queued · runs as a subagent in P5"), set by a
-    // verb pick (P4d T4). Pure-renderer-readable since it lives on ShellState.
+    // Transient one-line hint (e.g. "queued: <msg>", command usage/errors), set
+    // by the bin. Pure-renderer-readable since it lives on ShellState.
+    // One Span, no wrapping: anything multi-line or per-row belongs in a drawer
+    // or an overlay, not here. In particular subagent status goes to the
+    // right-rail Subagents drawer — the bottom bar reflects delegation only
+    // through `busy` (the spinner below).
     if let Some(hint) = &state.status_hint {
         left.push(Span::styled(
             format!(" · {hint}"),

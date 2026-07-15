@@ -584,9 +584,8 @@ pub struct ShellState {
 
 impl ShellState {
     /// The calm default: Chat mode, focus on the input, the Chat rail set
-    /// (repo/session/context/tasks all open, matching `docs/ux/chat-mode.html`).
-    /// The Subagents drawer is hidden from the default rail until delegation is
-    /// re-enabled.
+    /// (repo/session/context/tasks/subagents all open, matching
+    /// `docs/ux/chat-mode.html`).
     pub fn new() -> Self {
         let drawers = vec![
             Drawer {
