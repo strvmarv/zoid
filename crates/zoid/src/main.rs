@@ -4533,12 +4533,24 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             }
         }
         Action::CatalogEnterConfirm => {
-            let sel = app
+            // `:plugin list` is a listing: no confirm, and no manifest fetch
+            // either. The key route already declines to emit this action for a
+            // read-only catalog; this guard means a future caller can't reach
+            // the network (or a confirm card) by emitting it anyway.
+            let read_only = app
                 .shell
                 .plugin_catalog
                 .as_ref()
-                .and_then(|c| c.selected())
-                .map(|r| (r.id.clone(), r.kind_label.clone()));
+                .is_some_and(|c| c.read_only);
+            let sel = if read_only {
+                None
+            } else {
+                app.shell
+                    .plugin_catalog
+                    .as_ref()
+                    .and_then(|c| c.selected())
+                    .map(|r| (r.id.clone(), r.kind_label.clone()))
+            };
             if let Some((id, kind)) = sel {
                 if kind == "mcp" {
                     if let Some(cat) = app.shell.plugin_catalog.as_mut() {
@@ -4887,8 +4899,8 @@ fn disable_companion(app: &mut App) {
 }
 
 /// Kick off the async catalog index load shared by `:plugin catalog` (which
-/// populates the overlay) and `:plugin list` (which prints rows to the
-/// scrollback once the load resolves). The cache dir is resolved here on the
+/// populates the browsable overlay) and `:plugin list` (which populates the
+/// same overlay read-only). The cache dir is resolved here on the
 /// main loop; only the resolved path (not any env access) crosses into the
 /// spawned task. Never blocks the main loop — the fetch itself runs entirely
 /// inside `tokio::spawn`.
@@ -5043,42 +5055,26 @@ fn map_catalog_entries(entries: Vec<zoid::catalog::CatalogEntry>) -> Vec<zoid_tu
         .collect()
 }
 
-/// Handle `AgentUpdate::CatalogLoaded`: if the `:plugin catalog` overlay is
-/// open, populate it (Ready or Error); otherwise (the `:plugin list` path)
-/// summarize the rows to the status hint — the load never blocks the main
-/// loop either way.
+/// Handle `AgentUpdate::CatalogLoaded`: populate the catalog overlay (Ready or
+/// Error). Both openers — bare `:plugin` (browsable) and `:plugin list`
+/// (read-only) — put the overlay up before spawning the load, so the overlay is
+/// the only sink. A result that arrives after the user closed the overlay is
+/// stale and dropped: the status bar renders a single span, so a catalog
+/// listing cannot be shown there. The load never blocks the main loop.
 fn apply_catalog_loaded(app: &mut App, res: Result<Vec<zoid::catalog::CatalogEntry>, String>) {
-    if app.shell.overlay == zoid_tui::state::Overlay::PluginCatalog {
-        if let Some(cat) = app.shell.plugin_catalog.as_mut() {
-            match res {
-                Ok(entries) => {
-                    cat.rows = map_catalog_entries(entries);
-                    cat.cursor = 0;
-                    cat.status = zoid_tui::state::CatalogStatus::Ready;
-                }
-                Err(e) => {
-                    cat.status = zoid_tui::state::CatalogStatus::Error(e);
-                }
-            }
-        }
+    if app.shell.overlay != zoid_tui::state::Overlay::PluginCatalog {
         return;
     }
-    match res {
-        Ok(entries) => {
-            let rows = map_catalog_entries(entries);
-            if rows.is_empty() {
-                app.shell.status_hint = Some("plugin catalog: (no plugins)".into());
-            } else {
-                let summary = rows
-                    .iter()
-                    .map(|r| format!("{}  [{}]  {}", r.id, r.kind_label, r.description))
-                    .collect::<Vec<_>>()
-                    .join("  ·  ");
-                app.shell.status_hint = Some(summary);
+    if let Some(cat) = app.shell.plugin_catalog.as_mut() {
+        match res {
+            Ok(entries) => {
+                cat.rows = map_catalog_entries(entries);
+                cat.cursor = 0;
+                cat.status = zoid_tui::state::CatalogStatus::Ready;
             }
-        }
-        Err(e) => {
-            app.shell.status_hint = Some(format!("plugin catalog error: {e}"));
+            Err(e) => {
+                cat.status = zoid_tui::state::CatalogStatus::Error(e);
+            }
         }
     }
 }
@@ -5535,6 +5531,8 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             Ok(false)
         }
         Command::PluginList => {
+            app.shell.plugin_catalog = Some(zoid_tui::state::PluginCatalogState::loading_read_only());
+            app.shell.overlay = zoid_tui::state::Overlay::PluginCatalog;
             spawn_catalog_load(app);
             Ok(false)
         }

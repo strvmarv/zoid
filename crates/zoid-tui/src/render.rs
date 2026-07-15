@@ -1214,9 +1214,13 @@ fn render_plugin_catalog_overlay(
                 })
                 .collect();
             frame.render_widget(Paragraph::new(lines).scroll((off as u16, 0)), split[0]);
+            let footer = if cat.read_only {
+                "↑↓ scroll · esc close"
+            } else {
+                "↑↓ select · ↵ install · esc close"
+            };
             frame.render_widget(
-                Paragraph::new("↑↓ select · ↵ install · esc close")
-                    .style(Style::new().fg(color::DIM)),
+                Paragraph::new(footer).style(Style::new().fg(color::DIM)),
                 split[1],
             );
         }
@@ -2164,6 +2168,42 @@ mod tests {
         assert!(
             !content.contains("srv19"),
             "tail server must be scrolled off, not shown from the bottom"
+        );
+    }
+
+    /// The read-only `:plugin list` overlay still lists one row per entry, but
+    /// must not advertise an install key it does not route.
+    #[test]
+    fn read_only_catalog_footer_omits_install() {
+        use crate::state::{CatalogStatus, Overlay, PluginCatalogRow, PluginCatalogState, ShellState};
+        let mut s = ShellState::new();
+        s.overlay = Overlay::PluginCatalog;
+        let mut cat = PluginCatalogState::loading_read_only();
+        cat.rows = vec![PluginCatalogRow {
+            id: "github".into(), name: "GitHub".into(), kind_label: "mcp".into(),
+            description: "GitHub over MCP".into(), source_label: String::new(), license: None,
+        }];
+        cat.status = CatalogStatus::Ready;
+        let backend = TestBackend::new(72, 18);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| render_plugin_catalog_overlay(f, &s, f.area(), &cat))
+            .unwrap();
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
+        assert!(content.contains("GitHub"), "row must render: {content}");
+        assert!(
+            content.contains("↑↓ scroll · esc close"),
+            "read-only footer must still say what the keys do: {content}"
+        );
+        assert!(
+            !content.contains("install"),
+            "read-only listing must not offer install: {content}"
         );
     }
 

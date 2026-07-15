@@ -185,6 +185,13 @@ pub struct PluginCatalogState {
     pub mcp: Option<McpConfirm>,
     /// Some when the mcp manifest fetch failed (rendered in Confirm mode).
     pub confirm_error: Option<String>,
+    /// True for the `:plugin list` listing: browse and scroll, but no confirm
+    /// gate and no install. Bare `:plugin` opens the same overlay with this
+    /// false. There are *two* doors into a confirm — `enter_confirm` for
+    /// mode/skills rows and `begin_confirm_loading` for mcp rows (the dispatcher
+    /// picks per row kind) — so both check this flag; the key route and the
+    /// `CatalogEnterConfirm` handler check it too.
+    pub read_only: bool,
 }
 
 impl PluginCatalogState {
@@ -196,6 +203,15 @@ impl PluginCatalogState {
             status: CatalogStatus::Loading,
             mcp: None,
             confirm_error: None,
+            read_only: false,
+        }
+    }
+
+    /// The `:plugin list` variant: same catalog, no install surface.
+    pub fn loading_read_only() -> Self {
+        Self {
+            read_only: true,
+            ..Self::loading()
         }
     }
 
@@ -216,6 +232,9 @@ impl PluginCatalogState {
     }
 
     pub fn enter_confirm(&mut self) {
+        if self.read_only {
+            return;
+        }
         if self.selected().is_some() {
             self.mode = CatalogMode::Confirm;
         }
@@ -229,6 +248,9 @@ impl PluginCatalogState {
 
     /// mcp row selected: enter the loading pane while the manifest fetches.
     pub fn begin_confirm_loading(&mut self) {
+        if self.read_only {
+            return;
+        }
         self.mode = CatalogMode::ConfirmLoading;
         self.mcp = None;
         self.confirm_error = None;
@@ -1209,6 +1231,7 @@ mod tests {
             status: CatalogStatus::Ready,
             mcp: None,
             confirm_error: None,
+            read_only: false,
         };
         s.move_down();
         assert_eq!(s.cursor, 1);
@@ -1247,6 +1270,48 @@ mod tests {
         s.back_to_list();
         assert_eq!(s.mode, CatalogMode::List);
         assert!(s.mcp.is_none() && s.confirm_error.is_none());
+    }
+
+    /// `:plugin list` opens the same catalog overlay as bare `:plugin`, but
+    /// read-only: it is a listing, not an install surface. `enter_confirm` is
+    /// the gate to every write path, so a read-only catalog must refuse it even
+    /// if a caller asks.
+    #[test]
+    fn read_only_catalog_refuses_enter_confirm() {
+        let mut s = PluginCatalogState::loading_read_only();
+        assert!(s.read_only);
+        s.rows = vec![PluginCatalogRow {
+            id: "github".into(), name: "GitHub".into(), kind_label: "mcp".into(),
+            description: "d".into(), source_label: String::new(), license: None,
+        }];
+        s.status = CatalogStatus::Ready;
+        s.enter_confirm();
+        assert_eq!(s.mode, CatalogMode::List, "read-only catalog must stay in List mode");
+    }
+
+    #[test]
+    fn browsable_catalog_is_not_read_only() {
+        assert!(!PluginCatalogState::loading().read_only);
+    }
+
+    /// mcp rows do NOT reach the confirm gate through `enter_confirm` — the
+    /// dispatcher calls `begin_confirm_loading` + a network fetch for them
+    /// instead. Both doors must respect read_only, or a listing could still
+    /// fetch a manifest and open a confirm card.
+    #[test]
+    fn read_only_catalog_refuses_begin_confirm_loading() {
+        let mut s = PluginCatalogState::loading_read_only();
+        s.rows = vec![PluginCatalogRow {
+            id: "github".into(), name: "GitHub".into(), kind_label: "mcp".into(),
+            description: "d".into(), source_label: String::new(), license: None,
+        }];
+        s.status = CatalogStatus::Ready;
+        s.begin_confirm_loading();
+        assert_eq!(
+            s.mode,
+            CatalogMode::List,
+            "read-only catalog must not enter the mcp confirm-loading pane"
+        );
     }
 
     #[test]

@@ -407,6 +407,7 @@ fn route_plugin_catalog_key(state: &ShellState, key: KeyEvent) -> Action {
         .plugin_catalog
         .as_ref()
         .is_some_and(|c| c.confirm_error.is_some());
+    let read_only = state.plugin_catalog.as_ref().is_some_and(|c| c.read_only);
     match mode {
         // The fetch-failed pane: there is nothing to confirm, so y/Y must
         // dismiss like n/Esc instead of re-entering the mcp-confirm flow
@@ -435,6 +436,10 @@ fn route_plugin_catalog_key(state: &ShellState, key: KeyEvent) -> Action {
         _ => match key.code {
             KeyCode::Up => Action::CatalogMove(-1),
             KeyCode::Down => Action::CatalogMove(1),
+            // `:plugin list` is a listing, not an install surface: Enter is
+            // inert there (the state gate refuses it too, but routing it to a
+            // no-op keeps the overlay from flickering through a confirm).
+            KeyCode::Enter if read_only => Action::Noop,
             KeyCode::Enter => Action::CatalogEnterConfirm,
             KeyCode::Esc => Action::CloseOverlay,
             _ => Action::Noop,
@@ -661,6 +666,52 @@ mod tests {
             }],
         }];
         s
+    }
+
+    /// `:plugin list` is a read-only listing: Enter must not open the confirm
+    /// gate. Navigation and Esc stay live so it still reads like the browsable
+    /// catalog.
+    #[test]
+    fn read_only_catalog_enter_does_not_confirm() {
+        use crate::state::{PluginCatalogRow, PluginCatalogState};
+        let mut s = ShellState::new();
+        s.overlay = Overlay::PluginCatalog;
+        let mut catalog = PluginCatalogState::loading_read_only();
+        catalog.rows = vec![PluginCatalogRow {
+            id: "github".into(), name: "GitHub".into(), kind_label: "mcp".into(),
+            description: "d".into(), source_label: String::new(), license: None,
+        }];
+        s.plugin_catalog = Some(catalog);
+        assert_eq!(
+            route_plugin_catalog_key(&s, pick_key(KeyCode::Enter)),
+            Action::Noop,
+        );
+        assert_eq!(
+            route_plugin_catalog_key(&s, pick_key(KeyCode::Down)),
+            Action::CatalogMove(1),
+        );
+        assert_eq!(
+            route_plugin_catalog_key(&s, pick_key(KeyCode::Esc)),
+            Action::CloseOverlay,
+        );
+    }
+
+    /// The browsable catalog (bare `:plugin`) keeps its install gate.
+    #[test]
+    fn browsable_catalog_enter_opens_confirm() {
+        use crate::state::{PluginCatalogRow, PluginCatalogState};
+        let mut s = ShellState::new();
+        s.overlay = Overlay::PluginCatalog;
+        let mut catalog = PluginCatalogState::loading();
+        catalog.rows = vec![PluginCatalogRow {
+            id: "github".into(), name: "GitHub".into(), kind_label: "mcp".into(),
+            description: "d".into(), source_label: String::new(), license: None,
+        }];
+        s.plugin_catalog = Some(catalog);
+        assert_eq!(
+            route_plugin_catalog_key(&s, pick_key(KeyCode::Enter)),
+            Action::CatalogEnterConfirm,
+        );
     }
 
     // ---- route_plugin_catalog_key: confirm-error pane must dismiss, not confirm ----
