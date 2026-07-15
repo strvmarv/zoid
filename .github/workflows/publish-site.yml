@@ -8,8 +8,9 @@ name: publish-site
 # enabled on a private repo for anonymous/public viewing, so the site must
 # live in the public releases repo alongside the binary assets.
 #
-# Why copy-as-is: /public/index.html is already self-contained (inlined CSS,
-# inlined frames under /public/frames/). There is no build step at serve
+# Why copy-as-is: /public/index.html is already self-contained — the scene
+# frames captured into /public/frames/<scene>/ are inlined into it by
+# public/assemble-site.sh at authoring time. There is no build step at serve
 # time. The committed artifact is what we ship, so CI needs no Rust toolchain
 # and no regeneration of frames — deterministic and fast.
 #
@@ -47,20 +48,36 @@ jobs:
             public
 
       - name: Validate site is present and self-contained
-        # Guard against shipping a broken or half-regenerated site. The
-        # build pipeline (public/build.sh) is supposed to commit a fully
-        # inlined index.html; if it is missing, or if the frames directory
-        # the inlined HTML references is empty, fail loudly here rather
-        # than publishing a 404'ing Pages site.
+        # Guard against shipping a broken or half-regenerated site. Authoring
+        # runs public/capture-preview.sh then public/assemble-site.sh, which
+        # inlines each scene's frames into index.html between
+        # <!--FRAMES:<scene>:BEGIN/END--> markers. Fail loudly here rather than
+        # publishing an empty or stale page.
         run: |
           set -euo pipefail
           test -f public/index.html || { echo "::error::public/index.html missing"; exit 1; }
           test -d public/frames    || { echo "::error::public/frames missing";  exit 1; }
-          # frames/ must contain at least the known set produced by build.sh.
-          for f in hero.html summary.html detail.html palette.html economy.html; do
-            test -s "public/frames/$f" || { echo "::error::public/frames/$f missing or empty"; exit 1; }
+          # Every scene must have captured frames AND be inlined into the page.
+          # Checking the marker block (not just the dir) is what catches a
+          # half-run assemble: frames present on disk but never inlined.
+          for scene in context-economy tools-models extensibility; do
+            ls public/frames/"$scene"/*.html >/dev/null 2>&1 \
+              || { echo "::error::public/frames/$scene has no frames (run capture-preview.sh)"; exit 1; }
+            inlined=$(awk -v b="FRAMES:$scene:BEGIN" -v e="FRAMES:$scene:END" \
+              '$0 ~ b {f=1; next} $0 ~ e {f=0} f' public/index.html | grep -c 'tui-frame' || true)
+            test "$inlined" -gt 0 \
+              || { echo "::error::$scene not inlined into index.html (run assemble-site.sh)"; exit 1; }
           done
-          # README and the build scripts are dev-only; do NOT ship them.
+          # The site is deliberately version-free: the TUI status bar bakes in
+          # CARGO_PKG_VERSION at capture time, which would pin the page to one
+          # release and go stale at the next. capture-preview.sh strips it; this
+          # catches any path that reintroduces one.
+          if grep -rEo 'v[0-9]+\.[0-9]+\.[0-9]+' public/index.html public/preview.html public/frames/ 2>/dev/null | head -1 | grep -q .; then
+            echo "::error::version token found in the site — see capture-preview.sh strip_version"
+            grep -rEn 'v[0-9]+\.[0-9]+\.[0-9]+' public/index.html public/preview.html public/frames/ 2>/dev/null | head
+            exit 1
+          fi
+          # README and the authoring scripts are dev-only; do NOT ship them.
           echo "site validated"
 
       - name: Checkout releases repo
@@ -87,10 +104,18 @@ jobs:
           # Copy the site payload, excluding the dev-only build scripts and
           # the README that documents the private-repo build pipeline.
           cp -r ../public/. docs/
-          # Dev-only files: build pipeline + the inlining source template.
-          # index.html is already the inlined artifact, so template.html
-          # is not needed at serve time.
-          rm -f docs/build.sh docs/capture.sh docs/README.md docs/template.html
+          # Dev-only: the authoring pipeline (capture + assemble), its preview
+          # template, and the README documenting the private-repo workflow.
+          # index.html/preview.html are the already-inlined artifacts, so
+          # nothing here is needed at serve time. Deleting a file from
+          # public/ MUST also be removed from this list — anything not listed
+          # ships to the public site.
+          rm -f docs/capture-preview.sh docs/assemble-site.sh docs/assemble-preview.sh \
+                docs/preview.template.html docs/README.md
+          # Fail rather than publish a dev script we forgot to strip.
+          if ls docs/*.sh >/dev/null 2>&1; then
+            echo "::error::dev script(s) would ship to the public site:"; ls docs/*.sh; exit 1
+          fi
           echo "synced site into docs/"
           ls -la docs/ docs/frames/
 
