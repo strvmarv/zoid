@@ -377,6 +377,11 @@ fn rank_normalize_maps_to_unit_interval_and_degenerates_to_zero() {
     assert_eq!(rank_normalize(&[0.5, 0.5, 0.5]), vec![0.0, 0.0, 0.0]);
     assert_eq!(rank_normalize(&[0.9]), vec![0.0]);
     assert_eq!(rank_normalize(&[]), Vec::<f32>::new());
+    // TIE GUARD (B1): the common case — one on-goal turn, the rest raw==0. All the
+    // zeros MUST map to 0.0, not be spread by array position. A position-based
+    // rank returns [1.0, 0.0, 0.25, 0.5] here and hands off-goal turns a bump.
+    assert_eq!(rank_normalize(&[0.9, 0.0, 0.0, 0.0]), vec![1.0, 0.0, 0.0, 0.0]);
+    assert_eq!(rank_normalize(&[0.0, 0.5, 0.0, 0.5]), vec![0.0, 1.0, 0.0, 1.0]);
 }
 ```
 
@@ -425,24 +430,34 @@ fn turn_relevance(turn: &TurnView, ctx: &GoalContext) -> f32 {
         .fold(0.0f32, f32::max)
 }
 
-/// Map raws to [0,1] by ascending rank (best = 1.0). All-equal (incl. all-zero)
-/// or len ≤ 1 ⇒ all 0.0 (no spurious rescue).
+/// Map raws to [0,1] by DISTINCT-VALUE rank: ties share a rank, and the lowest
+/// distinct value pins to 0.0. All-equal (incl. all-zero) or len ≤ 1 ⇒ all 0.0.
+/// CRITICAL: this must be value-based, not array-position-based. In production the
+/// candidate set is mostly `raw == 0.0` (off-goal / no cached vector); those MUST
+/// all map to 0.0 (zero bump). A position-based rank would spread equal zeros
+/// across [0,1] and hand off-goal turns a spurious rescue — silently corrupting
+/// the rescue-only guarantee.
 fn rank_normalize(raws: &[f32]) -> Vec<f32> {
     let n = raws.len();
     if n <= 1 {
         return vec![0.0; n];
     }
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&i, &j| raws[i].partial_cmp(&raws[j]).unwrap_or(std::cmp::Ordering::Equal));
-    // detect all-equal
-    if (raws[order[0]] - raws[order[n - 1]]).abs() < f32::EPSILON {
-        return vec![0.0; n];
+    let mut distinct: Vec<f32> = raws.to_vec();
+    distinct.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    distinct.dedup_by(|a, b| (*a - *b).abs() < f32::EPSILON);
+    let d = distinct.len();
+    if d <= 1 {
+        return vec![0.0; n]; // all-equal ⇒ no rescue
     }
-    let mut out = vec![0.0f32; n];
-    for (rank, &idx) in order.iter().enumerate() {
-        out[idx] = rank as f32 / (n as f32 - 1.0);
-    }
-    out
+    raws.iter()
+        .map(|r| {
+            let rank = distinct
+                .iter()
+                .position(|v| (v - r).abs() < f32::EPSILON)
+                .unwrap_or(0);
+            rank as f32 / (d as f32 - 1.0)
+        })
+        .collect()
 }
 ```
 
@@ -526,34 +541,43 @@ fn relevant_old_turn_survives_while_newer_offgoal_is_evicted() {
 }
 
 #[test]
-fn rescue_never_shrinks_the_eviction_quota() {
+fn band_preservation_rescue_never_shrinks_quota() {
+    // GENUINELY distinct relevances (distinct unit-vector cosines) so bumps spread
+    // 0..weight and the rescue path is actually exercised — NOT all-equal (which
+    // the degenerate guard would zero out, making the test vacuous).
     let events = turns8();
     let base = plan_evictions(&events, &policy(5_000, 2), 8_000, &RecencyScorer, &GoalContext::default());
-    // distinct increasing relevances across candidates (spread bumps 0..weight)
     let mut vecs = std::collections::HashMap::new();
-    for id in [1u128, 3, 5, 7, 9, 11] { vecs.insert(Ulid::from(id), vec![1.0, 0.0]); }
+    //                      cos vs [1,0]:  1.0   0.8        0.6        0.0       0.6      0.8
+    let angled = [(1u128, vec![1.0, 0.0]), (3, vec![0.8, 0.6]), (5, vec![0.6, 0.8]),
+                  (7, vec![0.0, 1.0]), (9, vec![0.6, 0.8]), (11, vec![0.8, 0.6])];
+    for (id, v) in angled { vecs.insert(Ulid::from(id), v); }
     let ctx = GoalContext { goal: vec![1.0, 0.0], vecs, weight: DEFAULT_RESCUE_WEIGHT };
     let rescued = plan_evictions(&events, &policy(5_000, 2), 8_000, &RecencyScorer, &ctx);
-    // no-starve: rescue reorders WHICH turns go, never how MANY (same reclaim quota)
+    // no-starve: rescue reorders WHICH turns go, never how MANY (same reclaim quota).
     assert_eq!(rescued.turns.len(), base.turns.len());
+    assert!(!rescued.turns.is_empty(), "wave still fired");
 }
 
 #[test]
-fn weight_zero_has_no_effect_even_for_maximally_relevant() {
+fn bounded_reach_weight_zero_is_pure_recency() {
+    // A maximally-relevant OLD turn is STILL evicted at weight 0 — proving the
+    // bump = weight·norm is finite and scales with weight (reach 0 at weight 0).
     let events = turns8();
     let mut vecs = std::collections::HashMap::new();
     vecs.insert(Ulid::from(1u128), vec![1.0, 0.0]); // maximally relevant, but weight 0
     let ctx = GoalContext { goal: vec![1.0, 0.0], vecs, weight: 0.0 };
     let plan = plan_evictions(&events, &policy(5_000, 2), 8_000, &RecencyScorer, &ctx);
     let base = plan_evictions(&events, &policy(5_000, 2), 8_000, &RecencyScorer, &GoalContext::default());
-    assert_eq!(plan, base, "bump = weight·norm; weight 0 ⇒ reach 0 ⇒ pure recency (bounded reach)");
+    assert_eq!(plan, base, "weight 0 ⇒ reach 0 ⇒ pure recency");
+    assert!(evicted_ids(&plan).contains(&Ulid::from(1u128)), "no rescue at weight 0");
 }
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p zoid-core -- empty_goalcontext relevant_old_turn band_preservation`
-Expected: FAIL — `plan_evictions` takes 4 args, not 5.
+Run: `cargo test -p zoid-core -- empty_goalcontext relevant_old_turn band_preservation bounded_reach`
+Expected: FAIL — `plan_evictions` takes 4 args, not 5. (Confirm the filter matches 4 tests, not 0 — a zero-match filter exits green and would mask a missing test.)
 
 - [ ] **Step 3: Add the `ctx` param + relevance layer**
 
@@ -621,23 +645,29 @@ pub fn plan_evictions<'a>(
 The new 5th param breaks all existing callers — production **and** tests — so the
 crate won't compile until every one is updated in this same commit. Sweep them:
 
+**The grep is authoritative — update every line it prints, do not trust a hand list:**
+
 Run: `grep -rn "plan_evictions(" crates/ | grep -v "fn plan_evictions"`
 
-Append `, &GoalContext::default()` (or `&zoid_core::eviction::GoalContext::default()`
-in `zoid`) as the final argument to each:
-- `crates/zoid/src/agent.rs` — 3 call sites (`:833` context-length retry, `:2679`
-  band pass, `:2695` hard-floor pass). All three use `default()` in this task;
-  Task 6 replaces the two `preflight_gate` ones (`:2679`, `:2695`) with the real
+At time of writing this returns **10** call sites (3 production + 7 tests). Append
+`, &GoalContext::default()` (or `&zoid_core::eviction::GoalContext::default()` in
+`zoid`) as the final argument to each:
+- `crates/zoid/src/agent.rs` — 3 sites (`:833` context-length retry, `:2679` band
+  pass, `:2695` hard-floor pass). All three use `default()` in this task; Task 6
+  replaces the two `preflight_gate` ones (`:2679`, `:2695`) with the real
   `goal_ctx`. `:833` stays `default()` permanently.
-- `crates/zoid-core/src/eviction.rs` `mod plan_tests` — every existing test call
-  (`no_plan_below_high_water`, `evicts_oldest_first_down_to_low_water`,
-  `idempotent_skips_already_evicted`, `never_evicts_protected_even_if_over`, and
-  any others the grep finds) gains the `&GoalContext::default()` arg.
+- `crates/zoid-core/src/eviction.rs` — **7** test sites across TWO modules:
+  `mod plan_tests` (`no_plan_below_high_water`, `evicts_oldest_first_down_to_low_water`,
+  `idempotent_skips_already_evicted`, `never_evicts_protected_even_if_over`,
+  `readmitted_turn_is_protected_from_re_eviction`,
+  `readmitted_turn_evictable_after_cooldown_lapses`) **and** `mod steady_state_tests`
+  (`holds_band_over_hundreds_of_turns`). Miss the second module and `-p zoid-core`
+  won't compile — hence: trust the grep, not this list.
 
 - [ ] **Step 5: Run tests + workspace build**
 
-Run: `cargo test -p zoid-core -- empty_goalcontext relevant_old_turn band_preservation`
-Expected: PASS.
+Run: `cargo test -p zoid-core -- empty_goalcontext relevant_old_turn band_preservation bounded_reach`
+Expected: PASS (all 4).
 Run: `cargo build --workspace && cargo test --workspace --no-fail-fast`
 Expected: success; no existing eviction test regressed (empty-ctx path is identical).
 
@@ -662,42 +692,129 @@ git commit -m "feat(zoid-core): rescue-only relevance layer in plan_evictions (c
 
 - [ ] **Step 1: Write the failing integration test**
 
+Mirror the existing `preflight_gate_evicts_before_send` harness (`agent.rs:3054`).
+Key technique: **fatness lives on the assistant messages** (drives the token
+estimate) while **user messages carry the discriminating tokens** (`goal_text`
+reads only `UserMessage`, and `FakeEmbedder` hashes whitespace tokens). Seed
+`event_embeddings` manually via `session.write_embedding` — the async lane is not
+running in the test, so nothing is cached unless we write it.
+
 ```rust
 #[tokio::test]
 async fn preflight_rescues_relevant_old_turn_over_newer_offgoal() {
-    // Build a session over high_water with a FakeEmbedder + seeded event_embeddings
-    // where an OLD turn's cached vector matches goal_text and newer turns don't.
-    // Assert: after preflight_gate, the old turn's ids are NOT in the emitted
-    // TurnsEvicted spans, while a newer off-goal turn's ids ARE.
-    // (Follow the existing preflight/eviction gate test harness in this module.)
+    use ulid::Ulid;
+    use zoid_core::event::{Event, EventKind};
+    use zoid_core::retrieval::{Embedder, FakeEmbedder};
+
+    let fat = "x".repeat(3000); // ONE token; ~1000 est tokens, on the assistant side
+    // user ids 1,3,5,7,9,11,13,15. recent_n=2 → 13,15 protected; goal (3 recent user
+    // msgs) = ids 15,13,11. On-goal set {1,11,13,15}; off-goal {3,5,7,9}.
+    let goalish = "alpha beta gamma delta";
+    let offgoal = "zulu yankee xray whiskey";
+    let utext = |uid: u128| -> String {
+        if matches!(uid, 1 | 11 | 13 | 15) { format!("{goalish} n{uid}") } else { format!("{offgoal} n{uid}") }
+    };
+    let mut seed = Vec::new();
+    for i in 0..8u128 {
+        let uid = i * 2 + 1;
+        seed.push(Event::new(Ulid::from(uid), None, uid as i64,
+            EventKind::UserMessage { text: utext(uid) }));
+        seed.push(Event::new(Ulid::from(i * 2 + 2), None, (i * 2 + 2) as i64,
+            EventKind::AssistantMessage { text: fat.clone() }));
+    }
+    let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+    for e in &seed { session.append(e.clone()).await.unwrap(); }
+
+    // Seed cached vectors for the candidate user events (model "fake").
+    let emb = FakeEmbedder::new(16);
+    for uid in [1u128, 3, 5, 7, 9, 11] {
+        let v = emb.embed(&[utext(uid).as_str()]).unwrap().remove(0);
+        session.write_embedding(Ulid::from(uid), "fake".into(), v).await.unwrap();
+    }
+
+    let mut cfg = chat_turn_config();
+    cfg.eviction = zoid_core::eviction::EvictionPolicy {
+        enabled: true, capacity: 1_000_000, context_target: 5_000,
+        band_headroom_pct: 20, recent_n: 2, max_output: None,
+    };
+    cfg.embedder = Some(std::sync::Arc::new(FakeEmbedder::new(16)));
+
+    let out = run_gate_only(cfg, session, seed).await; // helper: drives run_agent_turn, returns events
+    let evicted: Vec<Ulid> = out.iter().filter_map(|e| match &e.kind {
+        EventKind::TurnsEvicted { ids, .. } => Some(ids.clone()), _ => None,
+    }).flatten().collect();
+
+    assert!(!evicted.is_empty(), "a wave fired");
+    assert!(!evicted.contains(&Ulid::from(1u128)), "on-goal old turn rescued");
+    assert!(evicted.contains(&Ulid::from(3u128)), "a newer off-goal turn dropped instead");
 }
 
 #[tokio::test]
-async fn preflight_without_embedder_evicts_identically_to_recency() {
-    // Same session, config.embedder = None → eviction spans equal the recency-only
-    // baseline (regression guard on the degradation path).
+async fn preflight_without_embedder_evicts_the_old_turn() {
+    use ulid::Ulid;
+    use zoid_core::event::{Event, EventKind};
+    // Same seed shape, but cfg.embedder = None → recency-only → oldest (id 1) evicted.
+    let fat = "x".repeat(3000);
+    let mut seed = Vec::new();
+    for i in 0..8u128 {
+        let uid = i * 2 + 1;
+        seed.push(Event::new(Ulid::from(uid), None, uid as i64,
+            EventKind::UserMessage { text: format!("msg n{uid}") }));
+        seed.push(Event::new(Ulid::from(i * 2 + 2), None, (i * 2 + 2) as i64,
+            EventKind::AssistantMessage { text: fat.clone() }));
+    }
+    let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+    for e in &seed { session.append(e.clone()).await.unwrap(); }
+    let mut cfg = chat_turn_config();
+    cfg.eviction = zoid_core::eviction::EvictionPolicy {
+        enabled: true, capacity: 1_000_000, context_target: 5_000,
+        band_headroom_pct: 20, recent_n: 2, max_output: None,
+    };
+    cfg.embedder = None;
+    let out = run_gate_only(cfg, session, seed).await;
+    let evicted: Vec<Ulid> = out.iter().filter_map(|e| match &e.kind {
+        EventKind::TurnsEvicted { ids, .. } => Some(ids.clone()), _ => None,
+    }).flatten().collect();
+    assert!(evicted.contains(&Ulid::from(1u128)), "no embedder ⇒ recency evicts oldest");
 }
 ```
+
+Add a small `run_gate_only(cfg, session, seed_vec) -> Vec<Event>` test helper that
+wraps `run_agent_turn` exactly as `preflight_gate_evicts_before_send` does
+(`FakeProvider` yielding `TextDelta("done") + Done`, a drained mpsc channel,
+`EventLog::from_vec(seed)`, `|| 0`), returning the `out` events. Reuse it for both
+tests to keep them focused on the assertion.
 
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `cargo test -p zoid --features local-embed -- preflight_rescues preflight_without_embedder`
-Expected: FAIL (assertions unmet — real ctx not built yet).
+Expected: the rescue test FAILS its `!evicted.contains(id 1)` assertion (real ctx
+not built yet — the gate is recency-only, so id 1 is still evicted). The
+no-embedder test already passes. (Confirm the filter matches 2 tests, not 0.)
 
 - [ ] **Step 3: Add the `embeddable_event_ids` helper**
 
 ```rust
-/// Over-approximate the eviction candidate id set for a relevance read: every
-/// event id in the log. `vectors_by_ids` returns only those actually embedded,
-/// and `plan_evictions` looks up only real candidates — so extra ids are free.
+/// Candidate ids for the relevance read. Over-approximates the real candidate set
+/// (avoids replicating `group_turns`) BUT excludes already-evicted ids: those
+/// turns are `protected`, so `plan_evictions` never looks up their vectors —
+/// reading them would be pure waste. The survivors are ~the in-context working
+/// set (bounded by the band), not O(history), which keeps this hot-path read
+/// bounded on long sessions.
 fn embeddable_event_ids(events: &crate::eventlog::EventLog) -> Vec<Ulid> {
-    events.iter().map(|e| e.id).collect()
+    let evicted = zoid_core::eviction::evicted_ids(events.iter()); // HashSet<Ulid>, pub (see agent.rs:1369)
+    events.iter().map(|e| e.id).filter(|id| !evicted.contains(id)).collect()
 }
 ```
 
-- [ ] **Step 4: Build `ctx` in `preflight_gate` (once, above passes 2 and 3)**
+- [ ] **Step 4: Build `ctx` in `preflight_gate` — AFTER compaction, before passes (2)/(3)**
 
-Immediately after `let mut est = estimate(events);` and before pass (2):
+Placement matters: pass (1) compaction (agent.rs:2637–2675) can drop `est` below
+`high_water`, so building the context before it would pay the ~30 ms embed + vector
+read for nothing. Insert this **after the compaction pass re-estimates `est`** (the
+`if compacted { est = estimate(events); }` at ~2673) and **before** pass (2). It is
+gated on the post-compaction `est`, so if compaction alone relieved pressure, no
+embed happens:
 
 ```rust
     // Relevance rescue context — built only when a wave will fire and the
@@ -788,8 +905,9 @@ Add `spikes/eviction-weight-eval` as its own crate (the `spikes/` dir is already
 //    the same context_window estimate.
 // 3. Ground truth: collect ids later recall'd / TurnsReadmitted after eviction.
 // 4. For weight in [0,4,8,12,16,24,32]:
-//      - build GoalContext from goal_text(at that point) + vectors_by_ids(all ids)
-//      - plan = plan_evictions(..weight..)
+//      - build GoalContext { goal, vecs, weight } from goal_text(at that point)
+//        + vectors_by_ids(all ids)   (NOTE: the 5-arg plan_evictions signature)
+//      - plan = plan_evictions(events, &policy, est, &RecencyScorer, &ctx)
 //      - regret += evicted ∩ later_recalled;  measure realized window vs low_water;
 //        churn += symmetric-diff(plan_ids, weight0_plan_ids)
 // 5. Print the table; recommend the knee (min regret with band health green).

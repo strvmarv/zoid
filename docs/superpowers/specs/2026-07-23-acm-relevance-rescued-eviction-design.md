@@ -127,11 +127,15 @@ non-empty**:
    compute `raw = max over turn.ids of cosine(ctx.goal, ctx.vecs[id])`. Ids with no
    cached vector contribute nothing; a turn with **no** cached vector → `raw = 0.0`.
    *Max* (not mean): protect a turn if **any** load-bearing part is on-goal.
-2. **Rank-normalize** the candidates' `raw` values into `[0, 1]`
-   (`normalized = rank / (n − 1)`, best-relevance = 1.0). Fully scale-free — the
-   bge non-zero-centered range never needs calibrating. **Degenerate guard:** ≤ 1
-   candidate, or all-equal `raw` (incl. all-zero) → `normalized = 0.0` for all ⇒
-   pure recency, no spurious rescue.
+2. **Rank-normalize** the candidates' `raw` values into `[0, 1]` by
+   **distinct-value rank** (`normalized = value_rank / (num_distinct − 1)`, best =
+   1.0). Fully scale-free — the bge non-zero-centered range never needs
+   calibrating. **Ties must share a rank, and the lowest distinct value must pin to
+   `0.0`** — this is essential, not cosmetic: in production most candidates have
+   `raw = 0.0` (off-goal / no cached vector), and a *position*-based rank would
+   spread those equal zeros across `[0, 1]` and hand off-goal turns a spurious
+   rescue bump. **Degenerate guard:** ≤ 1 candidate, or all values equal (incl.
+   all-zero) → `normalized = 0.0` for all ⇒ pure recency, no rescue.
 3. Sort key `= base_score(turn) + ctx.weight · normalized`. Empty `ctx.goal`
    skips 1–3 entirely (bump = 0).
 
