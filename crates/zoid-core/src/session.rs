@@ -73,6 +73,11 @@ enum Cmd {
         vector: Vec<f32>,
         reply: oneshot::Sender<Result<()>>,
     },
+    VectorsByIds {
+        model_id: String,
+        ids: Vec<Ulid>,
+        reply: oneshot::Sender<Result<std::collections::HashMap<Ulid, Vec<f32>>>>,
+    },
     LoadRecentEmbeddings {
         model_id: String,
         cap: usize,
@@ -199,6 +204,9 @@ impl SessionHandle {
                         reply,
                     } => {
                         let _ = reply.send(store.write_embedding(event_id, &model_id, &vector));
+                    }
+                    Cmd::VectorsByIds { model_id, ids, reply } => {
+                        let _ = reply.send(store.vectors_by_ids(&model_id, &ids));
                     }
                     Cmd::LoadRecentEmbeddings {
                         model_id,
@@ -437,6 +445,21 @@ impl SessionHandle {
             .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
     }
 
+    /// Batch-read cached vectors for `ids` under `model_id` (relevance rescue).
+    pub async fn vectors_by_ids(
+        &self,
+        model_id: String,
+        ids: Vec<Ulid>,
+    ) -> Result<std::collections::HashMap<Ulid, Vec<f32>>> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Cmd::VectorsByIds { model_id, ids, reply })
+            .await
+            .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
+    }
+
     /// Load up to `cap` most-recent embeddings for a model id.
     pub async fn load_recent_embeddings(
         &self,
@@ -666,5 +689,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(evs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn handle_vectors_by_ids_round_trips() {
+        let h = SessionHandle::spawn(":memory:").unwrap();
+        h.write_embedding(Ulid::from(10u128), "bge".into(), vec![1.0, 0.0]).await.unwrap();
+        let got = h
+            .vectors_by_ids("bge".into(), vec![Ulid::from(10u128), Ulid::from(20u128)])
+            .await
+            .unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got.get(&Ulid::from(10u128)).unwrap(), &vec![1.0, 0.0]);
     }
 }
