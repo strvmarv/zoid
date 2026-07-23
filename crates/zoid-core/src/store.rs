@@ -326,6 +326,50 @@ impl EventStore {
         Ok(out)
     }
 
+    /// Batch-read cached vectors for `ids` under `model_id`. Chunked to stay under
+    /// SQLite's bound-variable limit (a large eviction candidate set can exceed 999).
+    /// Missing ids are simply absent from the map; a corrupt row is skipped, never
+    /// propagated (same degrade posture as `load_recent_embeddings`).
+    pub fn vectors_by_ids(
+        &self,
+        model_id: &str,
+        ids: &[Ulid],
+    ) -> Result<std::collections::HashMap<Ulid, Vec<f32>>> {
+        use std::collections::HashMap;
+        let mut out: HashMap<Ulid, Vec<f32>> = HashMap::new();
+        if ids.is_empty() {
+            return Ok(out);
+        }
+        // 500 keeps us well under SQLITE_MAX_VARIABLE_NUMBER (default 999) with the
+        // model_id param to spare.
+        for chunk in ids.chunks(500) {
+            let placeholders = std::iter::repeat("?").take(chunk.len()).collect::<Vec<_>>().join(",");
+            let sql = format!(
+                "SELECT event_id, vector FROM event_embeddings
+                 WHERE model_id = ?1 AND event_id IN ({placeholders})"
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            // param 1 = model_id; params 2.. = the chunk's ulid strings
+            let mut params: Vec<String> = Vec::with_capacity(chunk.len() + 1);
+            params.push(model_id.to_string());
+            params.extend(chunk.iter().map(|id| id.to_string()));
+            let param_refs: Vec<&dyn rusqlite::ToSql> =
+                params.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+            let rows = stmt.query_map(param_refs.as_slice(), |r| {
+                let id: String = r.get(0)?;
+                let blob: Vec<u8> = r.get(1)?;
+                Ok((id, blob))
+            })?;
+            for row in rows {
+                let (id, blob) = row?;
+                if let Ok(u) = Ulid::from_string(&id) {
+                    out.insert(u, blob_to_f32s(&blob));
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Searchable events lacking an embedding for `model_id`, in this session.
     /// Content comes from `events_fts` (same set `recall` searches).
     pub fn unembedded_events(
@@ -923,6 +967,33 @@ mod tests {
             loaded.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             vec![Ulid::from(24u128), Ulid::from(23u128), Ulid::from(22u128)]
         );
+    }
+
+    #[test]
+    fn vectors_by_ids_reads_model_filtered_subset() {
+        let store = EventStore::open(":memory:").unwrap();
+        let sid = Ulid::from(1u128);
+        // seed two models' vectors for the same ids
+        store.write_embedding(Ulid::from(10u128), "bge", &[1.0, 0.0, 0.0]).unwrap();
+        store.write_embedding(Ulid::from(11u128), "bge", &[0.0, 1.0, 0.0]).unwrap();
+        store.write_embedding(Ulid::from(10u128), "other", &[9.0, 9.0, 9.0]).unwrap();
+        let _ = sid;
+
+        let got = store
+            .vectors_by_ids("bge", &[Ulid::from(10u128), Ulid::from(11u128), Ulid::from(99u128)])
+            .unwrap();
+
+        assert_eq!(got.len(), 2, "only bge rows for existing ids");
+        assert_eq!(got.get(&Ulid::from(10u128)).unwrap(), &vec![1.0, 0.0, 0.0]);
+        assert_eq!(got.get(&Ulid::from(11u128)).unwrap(), &vec![0.0, 1.0, 0.0]);
+        assert!(!got.contains_key(&Ulid::from(99u128)), "missing id absent, not error");
+        assert!(!got.values().any(|v| v == &vec![9.0, 9.0, 9.0]), "other-model row excluded");
+    }
+
+    #[test]
+    fn vectors_by_ids_empty_ids_is_empty_no_query() {
+        let store = EventStore::open(":memory:").unwrap();
+        assert!(store.vectors_by_ids("bge", &[]).unwrap().is_empty());
     }
 
     #[test]
