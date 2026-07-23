@@ -27,6 +27,8 @@ step, realized against the real embedder v1 shipped.
 - Store `vectors_by_ids(model_id, ids)` — one batch read of cached embeddings.
 - Wire-in at the `preflight_gate` eviction call sites, gated on real pressure
   (`est ≥ high_water`) and embedder presence.
+- An offline replay eval (§7.1) that fixes `DEFAULT_RESCUE_WEIGHT` from real
+  session logs before merge.
 
 **Deferred (seams honored, not built) — see §8.**
 
@@ -207,13 +209,24 @@ let plan = zoid_core::eviction::plan_evictions(events.iter(), policy, est, &Rece
 
 ## 5. Control plane
 
-- `DEFAULT_RESCUE_WEIGHT: f32` — a **const**, **starting value `12.0`**: a
-  perfectly on-goal old turn is treated as ~12 turns newer. Rationale: large
-  enough to lift a relevant turn clear of a handful of intervening off-goal turns,
-  small enough that it can't leapfrog the whole (typically 20–40 turn) live
-  window and starve eviction. Confirmed/adjusted during implementation against a
-  realistic over-pressure session. Exposing it via `[eviction]` config is a
-  deferred follow-up (§8), not this slice.
+- `DEFAULT_RESCUE_WEIGHT: f32` — a **const**, **provisional `12.0`, validated
+  pre-merge by the replay eval (§7.1).**
+  - **Units are pure turn-index** (rank normalization makes the bump `∈ [0,1]`
+    independent of the bge cosine scale, and `turn.index` is a plain turn
+    ordinal). So the weight's whole meaning is one sentence: **maximal relevance
+    is worth `weight` turns of newness** — an on-goal turn at index *i* is kept
+    over an off-goal turn at index *j* iff `i + weight > j`. It is the **rescue
+    reach, in turns.** Because the max bump is always `weight` regardless of
+    candidate count, its meaning is stable across session sizes — which is what
+    makes a single const defensible.
+  - **Analytically bounded range:** *lower* — must exceed the typical gap between
+    a still-relevant old turn and the eviction frontier; *upper* — must stay well
+    under the candidate-window size (~20–40 turns) or a single maximally-relevant
+    ancient turn survives forever and eviction can never shed it (band starve).
+    `12.0` sits at ~⅓ of a typical candidate window. The §7.1 eval picks the point
+    in this range; property tests (§7) prove any in-range value stays safe.
+  - Exposing it via `[eviction]` config is a deferred follow-up (§8), not this
+    slice.
 - No new config keys, no new compile feature: this rides entirely on v1's
   existing `local-embed` feature and `[embed]` runtime switch. When `local-embed`
   is compiled out, `config.embedder` is `None` ⇒ recency-only, and none of this
@@ -257,6 +270,15 @@ All candle-free via `FakeEmbedder`; no network.
     the quota — an over-pressure session still reclaims down past `low_water`.
   - **No deadlock:** with every candidate maximally rescued and pressure above
     the band, eviction still reaches `low_water`.
+- **Weight-semantics property tests (pin the safe range, not the number):**
+  - **Bounded reach:** a maximally-relevant turn at index *i* is **not** kept over
+    an off-goal turn that is `≥ ceil(weight)` turns newer, and **is** kept over one
+    `< ceil(weight)` turns newer — proves "reach = `weight` turns" and that reach
+    is finite (an ancient turn can't be rescued arbitrarily far).
+  - **Band-preservation upper bound:** with *all* candidates maximally relevant and
+    pressure above the band, eviction still drains to `low_water` (no in-range
+    weight can starve the band) — the structural guarantee that makes the eval's
+    chosen value safe by construction.
 - **`vectors_by_ids`:** round-trip; **model filter** (rows of another `model_id`
   excluded); missing ids absent from the map; short/bad row skipped, not errored.
 - **Wire-in (`zoid` integration):** with a `FakeEmbedder` + seeded
@@ -265,6 +287,31 @@ All candle-free via `FakeEmbedder`; no network.
   session evicts identically to recency-only.
 - **Every task builds `--workspace`** (the `GoalContext` field additions and the
   `plan_evictions` signature change are cross-crate).
+
+### 7.1 Weight-validation replay eval (offline, no CI cost)
+
+A `#[ignore]`-by-default bench (a new `spikes/eviction-weight-eval/`, mirroring
+`spikes/embed-rerank-eval/`), run manually before merge to fix
+`DEFAULT_RESCUE_WEIGHT` from the provisional `12.0`. This is what turns the weight
+from an educated guess into an empirically-chosen point in the §5 range.
+
+- **Data — real session logs, zero manual labeling.** zoid is event-sourced, so
+  each recorded session is a replayable event log in sqlite. Dogfood corpus =
+  the maintainer's own sessions (private; stays local — no public leak).
+- **Ground truth is *in the log*.** A turn that was evicted and **later `recall`'d
+  or `TurnsReadmitted`** is a labeled *"should have kept"* example. No annotation.
+- **Sweep** `weight ∈ {0, 4, 8, 12, 16, 24, 32}` (`0` = today's recency baseline,
+  so the sweep directly measures what rescue *buys*). For each weight, replay
+  `plan_evictions` at every point the real session fired eviction and measure:
+  - **regret rate** — evictions later contradicted by a recall/readmit of that
+    turn (**minimize**);
+  - **band health** — realized window vs `low_water` (rescue must not make
+    eviction under-fire — **stay green**);
+  - **churn** — keep/evict decisions flipped vs the `weight=0` baseline (**bound**,
+    a sanity check that rescue is targeted, not thrashing).
+- **Decision rule:** pick the **knee** — lowest regret subject to band health
+  green — and set the const. The property tests (§7) already guarantee whatever
+  point is chosen stays inside the safe range.
 
 ---
 
@@ -291,8 +338,12 @@ All candle-free via `FakeEmbedder`; no network.
   the reclaim still reaches `low_water`.
 - With the embedder absent/disabled/uncompiled, eviction is **byte-identical** to
   today's recency behavior (regression-tested).
-- The rescue-only invariant holds: relevance **never** evicts a turn recency would
-  have kept.
+- The rescue-only invariant holds (per-item): every turn's `keep_score ≥
+  turn.index`, so relevance only moves a turn *up* the keep order — never below its
+  recency baseline. (It may still shift a *drop* onto a newer off-goal turn to hit
+  the same reclaim target; that trade is intended, §3.1.)
 - The synchronous gate performs **no** embedding; the single goal embed runs
   off-thread and only when eviction fires.
 - `GoalContext` — reserved empty since Slice-4 — is populated and load-bearing.
+- `DEFAULT_RESCUE_WEIGHT` is set from the §7.1 replay eval (regret-minimizing,
+  band-healthy), and property tests prove that value sits in the safe range.
