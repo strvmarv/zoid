@@ -41,6 +41,13 @@ pub enum Action {
     /// A left-click landed in the conversation at this screen row. The bin
     /// focuses the conversation and, if the row falls on a code block, copies it.
     ConversationClick(u16),
+    /// Dismiss the peek popup (Esc or click-away).
+    DismissPeek,
+    /// Scroll the peek popup content by delta lines (positive = down).
+    ScrollPeek(i32),
+    /// A mouse click while the peek popup is open. The bin tests whether (row, col)
+    /// falls inside the popup rect: if outside, dismiss; if inside, no-op.
+    PeekClick(u16, u16),
     ZoomIn,
     ZoomOut,
     /// Toggle terminal mouse capture ("select mode"). Applied by the bin's run
@@ -226,6 +233,16 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
     // textarea is not focused during a question.
     if let Some(q) = &state.question {
         return crate::question::route_question_key(q, key);
+    }
+
+    // 0.5. An open peek popup captures Esc and scroll keys.
+    if state.peek.is_some() {
+        match key.code {
+            KeyCode::Esc => return Action::DismissPeek,
+            KeyCode::Down | KeyCode::PageDown => return Action::ScrollPeek(1),
+            KeyCode::Up | KeyCode::PageUp => return Action::ScrollPeek(-1),
+            _ => return Action::Noop,
+        }
     }
 
     // 1. Overlays capture keys first.
@@ -596,6 +613,17 @@ pub fn hit_test(layout: &ShellLayout, col: u16, row: u16) -> Target {
 }
 
 pub fn route_mouse(state: &ShellState, layout: &ShellLayout, m: MouseEvent) -> Action {
+    // An open peek popup captures mouse input: scroll scrolls the popup
+    // content; a click is resolved by the bin (inside = no-op, outside =
+    // dismiss).
+    if state.peek.is_some() {
+        return match m.kind {
+            MouseEventKind::ScrollDown => Action::ScrollPeek(1),
+            MouseEventKind::ScrollUp => Action::ScrollPeek(-1),
+            MouseEventKind::Down(MouseButton::Left) => Action::PeekClick(m.row, m.column),
+            _ => Action::Noop,
+        };
+    }
     // An open inline question card does NOT capture mouse input: scroll still
     // navigates the conversation, scrollbar drag still works, so the user can
     // review the context above the card while answering. Choice navigation is
@@ -1804,5 +1832,108 @@ mod tests {
             route_key(&s, key(KeyCode::Up, KeyModifiers::NONE)),
             Action::Noop
         );
+    }
+
+    fn esc_key() -> KeyEvent {
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
+    }
+
+    fn down_key() -> KeyEvent {
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)
+    }
+
+    fn up_key() -> KeyEvent {
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)
+    }
+
+    fn area160x40() -> Rect {
+        Rect { x: 0, y: 0, width: 160, height: 40 }
+    }
+
+    #[test]
+    fn peek_open_esc_dismisses() {
+        use crate::state::{PeekContent, PeekState};
+        let mut s = ShellState::new();
+        s.peek = Some(PeekState {
+            content: PeekContent::Delegated { summary: "x".into(), ok: true },
+            scroll: 0,
+        });
+        assert_eq!(route_key(&s, esc_key()), Action::DismissPeek);
+    }
+
+    #[test]
+    fn peek_open_arrows_scroll() {
+        use crate::state::{PeekContent, PeekState};
+        let mut s = ShellState::new();
+        s.peek = Some(PeekState {
+            content: PeekContent::Delegated { summary: "x".into(), ok: true },
+            scroll: 0,
+        });
+        assert_eq!(route_key(&s, down_key()), Action::ScrollPeek(1));
+        assert_eq!(route_key(&s, up_key()), Action::ScrollPeek(-1));
+    }
+
+    #[test]
+    fn peek_open_other_keys_are_noop() {
+        use crate::state::{PeekContent, PeekState};
+        let mut s = ShellState::new();
+        s.peek = Some(PeekState {
+            content: PeekContent::Delegated { summary: "x".into(), ok: true },
+            scroll: 0,
+        });
+        assert_eq!(
+            route_key(&s, KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+            Action::Noop
+        );
+    }
+
+    #[test]
+    fn peek_open_mouse_scroll_scrolls_peek() {
+        use crate::state::{PeekContent, PeekState};
+        let mut s = ShellState::new();
+        s.peek = Some(PeekState {
+            content: PeekContent::Delegated { summary: "x".into(), ok: true },
+            scroll: 0,
+        });
+        let layout = compute(area160x40(), &s);
+        let scroll_down = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(route_mouse(&s, &layout, scroll_down), Action::ScrollPeek(1));
+    }
+
+    #[test]
+    fn peek_open_mouse_click_returns_peek_click() {
+        use crate::state::{PeekContent, PeekState};
+        let mut s = ShellState::new();
+        s.peek = Some(PeekState {
+            content: PeekContent::Delegated { summary: "x".into(), ok: true },
+            scroll: 0,
+        });
+        let layout = compute(area160x40(), &s);
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        let action = route_mouse(&s, &layout, click);
+        assert!(matches!(action, Action::PeekClick(_, _)));
+    }
+
+    #[test]
+    fn peek_closed_mouse_behaves_normally() {
+        let s = ShellState::new();
+        let layout = compute(area160x40(), &s);
+        let scroll_down = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(route_mouse(&s, &layout, scroll_down), Action::ScrollConversation(1));
     }
 }
