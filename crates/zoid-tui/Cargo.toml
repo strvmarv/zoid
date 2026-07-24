@@ -16,6 +16,8 @@ unicode-width = "0.2"
 # Message-body markdown → styled spans (spec §3.5). Pure-Rust, no runtime;
 # default features off (drops the html/getopts extras) to respect the size budget.
 pulldown-cmark = { version = "0.13", default-features = false }
+# Session ids in the resume-picker confirm state (SessionConfirm).
+ulid = { workspace = true }
 
 [features]
 # Opt-in: compiles the buffer→HTML converter used only by the `web_capture`

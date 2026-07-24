@@ -2,6 +2,21 @@
 //! drawer stack. Terminal-free and unit-tested (spec §13). Rendering, layout,
 //! and routing all read from this; the `zoid` bin owns the side effects.
 
+use ulid::Ulid;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionConfirm {
+    pub sid: Ulid,
+    pub name: String,
+    pub kind: SessionConfirmKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionConfirmKind {
+    Delete,
+    Takeover,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Conversation,
@@ -474,6 +489,10 @@ pub struct ShellState {
     pub sessions_live: Vec<bool>,
     /// Highlighted row in the resume-session picker.
     pub session_selected: usize,
+    /// A pending destructive action (delete or takeover) on a session row,
+    /// rendered as an inline confirm line in the session overlay. `None` when
+    /// no confirm is pending. Replaces the question-card approach.
+    pub session_confirm: Option<SessionConfirm>,
     /// Session name shown in the session drawer header line.
     pub session_name: String,
     /// Active model id shown in the session drawer.
@@ -650,6 +669,7 @@ impl ShellState {
             sessions: Vec::new(),
             sessions_live: Vec::new(),
             session_selected: 0,
+            session_confirm: None,
             help_scroll: 0,
             session_name: String::new(),
             model: String::new(),
@@ -1322,5 +1342,11 @@ mod tests {
         assert_eq!(s.mode, CatalogMode::Confirm);
         assert_eq!(s.confirm_error.as_deref(), Some("boom"));
         assert!(s.mcp.is_none());
+    }
+
+    #[test]
+    fn session_confirm_defaults_to_none() {
+        let s = ShellState::new();
+        assert!(s.session_confirm.is_none());
     }
 }
