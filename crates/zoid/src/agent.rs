@@ -1526,6 +1526,32 @@ async fn run_turn_inner(
                         .get("worktree")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
+                    // Resolve the agent profile by name (default "delegate").
+                    let profile = match &config.agents {
+                        Some(reg) => match resolve_agent_for_dispatch(&tc.args, reg.clone()) {
+                            Ok((p, _name)) => p,
+                            Err(msg) => {
+                                emit(
+                                    &session,
+                                    &mut events,
+                                    ui,
+                                    &config.branch,
+                                    EventKind::ToolResult {
+                                        id: tc.id,
+                                        name: tc.name,
+                                        output: msg,
+                                        is_error: true,
+                                    },
+                                    session_id,
+                                    now,
+                                )
+                                .await?;
+                                continue;
+                            }
+                        },
+                        // No registry available (subagent turn) → fall back to builtin.
+                        None => zoid_core::agent_profile::AgentProfile::builtin(),
+                    };
                     let sub_ulid = Ulid::new();
                     let sub_id = format!("sub-{sub_ulid}");
 
@@ -1578,6 +1604,7 @@ async fn run_turn_inner(
 
                     crate::spawn_subagent::spawn_subagent(
                         task,
+                        profile,
                         events.snapshot(),
                         provider.clone(),
                         cwd,
@@ -4554,6 +4581,110 @@ mod tests {
             }
             _ => panic!(),
         }
+    }
+    /// An unknown `agent` name against a populated registry emits an error
+    /// ToolResult listing available agents, and no subagent is spawned.
+    #[tokio::test]
+    async fn dispatch_with_unknown_agent_emits_error_listing_available() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage { text: "dispatch a subagent".into() },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d1".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({"task": "x", "agent": "nope"}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![
+                ProviderEvent::TextDelta("ok".into()),
+                ProviderEvent::Done,
+            ],
+        ]));
+
+        let reg = std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin());
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            reg.clone(),
+            zoid_tools::KillSlot::new(),
+        ));
+        // Capture any SubagentStarted updates to assert none are sent.
+        let started = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let started_cap = started.clone();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move {
+            while let Some(upd) = rx.recv().await {
+                if let AgentUpdate::SubagentStarted { id, task } = upd {
+                    started_cap.lock().unwrap().push((id, task));
+                }
+            }
+        });
+
+        let mut config = chat_turn_config();
+        config.agents = Some(reg.clone());
+        let out = run_agent_turn(
+            config,
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let tool_result = out
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ToolResult { name, .. } if name == "dispatch_subagent"
+                )
+            })
+            .expect("dispatch_subagent tool result must be emitted");
+        match &tool_result.kind {
+            EventKind::ToolResult { output, is_error, .. } => {
+                assert!(
+                    *is_error,
+                    "unknown agent must produce an error ToolResult"
+                );
+                assert!(
+                    output.contains("unknown agent 'nope'"),
+                    "error must name the unknown agent: got {output}"
+                );
+                assert!(
+                    output.contains("delegate"),
+                    "error must list available agents (delegate): got {output}"
+                );
+            }
+            _ => panic!(),
+        }
+        // Give the drainer a tick to flush, then assert no subagent was started.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let started = started.lock().unwrap();
+        assert!(
+            started.is_empty(),
+            "no SubagentStarted should be emitted for an unknown agent: got {started:?}"
+        );
     }
     #[tokio::test]
     async fn dispatch_two_subagents_second_is_rejected() {
