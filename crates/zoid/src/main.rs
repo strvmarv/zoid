@@ -576,6 +576,7 @@ enum PickKey {
     Down,
     Enter,
     Esc,
+    Delete,
 }
 
 /// The outcome of a single keystroke in the startup picker.
@@ -589,6 +590,8 @@ enum PickOutcome {
     CreateNew,
     /// The user pressed Esc — abort to a clean exit.
     Abort,
+    /// Delete the session at this index (raises inline confirm in pick_session).
+    DeleteConfirm(usize),
 }
 
 /// Handle one keystroke in the startup picker. `n_sessions` is the number of
@@ -615,6 +618,13 @@ fn pick_choice(n_sessions: usize, selected: usize, key: PickKey) -> PickOutcome 
             }
         }
         PickKey::Esc => PickOutcome::Abort,
+        PickKey::Delete => {
+            if cur < n_sessions {
+                PickOutcome::DeleteConfirm(cur)
+            } else {
+                PickOutcome::Pending(cur)
+            }
+        }
     }
 }
 
@@ -652,12 +662,12 @@ async fn pick_session(
     use ratatui::widgets::{Block, Borders, Paragraph};
     use zoid_tui::economy_view::human_tokens;
 
-    let sessions: Vec<zoid_core::sessions::SessionInfo> = session
+    let mut sessions: Vec<zoid_core::sessions::SessionInfo> = session
         .list_sessions(Some(root.to_string()))
         .await
         .unwrap_or_default();
-    let n = sessions.len();
-    let live: Vec<bool> = sessions
+    let mut n = sessions.len();
+    let mut live: Vec<bool> = sessions
         .iter()
         .map(|s| {
             zoid_core::store::is_live(
@@ -671,6 +681,7 @@ async fn pick_session(
         .collect();
     let mut selected: usize = 0;
     let mut term_events = EventStream::new();
+    let mut pending_delete: Option<usize> = None;
 
     loop {
         terminal.draw(|f| {
@@ -699,6 +710,15 @@ async fn pick_session(
                 lines.push(Line::from(Span::styled(row_text, style)));
             }
 
+            if let Some(idx) = pending_delete {
+                if let Some(s) = sessions.get(idx) {
+                    lines.push(Line::from(Span::styled(
+                        format!(" Delete \"{}\"? [y]es / [n]o", s.name),
+                        Style::new().fg(Color::Yellow),
+                    )));
+                }
+            }
+
             let create_text = "  Create new session".to_string();
             let create_style = if selected == n {
                 Style::new()
@@ -723,11 +743,53 @@ async fn pick_session(
 
         match term_events.next().await {
             Some(Ok(CEvent::Key(key))) => {
+                // Inline confirm for pending delete — captures all keys.
+                if let Some(idx) = pending_delete {
+                    match key.code {
+                        crossterm::event::KeyCode::Char('y')
+                        | crossterm::event::KeyCode::Char('Y')
+                        | crossterm::event::KeyCode::Enter => {
+                            if let Some(s) = sessions.get(idx) {
+                                let _ = session.delete_session(s.id).await;
+                            }
+                            sessions = session
+                                .list_sessions(Some(root.to_string()))
+                                .await
+                                .unwrap_or_default();
+                            n = sessions.len();
+                            live = sessions
+                                .iter()
+                                .map(|s| {
+                                    zoid_core::store::is_live(
+                                        s.active,
+                                        s.active_pid,
+                                        s.active_heartbeat,
+                                        boot_ts,
+                                        pid_alive,
+                                    )
+                                })
+                                .collect();
+                            if selected >= n {
+                                selected = 0;
+                            }
+                            pending_delete = None;
+                        }
+                        crossterm::event::KeyCode::Char('n')
+                        | crossterm::event::KeyCode::Char('N')
+                        | crossterm::event::KeyCode::Esc => {
+                            pending_delete = None;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
                 let pick_key = match key.code {
                     crossterm::event::KeyCode::Up => PickKey::Up,
                     crossterm::event::KeyCode::Down => PickKey::Down,
                     crossterm::event::KeyCode::Enter => PickKey::Enter,
                     crossterm::event::KeyCode::Esc => PickKey::Esc,
+                    crossterm::event::KeyCode::Delete
+                    | crossterm::event::KeyCode::Backspace => PickKey::Delete,
                     _ => continue,
                 };
                 match pick_choice(n, selected, pick_key) {
@@ -743,6 +805,12 @@ async fn pick_session(
                     PickOutcome::CreateNew => return Ok(PickResult::CreateNew),
                     PickOutcome::Abort => {
                         anyhow::bail!("startup picker aborted");
+                    }
+                    PickOutcome::DeleteConfirm(idx) => {
+                        if live.get(idx).copied().unwrap_or(false) {
+                            continue;
+                        }
+                        pending_delete = Some(idx);
                     }
                 }
             }
@@ -8798,6 +8866,26 @@ mod tests {
     fn pick_choice_clamps_selection_to_total_rows() {
         // If selected is somehow past the end, Down should wrap to 0.
         assert_eq!(pick_choice(2, 5, PickKey::Down), PickOutcome::Pending(0));
+    }
+
+    #[test]
+    fn pick_choice_delete_on_session_row() {
+        assert_eq!(
+            pick_choice(2, 0, PickKey::Delete),
+            PickOutcome::DeleteConfirm(0)
+        );
+        assert_eq!(
+            pick_choice(2, 1, PickKey::Delete),
+            PickOutcome::DeleteConfirm(1)
+        );
+    }
+
+    #[test]
+    fn pick_choice_delete_on_create_new_is_noop() {
+        assert_eq!(
+            pick_choice(2, 2, PickKey::Delete),
+            PickOutcome::Pending(2)
+        );
     }
 
     // --- boot_decision tests ---
