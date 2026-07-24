@@ -28,9 +28,9 @@ dogfood corpus; different workflows may want a different rescue reach.
   `recent_n`, `compact_threshold_pct`) from `[economy]` to `[eviction]`.
   They stay in `[economy]`; this slice adds only `rescue_weight`.
 - Config-screen UI for the knob (the config file is the surface).
-- Validation/bounds enforcement beyond the existing property-test guarantees
-  (any in-range value is safe per 4b §5; a wildly out-of-range value just
-  makes rescue ineffective or too aggressive — no panic, no corruption).
+- Config-parse-time range validation — the read-site `resolve_rescue_weight`
+  clamping (§3.1) handles non-finite and out-of-range values without
+  introducing a new validation pattern to the config layer.
 
 ---
 
@@ -41,23 +41,29 @@ dogfood corpus; different workflows may want a different rescue reach.
 A new `EvictionConfig` struct:
 
 ```rust
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct EvictionConfig {
     /// Rescue weight in turn-index units ("maximal relevance is worth this
     /// many turns of newness"). None ⇒ DEFAULT_RESCUE_WEIGHT const.
     /// Range: ~4–32; see 4b design §5. 0 disables rescue (= pure recency).
+    /// Negative, NaN, and +∞ are clamped at the read site (§3.1).
     pub rescue_weight: Option<f32>,
-}
-
-impl Default for EvictionConfig {
-    fn default() -> Self {
-        Self { rescue_weight: None }  // ⇒ const fallback
-    }
 }
 ```
 
+`#[derive(Default)]` suffices — `Option<f32>::default()` is `None`, which is
+exactly the const-fallback semantics. No manual impl needed.
+
 Add `pub eviction: EvictionConfig` to `Config` (alongside `economy`, `embed`,
-etc.). The partial-config overlay gets a matching `PartialEviction` struct
+etc.). **`Config` currently derives `Eq` (config.rs:34).** Adding
+`eviction: EvictionConfig` (with `Option<f32>`) requires **dropping `Eq` from
+`Config`**, retaining `PartialEq`. Verified: the only `Config`-level equality
+assertion (`config.rs:653`, `assert_eq!(cfg, Config::default())`) requires
+`PartialEq + Debug`, not `Eq`; no workspace consumer bounds `Config: Eq`. The
+`Provenance` struct and `Source` enum (which do carry `Eq`) are unaffected —
+they don't hold the new field.
+
+The partial-config overlay gets a matching `PartialEviction` struct
 (following the `PartialEmbed` / `PartialEconomy` pattern —
 `#[derive(Debug, Default, Clone, Deserialize)]` with `Option<f32>` fields):
 
@@ -111,7 +117,8 @@ disabled — consistent with `enabled: false` being a total bypass).
 The `Eq` derive is dropped. `f32` does not implement `Eq`, and the `Eq` impl
 is not used in any assertion (verified: no `assert_eq` on `EvictionPolicy`
 values in the test suite). `PartialEq` (float-aware) is retained for any
-structural comparison needs.
+structural comparison needs. `Option<f32>` is `Copy`, so `EvictionPolicy`
+retains `Copy` — the field is passed by value through `TurnConfig` unchanged.
 
 ### 2.3 Wire-in (`crates/zoid/src/main.rs` + `agent.rs`)
 
@@ -122,18 +129,14 @@ add `rescue_weight: app.config.eviction.rescue_weight` to the struct literal.
 replace the bare const with the resolved value:
 
 ```rust
-let weight = config
-    .eviction
-    .rescue_weight
-    .unwrap_or(zoid_core::eviction::DEFAULT_RESCUE_WEIGHT)
-    .max(0.0);  // clamp negative ⇒ 0.0 (pure recency)
+let weight = resolve_rescue_weight(config.eviction.rescue_weight);
 zoid_core::eviction::GoalContext { goal, vecs, weight }
 ```
 
 The tracing line (`agent.rs:2807`) logs the resolved `weight` (not the const).
 
-**`agent.rs:833`** — the context-length emergency retry call site stays on
-`GoalContext::default()` (unchanged — rescue doesn't apply to the emergency
+**`agent.rs:862–867`** — the context-length emergency retry call site stays
+on `GoalContext::default()` (unchanged — rescue doesn't apply to the emergency
 retry path).
 
 ### 2.4 What does NOT change
@@ -155,33 +158,64 @@ retry path).
 |---|---|
 | `[eviction]` absent in config | `EvictionConfig::default()` ⇒ `None` ⇒ `DEFAULT_RESCUE_WEIGHT` (12.0) — identical to today |
 | `rescue_weight = 0` | `GoalContext.weight = 0.0` ⇒ bump = 0 ⇒ pure recency (proven by `bounded_reach_weight_zero_is_pure_recency` test) |
-| `rescue_weight` very high (e.g. 100) | Rescue reach exceeds candidate window — an ancient on-goal turn survives. Band-preservation property test guarantees eviction still reaches `low_water` under pressure. Not a crash, not corruption — just an over-protective policy. |
-| `rescue_weight` negative | `weight < 0` would make the bump negative — *anti-rescue* (relevance penalizes). The `keep_score ≥ turn.index` rescue-only invariant would break. **Reject negative values at config parse time** with a validation error. |
+| `rescue_weight` large finite (e.g. 100) | Clamped to `RESCUE_WEIGHT_MAX` (48.0) by `resolve_rescue_weight`. Band-preservation property test guarantees eviction still reaches `low_water` under pressure for any finite value ≤ the cap. |
+| `rescue_weight = 1e308` (deserializes to `+∞`) | `resolve_rescue_weight` detects non-finite ⇒ `0.0` (pure recency). Prevents the band-starve pathology where `inf`-scored turns become permanently un-evictable. |
+| `rescue_weight` negative or `-∞` | `resolve_rescue_weight` ⇒ `0.0` (pure recency). Preserves the `keep_score ≥ turn.index` rescue-only invariant. |
 
-### 3.1 Negative-value handling
+### 3.1 Non-finite and out-of-range value handling
 
-There is no config validation infrastructure today — values are merged as-is.
-Introducing parse-time rejection for one field would be a new pattern. Instead,
-**clamp at the read site**: in `preflight_gate`, resolve the weight as:
+Config type validation exists (serde rejects wrong-typed known keys —
+`config.rs:689`); range validation does not. The existing `u8`/`usize` economy
+fields already accept any in-type value without range checks. This slice
+clamps at the read site rather than introducing range validation, consistent
+with that posture.
+
+**Why clamping must cover both sides, not just negatives:** TOML floats
+deserialize into `f32` via serde. Values exceeding `f32::MAX` (e.g.
+`1e308`, `3.4028236e38`) produce `f32::INFINITY` — a perfectly valid
+deserialization, not a parse error. `f32::max(0.0)` only neutralizes the
+negative side; `+∞` sails through unchanged. With `weight = inf`, the
+relevance layer computes `bump[i] = inf * normalized[i]` for any on-goal
+turn, making it permanently un-evictable — the exact "band starve" failure
+the 4b design §5 warns about. The 4b property test
+`band_preservation_rescue_never_shrinks_quota` proves band-safety for
+*finite in-range* values (it uses `DEFAULT_RESCUE_WEIGHT = 12.0`); it does
+not cover `inf`, which is out of range by construction.
+
+**Resolution — a finite-and-bounded resolver** (pure function in
+`eviction.rs`, tested independently):
 
 ```rust
-let weight = config
-    .eviction
-    .rescue_weight
-    .unwrap_or(zoid_core::eviction::DEFAULT_RESCUE_WEIGHT)
-    .max(0.0);  // negative ⇒ 0.0 (pure recency) — preserves rescue-only invariant
+/// Upper cap: 4× the default. Anything above this makes rescue so
+/// over-protective that it's effectively a misconfiguration; clamping here
+/// prevents the band-starve pathology while still allowing ample tuning range.
+const RESCUE_WEIGHT_MAX: f32 = DEFAULT_RESCUE_WEIGHT * 4.0; // 48.0
+
+/// Resolve the rescue weight, clamping to a safe positive range.
+/// Negative / NaN / +∞ / -∞ all collapse to a safe value (0.0 for
+/// under/invalid, RESCUE_WEIGHT_MAX for over), preserving the rescue-only
+/// invariant and the band-preservation guarantee.
+fn resolve_rescue_weight(raw: Option<f32>) -> f32 {
+    let w = raw.unwrap_or(DEFAULT_RESCUE_WEIGHT);
+    if w.is_finite() && w >= 0.0 {
+        w.min(RESCUE_WEIGHT_MAX)
+    } else {
+        0.0
+    }
+}
 ```
 
-This is the simplest mechanical guarantee: a negative value is silently
-treated as "no rescue" (0.0), which is safe and never breaks the
-`keep_score ≥ turn.index` invariant. No new validation infrastructure, no
-config-parse error paths. The `EvictionConfig` doc comment notes that
-negative values are clamped to 0.0.
+This handles every pathological input:
+- **Negative** (`-5.0`): `is_finite() && >= 0.0` is false ⇒ `0.0` (pure recency).
+- **`+∞`** (`1e308` deserialized): `is_finite()` is false ⇒ `0.0`.
+- **`-∞`** (`-1e400`): `is_finite()` is false ⇒ `0.0`.
+- **NaN**: `is_finite()` is false ⇒ `0.0`. (TOML can't produce NaN, but the
+  guard is defense-in-depth.)
+- **Very large finite** (`100.0`): clamped to `RESCUE_WEIGHT_MAX` (48.0).
+- **`0.0`**: passes through (disables rescue = pure recency, explicitly allowed).
 
-`0.0` is explicitly allowed (disables rescue = pure recency). No upper bound
-is enforced — the property tests prove any positive value is band-safe. An
-unreasonable value is self-limiting (rescue becomes ineffective or
-over-protective, not dangerous).
+No new validation infrastructure, no config-parse error paths. The
+`EvictionConfig` doc comment notes that out-of-range values are clamped.
 
 ---
 
@@ -190,9 +224,15 @@ over-protective, not dangerous).
 - **Config parse round-trip:** `[eviction]\nrescue_weight = 16.0` ⇒
   `config.eviction.rescue_weight == Some(16.0)`. Absent ⇒ `None`.
 - **Negative-value clamping:** `rescue_weight = -5.0` parses to
-  `Some(-5.0)` (no parse error), but `preflight_gate` clamps it to `0.0`
-  ⇒ pure recency. Test at the read-site level (the `GoalContext.weight`
-  is `0.0` when the policy says `-5.0`).
+  `Some(-5.0)` (no parse error), but `resolve_rescue_weight` clamps it to
+  `0.0` ⇒ pure recency. Test the resolver directly: `resolve_rescue_weight(Some(-5.0)) == 0.0`.
+- **Over-bound / +∞ clamping:** `rescue_weight = 1e308` (deserializes to
+  `f32::INFINITY`) ⇒ `resolve_rescue_weight(Some(f32::INFINITY)) == 0.0`.
+  Also test a large finite value: `resolve_rescue_weight(Some(100.0)) ==
+  RESCUE_WEIGHT_MAX` (48.0). Add a band-preservation check: with the clamped
+  weight, `plan_evictions` still drains to `low_water` under pressure
+  (mirrors `band_preservation_rescue_never_shrinks_quota` with the clamped
+  over-bound value, not `DEFAULT_RESCUE_WEIGHT`).
 - **`EvictionPolicy` construction:** `main.rs` wiring passes
   `config.eviction.rescue_weight` into `EvictionPolicy.rescue_weight`.
   `disabled()` ⇒ `None`.
@@ -212,10 +252,15 @@ over-protective, not dangerous).
 
 - `EvictionPolicy` is defined in `zoid-core`, used in `zoid` (`agent.rs`,
   `main.rs`). Adding a field breaks all `EvictionPolicy { ... }` struct
-  literals — there are ~8 in `agent.rs` tests + 1 in `main.rs`. All must add
-  `rescue_weight: None` (tests) or `rescue_weight: app.config.eviction.rescue_weight`
-  (main.rs). The `disabled()` constructor is the single source for test
-  defaults.
+  literals — **11 total**: 3 in `eviction.rs` test modules (lines 50, 609,
+  970), 7 in `agent.rs` tests (lines 3220, 3348, 3408, 3629, 3897, 3960,
+  4423), and 1 in `main.rs` (line 6500). All must add `rescue_weight: None`
+  (tests) or `rescue_weight: app.config.eviction.rescue_weight` (main.rs).
+  The `eviction.rs` test helper `fn policy(target, recent_n)` at line 608 is
+  the best lever: updating it fixes lines 609 and 970 in one edit; line 50
+  is standalone. `disabled()` gains `rescue_weight: None` and covers only its
+  3 call sites (`agent.rs:265`, `subagent.rs:170`, `eviction.rs:45`) — the 7
+  `agent.rs` test literals build enabled policies inline, not via `disabled()`.
 - `Config` and its parsing are in `zoid-core`. The new `EvictionConfig`
   struct + `eviction` field + TOML parsing + partial-config overlay all live
   there.
