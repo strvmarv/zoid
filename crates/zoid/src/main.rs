@@ -949,6 +949,44 @@ fn handle_conversation_click(app: &mut App, layout: &zoid_tui::layout::ShellLayo
         let unit = if n == 1 { "line" } else { "lines" };
         app.shell.status_hint = Some(format!("copied {n} {unit}"));
     }
+
+    // Peek hits — clicking a tool-call line or delegated chip opens a popup.
+    let peeks = zoid_tui::chat::peek_hits(&msgs, app.streaming, true, app.tz_offset_secs, width, None);
+    if let Some(hit) = peeks.into_iter().find(|h| h.line == clicked_line) {
+        use zoid_tui::state::{PeekContent, PeekState};
+        use zoid_tui::chat::PeekKind;
+        use zoid_core::projection::ChatMsg;
+        let content = match hit.kind {
+            PeekKind::ToolCall { id, name, args } => {
+                let result = msgs.iter().find_map(|m| {
+                    if let ChatMsg::ToolResult { id: rid, output, is_error, compacted, .. } = m {
+                        if rid == &id { Some((output.clone(), *is_error, *compacted)) } else { None }
+                    } else { None }
+                });
+                match result {
+                    Some((output, is_error, compacted)) => PeekContent::ToolCall {
+                        name,
+                        args,
+                        output: Some(output),
+                        is_error,
+                        compacted,
+                    },
+                    None => PeekContent::ToolCall {
+                        name,
+                        args,
+                        output: None,
+                        is_error: false,
+                        compacted: false,
+                    },
+                }
+            }
+            PeekKind::Delegated { summary, ok } => {
+                PeekContent::Delegated { summary, ok }
+            }
+        };
+        app.shell.peek = Some(PeekState { content, scroll: 0 });
+        return;
+    }
 }
 
 /// The base URL to hand a provider: an explicit non-blank config override wins,
@@ -2790,6 +2828,13 @@ where
                             // the conversation rect + wrap width from `layout`.
                             zoid_tui::route::Action::ConversationClick(row) => {
                                 handle_conversation_click(app, &layout, row);
+                            }
+                            zoid_tui::route::Action::PeekClick(row, col) => {
+                                if let Some(p) = layout.peek {
+                                    if !zoid_tui::layout::in_rect(p, col, row) {
+                                        app.shell.peek = None;
+                                    }
+                                }
                             }
                             action => {
                                 if handle_action(app, action).await? {
@@ -4762,6 +4807,21 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             if let Some(cat) = app.shell.plugin_catalog.as_mut() {
                 cat.toggle_target();
             }
+        }
+        Action::DismissPeek => {
+            app.shell.peek = None;
+        }
+        Action::ScrollPeek(delta) => {
+            if let Some(ps) = &mut app.shell.peek {
+                if delta > 0 {
+                    ps.scroll = ps.scroll.saturating_add(delta as usize);
+                } else {
+                    ps.scroll = ps.scroll.saturating_sub((-delta) as usize);
+                }
+            }
+        }
+        Action::PeekClick(_, _) => {
+            // Resolved in the mouse event handler (needs layout rect).
         }
         Action::Noop => {}
     }
@@ -9058,6 +9118,84 @@ mod tests {
         assert_eq!(r.lines.len(), 3);
         assert!(matches!(r.lines[1].kind, zoid_tui::state::RenderDiffKind::Add));
         assert!(matches!(r.lines[2].kind, zoid_tui::state::RenderDiffKind::Del));
+    }
+
+    #[tokio::test]
+    async fn conversation_click_on_tool_call_opens_peek() {
+        use zoid_core::event::{Event, EventKind};
+        use zoid_core::projection::conversation;
+        use zoid_tui::state::PeekContent;
+
+        let mut app = test_app().await;
+        let now = 1000i64;
+        app.events.push(Event::new(
+            ulid::Ulid::new(),
+            None,
+            now,
+            EventKind::ToolCall {
+                id: "tc1".into(),
+                name: "shell".into(),
+                args: r#"{"command":"ls -la"}"#.into(),
+            },
+        ));
+        app.events.push(Event::new(
+            ulid::Ulid::new(),
+            None,
+            now + 1,
+            EventKind::ToolResult {
+                id: "tc1".into(),
+                name: "shell".into(),
+                output: "file1\nfile2\nfile3".into(),
+                is_error: false,
+            },
+        ));
+
+        let area = ratatui::layout::Rect {
+            x: 0, y: 0, width: 200, height: 50,
+        };
+        let layout = zoid_tui::layout::compute(area, &app.shell);
+        let width = zoid_tui::layout::conv_text_width(layout.conversation.width) as usize;
+        let msgs = conversation(app.events.iter());
+        let peeks = zoid_tui::chat::peek_hits(&msgs, false, true, 0, width, None);
+        assert!(!peeks.is_empty(), "should have at least one peek hit");
+
+        let clicked_line = peeks[0].line;
+        let row = layout.conversation.y + clicked_line as u16;
+        handle_conversation_click(&mut app, &layout, row);
+
+        assert!(app.shell.peek.is_some());
+        let ps = app.shell.peek.as_ref().unwrap();
+        assert!(matches!(&ps.content, PeekContent::ToolCall { name, .. } if name == "shell"));
+    }
+
+    #[tokio::test]
+    async fn dismiss_peek_clears_state() {
+        use zoid_tui::state::{PeekContent, PeekState};
+        use zoid_tui::route::Action;
+
+        let mut app = test_app().await;
+        app.shell.peek = Some(PeekState {
+            content: PeekContent::Delegated { summary: "done".into(), ok: true },
+            scroll: 0,
+        });
+        handle_action(&mut app, Action::DismissPeek).await.unwrap();
+        assert!(app.shell.peek.is_none());
+    }
+
+    #[tokio::test]
+    async fn scroll_peek_adjusts_scroll() {
+        use zoid_tui::state::{PeekContent, PeekState};
+        use zoid_tui::route::Action;
+
+        let mut app = test_app().await;
+        app.shell.peek = Some(PeekState {
+            content: PeekContent::Delegated { summary: "line1\nline2\nline3".into(), ok: true },
+            scroll: 0,
+        });
+        handle_action(&mut app, Action::ScrollPeek(2)).await.unwrap();
+        assert_eq!(app.shell.peek.as_ref().unwrap().scroll, 2);
+        handle_action(&mut app, Action::ScrollPeek(-5)).await.unwrap();
+        assert_eq!(app.shell.peek.as_ref().unwrap().scroll, 0);
     }
 }
 

@@ -385,6 +385,34 @@ pub struct ObjectState {
     pub verb_selected: usize,
 }
 
+/// State for the peek popup — a lightweight overlay showing the full content
+/// of a tool call (args + result) or delegated result. Separate from `Overlay`
+/// because it has different mouse semantics (click-away dismiss, internal
+/// scroll). `None` when no popup is open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeekState {
+    pub content: PeekContent,
+    pub scroll: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PeekContent {
+    ToolCall {
+        name: String,
+        args: String,
+        /// The full result output, if the call has returned. None if still
+        /// pending (the tool call was sent but no ToolResult event yet).
+        output: Option<String>,
+        is_error: bool,
+        /// Whether the result was compacted by ACM (shows a "(compacted)" note).
+        compacted: bool,
+    },
+    Delegated {
+        summary: String,
+        ok: bool,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellState {
     /// Active mode name, mirrored from the bin's `ModeRegistry` (the renderer is
@@ -493,6 +521,9 @@ pub struct ShellState {
     /// rendered as an inline confirm line in the session overlay. `None` when
     /// no confirm is pending. Replaces the question-card approach.
     pub session_confirm: Option<SessionConfirm>,
+    /// The peek popup state. `None` when no popup is open. Separate from
+    /// `Overlay` — see `PeekState` docs.
+    pub peek: Option<PeekState>,
     /// Session name shown in the session drawer header line.
     pub session_name: String,
     /// Active model id shown in the session drawer.
@@ -670,6 +701,7 @@ impl ShellState {
             sessions_live: Vec::new(),
             session_selected: 0,
             session_confirm: None,
+            peek: None,
             help_scroll: 0,
             session_name: String::new(),
             model: String::new(),
@@ -1348,5 +1380,46 @@ mod tests {
     fn session_confirm_defaults_to_none() {
         let s = ShellState::new();
         assert!(s.session_confirm.is_none());
+    }
+
+    #[test]
+    fn peek_is_none_by_default() {
+        let s = ShellState::new();
+        assert!(s.peek.is_none());
+    }
+
+    #[test]
+    fn peek_set_and_clear() {
+        let mut s = ShellState::new();
+        s.peek = Some(PeekState {
+            content: PeekContent::ToolCall {
+                name: "shell".into(),
+                args: r#"{"command":"ls"}"#.into(),
+                output: Some("file1\nfile2".into()),
+                is_error: false,
+                compacted: false,
+            },
+            scroll: 0,
+        });
+        assert!(s.peek.is_some());
+        s.peek = None;
+        assert!(s.peek.is_none());
+    }
+
+    #[test]
+    fn peek_included_in_equality() {
+        let mut a = ShellState::new();
+        let mut b = ShellState::new();
+        assert_eq!(a, b);
+        a.peek = Some(PeekState {
+            content: PeekContent::Delegated { summary: "done".into(), ok: true },
+            scroll: 0,
+        });
+        assert_ne!(a, b);
+        b.peek = Some(PeekState {
+            content: PeekContent::Delegated { summary: "done".into(), ok: true },
+            scroll: 0,
+        });
+        assert_eq!(a, b);
     }
 }
