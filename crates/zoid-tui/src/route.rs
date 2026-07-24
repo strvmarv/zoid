@@ -76,6 +76,14 @@ pub enum Action {
     /// The user pressed Enter on a live ("in use") resume-picker row. Raise a
     /// confirm card before taking it over. Spec §3.2.
     SessionTakeoverConfirm,
+    /// Delete/Backspace on a resume-picker row: arm the inline delete confirm.
+    SessionDelete,
+    /// `y`/`Y`/Enter while the inline session confirm is pending: commit the
+    /// action (delete the session, or take it over).
+    SessionConfirmYes,
+    /// `n`/`N`/Esc while the inline session confirm is pending: cancel and drop
+    /// the confirm (the overlay stays open on the row list).
+    SessionConfirmNo,
     ConfigMoveField(i32),
     ConfigMoveSection(i32),
     ConfigBeginEdit,
@@ -365,11 +373,16 @@ fn route_objects_key(key: KeyEvent) -> Action {
 }
 
 fn route_sessions_key(state: &ShellState, key: KeyEvent) -> Action {
+    if state.session_confirm.is_some() {
+        return match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Action::SessionConfirmYes,
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Action::SessionConfirmNo,
+            _ => Action::Noop,
+        };
+    }
     match key.code {
         KeyCode::Esc => Action::CloseOverlay,
         KeyCode::Enter => {
-            // If the highlighted row is live, raise the takeover confirm card
-            // instead of resuming directly. Spec §3.2.
             let live = state
                 .sessions_live
                 .get(state.session_selected)
@@ -380,6 +393,9 @@ fn route_sessions_key(state: &ShellState, key: KeyEvent) -> Action {
             } else {
                 Action::SessionPick
             }
+        }
+        KeyCode::Delete | KeyCode::Backspace if !state.sessions.is_empty() => {
+            Action::SessionDelete
         }
         KeyCode::Up | KeyCode::Char('k') => Action::SessionMove(-1),
         KeyCode::Down | KeyCode::Char('j') => Action::SessionMove(1),
@@ -637,6 +653,8 @@ mod tests {
     use super::*;
     use crate::layout::compute;
     use crate::state::ShellState;
+    use ulid::Ulid;
+    use crate::state::{SessionConfirm, SessionConfirmKind};
     use ratatui::layout::Rect;
 
     fn key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
@@ -1699,5 +1717,92 @@ mod tests {
         assert_eq!(route_key(&s, k(KeyCode::Char('q'))), Action::CloseOverlay);
         assert_eq!(route_key(&s, k(KeyCode::Down)), Action::ScrollHelp(1));
         assert_eq!(route_key(&s, k(KeyCode::Char('k'))), Action::ScrollHelp(-1));
+    }
+
+    #[test]
+    fn delete_key_on_populated_list_fires_session_delete() {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Sessions;
+        s.sessions = vec!["a".into(), "b".into()];
+        s.session_selected = 0;
+        assert_eq!(
+            route_key(&s, key(KeyCode::Delete, KeyModifiers::NONE)),
+            Action::SessionDelete
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Backspace, KeyModifiers::NONE)),
+            Action::SessionDelete
+        );
+    }
+
+    #[test]
+    fn delete_key_on_empty_list_is_noop() {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Sessions;
+        s.sessions = Vec::new();
+        assert_eq!(
+            route_key(&s, key(KeyCode::Delete, KeyModifiers::NONE)),
+            Action::Noop
+        );
+    }
+
+    #[test]
+    fn confirm_yes_routes_on_y_enter() {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Sessions;
+        s.sessions = vec!["a".into()];
+        s.session_confirm = Some(SessionConfirm {
+            sid: Ulid::new(),
+            name: "test".into(),
+            kind: SessionConfirmKind::Delete,
+        });
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('y'), KeyModifiers::NONE)),
+            Action::SessionConfirmYes
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('Y'), KeyModifiers::NONE)),
+            Action::SessionConfirmYes
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Enter, KeyModifiers::NONE)),
+            Action::SessionConfirmYes
+        );
+    }
+
+    #[test]
+    fn confirm_no_routes_on_n_esc() {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Sessions;
+        s.sessions = vec!["a".into()];
+        s.session_confirm = Some(SessionConfirm {
+            sid: Ulid::new(),
+            name: "test".into(),
+            kind: SessionConfirmKind::Delete,
+        });
+        assert_eq!(
+            route_key(&s, key(KeyCode::Char('n'), KeyModifiers::NONE)),
+            Action::SessionConfirmNo
+        );
+        assert_eq!(
+            route_key(&s, key(KeyCode::Esc, KeyModifiers::NONE)),
+            Action::SessionConfirmNo
+        );
+    }
+
+    #[test]
+    fn confirm_captures_other_keys_as_noop() {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Sessions;
+        s.sessions = vec!["a".into()];
+        s.session_confirm = Some(SessionConfirm {
+            sid: Ulid::new(),
+            name: "test".into(),
+            kind: SessionConfirmKind::Delete,
+        });
+        assert_eq!(
+            route_key(&s, key(KeyCode::Up, KeyModifiers::NONE)),
+            Action::Noop
+        );
     }
 }
