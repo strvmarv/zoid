@@ -776,7 +776,11 @@ In the `handle_action` function, after `Action::SessionPick { ... }` (which ends
                 .sessions
                 .get(app.shell.session_selected)
                 .cloned()
-                .unwrap_or_default();
+                .unwrap_or_default()
+                .split("  ·  ")
+                .next()
+                .unwrap_or("session")
+                .to_string();
             app.shell.session_confirm = Some(zoid_tui::state::SessionConfirm {
                 sid,
                 name,
@@ -890,7 +894,11 @@ Find the existing `Action::SessionTakeoverConfirm` handler (~line 3870) and repl
                 .sessions
                 .get(app.shell.session_selected)
                 .cloned()
-                .unwrap_or_default();
+                .unwrap_or_default()
+                .split("  ·  ")
+                .next()
+                .unwrap_or("session")
+                .to_string();
             app.shell.session_confirm = Some(zoid_tui::state::SessionConfirm {
                 sid,
                 name,
@@ -992,12 +1000,8 @@ enum PickOutcome {
     Resume(usize),
     CreateNew,
     Abort,
-    /// Delete the session at this index (raises inline confirm).
+    /// Delete the session at this index (raises inline confirm in pick_session).
     DeleteConfirm(usize),
-    /// Confirm the pending delete.
-    DeleteConfirmYes,
-    /// Cancel the pending delete.
-    DeleteConfirmNo,
 }
 ```
 
@@ -1018,7 +1022,21 @@ Add `Delete` handling to `pick_choice` (~line 598). After the `PickKey::Esc => P
 
 - [ ] **Step 5: Update `pick_session` to handle delete**
 
-In `pick_session` (~line 641), add `Delete` to the key mapping (after `Esc`):
+First, change the immutable bindings to mutable. At `main.rs:655-672`, change:
+
+```rust
+// BEFORE:
+    let sessions: Vec<zoid_core::sessions::SessionInfo> = ...
+    let n = sessions.len();
+    let live: Vec<bool> = ...
+
+// AFTER:
+    let mut sessions: Vec<zoid_core::sessions::SessionInfo> = ...
+    let mut n = sessions.len();
+    let mut live: Vec<bool> = ...
+```
+
+Add `Delete` to the key mapping (after `Esc`):
 
 ```rust
                     crossterm::event::KeyCode::Esc => PickKey::Esc,
@@ -1033,20 +1051,19 @@ Then add a `pending_delete: Option<usize>` local variable before the loop:
     let mut pending_delete: Option<usize> = None;
 ```
 
-In the `match pick_choice(...)` block, add handlers for the new outcomes. After `PickOutcome::Abort`:
+While `pending_delete` is `Some`, intercept confirm keys BEFORE calling `pick_choice`. Add this check at the top of the `Some(Ok(CEvent::Key(key))) =>` arm, before the `pick_choice` call:
 
 ```rust
-                    PickOutcome::DeleteConfirm(idx) => {
-                        if live.get(idx).copied().unwrap_or(false) {
-                            // Can't delete a live session — skip.
-                            continue;
-                        }
-                        pending_delete = Some(idx);
-                    }
-                    PickOutcome::DeleteConfirmYes => {
-                        if let Some(idx) = pending_delete.take() {
-                            if let Some(&sid) = session_ids_list.get(idx) {
-                                let _ = session.delete_session(sid).await;
+            Some(Ok(CEvent::Key(key))) => {
+                // Inline confirm for pending delete — captures all keys.
+                if let Some(idx) = pending_delete {
+                    match key.code {
+                        crossterm::event::KeyCode::Char('y')
+                        | crossterm::event::KeyCode::Char('Y')
+                        | crossterm::event::KeyCode::Enter => {
+                            // Confirm: delete the session at idx.
+                            if let Some(s) = sessions.get(idx) {
+                                let _ = session.delete_session(s.id).await;
                             }
                             // Re-list sessions.
                             sessions = session
@@ -1066,89 +1083,21 @@ In the `match pick_choice(...)` block, add handlers for the new outcomes. After 
                                     )
                                 })
                                 .collect();
-                            session_ids_list = sessions.iter().map(|s| s.id).collect();
                             if selected >= n {
                                 selected = 0;
                             }
-                        }
-                    }
-                    PickOutcome::DeleteConfirmNo => {
-                        pending_delete = None;
-                    }
-```
-
-Note: `session_ids_list` must be a `Vec<Ulid>` of the session ids. If it doesn't exist as a separate variable, create it: `let mut session_ids_list: Vec<Ulid> = sessions.iter().map(|s| s.id).collect();` before the loop.
-
-Also, while `pending_delete` is `Some`, intercept keys for y/n/Esc before calling `pick_choice`:
-
-```rust
-            Some(Ok(CEvent::Key(key))) => {
-                if let Some(_) = pending_delete {
-                    match key.code {
-                        crossterm::event::KeyCode::Char('y') | crossterm::event::KeyCode::Char('Y') | crossterm::event::KeyCode::Enter => {
-                            // Handle via pick_choice returning DeleteConfirmYes, or handle inline.
-                        }
-                        _ => {}
-                    }
-                }
-```
-
-Actually, it's cleaner to handle the confirm keys inline in `pick_session` rather than threading them through `pick_choice`. While `pending_delete` is `Some`, only respond to y/Y/Enter (confirm), n/N/Esc (cancel), and ignore everything else. Add this check before the `pick_choice` call:
-
-```rust
-                if let Some(_) = pending_delete {
-                    match key.code {
-                        crossterm::event::KeyCode::Char('y')
-                        | crossterm::event::KeyCode::Char('Y')
-                        | crossterm::event::KeyCode::Enter => {
-                            // Confirm: handled by the DeleteConfirmYes outcome below.
-                            // Re-list and clear pending_delete.
-                            if let Some(idx) = pending_delete.take() {
-                                if let Some(&sid) = session_ids_list.get(idx) {
-                                    let _ = session.delete_session(sid).await;
-                                }
-                                sessions = session
-                                    .list_sessions(Some(root.to_string()))
-                                    .await
-                                    .unwrap_or_default();
-                                n = sessions.len();
-                                live = sessions.iter().map(|s| {
-                                    zoid_core::store::is_live(
-                                        s.active, s.active_pid, s.active_heartbeat,
-                                        boot_ts, pid_alive,
-                                    )
-                                }).collect();
-                                session_ids_list = sessions.iter().map(|s| s.id).collect();
-                                if selected >= n { selected = 0; }
-                            }
-                            continue;
+                            pending_delete = None;
                         }
                         crossterm::event::KeyCode::Char('n')
                         | crossterm::event::KeyCode::Char('N')
                         | crossterm::event::KeyCode::Esc => {
                             pending_delete = None;
-                            continue;
                         }
-                        _ => continue, // ignore all other keys during confirm
+                        _ => {} // ignore all other keys during confirm
                     }
+                    continue;
                 }
-```
-
-Also update the render to show the confirm line when `pending_delete` is `Some`. In the `terminal.draw` closure, after the session rows and before the "Create new" row:
-
-```rust
-            if let Some(idx) = pending_delete {
-                if let Some(s) = sessions.get(idx) {
-                    lines.push(Line::from(Span::styled(
-                        format!(
-                            " Delete \"{}\"? [y]es / [n]o",
-                            s.name
-                        ),
-                        Style::new().fg(Color::Yellow),
-                    )));
-                }
-            }
-```
+                let pick_key = match key.code {
 
 - [ ] **Step 6: Run tests to verify they pass**
 
