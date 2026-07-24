@@ -3996,6 +3996,7 @@ mod tests {
         ]));
         let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
             std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
             zoid_tools::KillSlot::new(),
         ));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
@@ -4112,6 +4113,7 @@ mod tests {
         ]));
         let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
             std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
             zoid_tools::KillSlot::new(),
         ));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
@@ -4213,6 +4215,7 @@ mod tests {
         ]));
         let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
             std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
             zoid_tools::KillSlot::new(),
         ));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
@@ -4287,6 +4290,7 @@ mod tests {
         ]));
         let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
             std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
             zoid_tools::KillSlot::new(),
         ));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
@@ -4370,6 +4374,7 @@ mod tests {
         };
         let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
             std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
             zoid_tools::KillSlot::new(),
         ));
 
@@ -4480,6 +4485,7 @@ mod tests {
 
         let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
             std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
             zoid_tools::KillSlot::new(),
         ));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
@@ -4560,6 +4566,7 @@ mod tests {
 
         let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
             std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
             zoid_tools::KillSlot::new(),
         ));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);

@@ -44,6 +44,7 @@ fn active_turn_snapshot_scopes_invoke_skill() {
     let (_p, eff_chat) = active_turn(&modes, &global, &base);
     let tools = Arc::new(zoid::invoke_skill::chat_tools(
         Arc::new(eff_chat),
+        std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
         zoid_tools::KillSlot::new(),
     ));
     let inv = tools.iter().find(|t| t.name() == "invoke_skill").unwrap();
@@ -56,6 +57,7 @@ fn active_turn_snapshot_scopes_invoke_skill() {
     assert!(profile.system_prompt.ends_with("USE SKILLS"));
     let tools = Arc::new(zoid::invoke_skill::chat_tools(
         Arc::new(eff_sp),
+        std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
         zoid_tools::KillSlot::new(),
     ));
     let inv = tools.iter().find(|t| t.name() == "invoke_skill").unwrap();

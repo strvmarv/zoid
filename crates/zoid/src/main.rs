@@ -6458,7 +6458,11 @@ fn spawn_turn(app: &mut App) {
         zoid_core::mode::active_turn(&app.modes, &app.skills, &app.base_profile);
     let menu = effective.menu();
     let kill = zoid_tools::KillSlot::new();
-    let mut tools = zoid::invoke_skill::chat_tools(std::sync::Arc::new(effective), kill.clone());
+    let mut tools = zoid::invoke_skill::chat_tools(
+        std::sync::Arc::new(effective),
+        std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+        kill.clone(),
+    );
     if let Some(wiz) = &app.wizard {
         let wiz = std::sync::Arc::new(wiz.clone());
         tools.push(Box::new(zoid::mode_wizard::ProposeModeMappingTool::new(
