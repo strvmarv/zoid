@@ -1096,7 +1096,7 @@ fn render_verb_overlay(frame: &mut Frame, msgs: &[ChatMsg], state: &ShellState, 
 }
 
 fn render_sessions_overlay(frame: &mut Frame, state: &ShellState, area: Rect) {
-    let mut rows = if state.sessions.is_empty() {
+    let rows: Vec<String> = if state.sessions.is_empty() {
         vec!["(no sessions for this repo)".to_string()]
     } else {
         state
@@ -1113,27 +1113,48 @@ fn render_sessions_overlay(frame: &mut Frame, state: &ShellState, area: Rect) {
             })
             .collect()
     };
+    let sel = nav(state.session_selected, 0, rows.len());
+
     if let Some(c) = &state.session_confirm {
+        // Split the overlay area: list on top, confirm line on the bottom.
+        let chunks = ratatui::layout::Layout::vertical([
+            ratatui::layout::Constraint::Min(3),
+            ratatui::layout::Constraint::Length(1),
+        ])
+        .split(area);
+        list_overlay(
+            frame,
+            chunks[0],
+            format!(" {} resume session ", glyph::RESUME),
+            &rows,
+            sel,
+        );
         let prompt = match c.kind {
             SessionConfirmKind::Delete => format!(
-                " Delete \"{}\"? This permanently removes its history. [y]es / [n]o",
+                " Delete \"{}\"? [y]es / [n]o",
                 c.name
             ),
             SessionConfirmKind::Takeover => format!(
-                " \"{}\" is active in another instance. Take it over? [y]es / [n]o",
+                " \"{}\" is in use. Take over? [y]es / [n]o",
                 c.name
             ),
         };
-        rows.push(prompt);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                prompt,
+                Style::new().fg(color::ERROR).bg(color::SEL_BG),
+            ))),
+            chunks[1],
+        );
+    } else {
+        list_overlay(
+            frame,
+            area,
+            format!(" {} resume session ", glyph::RESUME),
+            &rows,
+            sel,
+        );
     }
-    let sel = nav(state.session_selected, 0, rows.len());
-    list_overlay(
-        frame,
-        area,
-        format!(" {} resume session ", glyph::RESUME),
-        &rows,
-        sel,
-    );
 }
 
 /// The read-only `/mcp` server status overlay: one row per configured MCP
