@@ -94,6 +94,10 @@ enum Cmd {
         session_id: Ulid,
         reply: oneshot::Sender<Result<Vec<Event>>>,
     },
+    DeleteSession {
+        id: Ulid,
+        reply: oneshot::Sender<Result<()>>,
+    },
 }
 
 /// A cloneable handle to the single-writer event-store actor (spec §4.1).
@@ -144,6 +148,9 @@ impl SessionHandle {
                     }
                     Cmd::TouchSession { id, ts, reply } => {
                         let _ = reply.send(store.touch_session(id, ts));
+                    }
+                    Cmd::DeleteSession { id, reply } => {
+                        let _ = reply.send(store.delete_session(id));
                     }
                     Cmd::SetActiveMode { id, mode, reply } => {
                         let _ = reply.send(store.set_active_mode(id, &mode));
@@ -310,6 +317,19 @@ impl SessionHandle {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(Cmd::TouchSession { id, ts, reply })
+            .await
+            .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
+    }
+
+    /// Delete a session and all its events/FTS/embeddings. Only call this for
+    /// non-live sessions (the heartbeat invariant relies on live sessions
+    /// never being deleted).
+    pub async fn delete_session(&self, id: Ulid) -> Result<()> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Cmd::DeleteSession { id, reply })
             .await
             .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
         rx.await
@@ -666,5 +686,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(evs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn delete_session_removes_session() {
+        let store = SessionHandle::spawn(":memory:").unwrap();
+        let sid = Ulid::new();
+        store.new_session(sid, "test".into(), "/repo".into(), 0).await.unwrap();
+        // Confirm it exists.
+        let before = store.list_sessions(None).await.unwrap();
+        assert!(before.iter().any(|s| s.id == sid));
+        // Delete it.
+        store.delete_session(sid).await.unwrap();
+        // Confirm it's gone.
+        let after = store.list_sessions(None).await.unwrap();
+        assert!(!after.iter().any(|s| s.id == sid), "session must be deleted");
     }
 }
