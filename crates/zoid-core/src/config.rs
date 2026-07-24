@@ -50,21 +50,11 @@ pub struct Config {
     pub wake: WakeConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ApprovalConfig {
     pub yolo: bool,
     pub shell_danger: Vec<String>,
     pub shell_allow: Vec<String>,
-}
-
-impl Default for ApprovalConfig {
-    fn default() -> Self {
-        Self {
-            yolo: false,
-            shell_danger: vec![],
-            shell_allow: vec![],
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

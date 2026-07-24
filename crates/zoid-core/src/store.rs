@@ -343,7 +343,7 @@ impl EventStore {
         // 500 keeps us well under SQLITE_MAX_VARIABLE_NUMBER (default 999) with the
         // model_id param to spare.
         for chunk in ids.chunks(500) {
-            let placeholders = std::iter::repeat("?").take(chunk.len()).collect::<Vec<_>>().join(",");
+            let placeholders = std::iter::repeat_n("?", chunk.len()).collect::<Vec<_>>().join(",");
             let sql = format!(
                 "SELECT event_id, vector FROM event_embeddings
                  WHERE model_id = ?1 AND event_id IN ({placeholders})"

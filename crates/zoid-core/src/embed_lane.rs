@@ -30,7 +30,7 @@ impl EmbedLane {
         };
         let mut out = Vec::with_capacity(batch.len());
         let mut idx = self.index.write().unwrap();
-        for ((id, _), raw) in batch.iter().zip(embs.into_iter()) {
+        for ((id, _), raw) in batch.iter().zip(embs) {
             let v = normalize(raw);
             idx.append(*id, &v);
             out.push((*id, v));

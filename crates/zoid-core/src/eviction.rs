@@ -304,7 +304,7 @@ mod goal_text_tests {
 
     #[test]
     fn goal_text_takes_recent_nontrivial_user_msgs_newest_first() {
-        let evs = vec![
+        let evs = [
             user(1, "implement the relevance rescue scorer"),
             asst(2, "ok"),
             user(3, "yes"), // trivial: dropped
@@ -321,7 +321,7 @@ mod goal_text_tests {
 
     #[test]
     fn goal_text_empty_when_no_nontrivial_user_msgs() {
-        let evs = vec![user(1, "y"), user(2, "3")];
+        let evs = [user(1, "y"), user(2, "3")];
         let refs: Vec<&Event> = evs.iter().collect();
         assert!(goal_text(&refs, GOAL_WINDOW_MSGS).is_empty());
     }

@@ -81,6 +81,7 @@ enum Cmd {
     LoadRecentEmbeddings {
         model_id: String,
         cap: usize,
+        #[allow(clippy::type_complexity)]
         reply: oneshot::Sender<Result<Vec<(Ulid, Vec<f32>)>>>,
     },
     UnembeddedEvents {
