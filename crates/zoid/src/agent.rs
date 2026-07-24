@@ -3224,6 +3224,7 @@ mod tests {
             band_headroom_pct: 20,
             recent_n: 2,
             max_output: None,
+            rescue_weight: None,
         };
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} }); // drain UI updates
@@ -3352,6 +3353,7 @@ mod tests {
             band_headroom_pct: 20,
             recent_n: 2,
             max_output: None,
+            rescue_weight: None,
         };
         cfg.embedder = Some(std::sync::Arc::new(FakeEmbedder::new(16)));
 
@@ -3412,6 +3414,7 @@ mod tests {
             band_headroom_pct: 20,
             recent_n: 2,
             max_output: None,
+            rescue_weight: None,
         };
         cfg.embedder = None;
         let out = run_gate_only(cfg, session, seed).await;
@@ -3633,6 +3636,7 @@ mod tests {
             band_headroom_pct: 20,
             recent_n: 4,
             max_output: None,
+            rescue_weight: None,
         };
 
         let provider = std::sync::Arc::new(RecordingProvider::new(vec![
@@ -3901,6 +3905,7 @@ mod tests {
             band_headroom_pct: 20,
             recent_n: 4,
             max_output: None,
+            rescue_weight: None,
         };
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
@@ -3964,6 +3969,7 @@ mod tests {
             band_headroom_pct: 20,
             recent_n: 4,
             max_output: None,
+            rescue_weight: None,
         };
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
@@ -4427,6 +4433,7 @@ mod tests {
             band_headroom_pct: 20,
             recent_n: 2,
             max_output: None,
+            rescue_weight: None,
         };
         let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
             std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),

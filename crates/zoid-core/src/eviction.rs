@@ -5,7 +5,7 @@ use crate::band::{derive_band, Band};
 
 /// The live turn's eviction parameters. `enabled: false` is a total bypass
 /// (byte-identical to pre-ACM behavior) used by the zero-arg test constructors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EvictionPolicy {
     pub enabled: bool,
     pub capacity: u64,
@@ -13,6 +13,7 @@ pub struct EvictionPolicy {
     pub band_headroom_pct: u8,
     pub recent_n: usize,
     pub max_output: Option<u64>,
+    pub rescue_weight: Option<f32>,
 }
 
 impl EvictionPolicy {
@@ -24,6 +25,7 @@ impl EvictionPolicy {
             band_headroom_pct: 0,
             recent_n: 0,
             max_output: None,
+            rescue_weight: None,
         }
     }
     /// The band for this policy (spec §3.6a).
@@ -54,8 +56,38 @@ mod tests {
             band_headroom_pct: 20,
             recent_n: 4,
             max_output: None,
+            rescue_weight: None,
         };
         assert_eq!(p.band().high_water, 384_000);
+    }
+
+    #[test]
+    fn resolve_rescue_weight_none_uses_default() {
+        assert_eq!(resolve_rescue_weight(None), DEFAULT_RESCUE_WEIGHT);
+    }
+
+    #[test]
+    fn resolve_rescue_weight_some_finite_passes_through_capped() {
+        assert_eq!(resolve_rescue_weight(Some(8.0)), 8.0);
+        assert_eq!(resolve_rescue_weight(Some(0.0)), 0.0);
+        assert_eq!(resolve_rescue_weight(Some(RESCUE_WEIGHT_MAX)), RESCUE_WEIGHT_MAX);
+    }
+
+    #[test]
+    fn resolve_rescue_weight_large_finite_clamped_to_max() {
+        assert_eq!(resolve_rescue_weight(Some(100.0)), RESCUE_WEIGHT_MAX);
+    }
+
+    #[test]
+    fn resolve_rescue_weight_negative_clamped_to_zero() {
+        assert_eq!(resolve_rescue_weight(Some(-5.0)), 0.0);
+    }
+
+    #[test]
+    fn resolve_rescue_weight_non_finite_clamped_to_zero() {
+        assert_eq!(resolve_rescue_weight(Some(f32::INFINITY)), 0.0);
+        assert_eq!(resolve_rescue_weight(Some(f32::NEG_INFINITY)), 0.0);
+        assert_eq!(resolve_rescue_weight(Some(f32::NAN)), 0.0);
     }
 }
 
@@ -191,6 +223,25 @@ mod fold_tests {
 /// Rescue weight in "turns of recency" units (provisional; fixed by the replay
 /// eval). Maximal relevance is worth ~this many turns of newness.
 pub const DEFAULT_RESCUE_WEIGHT: f32 = 12.0;
+
+/// Upper cap for `resolve_rescue_weight`: 4× the default. Anything above this
+/// makes rescue so over-protective that it's effectively a misconfiguration;
+/// clamping here prevents the band-starve pathology while still allowing ample
+/// tuning range.
+pub const RESCUE_WEIGHT_MAX: f32 = DEFAULT_RESCUE_WEIGHT * 4.0; // 48.0
+
+/// Resolve the rescue weight, clamping to a safe positive range.
+/// Negative / NaN / +∞ / -∞ all collapse to 0.0 (pure recency), preserving
+/// the rescue-only invariant and the band-preservation guarantee. Large finite
+/// values are capped at `RESCUE_WEIGHT_MAX`. `None` ⇒ `DEFAULT_RESCUE_WEIGHT`.
+pub fn resolve_rescue_weight(raw: Option<f32>) -> f32 {
+    let w = raw.unwrap_or(DEFAULT_RESCUE_WEIGHT);
+    if w.is_finite() && w >= 0.0 {
+        w.min(RESCUE_WEIGHT_MAX)
+    } else {
+        0.0
+    }
+}
 
 /// Relevance context for a rescue-aware eviction pass. Empty `goal` ⇒ no rescue
 /// ⇒ byte-identical to pure recency (the degradation path).
@@ -613,6 +664,7 @@ mod plan_tests {
             band_headroom_pct: 20,
             recent_n,
             max_output: None,
+            rescue_weight: None,
         }
     }
 
@@ -974,6 +1026,7 @@ mod steady_state_tests {
             band_headroom_pct: 20,
             recent_n: 4,
             max_output: None,
+            rescue_weight: None,
         };
         let band = policy.band();
         let overhead = ContextOverhead::default();
