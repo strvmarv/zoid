@@ -2599,17 +2599,28 @@ const OVERCOUNT_BIAS: f64 = 1.15;
 /// Candidate ids for the relevance read. Over-approximates the real candidate set
 /// (avoids replicating `group_turns`) BUT excludes already-evicted ids: those
 /// turns are `protected`, so `plan_evictions` never looks up their vectors —
-/// reading them would be pure waste. The survivors are ~the in-context working
-/// set (bounded by the band), not O(history), which keeps this hot-path read
-/// bounded on long sessions.
+/// reading them would be pure waste.
+///
+/// **Bounded:** Capped to the first `EMBEDDABLE_ID_CAP` non-evicted events from the
+/// log. The real candidate set in `plan_evictions` is the non-protected turns
+/// (old enough to evict, not recent-N) — at most ~band_size turns (~40-80
+/// events). 500 ids gives generous headroom while preventing a 10k-event session
+/// from deserializing ~15 MB of vectors that `plan_evictions` will never look up.
 fn embeddable_event_ids(events: &crate::eventlog::EventLog) -> Vec<Ulid> {
     let evicted = zoid_core::eviction::evicted_ids(events.iter());
     events
         .iter()
         .map(|e| e.id)
         .filter(|id| !evicted.contains(id))
+        .take(EMBEDDABLE_ID_CAP)
         .collect()
 }
+
+/// Max number of event ids to read vectors for in one eviction pass. The candidate
+/// set in `plan_evictions` is bounded by the band (~40 turns ≈ 80 events); this
+/// cap is generous over-approximation that keeps the hot-path read bounded on
+/// long sessions.
+const EMBEDDABLE_ID_CAP: usize = 500;
 
 /// Run the cheap correctness levers BEFORE the request is built (spec §3.8, C1):
 /// (1) compact tool results, (2) evict oldest turns to `low_water`, (3) if near
