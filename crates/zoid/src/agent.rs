@@ -2859,13 +2859,14 @@ async fn emit_eviction(
     now: fn() -> i64,
     plan: zoid_core::eviction::EvictionPlan,
 ) -> Result<()> {
-    if plan.turns.is_empty() {
+    let zoid_core::eviction::EvictionPlan { turns, rescue } = plan;
+    if turns.is_empty() {
         return Ok(());
     }
     let mut ids = Vec::new();
     let mut reclaimed = 0u64;
     let mut spans = Vec::new();
-    for t in plan.turns {
+    for t in turns {
         reclaimed += t.token_estimate;
         spans.push(zoid_core::event::EvictedSpan {
             token_estimate: t.token_estimate,
@@ -2882,7 +2883,7 @@ async fn emit_eviction(
             ids,
             reclaimed_tokens: reclaimed,
             marker: zoid_core::event::EvictionMarker { spans },
-            rescue: None,
+            rescue,
         },
         session_id,
         now,
