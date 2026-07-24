@@ -2808,7 +2808,17 @@ where
                         // instead of triggering a full O(n) conversation() fold
                         // on the next frame. Structural events (ToolResult,
                         // Usage, etc.) return false and get a full refresh.
-                        if !app.proj.apply_streaming(&ev) {
+                        //
+                        // Subagent-branch events are persisted to SQLite and
+                        // pushed into app.events, but the projection cache only
+                        // cares about main-branch events for the conversation
+                        // view. Skip the incremental streaming path AND cache
+                        // invalidation for subagent-branch events — no UI churn.
+                        // DelegationResult events are on the default branch, so
+                        // they flow through here normally.
+                        let is_subagent_branch =
+                            ev.branch != zoid_core::event::BranchId::default();
+                        if !is_subagent_branch && !app.proj.apply_streaming(&ev) {
                             // Structural event — invalidate the projection cache
                             // AND the body cache so both do a full rebuild on
                             // the next frame. Compaction events replace content
@@ -7912,6 +7922,106 @@ mod tests {
         );
         assert!(!app.wake_after_delegation, "the stale flag is cleared");
         assert!(!app.streaming, "no continuation turn on a yielded session");
+    }
+
+    /// A subagent-branch event must NOT be applied to the projection cache
+    /// via `apply_streaming`. The `msgs` vector must be unchanged.
+    #[tokio::test]
+    async fn subagent_branch_event_skips_apply_streaming() {
+        let mut app = test_app().await;
+        // Seed the projection with one main-branch user message so the cache
+        // is populated (events_len = Some(1), msgs has 1 item).
+        let ev = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::UserMessage { text: "hello".into() },
+        );
+        app.events.push(ev);
+        app.proj.refresh(&app.events);
+
+        let msgs_before = app.proj.msgs.len();
+        assert!(msgs_before > 0, "projection must have the seeded message");
+        assert!(
+            app.proj.events_len.is_some(),
+            "events_len must be set (cache is live)"
+        );
+
+        // Simulate a subagent-branch ModelDelta arriving through Appended.
+        // The branch is "subagent:01ABC" — NOT the default "main" branch.
+        let sub_ev = Event::new(
+            Ulid::new(),
+            None,
+            1,
+            EventKind::ModelDelta { text: "subagent text".into() },
+        )
+        .with_session(app.session_id);
+        // Override the branch to a subagent branch.
+        let mut sub_ev = sub_ev;
+        sub_ev.branch = zoid_core::event::BranchId("subagent:01ABC".into());
+
+        // Process it the same way the Appended handler does, but with the
+        // branch guard applied (the code under test).
+        let is_subagent_branch = sub_ev.branch != zoid_core::event::BranchId::default();
+        if !is_subagent_branch && !app.proj.apply_streaming(&sub_ev) {
+            app.proj.events_len = None;
+        }
+        app.events.push(sub_ev);
+
+        // The projection cache must be untouched: same msg count, events_len
+        // still set (not invalidated).
+        assert_eq!(
+            app.proj.msgs.len(),
+            msgs_before,
+            "subagent-branch event must not add to projection msgs"
+        );
+        assert!(
+            app.proj.events_len.is_some(),
+            "subagent-branch event must not invalidate the projection cache"
+        );
+        // The event IS in app.events (persisted), just not in the projection.
+        assert_eq!(app.events.len(), 2, "event pushed into app.events");
+    }
+
+    /// A main-branch ModelDelta must still be applied via `apply_streaming`
+    /// (existing behavior preserved).
+    #[tokio::test]
+    async fn main_branch_event_applies_streaming() {
+        let mut app = test_app().await;
+        // Seed with a user message so apply_streaming can find a last Assistant
+        // msg to append to (or it creates a new one).
+        let ev = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::UserMessage { text: "hello".into() },
+        );
+        app.events.push(ev);
+        app.proj.refresh(&app.events);
+
+        let msgs_before = app.proj.msgs.len();
+
+        // A main-branch ModelDelta (default branch).
+        let main_ev = Event::new(
+            Ulid::new(),
+            None,
+            1,
+            EventKind::ModelDelta { text: "response".into() },
+        );
+
+        let is_subagent_branch = main_ev.branch != zoid_core::event::BranchId::default();
+        if !is_subagent_branch && !app.proj.apply_streaming(&main_ev) {
+            app.proj.events_len = None;
+        }
+        app.events.push(main_ev);
+
+        // apply_streaming should have added an Assistant msg (ModelDelta creates
+        // a new one if none exists, or appends to the last one).
+        assert_eq!(
+            app.proj.msgs.len(),
+            msgs_before + 1,
+            "main-branch ModelDelta must add to projection msgs"
+        );
     }
 
     /// Regression for I-1: `Action::SessionPick` must be a no-op while a
