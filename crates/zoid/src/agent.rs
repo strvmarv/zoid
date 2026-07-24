@@ -835,6 +835,7 @@ async fn run_turn_inner(
                             &config.eviction,
                             est,
                             &zoid_core::eviction::RecencyScorer,
+                            &zoid_core::eviction::GoalContext::default(),
                         );
                         emit_eviction(&session, &mut events, ui, config, session_id, now, plan)
                             .await?;
@@ -2681,6 +2682,7 @@ async fn preflight_gate(
             policy,
             est,
             &zoid_core::eviction::RecencyScorer,
+            &zoid_core::eviction::GoalContext::default(),
         );
         emit_eviction(session, events, ui, config, session_id, now, plan).await?;
         est = estimate(events);
@@ -2697,6 +2699,7 @@ async fn preflight_gate(
             policy,
             est,
             &zoid_core::eviction::RecencyScorer,
+            &zoid_core::eviction::GoalContext::default(),
         );
         emit_eviction(session, events, ui, config, session_id, now, plan).await?;
     }
