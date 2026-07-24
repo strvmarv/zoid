@@ -1672,9 +1672,6 @@ struct App {
     /// a new value re-arms the watcher immediately (schedule/cancel/fire).
     next_wake_tx: tokio::sync::watch::Sender<Option<i64>>,
     /// A takeover confirmation in flight: the session id the user is about to
-    /// forcibly claim from another instance. Set by `SessionTakeoverConfirm`,
-    /// consumed by the "Take over" answer in `QuestionSelect`. Spec §3.2.
-    pending_takeover: Option<Ulid>,
     /// Background MCP manager (None if no servers are configured). Its tools are
     /// merged into the Chat tool set each turn.
     mcp: Option<std::sync::Arc<zoid_mcp::McpManager>>,
@@ -2141,7 +2138,6 @@ async fn main() -> Result<()> {
         wake_after_delegation: false,
         pending_wakes: std::collections::BTreeMap::new(),
         next_wake_tx: tokio::sync::watch::channel(None).0,
-        pending_takeover: None,
         mcp,
         embed_index,
         embedder,
@@ -3869,8 +3865,6 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 zoid_tui::palette::nav(app.shell.session_selected, d, app.shell.sessions.len());
         }
         Action::SessionTakeoverConfirm => {
-            // The user picked a live row. Raise a confirm card; on "Take over",
-            // overwrite the row's active_pid/heartbeat to claim it, then resume.
             let sid = match app.session_ids.get(app.shell.session_selected) {
                 Some(&sid) => sid,
                 None => {
@@ -3878,14 +3872,21 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                     return Ok(false);
                 }
             };
-            app.shell.question = Some(zoid_tui::question::QuestionState::new(
-                "This session is active in another instance. Take it over? \
-                 The other instance will detect this and yield."
-                    .to_string(),
-                vec!["Take over".into(), "Cancel".into()],
-            ));
-            // Stash the takeover target so QuestionSelect can act on it.
-            app.pending_takeover = Some(sid);
+            let name = app
+                .shell
+                .sessions
+                .get(app.shell.session_selected)
+                .cloned()
+                .unwrap_or_default()
+                .split("  ·  ")
+                .next()
+                .unwrap_or("session")
+                .to_string();
+            app.shell.session_confirm = Some(zoid_tui::state::SessionConfirm {
+                sid,
+                name,
+                kind: zoid_tui::state::SessionConfirmKind::Takeover,
+            });
         }
         Action::SessionPick => {
             if app.streaming || !app.in_flight_subagents.is_empty() {
@@ -3949,6 +3950,113 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 spawn_heartbeat(app);
             }
             app.shell.close_overlay();
+        }
+        Action::SessionDelete => {
+            if app.streaming || !app.in_flight_subagents.is_empty() {
+                app.shell.status_hint = Some("finish the current turn first".into());
+                app.shell.close_overlay();
+                return Ok(false);
+            }
+            let sid = match app.session_ids.get(app.shell.session_selected) {
+                Some(&sid) => sid,
+                None => return Ok(false),
+            };
+            let live = app
+                .shell
+                .sessions_live
+                .get(app.shell.session_selected)
+                .copied()
+                .unwrap_or(false);
+            if live {
+                app.shell.status_hint = Some("can't delete a session that's in use".into());
+                return Ok(false);
+            }
+            let name = app
+                .shell
+                .sessions
+                .get(app.shell.session_selected)
+                .cloned()
+                .unwrap_or_default()
+                .split("  ·  ")
+                .next()
+                .unwrap_or("session")
+                .to_string();
+            app.shell.session_confirm = Some(zoid_tui::state::SessionConfirm {
+                sid,
+                name,
+                kind: zoid_tui::state::SessionConfirmKind::Delete,
+            });
+        }
+        Action::SessionConfirmYes => {
+            let confirm = match app.shell.session_confirm.take() {
+                Some(c) => c,
+                None => return Ok(false),
+            };
+            match confirm.kind {
+                zoid_tui::state::SessionConfirmKind::Delete => {
+                    if let Err(e) = app.session.delete_session(confirm.sid).await {
+                        app.shell.status_hint = Some(format!("could not delete session: {e}"));
+                        return Ok(false);
+                    }
+                    // Refresh the session list.
+                    let list = app
+                        .session
+                        .list_sessions(Some(repo_root()))
+                        .await
+                        .unwrap_or_default();
+                    app.session_ids = list.iter().map(|s| s.id).collect();
+                    app.shell.sessions = list
+                        .iter()
+                        .map(|s| {
+                            format!(
+                                "{}  ·  {}  ·  {}",
+                                s.name,
+                                fmt_since(s.last_touched_ts, now_ms()),
+                                zoid_tui::economy_view::human_tokens(s.token_total)
+                            )
+                        })
+                        .collect();
+                    let now = now_ms();
+                    app.shell.sessions_live = list
+                        .iter()
+                        .map(|s| {
+                            zoid_core::store::is_live(
+                                s.active,
+                                s.active_pid,
+                                s.active_heartbeat,
+                                now,
+                                pid_alive,
+                            )
+                        })
+                        .collect();
+                    if app.shell.session_selected >= app.shell.sessions.len() {
+                        app.shell.session_selected = 0;
+                    }
+                    app.shell.session_confirm = None;
+                }
+                zoid_tui::state::SessionConfirmKind::Takeover => {
+                    let sid = confirm.sid;
+                    let self_pid = std::process::id() as i64;
+                    app.session
+                        .set_active(sid, true, self_pid, now_ms())
+                        .await
+                        .ok();
+                    app.shell.session_selected = app
+                        .session_ids
+                        .iter()
+                        .position(|&x| x == sid)
+                        .unwrap_or(app.shell.session_selected);
+                    app.shell.session_confirm = None;
+                    return Box::pin(handle_action(
+                        app,
+                        zoid_tui::route::Action::SessionPick,
+                    ))
+                    .await;
+                }
+            }
+        }
+        Action::SessionConfirmNo => {
+            app.shell.session_confirm = None;
         }
         Action::ConfigMoveField(d) => {
             let n = app
@@ -4324,33 +4432,6 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::QuestionSelect => {
             use zoid_tui::question::{QuestionMode, QuestionOutcome};
-            // A takeover confirm card's answer. NB: QuestionState resolves the
-            // last choice row to LetYouDecide, so `Cancel` arrives as
-            // LetYouDecide, not Choice("Cancel"). Anything that isn't
-            // Choice("Take over") is treated as a cancel — the intended contract.
-            if let Some(sid) = app.pending_takeover.take() {
-                let outcome = app.shell.question.as_ref().map(|q| q.resolved());
-                let take = matches!(outcome, Some(QuestionOutcome::Choice(s)) if s == "Take over");
-                app.shell.question = None;
-                if !take {
-                    // Cancel: return to the picker.
-                    app.shell.overlay = zoid_tui::Overlay::Sessions;
-                    return Ok(false);
-                }
-                // Take over: claim the row, then load it via the SessionPick path.
-                let self_pid = std::process::id() as i64;
-                app.session
-                    .set_active(sid, true, self_pid, now_ms())
-                    .await
-                    .ok();
-                app.shell.session_selected = app
-                    .session_ids
-                    .iter()
-                    .position(|&x| x == sid)
-                    .unwrap_or(app.shell.session_selected);
-                // Box::pin the recursive call (async fn can't recurse directly).
-                return Box::pin(handle_action(app, zoid_tui::route::Action::SessionPick)).await;
-            }
             let outcome = app.shell.question.as_ref().map(|q| q.resolved());
             match outcome {
                 Some(QuestionOutcome::EnterFreeText) => {
@@ -7233,7 +7314,6 @@ mod tests {
             wake_after_delegation: false,
             pending_wakes: std::collections::BTreeMap::new(),
             next_wake_tx: tokio::sync::watch::channel(None).0,
-            pending_takeover: None,
             mcp: None,
             embed_index: None,
             embedder: None,
