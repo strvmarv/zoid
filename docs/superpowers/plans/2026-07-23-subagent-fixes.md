@@ -48,7 +48,7 @@ Add these tests to the `#[cfg(test)] mod tests` block in `main.rs`, near the exi
             0,
             EventKind::UserMessage { text: "hello".into() },
         );
-        app.events.push(ev.clone());
+        app.events.push(ev);
         app.proj.refresh(&app.events);
 
         let msgs_before = app.proj.msgs.len();
@@ -107,7 +107,7 @@ Add these tests to the `#[cfg(test)] mod tests` block in `main.rs`, near the exi
             0,
             EventKind::UserMessage { text: "hello".into() },
         );
-        app.events.push(ev.clone());
+        app.events.push(ev);
         app.proj.refresh(&app.events);
 
         let msgs_before = app.proj.msgs.len();
