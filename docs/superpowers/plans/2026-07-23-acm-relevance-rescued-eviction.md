@@ -46,7 +46,7 @@
 - Consumes: existing `event_embeddings(event_id TEXT, model_id TEXT, dim INT, vector BLOB)`; private `blob_to_f32s(&[u8]) -> Vec<f32>`.
 - Produces: `EventStore::vectors_by_ids(&self, model_id: &str, ids: &[Ulid]) -> Result<HashMap<Ulid, Vec<f32>>>`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```rust
 #[test]
@@ -77,12 +77,12 @@ fn vectors_by_ids_empty_ids_is_empty_no_query() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p zoid-core vectors_by_ids -- --nocapture`
 Expected: FAIL — `no method named vectors_by_ids`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```rust
 /// Batch-read cached vectors for `ids` under `model_id`. Chunked to stay under
@@ -130,17 +130,17 @@ pub fn vectors_by_ids(
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p zoid-core vectors_by_ids`
 Expected: PASS (both tests).
 
-- [ ] **Step 5: Build the workspace (cross-crate guard)**
+- [x] **Step 5: Build the workspace (cross-crate guard)**
 
 Run: `cargo build --workspace`
 Expected: success.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/zoid-core/src/store.rs
@@ -159,7 +159,7 @@ git commit -m "feat(zoid-core): vectors_by_ids — chunked batch read of cached 
 - Consumes: `EventStore::vectors_by_ids` (Task 1).
 - Produces: `SessionHandle::vectors_by_ids(&self, model_id: String, ids: Vec<Ulid>) -> Result<HashMap<Ulid, Vec<f32>>>`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```rust
 #[tokio::test]
@@ -177,12 +177,12 @@ async fn handle_vectors_by_ids_round_trips() {
 
 > If the existing embedding tests use a differently-named constructor than `test_handle()`, reuse that exact one (see the test that calls `h.write_embedding(...)` around session.rs:650).
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p zoid-core handle_vectors_by_ids`
 Expected: FAIL — `no method named vectors_by_ids` on the handle.
 
-- [ ] **Step 3: Add the `Cmd` variant**
+- [x] **Step 3: Add the `Cmd` variant**
 
 In the `enum Cmd { … }`, beside `WriteEmbedding`:
 
@@ -194,7 +194,7 @@ VectorsByIds {
 },
 ```
 
-- [ ] **Step 4: Add the match arm**
+- [x] **Step 4: Add the match arm**
 
 In the actor loop, beside the `Cmd::WriteEmbedding` arm:
 
@@ -204,7 +204,7 @@ Cmd::VectorsByIds { model_id, ids, reply } => {
 }
 ```
 
-- [ ] **Step 5: Add the `SessionHandle` method**
+- [x] **Step 5: Add the `SessionHandle` method**
 
 Beside `write_embedding`:
 
@@ -225,12 +225,12 @@ pub async fn vectors_by_ids(
 }
 ```
 
-- [ ] **Step 6: Run test to verify it passes**
+- [x] **Step 6: Run test to verify it passes**
 
 Run: `cargo test -p zoid-core handle_vectors_by_ids`
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/zoid-core/src/session.rs
@@ -252,7 +252,7 @@ git commit -m "feat(zoid-core): session VectorsByIds command + handle"
   - `pub const MIN_GOAL_MSG_CHARS: usize = 8;`
   - `pub fn goal_text(events: &[&Event], n: usize) -> String;`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```rust
 #[test]
@@ -283,12 +283,12 @@ fn goal_text_empty_when_no_nontrivial_user_msgs() {
 
 > Reuse/extend the existing `user(id, text)` test constructor in this file (see `plan_tests`). Add a sibling `asst(id, text)` returning `EventKind::AssistantMessage { text }` if not present.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p zoid-core goal_text`
 Expected: FAIL — `cannot find function goal_text`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```rust
 /// Newest-first concatenation of up to `n` non-trivial user messages, the
@@ -314,12 +314,12 @@ pub fn goal_text(events: &[&Event], n: usize) -> String {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p zoid-core goal_text`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/zoid-core/src/eviction.rs
@@ -343,7 +343,7 @@ git commit -m "feat(zoid-core): goal_text — recent non-trivial user turns as r
   - `fn turn_relevance(turn: &TurnView, ctx: &GoalContext) -> f32` (max cosine over the turn's cached event vectors; 0.0 if none).
   - `fn rank_normalize(raws: &[f32]) -> Vec<f32>` (rank/(n−1) ∈ [0,1]; all-equal or len≤1 → all 0.0).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 #[test]
@@ -387,12 +387,12 @@ fn rank_normalize_maps_to_unit_interval_and_degenerates_to_zero() {
 
 > `TurnView` needs `#[derive(Clone)]` for the `..turn.clone()` spread — it already derives `Clone` (eviction.rs:196). If not, add it.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cargo test -p zoid-core -- cosine_is_dot turn_relevance rank_normalize`
 Expected: FAIL — items not found.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Replace the empty `GoalContext` (eviction.rs:191-193) and add helpers:
 
@@ -461,17 +461,17 @@ fn rank_normalize(raws: &[f32]) -> Vec<f32> {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `cargo test -p zoid-core -- cosine_is_dot turn_relevance rank_normalize`
 Expected: PASS.
 
-- [ ] **Step 5: Build the workspace (GoalContext is public, cross-crate)**
+- [x] **Step 5: Build the workspace (GoalContext is public, cross-crate)**
 
 Run: `cargo build --workspace`
 Expected: success (no consumer sets `GoalContext` fields yet; `Default` still works).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/zoid-core/src/eviction.rs
@@ -492,7 +492,7 @@ git commit -m "feat(zoid-core): GoalContext fields + cosine/turn_relevance/rank_
 - Produces: new signature
   `pub fn plan_evictions<'a>(events, policy, current_tokens, scorer: &dyn EvictionScorer, ctx: &GoalContext) -> EvictionPlan`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to the existing `mod plan_tests` (reuses its `user`, `asst`, `policy`
 fixtures). All use this 8-turn builder — 6 candidates after `recent_n = 2`, each
@@ -574,12 +574,12 @@ fn bounded_reach_weight_zero_is_pure_recency() {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cargo test -p zoid-core -- empty_goalcontext relevant_old_turn band_preservation bounded_reach`
 Expected: FAIL — `plan_evictions` takes 4 args, not 5. (Confirm the filter matches 4 tests, not 0 — a zero-match filter exits green and would mask a missing test.)
 
-- [ ] **Step 3: Add the `ctx` param + relevance layer**
+- [x] **Step 3: Add the `ctx` param + relevance layer**
 
 Change the signature and the candidate-sort block. Replace the internal
 `let ctx = GoalContext::default();` (line ~356) — `ctx` now comes from the caller:
@@ -640,7 +640,7 @@ pub fn plan_evictions<'a>(
 
 > `EvictionScorer::score(turn, ctx)` still receives `ctx`; `RecencyScorer` ignores it (returns `turn.index`). The relevance term is applied here, not in the scorer, because ranking needs all candidates at once.
 
-- [ ] **Step 4: Update EVERY existing `plan_evictions` call site (compile-break sweep)**
+- [x] **Step 4: Update EVERY existing `plan_evictions` call site (compile-break sweep)**
 
 The new 5th param breaks all existing callers — production **and** tests — so the
 crate won't compile until every one is updated in this same commit. Sweep them:
@@ -664,14 +664,14 @@ At time of writing this returns **10** call sites (3 production + 7 tests). Appe
   (`holds_band_over_hundreds_of_turns`). Miss the second module and `-p zoid-core`
   won't compile — hence: trust the grep, not this list.
 
-- [ ] **Step 5: Run tests + workspace build**
+- [x] **Step 5: Run tests + workspace build**
 
 Run: `cargo test -p zoid-core -- empty_goalcontext relevant_old_turn band_preservation bounded_reach`
 Expected: PASS (all 4).
 Run: `cargo build --workspace && cargo test --workspace --no-fail-fast`
 Expected: success; no existing eviction test regressed (empty-ctx path is identical).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/zoid-core/src/eviction.rs crates/zoid/src/agent.rs
@@ -690,7 +690,7 @@ git commit -m "feat(zoid-core): rescue-only relevance layer in plan_evictions (c
 - Consumes: `SessionHandle::vectors_by_ids` (T2), `goal_text`/`GoalContext`/`DEFAULT_RESCUE_WEIGHT`/`GOAL_WINDOW_MSGS` (T3/T4), `plan_evictions` 5-arg (T5), `TurnConfig { embed, embedder }` (agent.rs:157-159).
 - Produces: populated `GoalContext` passed to the two `preflight_gate` `plan_evictions` calls; `agent.rs:833` stays `GoalContext::default()`.
 
-- [ ] **Step 1: Write the failing integration test**
+- [x] **Step 1: Write the failing integration test**
 
 Mirror the existing `preflight_gate_evicts_before_send` harness (`agent.rs:3054`).
 Key technique: **fatness lives on the assistant messages** (drives the token
@@ -785,14 +785,14 @@ wraps `run_agent_turn` exactly as `preflight_gate_evicts_before_send` does
 `EventLog::from_vec(seed)`, `|| 0`), returning the `out` events. Reuse it for both
 tests to keep them focused on the assertion.
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cargo test -p zoid --features local-embed -- preflight_rescues preflight_without_embedder`
 Expected: the rescue test FAILS its `!evicted.contains(id 1)` assertion (real ctx
 not built yet — the gate is recency-only, so id 1 is still evicted). The
 no-embedder test already passes. (Confirm the filter matches 2 tests, not 0.)
 
-- [ ] **Step 3: Add the `embeddable_event_ids` helper**
+- [x] **Step 3: Add the `embeddable_event_ids` helper**
 
 ```rust
 /// Candidate ids for the relevance read. Over-approximates the real candidate set
@@ -807,7 +807,7 @@ fn embeddable_event_ids(events: &crate::eventlog::EventLog) -> Vec<Ulid> {
 }
 ```
 
-- [ ] **Step 4: Build `ctx` in `preflight_gate` — AFTER compaction, before passes (2)/(3)**
+- [x] **Step 4: Build `ctx` in `preflight_gate` — AFTER compaction, before passes (2)/(3)**
 
 Placement matters: pass (1) compaction (agent.rs:2637–2675) can drop `est` below
 `high_water`, so building the context before it would pay the ~30 ms embed + vector
@@ -866,14 +866,14 @@ embed happens:
 
 Then pass `&goal_ctx` to the pass-(2) and pass-(3) `plan_evictions` calls (leave `agent.rs:833`, the context-length emergency retry, on `&GoalContext::default()`).
 
-- [ ] **Step 5: Run tests + release-gate build**
+- [x] **Step 5: Run tests + release-gate build**
 
 Run: `cargo test -p zoid --features local-embed -- preflight_rescues preflight_without_embedder`
 Expected: PASS.
 Run: `cargo test --workspace --features zoid/local-embed --no-fail-fast`
 Expected: success (the release gate from AGENTS.md §4).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/zoid/src/agent.rs
@@ -892,11 +892,11 @@ git commit -m "feat(zoid): wire relevance rescue into preflight_gate under press
 - Consumes: `EventStore` (open a real session DB read-only), `plan_evictions` (T5), `goal_text`, `vectors_by_ids`.
 - Produces: a printed table `weight → {regret_rate, band_health, churn}` and a recommended weight.
 
-- [ ] **Step 1: Scaffold the spike crate (not in the workspace release path)**
+- [x] **Step 1: Scaffold the spike crate (not in the workspace release path)**
 
 Add `spikes/eviction-weight-eval` as its own crate (the `spikes/` dir is already excluded from the shipped build — follow `spikes/embed-rerank-eval/Cargo.toml`).
 
-- [ ] **Step 2: Implement the replay + metrics**
+- [x] **Step 2: Implement the replay + metrics**
 
 ```rust
 // Pseudocode-level structure (fill with real EventStore reads):
@@ -913,19 +913,19 @@ Add `spikes/eviction-weight-eval` as its own crate (the `spikes/` dir is already
 // 5. Print the table; recommend the knee (min regret with band health green).
 ```
 
-- [ ] **Step 3: Run it against a real dogfood session (manual)**
+- [x] **Step 3: Run it against a real dogfood session (manual)**
 
 Run: `cargo run -p eviction-weight-eval -- /path/to/session.sqlite`
 Expected: a weight→metrics table; a recommended value.
 
-- [ ] **Step 4: Set the const to the chosen value**
+- [x] **Step 4: Set the const to the chosen value**
 
 Update `DEFAULT_RESCUE_WEIGHT` in `eviction.rs` if the eval's knee ≠ 12.0; re-run Task 5's property tests to confirm the value stays in the safe range.
 
 Run: `cargo test -p zoid-core -- band_preservation relevant_old_turn`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add spikes/eviction-weight-eval crates/zoid-core/src/eviction.rs
