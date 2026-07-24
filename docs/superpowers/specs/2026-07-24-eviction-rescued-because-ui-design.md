@@ -187,7 +187,7 @@ EventKind::TurnsEvicted { ids, reclaimed_tokens, marker, rescue } => {
         reclaimed_tokens: *reclaimed_tokens,
         evicted_topics,
         rescue,
-        ts: /* the event's timestamp */,
+        ts: e.ts,
     });
 }
 ```
@@ -345,14 +345,16 @@ TUI (chat.rs)
   existing `EvictionPlan { turns: ... }` literals must add `rescue: None`
   (test helpers, `Default`). `GoalContext` gains `pub goal_text: String` field;
   all `GoalContext { ... }` literals must add `goal_text: String::new()` (test
-  sites: eviction.rs ~line 346, 904, 922; production site: agent.rs:2797).
+  sites: eviction.rs ~line 346, 862, 904, 922; production site: agent.rs:2797).
   `Default` for `GoalContext` yields `goal_text: String::default()` = `""`,
   consistent with `rescue: None` (empty goal ⇒ no rescue).
 - **`event.rs` (zoid-core)** — `TurnsEvicted` gains `rescue` field. `EventKind`
   (line 69) and `Event` (line 196) both drop `Eq` **and `Hash`** (retains
-  `PartialEq`). All `TurnsEvicted { ... }` literals must add `rescue: None`
-  (emit_eviction in agent.rs, test event constructors in event.rs and agent.rs
-  test modules).
+  `PartialEq`). All `TurnsEvicted { ... }` literals must add `rescue: None` —
+  **14 sites**: `event.rs:444` (test), `context.rs:827` (test), `reassert.rs:98`
+  (test), `projection.rs:761` (test), `eviction.rs:151, 174, 660, 699, 733, 959`
+  (6 test sites), `agent.rs:2879` (production — `emit_eviction`), `agent.rs:3079,
+  4030, 4245` (3 test sites).
 - **`projection.rs` (zoid-core)** — `ChatMsg::Evicted` variant; `RescueSummary`,
   `RescuedTurnSummary` structs; `TurnsEvicted` no longer skipped. All exhaustive
   `match ChatMsg` arms in `zoid-tui`, `zoid-core`, **and `zoid` (`map_msg` at
@@ -366,9 +368,11 @@ TUI (chat.rs)
   `rescue` before consuming `turns`. `build_request_with_thinking` (agent.rs:570)
   filters `ChatMsg::Evicted` out of messages before `map_msg`. `map_msg` gains an
   `Evicted` arm (inert empty assistant message, defense-in-depth). The
-  `preflight_gate` tracing line stays. The `GoalContext` construction at
-  agent.rs:2797 must add `goal_text: text.clone()` (the `text` variable is in
-  scope from agent.rs:2770 and still needed for the embed call at agent.rs:2781).
+  The `GoalContext` construction at
+  agent.rs:2797 must add `goal_text: goal_text` — where `goal_text` is
+  captured by cloning `text` *before* the `spawn_blocking` move closure
+  at agent.rs:2780 consumes it: `let goal_text = text.clone();` above the
+  `spawn_blocking` block.
 - `cargo build --workspace && cargo test --workspace` after each task.
 
 ---
