@@ -53,6 +53,7 @@ pub struct BodyLine {
 /// Render markdown `source` into typed body lines. Most non-empty input yields at
 /// least one line; whitespace-only input can yield an empty vec (the caller —
 /// `push_message` — handles an empty body by emitting the prefix alone).
+#[allow(clippy::field_reassign_with_default)]
 pub fn render_body(source: &str, content_w: usize) -> Vec<BodyLine> {
     let mut b = Builder::default();
     b.content_w = content_w;
@@ -102,8 +103,7 @@ fn border_line(widths: &[usize], kind: BorderKind) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     spans.push(Span::styled(left.to_string(), dim));
     for (i, &w) in widths.iter().enumerate() {
-        let seg = std::iter::repeat(glyph::TABLE_H)
-            .take(w + 2)
+        let seg = std::iter::repeat_n(glyph::TABLE_H, w + 2)
             .collect::<String>();
         spans.push(Span::styled(seg, dim));
         if i + 1 < widths.len() {
@@ -651,6 +651,7 @@ impl Builder {
     /// Layout a finished table grid into bordered `BodyKind::Table` lines and
     /// push them onto `self.lines` (spec §2). Called from `end(TagEnd::Table)`.
     /// `table` is the fully-accumulated grid (moved out of `self.table`).
+    #[allow(clippy::needless_range_loop)]
     fn render_table(&mut self, table: TableAccum, content_w: usize) {
         let ncols = table.alignments.len();
         if ncols == 0 {
@@ -1227,7 +1228,7 @@ mod tests {
             "\n| --- | --- |\n| c | d |\n",
         ] {
             let lines = render_markdown(md, TEST_W);
-            assert!(lines.len() >= 1, "malformed table {md:?} produced no lines");
+            assert!(!lines.is_empty(), "malformed table {md:?} produced no lines");
         }
     }
 

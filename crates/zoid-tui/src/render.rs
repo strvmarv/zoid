@@ -302,7 +302,7 @@ fn title_line(w: usize) -> Line<'static> {
     let ver_w = VERSION.width();
 
     let mut spans = Vec::new();
-    if pad >= ver_w + 1 {
+    if pad > ver_w {
         spans.push(Span::styled(VERSION, Style::new().fg(color::DIM)));
         spans.push(Span::styled(" ".repeat(pad - ver_w), Style::new()));
     } else {
@@ -775,7 +775,7 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
             ),
             Span::styled("tok ", Style::new().fg(color::DIM)),
             Span::styled(
-                format!("{}", human_tokens(state.session_tokens)),
+                human_tokens(state.session_tokens).to_string(),
                 Style::new().fg(color::TXT),
             ),
             if state.cache_supported {
@@ -785,7 +785,7 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
             },
             if state.cache_supported {
                 Span::styled(
-                    format!("{}", human_tokens(state.cached_tokens)),
+                    human_tokens(state.cached_tokens).to_string(),
                     Style::new().fg(color::TXT),
                 )
             } else {

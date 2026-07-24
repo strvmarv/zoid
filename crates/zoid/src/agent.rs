@@ -308,6 +308,7 @@ pub(crate) fn ensure_tool_call_id(id: String) -> String {
 }
 
 /// The user's answer to an `ask_user` prompt.
+#[allow(clippy::large_enum_variant)]
 pub enum Answer {
     Choice(String),
     FreeText(String),
@@ -1609,7 +1610,7 @@ async fn run_turn_inner(
                         provider.clone(),
                         cwd,
                         model.clone(),
-                        config.thinking.clone(),
+                        config.thinking,
                         session.clone(),
                         session_id,
                         ui.clone(),

@@ -293,7 +293,7 @@ mod tests {
     #[test]
     fn files_with_matches_not_dropped_by_noisy_file() {
         let dir = tempfile::tempdir().unwrap();
-        let noisy: String = std::iter::repeat("needle\n").take(250).collect();
+        let noisy: String = std::iter::repeat_n("needle\n", 250).collect();
         std::fs::write(dir.path().join("a.rs"), noisy).unwrap();
         std::fs::write(dir.path().join("b.rs"), "needle\n").unwrap();
         let out = Grep.run(
@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn count_mode_counts_all_lines_but_caps_files() {
         let dir = tempfile::tempdir().unwrap();
-        let noisy: String = std::iter::repeat("needle\n").take(250).collect();
+        let noisy: String = std::iter::repeat_n("needle\n", 250).collect();
         std::fs::write(dir.path().join("a.rs"), noisy).unwrap();
         std::fs::write(dir.path().join("b.rs"), "needle\n").unwrap();
         let out = Grep.run(

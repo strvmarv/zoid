@@ -35,6 +35,12 @@ pub struct McpManager {
     inner: Mutex<ManagerState>,
 }
 
+impl Default for McpManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl std::fmt::Debug for McpManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "McpManager")
