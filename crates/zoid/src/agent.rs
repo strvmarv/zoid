@@ -2791,7 +2791,9 @@ async fn preflight_gate(
                     zoid_core::eviction::GoalContext {
                         goal,
                         vecs,
-                        weight: zoid_core::eviction::DEFAULT_RESCUE_WEIGHT,
+                        weight: zoid_core::eviction::resolve_rescue_weight(
+                            config.eviction.rescue_weight,
+                        ),
                     }
                 }
             }
@@ -2804,7 +2806,7 @@ async fn preflight_gate(
     if !goal_ctx.goal.is_empty() {
         tracing::info!(
             candidates = goal_ctx.vecs.len(),
-            weight = zoid_core::eviction::DEFAULT_RESCUE_WEIGHT,
+            weight = goal_ctx.weight,
             "eviction relevance rescue active"
         );
     }
@@ -3375,6 +3377,83 @@ mod tests {
         assert!(
             evicted.contains(&Ulid::from(3u128)),
             "a newer off-goal turn dropped instead"
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_rescue_weight_zero_is_pure_recency() {
+        use ulid::Ulid;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_core::retrieval::{Embedder, FakeEmbedder};
+
+        let fat = "x".repeat(3000);
+        let goalish = "alpha beta gamma delta";
+        let offgoal = "zulu yankee xray whiskey";
+        let utext = |uid: u128| -> String {
+            if matches!(uid, 1 | 11 | 13 | 15) {
+                format!("{goalish} n{uid}")
+            } else {
+                format!("{offgoal} n{uid}")
+            }
+        };
+        let mut seed = Vec::new();
+        for i in 0..8u128 {
+            let uid = i * 2 + 1;
+            seed.push(Event::new(
+                Ulid::from(uid),
+                None,
+                uid as i64,
+                EventKind::UserMessage {
+                    text: utext(uid),
+                },
+            ));
+            seed.push(Event::new(
+                Ulid::from(i * 2 + 2),
+                None,
+                (i * 2 + 2) as i64,
+                EventKind::AssistantMessage { text: fat.clone() },
+            ));
+        }
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let emb = FakeEmbedder::new(16);
+        for uid in [1u128, 3, 5, 7, 9, 11] {
+            let v = emb.embed(&[utext(uid).as_str()]).unwrap().remove(0);
+            session
+                .write_embedding(Ulid::from(uid), "fake".into(), v)
+                .await
+                .unwrap();
+        }
+
+        let mut cfg = chat_turn_config();
+        cfg.eviction = zoid_core::eviction::EvictionPolicy {
+            enabled: true,
+            capacity: 1_000_000,
+            context_target: 9_910,
+            band_headroom_pct: 20,
+            recent_n: 2,
+            max_output: None,
+            rescue_weight: Some(0.0), // weight 0 ⇒ pure recency, no rescue
+        };
+        cfg.embedder = Some(std::sync::Arc::new(FakeEmbedder::new(16)));
+
+        let out = run_gate_only(cfg, session, seed).await;
+        let evicted: Vec<Ulid> = out
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EventKind::TurnsEvicted { ids, .. } => Some(ids.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+
+        assert!(!evicted.is_empty(), "a wave fired");
+        assert!(
+            evicted.contains(&Ulid::from(1u128)),
+            "weight 0 ⇒ oldest evicted (no rescue)"
         );
     }
 
