@@ -106,9 +106,10 @@ Add these tests to the `#[cfg(test)] mod tests` block in `chat.rs`, after the ex
             "badge must appear: {joined}"
         );
         // The badge should be on the tool-call line (the last line of the turn).
-        // Find the line containing "read" (the tool call) and check it has the badge.
+        // Search for the tool glyph (●) which only appears on tool-call lines,
+        // not in the assistant text "Let me read the file."
         let tool_line = lines.iter().find(|l| {
-            l.spans.iter().any(|s| s.content.contains("read"))
+            l.spans.iter().any(|s| s.content.contains('●'))
         });
         assert!(
             tool_line.is_some_and(|l| {
