@@ -85,10 +85,30 @@ fn main() -> Result<()> {
     // Ground truth: ids that were later recalled or readmitted after being evicted.
     let later_recalled = collect_later_recalled(&events);
 
-    // Cached vectors: load all from the DB for the session's model.
-    let model_id = embedder.model_id().to_string();
-    let vecs_by_id = load_vectors_for_model(&conn, &model_id)?;
+    // Cached vectors: load from the DB for the session's model.
+    // In `fake` mode, the embedder's model_id ("fake") won't match the session DB
+    // (which stores under e.g. "bge-small-en-v1.5"). Discover the real model_id from
+    // the DB instead. In `candle` mode, the embedder's model_id should match.
+    let model_id = if embedder_kind == "fake" {
+        match discover_model_id(&conn)? {
+            Some(id) => id,
+            None => {
+                eprintln!("warning: no cached vectors in DB — rescue layer will be inert");
+                String::new()
+            }
+        }
+    } else {
+        embedder.model_id().to_string()
+    };
+    let vecs_by_id = if model_id.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        load_vectors_for_model(&conn, &model_id)?
+    };
     eprintln!("{} cached vectors for model '{model_id}'", vecs_by_id.len());
+    if vecs_by_id.is_empty() {
+        eprintln!("warning: zero cached vectors — rescue layer is inert; use 'candle' mode for real data");
+    }
 
     // For each weight, replay each fire point and accumulate metrics.
     let mut results: Vec<WeightMetrics> = Vec::new();
@@ -301,6 +321,21 @@ fn load_vectors_for_model(conn: &Connection, model_id: &str) -> Result<std::coll
         }
     }
     Ok(out)
+}
+
+/// Discover the model_id used in this session DB by querying for distinct values.
+/// Used in `fake` mode where the embedder's model_id ("fake") won't match the DB.
+fn discover_model_id(conn: &Connection) -> Result<Option<String>> {
+    let mut stmt = conn.prepare("SELECT DISTINCT model_id FROM event_embeddings LIMIT 1")?;
+    let mut rows = stmt.query_map([], |row| {
+        let id: String = row.get(0)?;
+        Ok(id)
+    })?;
+    match rows.next() {
+        Some(Ok(id)) => Ok(Some(id)),
+        Some(Err(e)) => Err(e.into()),
+        None => Ok(None),
+    }
 }
 
 fn blob_to_f32s(blob: &[u8]) -> Vec<f32> {
