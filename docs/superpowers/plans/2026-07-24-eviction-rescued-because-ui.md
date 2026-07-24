@@ -28,10 +28,12 @@ merged first — this plan references `resolve_rescue_weight` at the
 
 ## Global Constraints
 
-- **`Eq` + `Hash` drops.** `EvictionPlan` (eviction.rs:414) drops `Eq`, retains
-  `PartialEq`. `EventKind` (event.rs:69) and `Event` (event.rs:196) both drop
-  `Eq` **and `Hash`**, retain `PartialEq`. All verified safe — no `Eq`/`Hash`-
-  bound consumers, no hash-map/btree-map keying on these types. `assert_eq!`
+- **`Eq` drops (no `Hash` to drop).** `EvictionPlan` (eviction.rs:414) drops
+  `Eq`, retains `PartialEq`. `EventKind` (event.rs:69) and `Event`
+  (event.rs:196) both drop `Eq` (they do **not** derive `Hash` — that was
+  a spec error; `EvictedSpan` and `EvictionMarker` derive `Hash` but they
+  don't contain `RescueRationale`). All verified safe — no `Eq`-bound
+  consumers, no hash-map/btree-map keying on these types. `assert_eq!`
   round-trip tests survive on `PartialEq + Debug`.
 - **`ChatMsg` retains `Eq`.** All new `ChatMsg::Evicted` fields are
   `Eq`-compatible (`u64`, `Vec<String>`, `Option<RescueSummary>`, `i64`).
@@ -56,18 +58,23 @@ merged first — this plan references `resolve_rescue_weight` at the
 | File | Responsibility | Change |
 |---|---|---|
 | `crates/zoid-core/src/eviction.rs` | `RescueRationale`, `RescuedTurn` structs; `EvictionPlan.rescue` field; `GoalContext.goal_text` field; `plan_evictions` populates `rescue`; drop `Eq` from `EvictionPlan` | Modify |
-| `crates/zoid-core/src/event.rs` | `TurnsEvicted` gains `rescue` field; drop `Eq`+`Hash` from `EventKind` and `Event`; 1 test literal | Modify |
+| `crates/zoid-core/src/event.rs` | `TurnsEvicted` gains `rescue` field; drop `Eq` from `EventKind` and `Event`; 1 test literal | Modify |
 | `crates/zoid-core/src/projection.rs` | `ChatMsg::Evicted` variant; `RescueSummary`, `RescuedTurnSummary` structs; `TurnsEvicted` → `ChatMsg::Evicted`; update `conversation_skips_evicted_turns` test; 1 test literal | Modify |
+| `crates/zoid-core/src/zoom.rs` | `digests()` gains `Evicted` arm (invisible at Summary) | Modify |
 | `crates/zoid/src/agent.rs` | `emit_eviction` destructures plan; `build_request_with_thinking` filters `Evicted`; `map_msg` gains `Evicted` arm; `preflight_gate` clones `goal_text`; 4 `TurnsEvicted` test literals + 1 production literal; `GoalContext` production literal | Modify |
-| `crates/zoid-tui/src/chat.rs` | Normal + Detail rendering for `ChatMsg::Evicted` | Modify |
+| `crates/zoid-tui/src/chat.rs` | Normal + Detail rendering for `ChatMsg::Evicted`; `Evicted` arm in `build_conversation` (Normal) and `detail_lines` (Detail) | Modify |
 | `crates/zoid-core/src/context.rs` | 1 `TurnsEvicted` test literal | Modify |
 | `crates/zoid-core/src/reassert.rs` | 1 `TurnsEvicted` test literal | Modify |
 
 **Task order:** T1 (data model in `eviction.rs`) → T2 (`TurnsEvicted` event +
-`Eq`/`Hash` drops) → T3 (`emit_eviction` + `preflight_gate` wiring) → T4
-(projection + `ChatMsg::Evicted` + model-request filter) → T5 (TUI rendering).
+`Eq` drops) → T3 (`emit_eviction` + `preflight_gate` wiring) → T4
+(projection + `ChatMsg::Evicted` + all exhaustive-match arms + model-request
+filter) → T5 (TUI rendering polish).
 T1 must come first (breaks `EvictionPlan` literals). T2 breaks `TurnsEvicted`
-literals. T3 connects them. T4 breaks `ChatMsg` match arms. T5 adds the UI.
+literals. T3 connects them. T4 adds the `ChatMsg` variant and updates **all**
+exhaustive `match ChatMsg` arms (`zoom.rs::digests`, `chat.rs::build_conversation`,
+`chat.rs::detail_lines`, `agent.rs::map_msg`) so the workspace compiles. T5
+expands the TUI rendering from stubs to full chip + breakdown.
 Recommended linear order T1→T2→T3→T4→T5.
 
 ---
@@ -219,10 +226,23 @@ Extend `relevant_old_turn_survives_while_newer_offgoal_is_evicted`
     // The rescued turn (id 1) should be in survivors with bump > 0.
     let survivor = rescue.survivors.iter().find(|s| s.ids.contains(&Ulid::from(1u128)));
     assert!(survivor.is_some(), "rescued turn id 1 in survivors");
-    assert!(survivor.unwrap().rescue_bump > 0.0, "rescue bump > 0");
+    let survivor = survivor.unwrap();
+    assert!(survivor.rescue_bump > 0.0, "rescue bump > 0");
+    // Score arithmetic: keep_score == base_score + rescue_bump.
+    assert!((survivor.keep_score - (survivor.base_score + survivor.rescue_bump)).abs() < 1e-6,
+        "keep_score == base_score + rescue_bump");
 ```
 
-Add a test for rescue=None when goal is empty:
+Add a test for rescue=None when goal is empty — extend the existing
+`empty_goalcontext_is_byte_identical_to_recency` test (eviction.rs:832)
+with an assertion:
+
+```rust
+    // (add to empty_goalcontext_is_byte_identical_to_recency, after existing asserts)
+    assert!(a.rescue.is_none(), "empty goal ⇒ no rescue rationale");
+```
+
+Also add a standalone test for clarity:
 
 ```rust
 #[test]
@@ -260,7 +280,7 @@ populated when goal non-empty, None when empty."
 
 ---
 
-### Task 2: `TurnsEvicted` gains `rescue` + `Eq`/`Hash` drops
+### Task 2: `TurnsEvicted` gains `rescue` + `Eq` drops
 
 **Files:**
 - Modify: `crates/zoid-core/src/event.rs` (line 69 derive, line 156 `TurnsEvicted`,
@@ -271,7 +291,7 @@ populated when goal non-empty, None when empty."
 - Modify: `crates/zoid-core/src/eviction.rs` (6 test literals: lines 151, 174, 660, 699, 733, 959)
 - Modify: `crates/zoid/src/agent.rs` (4 test literals: lines 3079, 4030, 4245; production: 2879)
 
-- [ ] **Step 1: Add `rescue` field to `TurnsEvicted` and drop `Eq`+`Hash`**
+- [ ] **Step 1: Add `rescue` field to `TurnsEvicted` and drop `Eq`**
 
 At event.rs:69, change the derive:
 
@@ -280,7 +300,9 @@ At event.rs:69, change the derive:
 pub enum EventKind {
 ```
 
-(Drop `Eq, Hash` — `RescueRationale` has `f32` fields.)
+(Drop `Eq` — `RescueRationale` has `f32` fields. Note: `EventKind` does
+**not** derive `Hash` — only `EvictedSpan` and `EvictionMarker` do, and they
+don't contain `RescueRationale`.)
 
 At event.rs:156, add the `rescue` field:
 
@@ -300,7 +322,7 @@ At event.rs:196, change the `Event` derive:
 pub struct Event {
 ```
 
-(Drop `Eq, Hash` — transitive from `EventKind`.)
+(Drop `Eq` — transitive from `EventKind`. `Event` also does not derive `Hash`.)
 
 - [ ] **Step 2: Update all 14 `TurnsEvicted { ... }` struct literals**
 
@@ -341,12 +363,13 @@ Expected: PASS — all existing tests pass (the `Eq`/`Hash` drop is safe, verifi
 git add crates/zoid-core/src/event.rs crates/zoid-core/src/context.rs \
        crates/zoid-core/src/reassert.rs crates/zoid-core/src/projection.rs \
        crates/zoid-core/src/eviction.rs crates/zoid/src/agent.rs
-git commit -m "feat(zoid-core): TurnsEvicted gains rescue field; drop Eq+Hash from EventKind/Event
+git commit -m "feat(zoid-core): TurnsEvicted gains rescue field; drop Eq from EventKind/Event
 
-Add rescue: Option<RescueRationale> to TurnsEvicted. Drop Eq and Hash
+Add rescue: Option<RescueRationale> to TurnsEvicted. Drop Eq
 from EventKind (event.rs:69) and Event (event.rs:196) — f32 in
-RescueRationale is not Eq/Hash. Add Serialize/Deserialize to
-RescueRationale/RescuedTurn. Update all 14 TurnsEvicted literals."
+RescueRationale is not Eq. (Hash was already absent.) Add
+Serialize/Deserialize to RescueRationale/RescuedTurn. Update all
+14 TurnsEvicted literals."
 ```
 
 ---
@@ -400,14 +423,19 @@ Then update the `TurnsEvicted` event construction (agent.rs:2879) to pass
 
 - [ ] **Step 2: Clone `goal_text` before the `spawn_blocking` move in `preflight_gate`**
 
-At agent.rs:2770, after the `let text = ...` line and before the `spawn_blocking`
-block, add:
+In the `else` block at agent.rs:2776 (inside `if !text.is_empty()` → `else`,
+before `let model = ...`), add:
 
 ```rust
             let goal_text = text.clone();
 ```
 
-Then at agent.rs:2797, update the `GoalContext` construction:
+This clones only on the non-empty-text path (avoiding a wasted clone when
+`text` is empty and the branch returns `Default::default()`). The `text`
+variable is then moved into the `spawn_blocking` closure at agent.rs:2780.
+
+Then at agent.rs:2797, update the `GoalContext` construction. **If item-1
+(rescue_weight config) is merged**, use:
 
 ```rust
                     zoid_core::eviction::GoalContext {
@@ -420,10 +448,16 @@ Then at agent.rs:2797, update the `GoalContext` construction:
                     }
 ```
 
-> **Note:** The `weight` line references `resolve_rescue_weight` and
-> `config.eviction.rescue_weight` — these exist only if the item-1 branch
-> (`[eviction]` config) is merged. If it's not merged yet, use
-> `weight: zoid_core::eviction::DEFAULT_RESCUE_WEIGHT,` instead.
+**If item-1 is NOT merged**, use:
+
+```rust
+                    zoid_core::eviction::GoalContext {
+                        goal,
+                        vecs,
+                        weight: zoid_core::eviction::DEFAULT_RESCUE_WEIGHT,
+                        goal_text,
+                    }
+```
 
 - [ ] **Step 3: Run tests**
 
@@ -453,6 +487,8 @@ goal_text."
 
 **Files:**
 - Modify: `crates/zoid-core/src/projection.rs`
+- Modify: `crates/zoid-core/src/zoom.rs` (`digests()` gains `Evicted` arm)
+- Modify: `crates/zoid-tui/src/chat.rs` (`build_conversation` gains `Evicted` stub arm)
 - Modify: `crates/zoid/src/agent.rs` (`map_msg` + `build_request_with_thinking`)
 
 - [ ] **Step 1: Add `RescueSummary` and `RescuedTurnSummary` structs**
@@ -563,7 +599,77 @@ After the `Question` arm (agent.rs:476–521), add:
         },
 ```
 
-- [ ] **Step 6: Filter `ChatMsg::Evicted` in `build_request_with_thinking` (agent.rs:570)**
+- [ ] **Step 6: Add `Evicted` arm to `digests()` (zoom.rs:44)**
+
+After the `ChatMsg::Question { .. }` arm (zoom.rs:95), add:
+
+```rust
+            ChatMsg::Evicted { .. } => {
+                // Eviction chips are invisible at Summary zoom — not a turn.
+            }
+```
+
+- [ ] **Step 7: Add `Evicted` stub arm to `build_conversation` (chat.rs:270)**
+
+After the `ChatMsg::Question` arm in `build_conversation` (chat.rs:458), add a
+stub that renders the Normal-zoom chip. (T5 expands this with full rendering;
+this stub makes the workspace compile and produces a minimal chip.)
+
+```rust
+            ChatMsg::Evicted { reclaimed_tokens, evicted_topics, rescue, ts: _ } => {
+                let count = evicted_topics.len();
+                let reclaimed_k = if *reclaimed_tokens >= 1000 {
+                    format!("{:.1}k", *reclaimed_tokens as f64 / 1000.0)
+                } else {
+                    format!("{}", reclaimed_tokens)
+                };
+                let mut spans = vec![
+                    Span::styled(
+                        format!("{} evicted {} turns · {} reclaimed",
+                            glyph::COLLAPSED, count, reclaimed_k),
+                        Style::new().fg(color::DIM),
+                    ),
+                ];
+                if let Some(r) = rescue {
+                    spans.push(Span::styled(
+                        format!(" · {} rescued", r.rescued.len()),
+                        Style::new().fg(color::OK),
+                    ));
+                }
+                lines.push(Line::from(spans));
+            }
+```
+
+Also add a stub arm to `detail_lines` (chat.rs:923, the `Zoom::Detail` match).
+After the `ChatMsg::Question` arm, add the same rendering (the full breakdown
+is added in T5):
+
+```rust
+            ChatMsg::Evicted { reclaimed_tokens, evicted_topics, rescue, ts: _ } => {
+                // Full breakdown added in T5; for now, same chip as Normal.
+                let count = evicted_topics.len();
+                let reclaimed_k = if *reclaimed_tokens >= 1000 {
+                    format!("{:.1}k", *reclaimed_tokens as f64 / 1000.0)
+                } else {
+                    format!("{}", reclaimed_tokens)
+                };
+                out.push(Line::from(vec![
+                    Span::styled(
+                        format!("{} evicted {} turns · {} reclaimed",
+                            glyph::EXPANDED, count, reclaimed_k),
+                        Style::new().fg(color::DIM),
+                    ),
+                    if let Some(r) = rescue {
+                        Span::styled(format!(" · {} rescued", r.rescued.len()),
+                            Style::new().fg(color::OK))
+                    } else {
+                        Span::raw("")
+                    },
+                ]));
+            }
+```
+
+- [ ] **Step 9: Filter `ChatMsg::Evicted` in `build_request_with_thinking` (agent.rs:570)**
 
 Change:
 
@@ -584,32 +690,88 @@ to:
             .collect(),
 ```
 
-- [ ] **Step 7: Run tests**
+- [ ] **Step 10: Write projection test for `rescue: Some` path**
 
-Run: `cargo test -p zoid-core -- conversation_skips 2>&1 | tail -5`
-Expected: PASS (updated test).
+Add to the projection test module (near `conversation_skips_evicted_turns`):
+
+```rust
+#[test]
+fn conversation_emits_evicted_with_rescue_summary() {
+    use crate::eviction::{RescueRationale, RescuedTurn};
+    use ulid::Ulid;
+    let mk = |id: u128, k| Event::new(Ulid::from(id), None, id as i64, k);
+    let events = vec![
+        mk(1, EventKind::UserMessage { text: "old".into() }),
+        mk(2, EventKind::AssistantMessage { text: "reply".into() }),
+        mk(3, EventKind::TurnsEvicted {
+            ids: vec![Ulid::from(1u128)],
+            reclaimed_tokens: 500,
+            marker: EvictionMarker { spans: vec![
+                crate::event::EvictedSpan { token_estimate: 500, topic_hint: "old".into() }
+            ]},
+            rescue: Some(RescueRationale {
+                goal_text: "implement rescue".into(),
+                weight: 12.0,
+                survivors: vec![RescuedTurn {
+                    ids: vec![Ulid::from(2u128)],
+                    topic_hint: "reply".into(),
+                    base_score: 1.0,
+                    rescue_bump: 8.4,
+                    keep_score: 9.4,
+                }],
+            }),
+        }),
+    ];
+    let msgs = conversation(&events);
+    // Find the Evicted message.
+    let evicted_msg = msgs.iter().find(|m| matches!(m, ChatMsg::Evicted { .. }))
+        .expect("should have an Evicted message");
+    if let ChatMsg::Evicted { reclaimed_tokens, evicted_topics, rescue, .. } = evicted_msg {
+        assert_eq!(*reclaimed_tokens, 500);
+        assert_eq!(evicted_topics.len(), 1);
+        assert_eq!(evicted_topics[0], "old");
+        let r = rescue.as_ref().expect("rescue should be Some");
+        assert_eq!(r.goal_text, "implement rescue");
+        assert_eq!(r.weight, 12);  // 12.0.round() as u32
+        assert_eq!(r.rescued.len(), 1);
+        assert_eq!(r.rescued[0].topic_hint, "reply");
+        assert_eq!(r.rescued[0].bump_milli, 8400);  // 8.4 * 1000 = 8400
+    } else {
+        panic!("not an Evicted message");
+    }
+}
+```
+
+- [ ] **Step 11: Run tests**
+
+Run: `cargo test -p zoid-core -- conversation_skips conversation_emits_evicted 2>&1 | tail -5`
+Expected: PASS (both tests).
 
 Run: `cargo test -p zoid --features local-embed -- preflight 2>&1 | grep "test " | head -5`
 Expected: PASS (eviction events now produce `ChatMsg::Evicted`, but the model
 filter strips them).
 
-- [ ] **Step 8: Build the workspace**
+- [ ] **Step 12: Build the workspace**
 
 Run: `cargo build --workspace`
-Expected: success.
+Expected: success — all exhaustive `match ChatMsg` arms are handled (`zoom.rs::digests`,
+`chat.rs::build_conversation`, `chat.rs::detail_lines`, `agent.rs::map_msg`).
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 13: Commit**
 
 ```bash
-git add crates/zoid-core/src/projection.rs crates/zoid/src/agent.rs
-git commit -m "feat(zoid-core): ChatMsg::Evicted variant + model-request filter
+git add crates/zoid-core/src/projection.rs crates/zoid-core/src/zoom.rs \
+       crates/zoid-tui/src/chat.rs crates/zoid/src/agent.rs
+git commit -m "feat(zoid-core): ChatMsg::Evicted variant + all match arms + model-request filter
 
 Projection emits ChatMsg::Evicted for TurnsEvicted (instead of
 skipping). RescueSummary/RescuedTurnSummary are Eq-compatible
-projection types (f32 → u32 milli). build_request_with_thinking
-filters Evicted before map_msg (model never sees eviction chips).
-map_msg gains inert Evicted arm (defense-in-depth). Update
-conversation_skips_evicted_turns test."
+projection types (f32 → u32 milli). All exhaustive match ChatMsg
+arms updated: zoom.rs::digests (invisible), chat.rs stubs (T5
+expands), agent.rs::map_msg (inert, defense-in-depth).
+build_request_with_thinking filters Evicted before map_msg. Update
+conversation_skips_evicted_turns test. Add projection test for
+rescue: Some path with milli-conversion assertions."
 ```
 
 ---
@@ -619,40 +781,32 @@ conversation_skips_evicted_turns test."
 **Files:**
 - Modify: `crates/zoid-tui/src/chat.rs`
 
-- [ ] **Step 1: Add `ChatMsg::Evicted` rendering at Normal zoom**
+- [ ] **Step 1: Expand the `ChatMsg::Evicted` Normal-zoom rendering (chat.rs:270)**
 
-In `build_conversation` (chat.rs, the `match m` block around line 430), after
-the `ChatMsg::Delegated` arm, add:
+T4 Step 7 added a stub arm to `build_conversation`. Verify it renders the chip
+correctly. The stub already uses `format!` for all strings (owned), so no
+lifetime issues. If you used `color::DIM` for the entire chip, consider using
+`color::WARN` (amber) for the "evicted N turns" portion for visual emphasis:
 
 ```rust
-            ChatMsg::Evicted { reclaimed_tokens, evicted_topics, rescue, ts: _ } => {
-                let count = evicted_topics.len();
-                let reclaimed_k = format_tokens(*reclaimed_tokens);
                 let mut spans = vec![
                     Span::styled(
-                        format!("{} evicted {} turns · {} reclaimed",
-                            glyph::COLLAPSED, count, reclaimed_k),
+                        format!("{} evicted {} turns", glyph::COLLAPSED, count),
+                        Style::new().fg(color::WARN),
+                    ),
+                    Span::styled(
+                        format!(" · {} reclaimed", reclaimed_k),
                         Style::new().fg(color::DIM),
                     ),
                 ];
-                if let Some(r) = rescue {
-                    spans.push(Span::styled(
-                        format!(" · {} rescued", r.rescued.len()),
-                        Style::new().fg(color::OK),
-                    ));
-                }
-                lines.push(Line::from(spans));
-            }
 ```
 
-> **Note:** `format_tokens` may not exist — check if there's a helper for
-> formatting token counts (e.g. "3.2k"). If not, inline:
-> `let reclaimed_k = if *reclaimed_tokens >= 1000 { format!("{:.1}k", *reclaimed_tokens as f64 / 1000.0) } else { format!("{}", reclaimed_tokens) };`
+- [ ] **Step 2: Expand the `ChatMsg::Evicted` Detail-zoom rendering (chat.rs:923)**
 
-- [ ] **Step 2: Add `ChatMsg::Evicted` rendering at Detail zoom**
-
-In `conversation_view` (chat.rs, the `Zoom::Detail` match block around line 920),
-after the `ChatMsg::Delegated` arm, add:
+T4 Step 7 added a stub arm to `detail_lines`. Replace it with the full
+indented breakdown. Use `.clone()` for all borrowed `String` fields —
+`Span::styled` requires `Into<Cow<'static, str>>`, which means owned `String`
+or `&'static str`, not `&String`:
 
 ```rust
             ChatMsg::Evicted { reclaimed_tokens, evicted_topics, rescue, ts: _ } => {
@@ -678,7 +832,7 @@ after the `ChatMsg::Delegated` arm, add:
                 if let Some(r) = rescue {
                     out.push(Line::from(vec![
                         Span::styled("    goal: ", Style::new().fg(color::DIM)),
-                        Span::styled(&r.goal_text, Style::new()),
+                        Span::styled(r.goal_text.clone(), Style::new()),
                     ]));
                     out.push(Line::from(vec![
                         Span::styled("    weight: ", Style::new().fg(color::DIM)),
@@ -691,7 +845,7 @@ after the `ChatMsg::Delegated` arm, add:
                         let bump = s.bump_milli as f64 / 1000.0;
                         out.push(Line::from(vec![
                             Span::styled("      · ", Style::new().fg(color::DIM)),
-                            Span::styled(&s.topic_hint, Style::new()),
+                            Span::styled(s.topic_hint.clone(), Style::new()),
                             Span::styled(format!(" (bump +{:.1})", bump), Style::new().fg(color::OK)),
                         ]));
                     }
@@ -702,20 +856,18 @@ after the `ChatMsg::Delegated` arm, add:
                 for topic in evicted_topics {
                     out.push(Line::from(vec![
                         Span::styled("      · ", Style::new().fg(color::DIM)),
-                        Span::styled(topic, Style::new()),
+                        Span::styled(topic.clone(), Style::new()),
                     ]));
                 }
             }
 ```
 
-- [ ] **Step 3: Add `ChatMsg::Evicted` to the Summary zoom (invisible)**
+- [ ] **Step 3: Verify Summary zoom invisibility**
 
-In `digests()` (zoom.rs or chat.rs), `ChatMsg::Evicted` should produce no
-digest line. Check if `digests` has an exhaustive match — if so, add:
-
-```rust
-ChatMsg::Evicted { .. } => { /* invisible at Summary zoom */ }
-```
+T4 Step 6 already added the `ChatMsg::Evicted { .. } => {}` arm to
+`digests()` in `zoom.rs`. Verify it produces no digest line by checking
+that `digests()` with an `Evicted` message in the input doesn't create a
+new `TurnDigest` entry. No code change needed — just verify.
 
 - [ ] **Step 4: Run TUI snapshot tests**
 
