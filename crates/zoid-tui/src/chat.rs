@@ -1065,6 +1065,13 @@ pub fn render_chat(frame: &mut Frame, msgs: &[ChatMsg], input: &TextArea<'_>, st
     frame.render_widget(Paragraph::new(status), chunks[3]);
 }
 
+/// Display width of a string (column count, handling wide glyphs).
+/// Used to compute the fixed overhead of a tool-call/result line so the
+/// args/preview budget can be derived from the available text width.
+fn display_width(s: &str) -> usize {
+    UnicodeWidthStr::width(s)
+}
+
 /// A compact one-line summary of a tool call's JSON args for the inline card.
 fn arg_summary(args_json: &str) -> String {
     let v: serde_json::Value = serde_json::from_str(args_json).unwrap_or(serde_json::Value::Null);
@@ -1527,5 +1534,14 @@ mod tests {
             let w: usize = l.spans.iter().map(|s| s.content.width()).sum();
             assert!(w <= width, "line exceeds width {width}: got {w}");
         }
+    }
+
+    #[test]
+    fn display_width_measures_correctly() {
+        assert_eq!(display_width("shell"), 5);
+        assert_eq!(display_width("update_tasks"), 12);
+        assert_eq!(display_width(""), 0);
+        // Wide char (fullwidth) counts as 2 columns.
+        assert_eq!(display_width("中"), 2);
     }
 }
