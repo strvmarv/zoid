@@ -478,9 +478,10 @@ impl EventStore {
     /// took over, or the session row is gone). The `false` return is the
     /// takeover-detection signal the bin uses to yield. Spec §2.3.
     ///
-    /// Invariant relied on here: there is no `DELETE FROM sessions` anywhere in
-    /// the codebase, so a zero-row match unambiguously means takeover (not row
-    /// deletion). Do not introduce a session-delete path without revisiting this.
+    /// Invariant relied on here: deletion is blocked for live sessions, so a
+    /// live session's heartbeat caller will never see a zero-row match from
+    /// deletion. A zero-row match unambiguously means takeover (another process
+    /// changed `active_pid`).
     pub fn heartbeat(&self, id: Ulid, active_pid: i64, active_heartbeat: i64) -> Result<bool> {
         let n = self.conn.execute(
             "UPDATE sessions SET active_heartbeat = ?3 WHERE id = ?1 AND active_pid = ?2",
