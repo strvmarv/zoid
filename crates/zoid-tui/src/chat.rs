@@ -269,6 +269,8 @@ fn build_conversation(
                     );
                 }
                 for tc in tool_calls {
+                    let name_w = display_width(&tc.name);
+                    let args_budget = ctx.width.saturating_sub(15 + name_w).min(120);
                     lines.push(Line::from(vec![
                         Span::styled(
                             format!("  {} ", glyph::EDIT),
@@ -276,7 +278,7 @@ fn build_conversation(
                         ),
                         Span::styled(tc.name.clone(), Style::new().fg(color::TXT).bold()),
                         Span::styled(
-                            format!("({})", arg_summary(&tc.args)),
+                            format!("({})", arg_summary(&tc.args, args_budget)),
                             Style::new().fg(color::DIM),
                         ),
                         Span::styled(
@@ -1073,22 +1075,23 @@ fn display_width(s: &str) -> usize {
 }
 
 /// A compact one-line summary of a tool call's JSON args for the inline card.
-fn arg_summary(args_json: &str) -> String {
+fn arg_summary(args_json: &str, max_width: usize) -> String {
     let v: serde_json::Value = serde_json::from_str(args_json).unwrap_or(serde_json::Value::Null);
-    match v {
+    let inner = match v {
         serde_json::Value::Object(map) => map
             .iter()
             .map(|(k, val)| format!("{k}: {}", scalar(val)))
             .collect::<Vec<_>>()
             .join(", "),
         other => scalar(&other),
-    }
+    };
+    truncate(&inner, max_width)
 }
 
 fn scalar(v: &serde_json::Value) -> String {
     match v {
-        serde_json::Value::String(s) => truncate(s, 30),
-        other => truncate(&other.to_string(), 30),
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
     }
 }
 
@@ -1543,5 +1546,54 @@ mod tests {
         assert_eq!(display_width(""), 0);
         // Wide char (fullwidth) counts as 2 columns.
         assert_eq!(display_width("中"), 2);
+    }
+
+    #[test]
+    fn scalar_returns_full_string_no_truncation() {
+        let long = "a".repeat(100);
+        assert_eq!(scalar(&serde_json::Value::String(long.clone())), long);
+        assert_eq!(
+            scalar(&serde_json::json!(42)),
+            "42"
+        );
+    }
+
+    #[test]
+    fn arg_summary_short_string_large_budget_no_truncation() {
+        let json = r#"{"command": "ls -la"}"#;
+        let result = arg_summary(json, 120);
+        assert_eq!(result, "command: ls -la");
+    }
+
+    #[test]
+    fn arg_summary_long_string_budget_60_truncates() {
+        let long = "a".repeat(200);
+        let json = format!(r#"{{"command": "{long}"}}"#);
+        let result = arg_summary(&json, 60);
+        assert!(UnicodeWidthStr::width(result.as_str()) <= 60,
+            "result must fit in 60 display cols: got {}", UnicodeWidthStr::width(result.as_str()));
+        assert!(result.starts_with("command: a"), "must start with the key and value: {result}");
+        assert!(result.ends_with('…'), "must end with ellipsis: {result}");
+    }
+
+    #[test]
+    fn arg_summary_multi_arg_truncates_as_unit() {
+        // serde_json::Object uses BTreeMap (alphabetical key order).
+        // Keys: aaaa, bbbb, cccc — alphabetical = aaaa first.
+        let json = r#"{"aaaa": "short", "bbbb": "this is a longer value that should get cut off", "cccc": "even more text here"}"#;
+        let result = arg_summary(json, 40);
+        // The whole joined string is truncated as a unit to 40.
+        assert!(result.ends_with('…'), "must end with ellipsis: {result}");
+        assert!(UnicodeWidthStr::width(result.as_str()) <= 40, "must fit in 40 cols: {result}");
+        assert!(result.starts_with("aaaa: short"), "first arg (alphabetical) visible: {result}");
+        // The last arg should be cut off — at 40 chars, not all 3 args fit.
+        assert!(!result.contains("even more text here"), "later args truncated: {result}");
+    }
+
+    #[test]
+    fn arg_summary_budget_zero_returns_empty() {
+        let json = r#"{"command": "ls"}"#;
+        let result = arg_summary(json, 0);
+        assert_eq!(result, "");
     }
 }
