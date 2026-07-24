@@ -8094,6 +8094,52 @@ mod tests {
         );
     }
 
+    /// A DelegationResult on the default branch must be folded into a
+    /// ChatMsg::Delegated by the projection, confirming the result-landing
+    /// plumbing. The continuation turn's request builder uses
+    /// `conversation_for_branch` → `map_msg`, which maps Delegated to a
+    /// Message with "[delegated subagent] {summary}".
+    #[test]
+    fn delegation_result_folds_into_chat_msg_delegated() {
+        use zoid_core::event::{Event, EventKind};
+        use zoid_core::projection::{conversation, ChatMsg};
+
+        let events = vec![
+            Event::new(Ulid::new(), None, 0, EventKind::UserMessage { text: "do the thing".into() }),
+            Event::new(Ulid::new(), None, 1, EventKind::AssistantMessage { text: "delegating".into() }),
+            Event::new(
+                Ulid::new(),
+                None,
+                2,
+                EventKind::DelegationResult {
+                    subagent_id: "sub-01ABC".into(),
+                    branch: "subagent:01ABC".into(),
+                    summary: "Task completed successfully.".into(),
+                    ok: true,
+                },
+            ),
+        ];
+
+        let msgs = conversation(events.iter());
+
+        // Find the Delegated message.
+        let delegated = msgs.iter().find_map(|m| {
+            if let ChatMsg::Delegated { summary, ok } = m {
+                Some((summary.clone(), *ok))
+            } else {
+                None
+            }
+        });
+
+        assert!(
+            delegated.is_some(),
+            "DelegationResult must fold into ChatMsg::Delegated"
+        );
+        let (summary, ok) = delegated.unwrap();
+        assert_eq!(summary, "Task completed successfully.");
+        assert!(ok, "ok must be true for a successful delegation");
+    }
+
     /// Regression for I-1: `Action::SessionPick` must be a no-op while a
     /// delegation is in flight, symmetric with `Submit`'s
     /// `app.streaming || !app.in_flight_subagents.is_empty()` guard. Before the fix, `SessionPick`
