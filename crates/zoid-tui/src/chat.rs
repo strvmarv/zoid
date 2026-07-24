@@ -1837,4 +1837,32 @@ mod tests {
             "no badge for empty thinking string: {joined}"
         );
     }
+
+    #[test]
+    fn detail_zoom_still_shows_full_thinking_section() {
+        // Detail zoom must still render the full thinking text under the
+        // "─ Thinking ─" separator — the badge change is Normal-zoom only.
+        let msgs = vec![ChatMsg::Assistant {
+            thinking: Some("I need to consider the tradeoffs.".into()),
+            text: "Here is the answer.".into(),
+            tool_calls: vec![],
+            ts: 0,
+        }];
+        let view = ChatView {
+            zoom: crate::state::Zoom::Detail,
+            caret_on: false,
+            reveal: None,
+            tz_offset_secs: 0,
+        };
+        let lines = conversation_view(&msgs, &view, false, 80, None, &[], 0);
+        let joined = join_spans(&lines);
+        assert!(
+            joined.contains("Thinking"),
+            "Detail zoom must show the thinking section header: {joined}"
+        );
+        assert!(
+            joined.contains("I need to consider the tradeoffs."),
+            "Detail zoom must show the full thinking text: {joined}"
+        );
+    }
 }
