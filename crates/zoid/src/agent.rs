@@ -3281,16 +3281,18 @@ mod tests {
         }
 
         let mut cfg = chat_turn_config();
-        // context_target 9_500 (not the plan's 5_000) is calibrated so the reclaim
+        // context_target 9_910 (not the plan's 5_000) is calibrated so the reclaim
         // quota evicts exactly 4 of the 6 candidate turns, leaving 2 survivors —
         // enough room for the rescue to keep id 1 and drop a newer off-goal turn.
         // At 5_000, all 6 candidates are evicted (reclaim > 6 turns), so no rescue
-        // is possible. The margin: est≈11,391, high_water=9,500, low_water=7,600,
-        // reclaim≈3,791 ≈ 4 turns @ ~950 tokens/turn (with OVERCOUNT_BIAS).
+        // is possible. The margin: est≈11,801, high_water=9,910, low_water=7,928,
+        // reclaim≈3,873 ≈ 4 turns @ ~950 tokens/turn (with OVERCOUNT_BIAS).
+        // NB: bumped from 9_500 → 9_910 after the expanded system prompt added
+        // ~411 estimated tokens, which shifted the eviction math.
         cfg.eviction = zoid_core::eviction::EvictionPolicy {
             enabled: true,
             capacity: 1_000_000,
-            context_target: 9_500,
+            context_target: 9_910,
             band_headroom_pct: 20,
             recent_n: 2,
             max_output: None,
