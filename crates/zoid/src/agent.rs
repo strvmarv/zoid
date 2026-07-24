@@ -2775,6 +2775,7 @@ async fn preflight_gate(
                 Default::default()
             } else {
                 let model = emb.model_id().to_string();
+                let goal_text = text.clone();
                 let goal = {
                     let emb = emb.clone();
                     tokio::task::spawn_blocking(move || {
@@ -2798,6 +2799,7 @@ async fn preflight_gate(
                         goal,
                         vecs,
                         weight: zoid_core::eviction::DEFAULT_RESCUE_WEIGHT,
+                        goal_text,
                     }
                 }
             }
@@ -2880,6 +2882,7 @@ async fn emit_eviction(
             ids,
             reclaimed_tokens: reclaimed,
             marker: zoid_core::event::EvictionMarker { spans },
+            rescue: None,
         },
         session_id,
         now,
@@ -3085,6 +3088,7 @@ mod tests {
                             topic_hint: "setup".into(),
                         }],
                     },
+                    rescue: None,
                 },
             ),
         ]);
@@ -4031,6 +4035,7 @@ mod tests {
                 ids: vec![Ulid::from(1u128)],
                 reclaimed_tokens: 10,
                 marker: EvictionMarker { spans: vec![] },
+                rescue: None,
             },
         );
         for e in [&e1, &e2, &evicted] {
@@ -4246,6 +4251,7 @@ mod tests {
                 ids: vec![Ulid::from(1u128)],
                 reclaimed_tokens: 10,
                 marker: EvictionMarker { spans: vec![] },
+                rescue: None,
             },
         );
         for e in [&e1, &e2, &evicted] {

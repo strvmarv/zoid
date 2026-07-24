@@ -762,6 +762,7 @@ mod tests {
                     ids: vec![Ulid::from(1u128), Ulid::from(2u128)],
                     reclaimed_tokens: 5,
                     marker: EvictionMarker { spans: vec![] },
+                    rescue: None,
                 },
             ),
         ];

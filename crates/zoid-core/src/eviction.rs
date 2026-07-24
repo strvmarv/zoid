@@ -153,6 +153,7 @@ mod fold_tests {
                     ids: vec![Ulid::from(1u128), Ulid::from(2u128)],
                     reclaimed_tokens: 5,
                     marker: marker.clone(),
+                    rescue: None,
                 },
             ),
             ev(
@@ -181,6 +182,7 @@ mod fold_tests {
                         topic_hint: "read config".into(),
                     }],
                 },
+                rescue: None,
             },
         )];
         let bc = eviction_breadcrumb(&events).unwrap();
@@ -727,6 +729,7 @@ mod plan_tests {
                 ids: vec![Ulid::from(1u128), Ulid::from(2u128)],
                 reclaimed_tokens: 1000,
                 marker: crate::event::EvictionMarker { spans: vec![] },
+                rescue: None,
             },
         ));
         // turn 1 already evicted → not re-selected
@@ -766,6 +769,7 @@ mod plan_tests {
                 ids: vec![Ulid::from(1u128), Ulid::from(2u128)],
                 reclaimed_tokens: 1000,
                 marker: crate::event::EvictionMarker { spans: vec![] },
+                rescue: None,
             },
         ));
         events.push(Event::new(
@@ -800,6 +804,7 @@ mod plan_tests {
                 ids: vec![Ulid::from(1u128)],
                 reclaimed_tokens: 1000,
                 marker: crate::event::EvictionMarker { spans: vec![] },
+                rescue: None,
             },
         ));
         events.push(Event::new(
@@ -1053,6 +1058,7 @@ mod steady_state_tests {
                 ids,
                 reclaimed_tokens: 0,
                 marker: crate::event::EvictionMarker { spans: vec![] },
+                rescue: None,
             },
         ));
     }
