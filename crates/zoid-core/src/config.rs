@@ -130,7 +130,7 @@ impl Default for EmbedConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SubagentConfig {
-    /// Idle (no-progress) timeout in seconds; 0 = disabled. Default 120.
+    /// Idle (no-progress) timeout in seconds; 0 = disabled. Default 300.
     pub idle_timeout_secs: u64,
     /// Absolute wall-clock ceiling in seconds; 0 = disabled. Default 900.
     pub hard_timeout_secs: u64,
@@ -139,7 +139,7 @@ pub struct SubagentConfig {
 impl Default for SubagentConfig {
     fn default() -> Self {
         Self {
-            idle_timeout_secs: 120,
+            idle_timeout_secs: 300,
             hard_timeout_secs: 900,
         }
     }
@@ -211,9 +211,9 @@ mod tests {
     }
 
     #[test]
-    fn subagent_defaults_are_120_and_900() {
+    fn subagent_defaults_are_300_and_900() {
         let c = Config::default();
-        assert_eq!(c.subagent.idle_timeout_secs, 120);
+        assert_eq!(c.subagent.idle_timeout_secs, 300);
         assert_eq!(c.subagent.hard_timeout_secs, 900);
     }
 
