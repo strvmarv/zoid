@@ -235,19 +235,6 @@ fn build_conversation(
                 ts,
                 thinking,
             } => {
-                // Thinking marker (collapsed at Normal zoom).
-                if let Some(thinking_text) = thinking {
-                    if !thinking_text.is_empty() {
-                        blank_between_turns(&mut lines);
-                        lines.push(Line::from(vec![
-                            Span::styled(
-                                format!("{} ", glyph::EXPANDED),
-                                Style::new().fg(color::DIM),
-                            ),
-                            Span::styled("Thinking…", Style::new().fg(color::DIM)),
-                        ]));
-                    }
-                }
                 let mut shown = text.clone();
                 if ctx.streaming && ctx.caret_on && i == last && tool_calls.is_empty() {
                     shown.push(glyph::CARET);
@@ -286,6 +273,19 @@ fn build_conversation(
                             Style::new().fg(color::DIM),
                         ),
                     ]));
+                }
+                // Append a dim "·thinking" badge to the last rendered line of
+                // this turn if reasoning was present. Replaces the old
+                // standalone "▾ Thinking…" marker line — saves one line per
+                // thinking turn.
+                let has_thinking = thinking.as_ref().is_some_and(|t| !t.is_empty());
+                if has_thinking {
+                    if let Some(last) = lines.last_mut() {
+                        last.spans.push(Span::styled(
+                            " ·thinking".to_string(),
+                            Style::new().fg(color::DIM),
+                        ));
+                    }
                 }
             }
             ChatMsg::ToolResult {
@@ -1724,6 +1724,117 @@ mod tests {
         assert!(
             joined.contains('…'),
             "very long output must be truncated even at width 200 (cap 120): {joined}"
+        );
+    }
+
+    #[test]
+    fn thinking_badge_on_text_only_turn() {
+        let msgs = vec![ChatMsg::Assistant {
+            thinking: Some("reasoning here".into()),
+            text: "Here is the answer.".into(),
+            tool_calls: vec![],
+            ts: 0,
+        }];
+        let lines = conversation_lines(&msgs, false, true, 0, 80, None);
+        let joined = join_spans(&lines);
+        assert!(
+            joined.contains("·thinking"),
+            "badge must appear when thinking is present: {joined}"
+        );
+        assert!(
+            !joined.contains("Thinking…"),
+            "standalone thinking marker must not appear: {joined}"
+        );
+    }
+
+    #[test]
+    fn thinking_badge_on_tool_call_only_turn() {
+        let msgs = vec![ChatMsg::Assistant {
+            thinking: Some("reasoning here".into()),
+            text: String::new(),
+            tool_calls: vec![ToolCallRef {
+                id: "tc1".into(),
+                name: "read".into(),
+                args: r#"{"path":"src/main.rs"}"#.into(),
+            }],
+            ts: 0,
+        }];
+        let lines = conversation_lines(&msgs, false, true, 0, 80, None);
+        let joined = join_spans(&lines);
+        assert!(
+            joined.contains("·thinking"),
+            "badge must appear on a tool-call turn: {joined}"
+        );
+        assert!(
+            !joined.contains("Thinking…"),
+            "standalone thinking marker must not appear: {joined}"
+        );
+    }
+
+    #[test]
+    fn thinking_badge_on_text_plus_tool_calls() {
+        let msgs = vec![ChatMsg::Assistant {
+            thinking: Some("reasoning here".into()),
+            text: "Let me read the file.".into(),
+            tool_calls: vec![ToolCallRef {
+                id: "tc1".into(),
+                name: "read".into(),
+                args: r#"{"path":"src/main.rs"}"#.into(),
+            }],
+            ts: 0,
+        }];
+        let lines = conversation_lines(&msgs, false, true, 0, 80, None);
+        let joined = join_spans(&lines);
+        assert!(
+            joined.contains("·thinking"),
+            "badge must appear: {joined}"
+        );
+        // Search for the tool glyph (●) which only appears on tool-call lines,
+        // not in the assistant text "Let me read the file."
+        let tool_line = lines.iter().find(|l| {
+            l.spans.iter().any(|s| s.content.contains('●'))
+        });
+        assert!(
+            tool_line.is_some_and(|l| {
+                l.spans.iter().any(|s| s.content.contains("·thinking"))
+            }),
+            "badge must be on the tool-call line: {joined}"
+        );
+    }
+
+    #[test]
+    fn no_thinking_no_badge() {
+        let msgs = vec![ChatMsg::Assistant {
+            thinking: None,
+            text: "Hello.".into(),
+            tool_calls: vec![],
+            ts: 0,
+        }];
+        let lines = conversation_lines(&msgs, false, true, 0, 80, None);
+        let joined = join_spans(&lines);
+        assert!(
+            !joined.contains("·thinking"),
+            "no badge when thinking is None: {joined}"
+        );
+        assert!(
+            !joined.contains("Thinking…"),
+            "no standalone marker when thinking is None: {joined}"
+        );
+    }
+
+    #[test]
+    fn empty_thinking_string_no_badge() {
+        let msgs = vec![ChatMsg::Assistant {
+            thinking: Some(String::new()),
+            text: "Hello.".into(),
+            tool_calls: vec![],
+            ts: 0,
+        }];
+        let lines = conversation_lines(&msgs, false, true, 0, 80, None);
+        let joined = join_spans(&lines);
+        assert!(
+            !joined.contains("·thinking"),
+            "no badge for empty thinking string: {joined}"
         );
     }
 }
