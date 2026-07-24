@@ -20,6 +20,7 @@ impl Tool for DispatchSubagent {
                 "type": "object",
                 "properties": {
                     "task": { "type": "string", "description": "The task description for the subagent" },
+                    "agent": { "type": "string", "description": "The agent profile name to use (default: 'delegate'). Call list_agents to see available agents.", "default": "delegate" },
                     "worktree": { "type": "boolean", "description": "Isolate in a git worktree (default: false)", "default": false }
                 },
                 "required": ["task"]
@@ -46,7 +47,12 @@ mod tests {
         assert_eq!(DispatchSubagent.kind(), ToolKind::Emitting);
         let params = DispatchSubagent.spec().parameters;
         assert_eq!(params["required"][0], "task");
-        assert!(params["properties"]["worktree"]["default"].is_boolean());
+        assert_eq!(params["properties"]["agent"]["type"], "string");
+        assert_eq!(params["properties"]["agent"]["default"], "delegate");
+        assert!(
+            params["properties"]["worktree"]["default"].is_boolean(),
+            "worktree default must remain boolean"
+        );
         assert!(
             params["properties"].get("model").is_none(),
             "model must not be in the dispatch_subagent spec — subagents inherit the session model"
