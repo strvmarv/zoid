@@ -15,7 +15,9 @@ use zoid_core::agent_profile::AgentProfile;
 use zoid_core::event::{BranchId, Event, EventKind};
 use zoid_core::projection::{conversation, ChatMsg};
 use zoid_core::session::SessionHandle;
-use zoid_provider::{CompletionRequest, Message, Provider, ProviderEvent, ThinkingMode, ToolCall, ToolSpec};
+use zoid_provider::{
+    CompletionRequest, Message, Provider, ProviderEvent, ThinkingMode, ToolCall, ToolSpec,
+};
 use zoid_tools::{Gate, Tool, ToolGate};
 
 /// Warning glyph used in agent-generated error messages; avoids a TUI-layer dep.
@@ -32,11 +34,67 @@ pub(crate) const WARN_GLYPH: char = '⚠';
 /// a graceful quality taper, not a correctness cliff. Picked, not tuned.
 const VECTOR_OVERFETCH: usize = 4;
 
-/// System prompt for Chat-mode turns.
-pub const SYSTEM_PROMPT: &str =
-    "You are zoid, a terminal coding assistant. Be concise and precise. \
-     You can call tools to read, write, edit, and search files and run shell \
-     commands in the user's working directory. Use them when helpful.";
+/// System prompt for Chat-mode turns. Behavioral guidance the tool schemas
+/// can't express (when to prefer which tool, verify-before-done, git safety,
+/// epistemic honesty); the tool *list* itself is carried by the tool specs,
+/// not duplicated here.
+pub const SYSTEM_PROMPT: &str = "You are zoid, a terminal coding assistant. Be concise and precise.
+
+You can call tools to read, write, edit, and search files and run shell \
+commands in the user's working directory. Prefer the dedicated file tools \
+(Read, Grep, Glob, LS) over their shell equivalents, and use shell for \
+actions no dedicated tool covers. Independent tool calls in one turn run in \
+parallel — batch them when they don't depend on each other.
+
+Write shell commands for the shell named in the Environment block below; it \
+is not always bash. Some commands (e.g. rm -rf, git push --force, sudo) \
+pause for the user's approval before they run — expect the prompt, and use \
+them when the task calls for it.
+
+For multi-step work, track progress with update_tasks so the user can see \
+what's done and what's left. When you're genuinely blocked on a decision \
+only the user can make, ask via ask_user; otherwise choose a sensible \
+default and proceed.
+
+Before claiming a change is done, working, or passing, run the relevant \
+build or tests and confirm the output. Never assert success you haven't \
+observed.
+
+Never print, log, or commit secrets or credentials.
+
+Git: call git_context to check repository state before acting on it. Branch \
+before committing to the default branch.
+
+Be explicit about epistemics. Separate fact from judgment — label claims \
+✅ Fact, 🟨 Interpretation, or 💡 Recommendation when the distinction \
+matters. When you're uncertain, mark confidence (🟢 High · 🟡 Likely · \
+🟠 Plausible · 🔴 Unknown) rather than implying false certainty. Never \
+recommend without stating the tradeoff (Choice → Gain → Give up). Call out \
+when a problem is the same shape as another (\"this is the same pattern as X\").";
+
+/// The ambient environment block appended to the Chat system prompt at
+/// turn-build time. Only session-STABLE fields (date, cwd, OS, shell) live
+/// here so the assembled system string hashes identically turn-to-turn and the
+/// provider's prompt cache keeps its prefix. Volatile git state is deliberately
+/// excluded — the model calls the `git_context` tool on demand instead.
+pub fn environment_block() -> String {
+    let date = chrono::Local::now().format("%Y-%m-%d");
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| ".".to_string());
+    let os = std::env::consts::OS;
+    let shell = std::env::var("SHELL")
+        .ok()
+        .and_then(|s| {
+            std::path::Path::new(&s)
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    format!(
+        "## Environment\n- Date: {date}\n- Working directory: {cwd}\n- OS: {os}\n- Shell: {shell}"
+    )
+}
 
 /// The default Chat mode profile: the standard zoid system prompt with an
 /// unrestricted tool set (empty allow-list = every tool permitted, per
@@ -113,14 +171,14 @@ impl std::fmt::Debug for TurnConfig {
 /// `system` is the profile's prompt; when `skill_menu` is non-empty it is
 /// appended under a header so the model knows what it can `invoke_skill`.
 pub fn chat_turn_config_with(profile: &AgentProfile, skill_menu: &str) -> TurnConfig {
-    let system = if skill_menu.is_empty() {
-        profile.system_prompt.clone()
-    } else {
-        format!(
-            "{}\n\n## Available skills — call invoke_skill(name):\n{}",
-            profile.system_prompt, skill_menu
-        )
-    };
+    // Layer order: profile prose → Environment block → skills menu. All three
+    // are per-session stable, so the assembled prefix stays cache-friendly.
+    let mut system = format!("{}\n\n{}", profile.system_prompt, environment_block());
+    if !skill_menu.is_empty() {
+        system.push_str(&format!(
+            "\n\n## Available skills — call invoke_skill(name):\n{skill_menu}"
+        ));
+    }
     TurnConfig {
         system,
         cwd: PathBuf::from("."),
@@ -522,7 +580,8 @@ async fn run_turn_inner(
             overhead,
         )
         .await?;
-        let req = build_request_with_thinking(&events, &model, &tools, &config.system, config.thinking);
+        let req =
+            build_request_with_thinking(&events, &model, &tools, &config.system, config.thinking);
 
         // Stream one model turn. Spawn the provider so a missing terminal Done
         // (truncated stream) can't hang us — we send our own Done after it ends.
@@ -729,7 +788,9 @@ async fn run_turn_inner(
                     &mut events,
                     ui,
                     &config.branch,
-                    EventKind::ModelThinking { text: std::mem::take(&mut thinking_buf) },
+                    EventKind::ModelThinking {
+                        text: std::mem::take(&mut thinking_buf),
+                    },
                     session_id,
                     now,
                 )
@@ -1082,7 +1143,8 @@ async fn run_turn_inner(
                     let vec_ids: Vec<Ulid> = match (&config.embed, &config.embedder) {
                         (Some(index), Some(emb)) => {
                             use zoid_core::retrieval::CandidateSource;
-                            let vs = zoid_core::retrieval::VectorSource::new(emb.clone(), index.clone());
+                            let vs =
+                                zoid_core::retrieval::VectorSource::new(emb.clone(), index.clone());
                             let q = query.clone();
                             tokio::task::spawn_blocking(move || vs.candidates(&q, vfetch))
                                 .await
@@ -1103,7 +1165,12 @@ async fn run_turn_inner(
                             .events_by_ids(merged.clone(), session_id)
                             .await
                             .unwrap_or_default();
-                        evs.sort_by_key(|e| merged.iter().position(|id| *id == e.id).unwrap_or(usize::MAX));
+                        evs.sort_by_key(|e| {
+                            merged
+                                .iter()
+                                .position(|id| *id == e.id)
+                                .unwrap_or(usize::MAX)
+                        });
                         // Session filter may have dropped cross-session vector hits;
                         // trim the session-present survivors back to the requested limit.
                         evs.truncate(limit);
@@ -2218,8 +2285,7 @@ mod tests {
     fn submit_feedback_parse_validates_kind_title_body() {
         let ok = parse_feedback_args(&serde_json::json!({"kind":"bug","title":"t","body":"b"}));
         assert!(ok.is_some());
-        let bad_kind =
-            parse_feedback_args(&serde_json::json!({"kind":"x","title":"t","body":"b"}));
+        let bad_kind = parse_feedback_args(&serde_json::json!({"kind":"x","title":"t","body":"b"}));
         assert!(bad_kind.is_none());
         let empty_title =
             parse_feedback_args(&serde_json::json!({"kind":"bug","title":"","body":"b"}));
@@ -2233,21 +2299,14 @@ mod tests {
     async fn call_or_abandon_yields_none_when_cancel_wins() {
         let cancel = CancellationToken::new();
         cancel.cancel(); // already cancelled → abandon immediately
-        let out = call_or_abandon(
-            &cancel,
-            std::future::pending::<zoid_tools::ToolOutput>(),
-        )
-        .await;
+        let out = call_or_abandon(&cancel, std::future::pending::<zoid_tools::ToolOutput>()).await;
         assert!(out.is_none(), "a cancelled token must abandon the call");
     }
 
     #[tokio::test]
     async fn call_or_abandon_yields_result_when_future_completes() {
         let cancel = CancellationToken::new(); // never fired
-        let out = call_or_abandon(&cancel, async {
-            zoid_tools::ToolOutput::ok("done")
-        })
-        .await;
+        let out = call_or_abandon(&cancel, async { zoid_tools::ToolOutput::ok("done") }).await;
         assert_eq!(out.expect("future should win").text, "done");
     }
 
@@ -2256,7 +2315,7 @@ mod tests {
         let c = chat_turn_config();
         assert_eq!(c.branch, BranchId::default());
         assert_eq!(c.cwd, std::path::PathBuf::from("."));
-        assert_eq!(c.system, SYSTEM_PROMPT);
+        assert!(c.system.starts_with(SYSTEM_PROMPT));
     }
 
     #[test]
@@ -2400,16 +2459,38 @@ mod tests {
     }
 
     #[test]
-    fn chat_turn_config_with_empty_menu_is_just_prompt() {
+    fn chat_turn_config_with_empty_menu_is_prompt_plus_env() {
         let p = default_profile();
         let cfg = chat_turn_config_with(&p, "");
-        assert_eq!(cfg.system, SYSTEM_PROMPT);
+        assert!(cfg.system.starts_with(SYSTEM_PROMPT));
+        assert!(cfg.system.contains("## Environment"));
+        assert!(!cfg.system.contains("## Available skills"));
     }
 
     #[test]
-    fn zero_arg_chat_turn_config_matches_default_profile_no_menu() {
-        // The zero-arg convenience must stay byte-identical to the old behavior.
-        assert_eq!(chat_turn_config().system, SYSTEM_PROMPT);
+    fn zero_arg_chat_turn_config_carries_prompt_and_env() {
+        // The zero-arg convenience carries the base prompt + environment block.
+        let cfg = chat_turn_config();
+        assert!(cfg.system.starts_with(SYSTEM_PROMPT));
+        assert!(cfg.system.contains("## Environment"));
+    }
+
+    #[test]
+    fn environment_block_contains_field_labels() {
+        let env = super::environment_block();
+        assert!(env.starts_with("## Environment\n"));
+        assert!(env.contains("- Date:"));
+        assert!(env.contains("- Working directory:"));
+        assert!(env.contains("- OS:"));
+        assert!(env.contains("- Shell:"));
+    }
+
+    #[test]
+    fn system_prompt_contains_epistemics_guidance() {
+        assert!(SYSTEM_PROMPT.contains("epistemic"));
+        assert!(SYSTEM_PROMPT.contains("✅ Fact") && SYSTEM_PROMPT.contains("🟨 Interpretation"));
+        assert!(SYSTEM_PROMPT.contains("🟢 High") && SYSTEM_PROMPT.contains("🔴 Unknown"));
+        assert!(SYSTEM_PROMPT.contains("Choice → Gain → Give up"));
     }
 
     #[tokio::test]
@@ -2491,14 +2572,15 @@ mod tests {
             Ulid::from(1u128),
             None,
             1,
-            EventKind::UserMessage { text: "are you there?".into() },
+            EventKind::UserMessage {
+                text: "are you there?".into(),
+            },
         )];
         for e in &seed {
             session.append(e.clone()).await.unwrap();
         }
-        let provider = std::sync::Arc::new(zoid_provider::FakeProvider::new(vec![
-            ProviderEvent::Done,
-        ]));
+        let provider =
+            std::sync::Arc::new(zoid_provider::FakeProvider::new(vec![ProviderEvent::Done]));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
         let out = run_agent_turn(
@@ -2752,7 +2834,9 @@ mod tests {
                     Ulid::from(i),
                     None,
                     1,
-                    EventKind::UserMessage { text: format!("foreign {i}") },
+                    EventKind::UserMessage {
+                        text: format!("foreign {i}"),
+                    },
                 )
                 .with_session(sid_b)
             })
@@ -2797,7 +2881,9 @@ mod tests {
         ));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
-        let seed = std::iter::once(target.clone()).chain(foreign.clone()).collect();
+        let seed = std::iter::once(target.clone())
+            .chain(foreign.clone())
+            .collect();
         let out = run_agent_turn(
             cfg,
             provider,
@@ -3139,7 +3225,9 @@ mod tests {
             Ulid::from(1u128),
             None,
             1,
-            EventKind::UserMessage { text: "dispatch a subagent".into() },
+            EventKind::UserMessage {
+                text: "dispatch a subagent".into(),
+            },
         )];
         for e in &seed {
             session.append(e.clone()).await.unwrap();
@@ -3193,7 +3281,9 @@ mod tests {
             })
             .expect("dispatch_subagent tool result must be emitted");
         match &tool_result.kind {
-            EventKind::ToolResult { output, is_error, .. } => {
+            EventKind::ToolResult {
+                output, is_error, ..
+            } => {
                 assert!(!*is_error, "dispatch should not error");
                 assert!(
                     output.contains("sub-"),
@@ -3215,7 +3305,9 @@ mod tests {
             Ulid::from(1u128),
             None,
             1,
-            EventKind::UserMessage { text: "dispatch two subagents".into() },
+            EventKind::UserMessage {
+                text: "dispatch two subagents".into(),
+            },
         )];
         for e in &seed {
             session.append(e.clone()).await.unwrap();
@@ -3345,7 +3437,10 @@ mod tests {
 
         let result = out.iter().find_map(|e| match &e.kind {
             EventKind::ToolResult {
-                name, output, is_error, ..
+                name,
+                output,
+                is_error,
+                ..
             } if name == "srv__missing" => Some((output.clone(), *is_error)),
             _ => None,
         });
@@ -3411,12 +3506,17 @@ mod tests {
             "hard-stop must not wait for the shell command"
         );
         // The tool call is answered with a killed result (balance preserved).
-        let killed = out.iter().any(|e| matches!(
-            &e.kind,
-            EventKind::ToolResult { id, output, .. }
-                if id == "call-1" && output.contains("[killed")
-        ));
-        assert!(killed, "the interrupted shell call must get a [killed] result");
+        let killed = out.iter().any(|e| {
+            matches!(
+                &e.kind,
+                EventKind::ToolResult { id, output, .. }
+                    if id == "call-1" && output.contains("[killed")
+            )
+        });
+        assert!(
+            killed,
+            "the interrupted shell call must get a [killed] result"
+        );
     }
 
     #[tokio::test]
@@ -3478,19 +3578,29 @@ mod tests {
             "hard-stop must not wait for the shell command"
         );
         // (b) The running shell call is answered with a killed result.
-        let killed = out.iter().any(|e| matches!(
-            &e.kind,
-            EventKind::ToolResult { id, output, .. }
-                if id == "call-1" && output.contains("[killed")
-        ));
-        assert!(killed, "the interrupted shell call must get a [killed] result");
+        let killed = out.iter().any(|e| {
+            matches!(
+                &e.kind,
+                EventKind::ToolResult { id, output, .. }
+                    if id == "call-1" && output.contains("[killed")
+            )
+        });
+        assert!(
+            killed,
+            "the interrupted shell call must get a [killed] result"
+        );
         // (c) The un-run second call is drained (this is the mid-batch drain path).
-        let skipped = out.iter().any(|e| matches!(
-            &e.kind,
-            EventKind::ToolResult { id, output, .. }
-                if id == "call-2" && output.contains("[skipped")
-        ));
-        assert!(skipped, "the remaining batched call must get a [skipped] result");
+        let skipped = out.iter().any(|e| {
+            matches!(
+                &e.kind,
+                EventKind::ToolResult { id, output, .. }
+                    if id == "call-2" && output.contains("[skipped")
+            )
+        });
+        assert!(
+            skipped,
+            "the remaining batched call must get a [skipped] result"
+        );
     }
 }
 

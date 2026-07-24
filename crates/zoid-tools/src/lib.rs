@@ -2,24 +2,25 @@
 //! Tools run in the process working directory (Chat is safe by human presence,
 //! spec §9); no path-jailing here.
 
-pub mod ask;
 pub mod approval;
+pub mod ask;
 pub mod edit;
 pub mod feedback;
+pub mod git_context;
 pub mod glob;
 pub mod kill;
 pub mod ls;
 pub mod read;
 pub mod recall;
 pub mod search;
-pub mod subagent_dispatch;
 pub mod shell;
 pub mod show;
-pub mod tasks;
-pub mod write;
 pub mod subagent_diff;
-pub mod web_search;
+pub mod subagent_dispatch;
+pub mod tasks;
 pub mod web_fetch;
+pub mod web_search;
+pub mod write;
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -88,9 +89,7 @@ pub trait Tool: Send + Sync {
         _args: &'a Value,
         _cwd: &'a Path,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolOutput> + Send + 'a>> {
-        Box::pin(async {
-            panic!("run_async called on non-Network tool {}", self.name())
-        })
+        Box::pin(async { panic!("run_async called on non-Network tool {}", self.name()) })
     }
 }
 
@@ -103,6 +102,7 @@ pub fn registry() -> Vec<Box<dyn Tool>> {
         Box::new(search::Grep),
         Box::new(glob::GlobTool),
         Box::new(ls::Ls),
+        Box::new(git_context::GitContext),
         Box::new(shell::Shell::default()),
         Box::new(tasks::UpdateTasks),
         Box::new(ask::AskUser),
@@ -123,6 +123,7 @@ pub fn registry_with_kill(kill: KillSlot) -> Vec<Box<dyn Tool>> {
         Box::new(search::Grep),
         Box::new(glob::GlobTool),
         Box::new(ls::Ls),
+        Box::new(git_context::GitContext),
         Box::new(shell::Shell::new(kill)),
         Box::new(tasks::UpdateTasks),
         Box::new(ask::AskUser),
@@ -326,16 +327,13 @@ mod tests {
         // `update_tasks` (Emitting), `ask_user` (Interactive), and the web
         // tools (Network) are the intentional exceptions; everything else
         // still defaults to Local.
-        for t in registry()
-            .into_iter()
-            .filter(|t| {
-                t.name() != "update_tasks"
-                    && t.name() != "ask_user"
-                    && t.name() != "submit_feedback"
-                    && t.name() != "web_search"
-                    && t.name() != "web_fetch"
-            })
-        {
+        for t in registry().into_iter().filter(|t| {
+            t.name() != "update_tasks"
+                && t.name() != "ask_user"
+                && t.name() != "submit_feedback"
+                && t.name() != "web_search"
+                && t.name() != "web_fetch"
+        }) {
             assert_eq!(
                 t.kind(),
                 ToolKind::Local,
