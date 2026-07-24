@@ -221,13 +221,6 @@ fn turn_relevance(turn: &TurnView, ctx: &GoalContext) -> f32 {
         .fold(0.0f32, f32::max)
 }
 
-/// Map raws to [0,1] by DISTINCT-VALUE rank: ties share a rank, and the lowest
-/// distinct value pins to 0.0. All-equal (incl. all-zero) or len ≤ 1 ⇒ all 0.0.
-/// CRITICAL: this must be value-based, not array-position-based. In production the
-/// candidate set is mostly `raw == 0.0` (off-goal / no cached vector); those MUST
-/// all map to 0.0 (zero bump). A position-based rank would spread equal zeros
-/// across [0,1] and hand off-goal turns a spurious rescue — silently corrupting
-/// the rescue-only guarantee.
 /// Tolerance for treating two cosine values as the same distinct rank tier.
 /// `f32::EPSILON` (~1.2e-7) is too tight for real bge cosines — two off-goal
 /// turns with cosines 0.3700001 and 0.3700003 would escape the dedup and spread
@@ -236,6 +229,13 @@ fn turn_relevance(turn: &TurnView, ctx: &GoalContext) -> f32 {
 /// float noise from dot products over 384 dims.
 const RANK_TOL: f32 = 1e-5;
 
+/// Map raws to [0,1] by DISTINCT-VALUE rank: ties share a rank, and the lowest
+/// distinct value pins to 0.0. All-equal (incl. all-zero) or len ≤ 1 ⇒ all 0.0.
+/// CRITICAL: this must be value-based, not array-position-based. In production the
+/// candidate set is mostly `raw == 0.0` (off-goal / no cached vector); those MUST
+/// all map to 0.0 (zero bump). A position-based rank would spread equal zeros
+/// across [0,1] and hand off-goal turns a spurious rescue — silently corrupting
+/// the rescue-only guarantee.
 fn rank_normalize(raws: &[f32]) -> Vec<f32> {
     let n = raws.len();
     if n <= 1 {
