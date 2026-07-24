@@ -1631,6 +1631,9 @@ struct App {
     /// Skills the `invoke_skill` tool can load; also rendered as the menu the
     /// active mode's system prompt advertises.
     skills: std::sync::Arc<zoid_core::skill::SkillRegistry>,
+    /// Agent profiles for `dispatch_subagent` name resolution + the `list_agents`
+    /// tool. Built at startup from convention + configured `agents.source_dirs`.
+    agents: std::sync::Arc<zoid_core::agent_profile::AgentRegistry>,
     /// The URL import/update wizard state. `Some` while a wizard is in flight;
     /// `None` otherwise. Gated into the turn's tool set in `spawn_turn`.
     wizard: Option<zoid::mode_wizard::ModeImportWizard>,
@@ -2076,6 +2079,16 @@ async fn main() -> Result<()> {
     );
     let modes = zoid::mode_import::build_mode_registry(&base_profile, &mode_dirs);
 
+    let agents = {
+        let dirs = zoid::agent_import::resolve_agent_dirs(
+            &config.agents.source_dirs,
+            &cfg_dir,
+            std::path::Path::new(&root),
+            home.as_deref(),
+        );
+        std::sync::Arc::new(zoid::agent_import::build_agent_registry(&dirs))
+    };
+
     let mcp = {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let servers = zoid_mcp::config::discover(&cfg_dir, &cwd, &|k| std::env::var(k).ok());
@@ -2196,6 +2209,7 @@ async fn main() -> Result<()> {
         base_profile,
         mode_dirs,
         skills,
+        agents,
         wizard: None,
         pending_adjust: None,
         model,
@@ -6460,7 +6474,7 @@ fn spawn_turn(app: &mut App) {
     let kill = zoid_tools::KillSlot::new();
     let mut tools = zoid::invoke_skill::chat_tools(
         std::sync::Arc::new(effective),
-        std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+        app.agents.clone(),
         kill.clone(),
     );
     if let Some(wiz) = &app.wizard {
@@ -6510,6 +6524,7 @@ fn spawn_turn(app: &mut App) {
         .then(|| std::time::Duration::from_secs(app.config.subagent.idle_timeout_secs));
     turn_config.subagent_ceiling = (app.config.subagent.hard_timeout_secs > 0)
         .then(|| std::time::Duration::from_secs(app.config.subagent.hard_timeout_secs));
+    turn_config.agents = Some(app.agents.clone());
     // Mint fresh cancellation tokens for this turn and keep clones so
     // `Action::CancelTurn` (Esc/Ctrl-C) can fire them. Cleared on `TurnComplete`.
     let cancel = tokio_util::sync::CancellationToken::new();
@@ -7376,6 +7391,7 @@ mod tests {
             )]),
             mode_dirs: Vec::new(),
             skills: std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            agents: std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
             wizard: None,
             pending_adjust: None,
             model: "test-model".into(),
