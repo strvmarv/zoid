@@ -401,6 +401,33 @@ impl EventStore {
         Ok(())
     }
 
+    /// Delete a session and all its data: events, FTS entries, embeddings,
+    /// and the session row. Transactional — either fully gone or fully intact.
+    /// Only call this for non-live sessions (see spec §2 — the heartbeat
+    /// invariant relies on live sessions never being deleted).
+    pub fn delete_session(&self, id: Ulid) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM event_embeddings WHERE event_id IN \
+             (SELECT id FROM events WHERE session_id = ?1)",
+            params![id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM events_fts WHERE session_id = ?1",
+            params![id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM events WHERE session_id = ?1",
+            params![id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM sessions WHERE id = ?1",
+            params![id.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn touch_session(&self, id: Ulid, last_touched_ts: i64) -> Result<()> {
         self.conn.execute(
             "UPDATE sessions SET last_touched_ts = ?2 WHERE id = ?1",
@@ -1346,5 +1373,40 @@ mod tests {
         let s = EventStore::open(":memory:").unwrap();
         let totals = s.session_token_totals().unwrap();
         assert!(totals.is_empty());
+    }
+
+    #[test]
+    fn delete_session_removes_row_events_fts_and_embeddings() {
+        let store = EventStore::open(":memory:").unwrap();
+        let sid1 = Ulid::new();
+        let sid2 = Ulid::new();
+        // Create two sessions with events.
+        store.insert_session(sid1, "s1", "/repo", 100, 100).unwrap();
+        store.insert_session(sid2, "s2", "/repo", 200, 200).unwrap();
+        let ev1 = Event::new(Ulid::new(), None, 150, EventKind::UserMessage { text: "hello".into() }).with_session(sid1);
+        let ev2 = Event::new(Ulid::new(), None, 250, EventKind::UserMessage { text: "world".into() }).with_session(sid2);
+        store.append(&ev1).unwrap();
+        store.append(&ev2).unwrap();
+
+        // Delete sid1.
+        store.delete_session(sid1).unwrap();
+
+        // sid1's row is gone; sid2's row remains.
+        let rows = store.list_session_rows().unwrap();
+        assert!(rows.iter().all(|r| r.id != sid1), "deleted session row gone");
+        assert!(rows.iter().any(|r| r.id == sid2), "other session row remains");
+
+        // sid1's events are gone; sid2's events remain.
+        let s1_events = store.load_session(sid1).unwrap();
+        assert!(s1_events.is_empty(), "deleted session events gone");
+        let s2_events = store.load_session(sid2).unwrap();
+        assert_eq!(s2_events.len(), 1, "other session events remain");
+    }
+
+    #[test]
+    fn delete_session_on_nonexistent_id_is_noop() {
+        let store = EventStore::open(":memory:").unwrap();
+        // No error, no panic.
+        store.delete_session(Ulid::new()).unwrap();
     }
 }
