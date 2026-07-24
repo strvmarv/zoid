@@ -192,6 +192,74 @@ mod fold_tests {
 #[derive(Debug, Default)]
 pub struct GoalContext {}
 
+/// Newest-first concatenation of up to `n` non-trivial user messages, the
+/// relevance query. "Non-trivial" filters empties and short confirmations
+/// ("yes", "3", "ok") so terse turns don't poison the goal.
+pub const GOAL_WINDOW_MSGS: usize = 3;
+pub const MIN_GOAL_MSG_CHARS: usize = 8;
+
+pub fn goal_text(events: &[&Event], n: usize) -> String {
+    let mut picked: Vec<&str> = Vec::with_capacity(n);
+    for e in events.iter().rev() {
+        if let EventKind::UserMessage { text } = &e.kind {
+            let t = text.trim();
+            if t.chars().count() >= MIN_GOAL_MSG_CHARS {
+                picked.push(t);
+                if picked.len() == n {
+                    break;
+                }
+            }
+        }
+    }
+    picked.join("\n")
+}
+
+#[cfg(test)]
+mod goal_text_tests {
+    use super::*;
+
+    fn user(id: u128, t: &str) -> Event {
+        Event::new(
+            Ulid::from(id),
+            None,
+            id as i64,
+            EventKind::UserMessage { text: t.into() },
+        )
+    }
+    fn asst(id: u128, t: &str) -> Event {
+        Event::new(
+            Ulid::from(id),
+            None,
+            id as i64,
+            EventKind::AssistantMessage { text: t.into() },
+        )
+    }
+
+    #[test]
+    fn goal_text_takes_recent_nontrivial_user_msgs_newest_first() {
+        let evs = vec![
+            user(1, "implement the relevance rescue scorer"),
+            asst(2, "ok"),
+            user(3, "yes"), // trivial: dropped
+            user(4, "wire it into preflight_gate under pressure"),
+        ];
+        let refs: Vec<&Event> = evs.iter().collect();
+        let g = goal_text(&refs, GOAL_WINDOW_MSGS);
+        let pos_wire = g.find("wire it into").unwrap();
+        let pos_impl = g.find("implement the relevance").unwrap();
+        assert!(pos_wire < pos_impl, "newest-first");
+        assert!(!g.contains("yes"), "trivial confirmation filtered");
+        assert!(!g.contains("ok"), "assistant text excluded");
+    }
+
+    #[test]
+    fn goal_text_empty_when_no_nontrivial_user_msgs() {
+        let evs = vec![user(1, "y"), user(2, "3")];
+        let refs: Vec<&Event> = evs.iter().collect();
+        assert!(goal_text(&refs, GOAL_WINDOW_MSGS).is_empty());
+    }
+}
+
 /// A candidate turn for eviction, derived positionally from the non-inert log.
 #[derive(Debug, Clone)]
 pub struct TurnView {
