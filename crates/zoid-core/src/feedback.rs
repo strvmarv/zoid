@@ -59,6 +59,7 @@ pub struct Diagnostics {
 
 impl Diagnostics {
     /// Snapshot from explicit values — not a global read, so it stays testable.
+    #[allow(clippy::too_many_arguments)]
     pub fn capture(
         version: String,
         os: String,

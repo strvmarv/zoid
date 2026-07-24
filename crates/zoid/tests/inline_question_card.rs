@@ -149,6 +149,7 @@ async fn apply_mode_mapping_emits_question_asked_with_mapping() {
     let wiz = Arc::new(ModeImportWizard::new_import(scan()));
     let mut tools = zoid::invoke_skill::chat_tools(
         Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+        std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
         zoid_tools::KillSlot::new(),
     );
     tools.push(Box::new(ProposeModeMappingTool::new(wiz.clone())));

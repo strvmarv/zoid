@@ -180,6 +180,7 @@ pub async fn run_subagent(
         progress: Some(progress.clone()),
         subagent_idle: None,
         subagent_ceiling: None,
+        agents: None,
     };
     // Subagents have no session-scoped companion (the `show` tool is chat-only
     // and is never in the subagent tool registry), so this hub is never

@@ -46,6 +46,7 @@ pub(crate) fn abort_summary(reason: Option<crate::agent::AbortReason>) -> String
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_subagent(
     task: String,
+    profile: AgentProfile,
     seed: crate::eventlog::EventLog,
     provider: Arc<dyn Provider>,
     cwd: PathBuf,
@@ -84,7 +85,7 @@ pub fn spawn_subagent(
         let res = crate::subagent::run_subagent(
             &task,
             &seed,
-            &AgentProfile::builtin(),
+            &profile,
             provider,
             cwd,
             model,

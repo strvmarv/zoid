@@ -124,6 +124,12 @@ impl FeedbackState {
     }
 }
 
+impl Default for FeedbackState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Read-only snapshot row for one catalog entry, mapped by the bin from
 /// `zoid::catalog::CatalogEntry` (zoid-tui does not depend on the catalog
 /// crate types, so the bin maps them to plain strings here, mirroring

@@ -66,6 +66,7 @@ async fn invoke_skill_body_flows_back_into_the_loop() {
     let skills = Arc::new(SkillRegistry::builtin());
     let tools = Arc::new(zoid::invoke_skill::chat_tools(
         skills.clone(),
+        std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
         zoid_tools::KillSlot::new(),
     ));
 

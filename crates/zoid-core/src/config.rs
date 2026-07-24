@@ -24,6 +24,13 @@ pub struct ModesConfig {
     pub source_dirs: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AgentsConfig {
+    /// Extra directories to scan for `<agent>/agent.md` files (beyond the two
+    /// convention dirs the bin adds). Unioned across config layers.
+    pub source_dirs: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub provider: String,
@@ -33,6 +40,7 @@ pub struct Config {
     pub reduced_motion: bool,
     pub skills: SkillsConfig,
     pub modes: ModesConfig,
+    pub agents: AgentsConfig,
     pub companion: CompanionConfig,
     pub thinking: ThinkingConfig,
     pub approval: ApprovalConfig,
@@ -42,21 +50,11 @@ pub struct Config {
     pub wake: WakeConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ApprovalConfig {
     pub yolo: bool,
     pub shell_danger: Vec<String>,
     pub shell_allow: Vec<String>,
-}
-
-impl Default for ApprovalConfig {
-    fn default() -> Self {
-        Self {
-            yolo: false,
-            shell_danger: vec![],
-            shell_allow: vec![],
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,6 +165,7 @@ impl Default for Config {
             reduced_motion: false,
             skills: SkillsConfig::default(),
             modes: ModesConfig::default(),
+            agents: AgentsConfig::default(),
             companion: CompanionConfig::default(),
             thinking: ThinkingConfig::default(),
             approval: ApprovalConfig::default(),
@@ -208,6 +207,7 @@ mod tests {
         assert_eq!(c.economy.context_target, Some(300_000));
         assert_eq!(c.economy.band_headroom_pct, 20);
         assert_eq!(c.economy.recent_n, 4);
+        assert!(c.agents.source_dirs.is_empty());
     }
 
     #[test]
@@ -354,6 +354,12 @@ pub struct PartialModes {
     pub source_dirs: Option<Vec<String>>,
 }
 
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(default)]
+pub struct PartialAgents {
+    pub source_dirs: Option<Vec<String>>,
+}
+
 #[derive(Debug, Default, Clone, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct PartialThinking {
@@ -413,6 +419,7 @@ pub struct PartialConfig {
     pub economy: PartialEconomy,
     pub skills: PartialSkills,
     pub modes: PartialModes,
+    pub agents: PartialAgents,
     pub companion: PartialCompanion,
     pub thinking: PartialThinking,
     pub approval: PartialApproval,
@@ -531,6 +538,13 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
             for d in dirs {
                 if !cfg.modes.source_dirs.contains(d) {
                     cfg.modes.source_dirs.push(d.clone());
+                }
+            }
+        }
+        if let Some(dirs) = &p.agents.source_dirs {
+            for d in dirs {
+                if !cfg.agents.source_dirs.contains(d) {
+                    cfg.agents.source_dirs.push(d.clone());
                 }
             }
         }
@@ -719,6 +733,26 @@ mod merge_tests {
         let (cfg, _) = merge(&[(Source::UserGlobal, user), (Source::Project, proj)]);
         assert_eq!(
             cfg.modes.source_dirs,
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
+    }
+
+    #[test]
+    fn parses_agents_source_dirs() {
+        let (p, _) = parse_toml("[agents]\nsource_dirs = [\"a\", \"b\"]").unwrap();
+        assert_eq!(
+            p.agents.source_dirs,
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+    }
+
+    #[test]
+    fn merge_unions_agents_source_dirs_across_layers() {
+        let (user, _) = parse_toml("[agents]\nsource_dirs = [\"a\", \"b\"]").unwrap();
+        let (proj, _) = parse_toml("[agents]\nsource_dirs = [\"b\", \"c\"]").unwrap();
+        let (cfg, _) = merge(&[(Source::UserGlobal, user), (Source::Project, proj)]);
+        assert_eq!(
+            cfg.agents.source_dirs,
             vec!["a".to_string(), "b".to_string(), "c".to_string()]
         );
     }

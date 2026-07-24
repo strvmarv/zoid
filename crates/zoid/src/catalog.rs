@@ -191,7 +191,7 @@ mod tests {
     fn parse_index_reads_fixture_catalog() {
         let fixture = include_str!("../tests/fixtures/catalog/index.json");
         let v = parse_index(fixture).unwrap();
-        assert!(v.len() >= 1, "fixture catalog must have at least one entry");
+        assert!(!v.is_empty(), "fixture catalog must have at least one entry");
         let superpowers = v.iter().find(|e| e.id == "superpowers")
             .expect("fixture catalog must contain the superpowers entry");
         assert_eq!(superpowers.name, "Superpowers");

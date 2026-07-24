@@ -741,10 +741,9 @@ async fn pick_session(
             f.render_widget(Paragraph::new(lines).block(block), area);
         })?;
 
-        match term_events.next().await {
-            Some(Ok(CEvent::Key(key))) => {
-                // Inline confirm for pending delete — captures all keys.
-                if let Some(idx) = pending_delete {
+        if let Some(Ok(CEvent::Key(key))) = term_events.next().await {
+            // Inline confirm for pending delete — captures all keys.
+            if let Some(idx) = pending_delete {
                     match key.code {
                         crossterm::event::KeyCode::Char('y')
                         | crossterm::event::KeyCode::Char('Y')
@@ -813,8 +812,6 @@ async fn pick_session(
                         pending_delete = Some(idx);
                     }
                 }
-            }
-            _ => {}
         }
     }
 }
@@ -985,7 +982,6 @@ fn handle_conversation_click(app: &mut App, layout: &zoid_tui::layout::ShellLayo
             }
         };
         app.shell.peek = Some(PeekState { content, scroll: 0 });
-        return;
     }
 }
 
@@ -1631,6 +1627,9 @@ struct App {
     /// Skills the `invoke_skill` tool can load; also rendered as the menu the
     /// active mode's system prompt advertises.
     skills: std::sync::Arc<zoid_core::skill::SkillRegistry>,
+    /// Agent profiles for `dispatch_subagent` name resolution + the `list_agents`
+    /// tool. Built at startup from convention + configured `agents.source_dirs`.
+    agents: std::sync::Arc<zoid_core::agent_profile::AgentRegistry>,
     /// The URL import/update wizard state. `Some` while a wizard is in flight;
     /// `None` otherwise. Gated into the turn's tool set in `spawn_turn`.
     wizard: Option<zoid::mode_wizard::ModeImportWizard>,
@@ -2076,6 +2075,16 @@ async fn main() -> Result<()> {
     );
     let modes = zoid::mode_import::build_mode_registry(&base_profile, &mode_dirs);
 
+    let agents = {
+        let dirs = zoid::agent_import::resolve_agent_dirs(
+            &config.agents.source_dirs,
+            &cfg_dir,
+            std::path::Path::new(&root),
+            home.as_deref(),
+        );
+        std::sync::Arc::new(zoid::agent_import::build_agent_registry(&dirs))
+    };
+
     let mcp = {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let servers = zoid_mcp::config::discover(&cfg_dir, &cwd, &|k| std::env::var(k).ok());
@@ -2182,6 +2191,7 @@ async fn main() -> Result<()> {
         (None, None)
     };
     #[cfg(not(feature = "local-embed"))]
+    #[allow(clippy::type_complexity)]
     let (embed_index, embedder): (
         Option<std::sync::Arc<std::sync::RwLock<zoid_core::embed_index::EmbeddingIndex>>>,
         Option<std::sync::Arc<dyn zoid_core::retrieval::Embedder>>,
@@ -2196,6 +2206,7 @@ async fn main() -> Result<()> {
         base_profile,
         mode_dirs,
         skills,
+        agents,
         wizard: None,
         pending_adjust: None,
         model,
@@ -2332,15 +2343,15 @@ fn scrollbar_row_to_offset(app: &mut App, row: u16) {
     app.shell.scroll_to_offset(offset, max);
 }
 
-async fn run<B: ratatui::backend::Backend>(
+async fn run<B>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     ui_rx: &mut mpsc::Receiver<AgentUpdate>,
     obs_state: &std::sync::Arc<std::sync::Mutex<obs::ObsState>>,
 ) -> Result<()>
 where
+    B: ratatui::backend::Backend + std::io::Write,
     <B as ratatui::backend::Backend>::Error: Send + Sync + 'static,
-    B: std::io::Write,
 {
     let mut term_events = EventStream::new();
 
@@ -3252,7 +3263,7 @@ where
                                             },
                                         );
                                 }
-                                let _ = open_url(&url);
+                                open_url(&url);
                                 app.shell.status_hint =
                                     Some(format!("Opened browser: {}", url));
                             }
@@ -5222,7 +5233,7 @@ fn apply_mcp_manifest_fetched(
             .shell
             .plugin_catalog
             .as_ref()
-            .map_or(false, |c| catalog_confirm_awaits(c, &id));
+            .is_some_and(|c| catalog_confirm_awaits(c, &id));
     if !matches {
         return;
     }
@@ -5382,8 +5393,8 @@ fn install_plugin(app: &mut App, arg: String) {
                     let body = zoid::catalog::fetch_text(&zoid::catalog::catalog_manifest_url(&id))
                         .await
                         .map_err(|e| format!("catalog manifest fetch failed: {e}"))?;
-                    let manifest = zoid_plugin::manifest::parse_manifest(&body).map_err(|e| e)?;
-                    manifest.validate().map_err(|e| e)?;
+                    let manifest = zoid_plugin::manifest::parse_manifest(&body)?;
+                    manifest.validate()?;
                     let src = manifest
                         .source
                         .clone()
@@ -6458,7 +6469,11 @@ fn spawn_turn(app: &mut App) {
         zoid_core::mode::active_turn(&app.modes, &app.skills, &app.base_profile);
     let menu = effective.menu();
     let kill = zoid_tools::KillSlot::new();
-    let mut tools = zoid::invoke_skill::chat_tools(std::sync::Arc::new(effective), kill.clone());
+    let mut tools = zoid::invoke_skill::chat_tools(
+        std::sync::Arc::new(effective),
+        app.agents.clone(),
+        kill.clone(),
+    );
     if let Some(wiz) = &app.wizard {
         let wiz = std::sync::Arc::new(wiz.clone());
         tools.push(Box::new(zoid::mode_wizard::ProposeModeMappingTool::new(
@@ -6506,6 +6521,7 @@ fn spawn_turn(app: &mut App) {
         .then(|| std::time::Duration::from_secs(app.config.subagent.idle_timeout_secs));
     turn_config.subagent_ceiling = (app.config.subagent.hard_timeout_secs > 0)
         .then(|| std::time::Duration::from_secs(app.config.subagent.hard_timeout_secs));
+    turn_config.agents = Some(app.agents.clone());
     // Mint fresh cancellation tokens for this turn and keep clones so
     // `Action::CancelTurn` (Esc/Ctrl-C) can fire them. Cleared on `TurnComplete`.
     let cancel = tokio_util::sync::CancellationToken::new();
@@ -7372,6 +7388,7 @@ mod tests {
             )]),
             mode_dirs: Vec::new(),
             skills: std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            agents: std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
             wizard: None,
             pending_adjust: None,
             model: "test-model".into(),
@@ -8258,7 +8275,7 @@ mod tests {
         use zoid_core::projection::conversation;
 
         let sub_branch = BranchId("subagent:01ABC".into());
-        let events = vec![
+        let events = [
             // Main-branch user message.
             Event::new(Ulid::new(), None, 0, EventKind::UserMessage { text: "hello".into() }),
             // Subagent-branch assistant text (must NOT appear).
@@ -8312,7 +8329,7 @@ mod tests {
         use zoid_core::event::{Event, EventKind};
         use zoid_core::projection::{conversation, ChatMsg};
 
-        let events = vec![
+        let events = [
             Event::new(Ulid::new(), None, 0, EventKind::UserMessage { text: "do the thing".into() }),
             Event::new(Ulid::new(), None, 1, EventKind::AssistantMessage { text: "delegating".into() }),
             Event::new(

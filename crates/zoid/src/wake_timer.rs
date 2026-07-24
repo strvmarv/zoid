@@ -49,8 +49,8 @@ impl WakeTimer {
                     _ = ticker.tick() => {
                         let t = now();
                         let last = progress.load(Ordering::Relaxed);
-                        let idle_breach = idle_ms.map_or(false, |i| i > 0 && t - last > i);
-                        let ceiling_breach = ceiling_ms.map_or(false, |c| c > 0 && t - start > c);
+                        let idle_breach = idle_ms.is_some_and(|i| i > 0 && t - last > i);
+                        let ceiling_breach = ceiling_ms.is_some_and(|c| c > 0 && t - start > c);
                         if idle_breach || ceiling_breach {
                             // Ceiling wins the label when both trip on the same tick.
                             let r = if ceiling_breach {

@@ -9,6 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use serde_json::{json, Value};
+use zoid_core::agent_profile::AgentRegistry;
 use zoid_core::skill::SkillRegistry;
 use zoid_provider::ToolSpec;
 use zoid_tools::{Tool, ToolOutput};
@@ -82,10 +83,16 @@ fn body_with_anchor(skill: &zoid_core::skill::Skill) -> String {
 }
 
 /// The Chat tool set: the standard curated registry plus the `invoke_skill` tool
-/// bound to `skills`. Extracted from `App` construction so it is unit-testable.
-pub fn chat_tools(skills: Arc<SkillRegistry>, kill: zoid_tools::KillSlot) -> Vec<Box<dyn Tool>> {
+/// bound to `skills`, and the `list_agents` tool bound to `agents`. Extracted
+/// from `App` construction so it is unit-testable.
+pub fn chat_tools(
+    skills: Arc<SkillRegistry>,
+    agents: Arc<AgentRegistry>,
+    kill: zoid_tools::KillSlot,
+) -> Vec<Box<dyn Tool>> {
     let mut tools = zoid_tools::registry_with_kill(kill);
     tools.push(Box::new(InvokeSkillTool::new(skills)));
+    tools.push(Box::new(zoid_tools::list_agents::ListAgents::new(agents)));
     // `recall` is always offered in chat (never gated on eviction.enabled): the
     // cold tier is a standing capability, and a prior session may hold paged-out
     // turns worth recalling even when eviction is currently off. It is NOT in the
@@ -152,11 +159,16 @@ mod tests {
 
     #[test]
     fn chat_tools_includes_invoke_skill_and_base_registry() {
-        let tools = chat_tools(Arc::new(SkillRegistry::builtin()), zoid_tools::KillSlot::new());
+        let tools = chat_tools(
+            Arc::new(SkillRegistry::builtin()),
+            Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(names.contains(&"invoke_skill"));
         assert!(names.contains(&"write"));
         assert!(names.contains(&"read"));
+        assert!(names.contains(&"list_agents"), "chat_tools includes list_agents");
         // recall is a chat-only tool; it must be registered here (and never in the
         // subagent registry — see chat_tools).
         assert!(names.contains(&"recall"));
@@ -191,6 +203,7 @@ mod tests {
     fn chat_tools_includes_dispatch_and_diff() {
         let tools = chat_tools(
             std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
             zoid_tools::KillSlot::new(),
         );
         assert!(
