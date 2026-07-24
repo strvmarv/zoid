@@ -16,7 +16,7 @@
 - **`Option<f32>` is `Copy`** — both `EvictionPolicy` and `EvictionConfig` retain `Copy`.
 - **Cross-crate discipline.** `EvictionPolicy` is defined in `zoid-core`, used in `zoid` (`agent.rs`, `main.rs`). `Config` is in `zoid-core`. Every task builds `cargo build --workspace` and `cargo test --workspace`, not just `-p zoid-core`.
 - **No co-author trailer** in commits (repo `AGENTS.md`).
-- **11 `EvictionPolicy { ... }` struct literals** must be updated when the field is added: 3 in `eviction.rs` (lines 50, 609, 970), 7 in `agent.rs` (lines 3220, 3348, 3408, 3629, 3897, 3960, 4423), 1 in `main.rs` (line 6500). All test literals get `rescue_weight: None`; `main.rs` gets `rescue_weight: app.config.eviction.rescue_weight`.
+- **12 `EvictionPolicy { ... }` struct literals** must be updated when the field is added: 3 in `eviction.rs` (lines 50, 609, 970), 8 in `agent.rs` (lines 3220, 3348, 3408, 3629, 3897, 3960, 4423, +1), 1 in `main.rs` (line 6500). All test literals get `rescue_weight: None`; `main.rs` gets `rescue_weight: app.config.eviction.rescue_weight`.
 
 ---
 
@@ -150,7 +150,7 @@ pub fn disabled() -> Self {
 }
 ```
 
-- [ ] **Step 6: Update all 11 `EvictionPolicy { ... }` struct literals (compile sweep)**
+- [ ] **Step 6: Update all 12 `EvictionPolicy { ... }` struct literals (compile sweep)**
 
 The new field breaks every struct literal. Run this to find them all:
 
@@ -189,7 +189,7 @@ git commit -m "feat(zoid-core): resolve_rescue_weight + rescue_weight field on E
 Add RESCUE_WEIGHT_MAX (48.0) const and resolve_rescue_weight() pure
 fn that clamps non-finite and out-of-range values. Add rescue_weight:
 Option<f32> to EvictionPolicy (drop Eq — f32 is not Eq). Update all
-11 struct literals (10 tests + 1 main.rs). main.rs references
+12 struct literals (11 tests + 1 main.rs). main.rs references
 app.config.eviction.rescue_weight — wired in next task. Workspace
 build fails only on that reference until T2 lands."
 ```
