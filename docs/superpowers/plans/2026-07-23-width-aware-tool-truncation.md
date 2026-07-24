@@ -112,8 +112,10 @@ Add to the test module:
         let long = "a".repeat(200);
         let json = format!(r#"{{"command": "{long}"}}"#);
         let result = arg_summary(&json, 60);
-        // truncate adds an ellipsis at the end, so the result is <= 60 display cols.
-        assert!(result.len() <= 61, "result must fit in budget + ellipsis: got {}", result.len());
+        // truncate produces at most `max` display columns. For ASCII content,
+        // that's 59 chars + 1 ellipsis glyph (… = 1 display col, 3 bytes).
+        assert!(UnicodeWidthStr::width(result.as_str()) <= 60,
+            "result must fit in 60 display cols: got {}", UnicodeWidthStr::width(result.as_str()));
         assert!(result.starts_with("command: a"), "must start with the key and value: {result}");
         assert!(result.ends_with('…'), "must end with ellipsis: {result}");
     }
@@ -208,21 +210,47 @@ In the `ChatMsg::Assistant` arm, the tool-call rendering (line ~279), change:
 
 ```rust
 // BEFORE:
+                for tc in tool_calls {
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("  {} ", glyph::EDIT),
+                            Style::new().fg(color::CHAT_ACCENT),
+                        ),
+                        Span::styled(tc.name.clone(), Style::new().fg(color::TXT).bold()),
                         Span::styled(
                             format!("({})", arg_summary(&tc.args)),
                             Style::new().fg(color::DIM),
                         ),
+                        Span::styled(
+                            format!(" {} peek", glyph::RETURN),
+                            Style::new().fg(color::DIM),
+                        ),
+                    ]));
+                }
 
 // AFTER:
-                        let name_w = display_width(&tc.name);
-                        let args_budget = ctx.width.saturating_sub(15 + name_w).min(120);
+                for tc in tool_calls {
+                    let name_w = display_width(&tc.name);
+                    let args_budget = ctx.width.saturating_sub(15 + name_w).min(120);
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("  {} ", glyph::EDIT),
+                            Style::new().fg(color::CHAT_ACCENT),
+                        ),
+                        Span::styled(tc.name.clone(), Style::new().fg(color::TXT).bold()),
                         Span::styled(
                             format!("({})", arg_summary(&tc.args, args_budget)),
                             Style::new().fg(color::DIM),
                         ),
+                        Span::styled(
+                            format!(" {} peek", glyph::RETURN),
+                            Style::new().fg(color::DIM),
+                        ),
+                    ]));
+                }
 ```
 
-Note: `15` = `  ● ` (4) + `(` (1) + `) ⏎ peek` (10). The `name_w` is the display width of the tool name.
+Note: `15` = `  ● ` (4) + `(` (1) + `) ⏎ peek` (10). The `name_w` is the display width of the tool name. The `let` bindings go before the `Line::from(vec![...])` call.
 
 - [ ] **Step 7: Run the full test suite to check for compile errors**
 
@@ -264,7 +292,8 @@ Add to the test module:
     fn first_line_long_output_budget_80_truncates() {
         let long = "a".repeat(200);
         let result = first_line(&long, 80);
-        assert!(result.len() <= 81, "result must fit in budget + ellipsis: got {}", result.len());
+        assert!(UnicodeWidthStr::width(result.as_str()) <= 80,
+            "result must fit in 80 display cols: got {}", UnicodeWidthStr::width(result.as_str()));
         assert!(result.ends_with('…'), "must end with ellipsis: {result}");
     }
 
@@ -338,19 +367,51 @@ In the `ChatMsg::Delegated` arm (line ~365), change:
 
 ```rust
 // BEFORE:
+            ChatMsg::Delegated { summary, ok } => {
+                let (mark, mark_color) = if *ok {
+                    (glyph::PASS, color::OK)
+                } else {
+                    (glyph::WARNING, color::ERROR)
+                };
+                lines.push(Line::from(vec![
+                    // Purple label with the card background = the collapsed chip.
                     Span::styled(
                         format!("{} delegated · {}", glyph::COLLAPSED, first_line(summary)),
                         Style::new().fg(color::BRANCH).bg(color::DELEGATE_BG),
                     ),
+                    Span::styled(format!("  {mark} "), Style::new().fg(mark_color)),
+                    Span::styled(
+                        format!("{} peek", glyph::RETURN),
+                        Style::new().fg(color::DIM),
+                    ),
+                ]));
+            }
 
 // AFTER:
-                    let delegated_prefix_w = display_width(glyph::COLLAPSED) + display_width(" delegated · ");
-                    let summary_budget = ctx.width.saturating_sub(delegated_prefix_w).min(120);
+            ChatMsg::Delegated { summary, ok } => {
+                let (mark, mark_color) = if *ok {
+                    (glyph::PASS, color::OK)
+                } else {
+                    (glyph::WARNING, color::ERROR)
+                };
+                let delegated_prefix_w = 1 + display_width(" delegated · ");
+                let summary_budget = ctx.width.saturating_sub(delegated_prefix_w).min(120);
+                lines.push(Line::from(vec![
+                    // Purple label with the card background = the collapsed chip.
                     Span::styled(
                         format!("{} delegated · {}", glyph::COLLAPSED, first_line(summary, summary_budget)),
                         Style::new().fg(color::BRANCH).bg(color::DELEGATE_BG),
                     ),
+                    Span::styled(format!("  {mark} "), Style::new().fg(mark_color)),
+                    Span::styled(
+                        format!("{} peek", glyph::RETURN),
+                        Style::new().fg(color::DIM),
+                    ),
+                ]));
+            }
 ```
+
+Note: `glyph::COLLAPSED` is a `char` (1 display column), so the prefix width is `1 + display_width(" delegated · ")`. The `let` bindings go before the `Line::from(vec![...])` call.
 
 - [ ] **Step 6: Run tests to verify they pass**
 
@@ -381,9 +442,16 @@ git commit -m "feat: width-aware first_line truncation (cap min(available, 120))
 
 - [ ] **Step 1: Write integration tests**
 
-Add to the test module:
+Add the `join_spans` helper (if not already present) and these tests to the test module:
 
 ```rust
+    fn join_spans(lines: &[Line<'static>]) -> String {
+        lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect::<String>()
+    }
+
     #[test]
     fn tool_call_line_wide_terminal_shows_full_short_command() {
         // At width 111, a short shell command should NOT be truncated.
