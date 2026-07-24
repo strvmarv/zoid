@@ -324,11 +324,17 @@ fn build_conversation(
                         Style::new().fg(color::REMOVED),
                     ));
                 } else {
-                    spans.push(Span::styled(
-                        format!(" → {}", first_line(output)),
-                        Style::new().fg(color::DIM),
-                    ));
-                }
+                        let name_w = display_width(name);
+                        let mut overhead = 7 + name_w;
+                        if *compacted {
+                            overhead += 12; // approximate width of "{glyph} compacted "
+                        }
+                        let result_budget = ctx.width.saturating_sub(overhead).min(120);
+                        spans.push(Span::styled(
+                            format!(" → {}", first_line(output, result_budget)),
+                            Style::new().fg(color::DIM),
+                        ));
+                    }
                 lines.push(Line::from(spans));
 
                 // … and an inline snippet for the last-K cached edits.
@@ -361,10 +367,12 @@ fn build_conversation(
                 } else {
                     (glyph::WARNING, color::ERROR)
                 };
+                let delegated_prefix_w = 1 + display_width(" delegated · ");
+                let summary_budget = ctx.width.saturating_sub(delegated_prefix_w).min(120);
                 lines.push(Line::from(vec![
                     // Purple label with the card background = the collapsed chip.
                     Span::styled(
-                        format!("{} delegated · {}", glyph::COLLAPSED, first_line(summary)),
+                        format!("{} delegated · {}", glyph::COLLAPSED, first_line(summary, summary_budget)),
                         Style::new().fg(color::BRANCH).bg(color::DELEGATE_BG),
                     ),
                     Span::styled(format!("  {mark} "), Style::new().fg(mark_color)),
@@ -1095,8 +1103,8 @@ fn scalar(v: &serde_json::Value) -> String {
     }
 }
 
-fn first_line(s: &str) -> String {
-    truncate(s.lines().next().unwrap_or(""), 40)
+fn first_line(s: &str, max_width: usize) -> String {
+    truncate(s.lines().next().unwrap_or(""), max_width)
 }
 
 #[cfg(test)]
@@ -1594,6 +1602,33 @@ mod tests {
     fn arg_summary_budget_zero_returns_empty() {
         let json = r#"{"command": "ls"}"#;
         let result = arg_summary(json, 0);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn first_line_short_output_large_budget_no_truncation() {
+        let result = first_line("hello world", 120);
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn first_line_long_output_budget_80_truncates() {
+        let long = "a".repeat(200);
+        let result = first_line(&long, 80);
+        assert!(UnicodeWidthStr::width(result.as_str()) <= 80,
+            "result must fit in 80 display cols: got {}", UnicodeWidthStr::width(result.as_str()));
+        assert!(result.ends_with('…'), "must end with ellipsis: {result}");
+    }
+
+    #[test]
+    fn first_line_multiline_takes_only_first_line() {
+        let result = first_line("first line\nsecond line", 120);
+        assert_eq!(result, "first line");
+    }
+
+    #[test]
+    fn first_line_empty_returns_empty() {
+        let result = first_line("", 120);
         assert_eq!(result, "");
     }
 }
