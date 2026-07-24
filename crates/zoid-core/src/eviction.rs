@@ -2,6 +2,7 @@
 //! scorer, breadcrumb); Slice 0 lands only the policy the turn config carries.
 
 use crate::band::{derive_band, Band};
+use serde::{Deserialize, Serialize};
 
 /// The live turn's eviction parameters. `enabled: false` is a total bypass
 /// (byte-identical to pre-ACM behavior) used by the zero-arg test constructors.
@@ -202,6 +203,9 @@ pub struct GoalContext {
     pub vecs: HashMap<Ulid, Vec<f32>>,
     /// Rescue weight in turn-index units.
     pub weight: f32,
+    /// The goal text that drove the rescue decision (for `RescueRationale`).
+    /// Empty when rescue is inactive. `Default::default()` ⇒ `String::new()`.
+    pub goal_text: String,
 }
 
 /// Cosine == dot product for L2-normalized vectors; 0.0 on length mismatch.
@@ -347,6 +351,7 @@ mod relevance_tests {
             goal: vec![1.0, 0.0],
             vecs,
             weight: DEFAULT_RESCUE_WEIGHT,
+            goal_text: String::new(),
         };
         let turn = TurnView {
             ids: vec![Ulid::from(1u128), Ulid::from(2u128)],
@@ -411,9 +416,32 @@ pub struct EvictedTurn {
     pub topic_hint: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Per-turn rescue rationale for candidates that were *kept* (not evicted).
+/// Present only when rescue was active (non-empty goal). Survivors with
+/// `rescue_bump == 0.0` are excluded — they were kept by recency, not rescue.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RescueRationale {
+    /// The goal text that drove the rescue decision.
+    pub goal_text: String,
+    /// The rescue weight used in the bump computation.
+    pub weight: f32,
+    /// Candidates that were kept (not evicted) with `rescue_bump > 0.0`.
+    pub survivors: Vec<RescuedTurn>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RescuedTurn {
+    pub ids: Vec<Ulid>,
+    pub topic_hint: String,
+    pub base_score: f32,
+    pub rescue_bump: f32,
+    pub keep_score: f32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct EvictionPlan {
     pub turns: Vec<EvictedTurn>,
+    pub rescue: Option<RescueRationale>,
 }
 
 /// Is this event inert for turn-grouping (never starts/joins a conversational turn)?
@@ -580,6 +608,44 @@ pub fn plan_evictions<'a>(
             topic_hint: t.topic_hint.clone(),
         });
     }
+
+    // Rescue rationale: survivors are candidates NOT evicted AND with bump > 0.0.
+    // Only populated when rescue was active (non-empty goal).
+    let rescue = if ctx.goal.is_empty() {
+        None
+    } else {
+        let evicted_set: HashSet<Ulid> = plan.turns.iter()
+            .flat_map(|t| t.ids.iter().copied())
+            .collect();
+        let survivors: Vec<RescuedTurn> = candidates
+            .iter()
+            .enumerate()
+            .filter(|(i, t)| {
+                bump[*i] > 0.0
+                    && !t.ids.iter().any(|id| evicted_set.contains(id))
+            })
+            .map(|(i, t)| {
+                let base = scorer.score(t, ctx);
+                RescuedTurn {
+                    ids: t.ids.clone(),
+                    topic_hint: t.topic_hint.clone(),
+                    base_score: base,
+                    rescue_bump: bump[i],
+                    keep_score: base + bump[i],
+                }
+            })
+            .collect();
+        if survivors.is_empty() {
+            None
+        } else {
+            Some(RescueRationale {
+                goal_text: ctx.goal_text.clone(),
+                weight: ctx.weight,
+                survivors,
+            })
+        }
+    };
+    plan.rescue = rescue;
     plan
 }
 
@@ -838,6 +904,17 @@ mod plan_tests {
             !evicted_ids_of(&a).contains(&Ulid::from(15u128)),
             "newest protected"
         );
+        // (add to empty_goalcontext_is_byte_identical_to_recency, after existing asserts)
+        assert!(a.rescue.is_none(), "empty goal ⇒ no rescue rationale");
+    }
+
+    #[test]
+    fn rescue_is_none_when_goal_empty() {
+        let events = turns8();
+        let plan = plan_evictions(
+            &events, &policy(5_000, 2), 8_000, &RecencyScorer, &GoalContext::default(),
+        );
+        assert!(plan.rescue.is_none(), "empty goal ⇒ no rescue rationale");
     }
 
     #[test]
@@ -863,6 +940,7 @@ mod plan_tests {
             goal: vec![1.0, 0.0],
             vecs,
             weight: DEFAULT_RESCUE_WEIGHT,
+            goal_text: String::new(),
         };
         let rescued = plan_evictions(&events, &policy(5_000, 2), 8_000, &RecencyScorer, &ctx);
         assert!(
@@ -873,6 +951,19 @@ mod plan_tests {
             evicted_ids_of(&rescued).contains(&Ulid::from(3u128)),
             "a newer off-goal turn dropped instead"
         );
+
+        // Rescue rationale is populated.
+        let rescue = rescued.rescue.as_ref().expect("rescue should be Some");
+        assert_eq!(rescue.goal_text, ctx.goal_text);
+        assert_eq!(rescue.weight, ctx.weight);
+        // The rescued turn (id 1) should be in survivors with bump > 0.
+        let survivor = rescue.survivors.iter().find(|s| s.ids.contains(&Ulid::from(1u128)));
+        assert!(survivor.is_some(), "rescued turn id 1 in survivors");
+        let survivor = survivor.unwrap();
+        assert!(survivor.rescue_bump > 0.0, "rescue bump > 0");
+        // Score arithmetic: keep_score == base_score + rescue_bump.
+        assert!((survivor.keep_score - (survivor.base_score + survivor.rescue_bump)).abs() < 1e-6,
+            "keep_score == base_score + rescue_bump");
     }
 
     #[test]
@@ -905,6 +996,7 @@ mod plan_tests {
             goal: vec![1.0, 0.0],
             vecs,
             weight: DEFAULT_RESCUE_WEIGHT,
+            goal_text: String::new(),
         };
         let rescued = plan_evictions(&events, &policy(5_000, 2), 8_000, &RecencyScorer, &ctx);
         // no-starve: rescue reorders WHICH turns go, never how MANY (same reclaim quota).
@@ -923,6 +1015,7 @@ mod plan_tests {
             goal: vec![1.0, 0.0],
             vecs,
             weight: 0.0,
+            goal_text: String::new(),
         };
         let plan = plan_evictions(&events, &policy(5_000, 2), 8_000, &RecencyScorer, &ctx);
         let base = plan_evictions(
