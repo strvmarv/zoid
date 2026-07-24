@@ -835,6 +835,7 @@ async fn run_turn_inner(
                             &config.eviction,
                             est,
                             &zoid_core::eviction::RecencyScorer,
+                            &zoid_core::eviction::GoalContext::default(),
                         );
                         emit_eviction(&session, &mut events, ui, config, session_id, now, plan)
                             .await?;
@@ -2595,6 +2596,32 @@ async fn record_compactions(
 /// code/tool output). Push the estimate up so the gate fires early, not late.
 const OVERCOUNT_BIAS: f64 = 1.15;
 
+/// Candidate ids for the relevance read. Over-approximates the real candidate set
+/// (avoids replicating `group_turns`) BUT excludes already-evicted ids: those
+/// turns are `protected`, so `plan_evictions` never looks up their vectors —
+/// reading them would be pure waste.
+///
+/// **Bounded:** Capped to the first `EMBEDDABLE_ID_CAP` non-evicted events from the
+/// log. The real candidate set in `plan_evictions` is the non-protected turns
+/// (old enough to evict, not recent-N) — at most ~band_size turns (~40-80
+/// events). 500 ids gives generous headroom while preventing a 10k-event session
+/// from deserializing ~15 MB of vectors that `plan_evictions` will never look up.
+fn embeddable_event_ids(events: &crate::eventlog::EventLog) -> Vec<Ulid> {
+    let evicted = zoid_core::eviction::evicted_ids(events.iter());
+    events
+        .iter()
+        .map(|e| e.id)
+        .filter(|id| !evicted.contains(id))
+        .take(EMBEDDABLE_ID_CAP)
+        .collect()
+}
+
+/// Max number of event ids to read vectors for in one eviction pass. The candidate
+/// set in `plan_evictions` is bounded by the band (~40 turns ≈ 80 events); this
+/// cap is generous over-approximation that keeps the hot-path read bounded on
+/// long sessions.
+const EMBEDDABLE_ID_CAP: usize = 500;
+
 /// Run the cheap correctness levers BEFORE the request is built (spec §3.8, C1):
 /// (1) compact tool results, (2) evict oldest turns to `low_water`, (3) if near
 /// hard capacity, evict harder toward the safety floor. Emits `ToolResultCompacted`
@@ -2674,6 +2701,58 @@ async fn preflight_gate(
         }
     }
 
+    // Relevance rescue context — built only when a wave will fire and the
+    // embedder is present. Otherwise default (recency-only, unchanged).
+    let goal_ctx: zoid_core::eviction::GoalContext = if est >= band.high_water {
+        if let Some(emb) = &config.embedder {
+            let text = zoid_core::eviction::goal_text(
+                &events.iter().collect::<Vec<_>>(),
+                zoid_core::eviction::GOAL_WINDOW_MSGS,
+            );
+            if text.is_empty() {
+                Default::default()
+            } else {
+                let model = emb.model_id().to_string();
+                let goal = {
+                    let emb = emb.clone();
+                    tokio::task::spawn_blocking(move || {
+                        emb.embed(&[text.as_str()])
+                            .ok()
+                            .and_then(|mut v| v.pop())
+                            .unwrap_or_default()
+                    })
+                    .await
+                    .unwrap_or_default()
+                };
+                if goal.is_empty() {
+                    Default::default()
+                } else {
+                    let ids = embeddable_event_ids(events);
+                    let vecs = session
+                        .vectors_by_ids(model, ids)
+                        .await
+                        .unwrap_or_default();
+                    zoid_core::eviction::GoalContext {
+                        goal,
+                        vecs,
+                        weight: zoid_core::eviction::DEFAULT_RESCUE_WEIGHT,
+                    }
+                }
+            }
+        } else {
+            Default::default()
+        }
+    } else {
+        Default::default()
+    };
+    if !goal_ctx.goal.is_empty() {
+        tracing::info!(
+            candidates = goal_ctx.vecs.len(),
+            weight = zoid_core::eviction::DEFAULT_RESCUE_WEIGHT,
+            "eviction relevance rescue active"
+        );
+    }
+
     // (2) Eviction to low_water.
     if est >= band.high_water {
         let plan = zoid_core::eviction::plan_evictions(
@@ -2681,6 +2760,7 @@ async fn preflight_gate(
             policy,
             est,
             &zoid_core::eviction::RecencyScorer,
+            &goal_ctx,
         );
         emit_eviction(session, events, ui, config, session_id, now, plan).await?;
         est = estimate(events);
@@ -2697,6 +2777,7 @@ async fn preflight_gate(
             policy,
             est,
             &zoid_core::eviction::RecencyScorer,
+            &goal_ctx,
         );
         emit_eviction(session, events, ui, config, session_id, now, plan).await?;
     }
@@ -3112,6 +3193,182 @@ mod tests {
         );
         // and the surviving conversation is under the seed size
         assert!(zoid_core::projection::conversation(out.iter()).len() < 16);
+    }
+
+    /// Test helper: drive `run_agent_turn` with a FakeProvider yielding "done"+Done,
+    /// a drained UI channel, and a seed-only EventLog. Returns the `out` events so
+    /// callers can inspect `TurnsEvicted` markers.
+    async fn run_gate_only(
+        cfg: TurnConfig,
+        session: zoid_core::session::SessionHandle,
+        seed: Vec<Event>,
+    ) -> crate::eventlog::EventLog {
+        use zoid_provider::ProviderEvent;
+        let provider = std::sync::Arc::new(zoid_provider::FakeProvider::new(vec![
+            ProviderEvent::TextDelta("done".into()),
+            ProviderEvent::Done,
+        ]));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move {
+            while rx.recv().await.is_some() {}
+        });
+        run_agent_turn(
+            cfg,
+            provider,
+            std::sync::Arc::new(zoid_tools::registry()),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::new(),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn preflight_rescues_relevant_old_turn_over_newer_offgoal() {
+        use ulid::Ulid;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_core::retrieval::{Embedder, FakeEmbedder};
+
+        let fat = "x".repeat(3000); // ~1000 est tokens, on the assistant side
+        // user ids 1,3,5,7,9,11,13,15. recent_n=2 → 13,15 protected; goal (3 recent
+        // user msgs) = ids 15,13,11. On-goal set {1,11,13,15}; off-goal {3,5,7,9}.
+        let goalish = "alpha beta gamma delta";
+        let offgoal = "zulu yankee xray whiskey";
+        let utext = |uid: u128| -> String {
+            if matches!(uid, 1 | 11 | 13 | 15) {
+                format!("{goalish} n{uid}")
+            } else {
+                format!("{offgoal} n{uid}")
+            }
+        };
+        let mut seed = Vec::new();
+        for i in 0..8u128 {
+            let uid = i * 2 + 1;
+            seed.push(Event::new(
+                Ulid::from(uid),
+                None,
+                uid as i64,
+                EventKind::UserMessage {
+                    text: utext(uid),
+                },
+            ));
+            seed.push(Event::new(
+                Ulid::from(i * 2 + 2),
+                None,
+                (i * 2 + 2) as i64,
+                EventKind::AssistantMessage { text: fat.clone() },
+            ));
+        }
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        // Seed cached vectors for the candidate user events (model "fake").
+        let emb = FakeEmbedder::new(16);
+        for uid in [1u128, 3, 5, 7, 9, 11] {
+            let v = emb.embed(&[utext(uid).as_str()]).unwrap().remove(0);
+            session
+                .write_embedding(Ulid::from(uid), "fake".into(), v)
+                .await
+                .unwrap();
+        }
+
+        let mut cfg = chat_turn_config();
+        // context_target 9_500 (not the plan's 5_000) is calibrated so the reclaim
+        // quota evicts exactly 4 of the 6 candidate turns, leaving 2 survivors —
+        // enough room for the rescue to keep id 1 and drop a newer off-goal turn.
+        // At 5_000, all 6 candidates are evicted (reclaim > 6 turns), so no rescue
+        // is possible. The margin: est≈11,391, high_water=9,500, low_water=7,600,
+        // reclaim≈3,791 ≈ 4 turns @ ~950 tokens/turn (with OVERCOUNT_BIAS).
+        cfg.eviction = zoid_core::eviction::EvictionPolicy {
+            enabled: true,
+            capacity: 1_000_000,
+            context_target: 9_500,
+            band_headroom_pct: 20,
+            recent_n: 2,
+            max_output: None,
+        };
+        cfg.embedder = Some(std::sync::Arc::new(FakeEmbedder::new(16)));
+
+        let out = run_gate_only(cfg, session, seed).await;
+        let evicted: Vec<Ulid> = out
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EventKind::TurnsEvicted { ids, .. } => Some(ids.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+
+        assert!(!evicted.is_empty(), "a wave fired");
+        assert!(
+            !evicted.contains(&Ulid::from(1u128)),
+            "on-goal old turn rescued"
+        );
+        assert!(
+            evicted.contains(&Ulid::from(3u128)),
+            "a newer off-goal turn dropped instead"
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_without_embedder_evicts_the_old_turn() {
+        use ulid::Ulid;
+        use zoid_core::event::{Event, EventKind};
+        // Same seed shape, but cfg.embedder = None → recency-only → oldest (id 1) evicted.
+        let fat = "x".repeat(3000);
+        let mut seed = Vec::new();
+        for i in 0..8u128 {
+            let uid = i * 2 + 1;
+            seed.push(Event::new(
+                Ulid::from(uid),
+                None,
+                uid as i64,
+                EventKind::UserMessage {
+                    text: format!("msg n{uid}"),
+                },
+            ));
+            seed.push(Event::new(
+                Ulid::from(i * 2 + 2),
+                None,
+                (i * 2 + 2) as i64,
+                EventKind::AssistantMessage { text: fat.clone() },
+            ));
+        }
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+        let mut cfg = chat_turn_config();
+        cfg.eviction = zoid_core::eviction::EvictionPolicy {
+            enabled: true,
+            capacity: 1_000_000,
+            context_target: 5_000,
+            band_headroom_pct: 20,
+            recent_n: 2,
+            max_output: None,
+        };
+        cfg.embedder = None;
+        let out = run_gate_only(cfg, session, seed).await;
+        let evicted: Vec<Ulid> = out
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EventKind::TurnsEvicted { ids, .. } => Some(ids.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert!(
+            evicted.contains(&Ulid::from(1u128)),
+            "no embedder ⇒ recency evicts oldest"
+        );
     }
 
     #[tokio::test]

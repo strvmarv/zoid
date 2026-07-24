@@ -1,0 +1,28 @@
+[package]
+name = "eviction-weight-eval"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+# Offline replay eval: fix DEFAULT_RESCUE_WEIGHT from real session logs.
+# Opens a real session sqlite DB, replays the event log, and for each weight in
+# the sweep grid, measures regret_rate / band_health / churn at every point the
+# live gate WOULD fire. Run manually: cargo run -p eviction-weight-eval -- /path/to/session.sqlite
+[dependencies]
+zoid-core = { path = "../../crates/zoid-core" }
+zoid-embed = { path = "../../crates/zoid-embed", optional = true }
+rusqlite = { version = "0.32", features = ["bundled"] }
+anyhow = "1"
+ulid = "1"
+serde_json = "1"
+
+[features]
+default = []
+candle = ["dep:zoid-embed"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

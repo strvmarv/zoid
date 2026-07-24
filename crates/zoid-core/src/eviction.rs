@@ -188,11 +188,199 @@ mod fold_tests {
     }
 }
 
-/// Slice-4 relevance context (empty now; keeps the scorer signature stable).
-#[derive(Debug, Default)]
-pub struct GoalContext {}
+/// Rescue weight in "turns of recency" units (provisional; fixed by the replay
+/// eval). Maximal relevance is worth ~this many turns of newness.
+pub const DEFAULT_RESCUE_WEIGHT: f32 = 12.0;
 
-/// A candidate turn for eviction, derived positionally from the non-inert log.
+/// Relevance context for a rescue-aware eviction pass. Empty `goal` ⇒ no rescue
+/// ⇒ byte-identical to pure recency (the degradation path).
+#[derive(Debug, Default, Clone)]
+pub struct GoalContext {
+    /// Goal (query) unit vector; empty ⇒ relevance term disabled.
+    pub goal: Vec<f32>,
+    /// event_id → cached unit vector, for candidate-turn events.
+    pub vecs: HashMap<Ulid, Vec<f32>>,
+    /// Rescue weight in turn-index units.
+    pub weight: f32,
+}
+
+/// Cosine == dot product for L2-normalized vectors; 0.0 on length mismatch.
+fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+/// Max cosine(goal, cached vector) over the turn's events; 0.0 if none cached.
+fn turn_relevance(turn: &TurnView, ctx: &GoalContext) -> f32 {
+    turn.ids
+        .iter()
+        .filter_map(|id| ctx.vecs.get(id))
+        .map(|v| cosine(&ctx.goal, v))
+        .fold(0.0f32, f32::max)
+}
+
+/// Tolerance for treating two cosine values as the same distinct rank tier.
+/// `f32::EPSILON` (~1.2e-7) is too tight for real bge cosines — two off-goal
+/// turns with cosines 0.3700001 and 0.3700003 would escape the dedup and spread
+/// across the rank range, handing them a spurious rescue bump. 1e-5 is still
+/// tight enough to separate genuinely different cosines while being immune to
+/// float noise from dot products over 384 dims.
+const RANK_TOL: f32 = 1e-5;
+
+/// Map raws to [0,1] by DISTINCT-VALUE rank: ties share a rank, and the lowest
+/// distinct value pins to 0.0. All-equal (incl. all-zero) or len ≤ 1 ⇒ all 0.0.
+/// CRITICAL: this must be value-based, not array-position-based. In production the
+/// candidate set is mostly `raw == 0.0` (off-goal / no cached vector); those MUST
+/// all map to 0.0 (zero bump). A position-based rank would spread equal zeros
+/// across [0,1] and hand off-goal turns a spurious rescue — silently corrupting
+/// the rescue-only guarantee.
+fn rank_normalize(raws: &[f32]) -> Vec<f32> {
+    let n = raws.len();
+    if n <= 1 {
+        return vec![0.0; n];
+    }
+    let mut distinct: Vec<f32> = raws.to_vec();
+    distinct.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    distinct.dedup_by(|a, b| (*a - *b).abs() < RANK_TOL);
+    let d = distinct.len();
+    if d <= 1 {
+        return vec![0.0; n]; // all-equal ⇒ no rescue
+    }
+    raws.iter()
+        .map(|r| {
+            let rank = distinct
+                .iter()
+                .position(|v| (v - r).abs() < RANK_TOL)
+                .unwrap_or(0);
+            rank as f32 / (d as f32 - 1.0)
+        })
+        .collect()
+}
+
+/// Newest-first concatenation of up to `n` non-trivial user messages, the
+/// relevance query. "Non-trivial" filters empties and short confirmations
+/// ("yes", "3", "ok") so terse turns don't poison the goal.
+pub const GOAL_WINDOW_MSGS: usize = 3;
+pub const MIN_GOAL_MSG_CHARS: usize = 8;
+
+pub fn goal_text(events: &[&Event], n: usize) -> String {
+    let mut picked: Vec<&str> = Vec::with_capacity(n);
+    for e in events.iter().rev() {
+        if let EventKind::UserMessage { text } = &e.kind {
+            let t = text.trim();
+            if t.chars().count() >= MIN_GOAL_MSG_CHARS {
+                picked.push(t);
+                if picked.len() == n {
+                    break;
+                }
+            }
+        }
+    }
+    picked.join("\n")
+}
+
+#[cfg(test)]
+mod goal_text_tests {
+    use super::*;
+
+    fn user(id: u128, t: &str) -> Event {
+        Event::new(
+            Ulid::from(id),
+            None,
+            id as i64,
+            EventKind::UserMessage { text: t.into() },
+        )
+    }
+    fn asst(id: u128, t: &str) -> Event {
+        Event::new(
+            Ulid::from(id),
+            None,
+            id as i64,
+            EventKind::AssistantMessage { text: t.into() },
+        )
+    }
+
+    #[test]
+    fn goal_text_takes_recent_nontrivial_user_msgs_newest_first() {
+        let evs = vec![
+            user(1, "implement the relevance rescue scorer"),
+            asst(2, "ok"),
+            user(3, "yes"), // trivial: dropped
+            user(4, "wire it into preflight_gate under pressure"),
+        ];
+        let refs: Vec<&Event> = evs.iter().collect();
+        let g = goal_text(&refs, GOAL_WINDOW_MSGS);
+        let pos_wire = g.find("wire it into").unwrap();
+        let pos_impl = g.find("implement the relevance").unwrap();
+        assert!(pos_wire < pos_impl, "newest-first");
+        assert!(!g.contains("yes"), "trivial confirmation filtered");
+        assert!(!g.contains("ok"), "assistant text excluded");
+    }
+
+    #[test]
+    fn goal_text_empty_when_no_nontrivial_user_msgs() {
+        let evs = vec![user(1, "y"), user(2, "3")];
+        let refs: Vec<&Event> = evs.iter().collect();
+        assert!(goal_text(&refs, GOAL_WINDOW_MSGS).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod relevance_tests {
+    use super::*;
+
+    #[test]
+    fn cosine_is_dot_for_unit_vectors_and_guards_mismatch() {
+        assert!((cosine(&[1.0, 0.0], &[1.0, 0.0]) - 1.0).abs() < 1e-6);
+        assert!(cosine(&[1.0, 0.0], &[0.0, 1.0]).abs() < 1e-6);
+        assert_eq!(cosine(&[1.0], &[1.0, 0.0]), 0.0, "length mismatch → 0");
+    }
+
+    #[test]
+    fn turn_relevance_is_max_over_cached_event_vecs() {
+        let mut vecs = std::collections::HashMap::new();
+        vecs.insert(Ulid::from(1u128), vec![1.0, 0.0]); // cos 1.0 vs goal
+        vecs.insert(Ulid::from(2u128), vec![0.0, 1.0]); // cos 0.0 vs goal
+        let ctx = GoalContext {
+            goal: vec![1.0, 0.0],
+            vecs,
+            weight: DEFAULT_RESCUE_WEIGHT,
+        };
+        let turn = TurnView {
+            ids: vec![Ulid::from(1u128), Ulid::from(2u128)],
+            index: 0,
+            token_estimate: 0,
+            topic_hint: String::new(),
+            protected: false,
+        };
+        assert!((turn_relevance(&turn, &ctx) - 1.0).abs() < 1e-6, "max, not mean");
+
+        let none = TurnView {
+            ids: vec![Ulid::from(9u128)],
+            ..turn.clone()
+        };
+        assert_eq!(turn_relevance(&none, &ctx), 0.0, "no cached vec → 0");
+    }
+
+    #[test]
+    fn rank_normalize_maps_to_unit_interval_and_degenerates_to_zero() {
+        let n = rank_normalize(&[0.37, 0.81, 0.55]);
+        assert_eq!(n[1], 1.0, "highest raw → 1.0");
+        assert_eq!(n[0], 0.0, "lowest raw → 0.0");
+        assert!((n[2] - 0.5).abs() < 1e-6, "middle → 0.5");
+        // degenerate: all-equal (incl. all-zero) → no spurious rescue
+        assert_eq!(rank_normalize(&[0.5, 0.5, 0.5]), vec![0.0, 0.0, 0.0]);
+        assert_eq!(rank_normalize(&[0.9]), vec![0.0]);
+        assert_eq!(rank_normalize(&[]), Vec::<f32>::new());
+        // TIE GUARD (B1): the common case — one on-goal turn, the rest raw==0. All the
+        // zeros MUST map to 0.0, not be spread by array position. A position-based
+        // rank returns [1.0, 0.0, 0.25, 0.5] here and hands off-goal turns a bump.
+        assert_eq!(rank_normalize(&[0.9, 0.0, 0.0, 0.0]), vec![1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(rank_normalize(&[0.0, 0.5, 0.0, 0.5]), vec![0.0, 1.0, 0.0, 1.0]);
+    }
+}
 #[derive(Debug, Clone)]
 pub struct TurnView {
     pub ids: Vec<Ulid>,
@@ -342,6 +530,7 @@ pub fn plan_evictions<'a>(
     policy: &EvictionPolicy,
     current_tokens: u64,
     scorer: &dyn EvictionScorer,
+    ctx: &GoalContext,
 ) -> EvictionPlan {
     if !policy.enabled {
         return EvictionPlan::default();
@@ -353,25 +542,37 @@ pub fn plan_evictions<'a>(
     let events: Vec<&Event> = events.into_iter().collect();
     let evicted = evicted_ids(events.iter().copied());
     let turns = group_turns(&events, &evicted, policy.recent_n);
-    let ctx = GoalContext::default();
 
-    let mut candidates: Vec<&TurnView> = turns
+    let candidates: Vec<&TurnView> = turns
         .iter()
         .filter(|t| !t.protected && !t.ids.is_empty())
         .collect();
-    candidates.sort_by(|a, b| {
-        scorer
-            .score(a, &ctx)
-            .partial_cmp(&scorer.score(b, &ctx))
+
+    // Relevance layer: rank-normalized max-cosine, folded soft-additive into the
+    // recency sort key. Empty goal ⇒ bump 0 ⇒ identical to pure recency.
+    let bump: Vec<f32> = if ctx.goal.is_empty() {
+        vec![0.0; candidates.len()]
+    } else {
+        let raws: Vec<f32> = candidates.iter().map(|t| turn_relevance(t, ctx)).collect();
+        let norm = rank_normalize(&raws);
+        norm.iter().map(|n| ctx.weight * n).collect()
+    };
+
+    let key = |i: usize, t: &TurnView| scorer.score(t, ctx) + bump[i];
+    let mut idx: Vec<usize> = (0..candidates.len()).collect();
+    idx.sort_by(|&a, &b| {
+        key(a, candidates[a])
+            .partial_cmp(&key(b, candidates[b]))
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let mut reclaimed = 0u64;
     let mut plan = EvictionPlan::default();
-    for t in candidates {
+    for &i in &idx {
         if current_tokens.saturating_sub(reclaimed) <= band.low_water {
             break;
         }
+        let t = candidates[i];
         reclaimed += t.token_estimate;
         plan.turns.push(EvictedTurn {
             ids: t.ids.clone(),
@@ -418,7 +619,7 @@ mod plan_tests {
     #[test]
     fn no_plan_below_high_water() {
         let events = vec![user(1, "a"), asst(2, "b")];
-        let plan = plan_evictions(&events, &policy(384_000, 4), 100, &RecencyScorer);
+        let plan = plan_evictions(&events, &policy(384_000, 4), 100, &RecencyScorer, &GoalContext::default());
         assert!(plan.turns.is_empty());
     }
 
@@ -432,7 +633,7 @@ mod plan_tests {
             events.push(asst(i * 2 + 2, "ok"));
         }
         // current well over high_water forces a wave; low_water = target - 20%.
-        let plan = plan_evictions(&events, &policy(3_000, 2), 6_000, &RecencyScorer);
+        let plan = plan_evictions(&events, &policy(3_000, 2), 6_000, &RecencyScorer, &GoalContext::default());
         assert!(!plan.turns.is_empty());
         // never evicts the protected (newest) turns
         let evicted_ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
@@ -463,7 +664,7 @@ mod plan_tests {
             },
         ));
         // turn 1 already evicted → not re-selected
-        let plan = plan_evictions(&events, &policy(1_000, 2), 5_000, &RecencyScorer);
+        let plan = plan_evictions(&events, &policy(1_000, 2), 5_000, &RecencyScorer, &GoalContext::default());
         let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
         assert!(!ids.contains(&Ulid::from(1u128)));
     }
@@ -473,7 +674,7 @@ mod plan_tests {
         // all turns are recent (recent_n huge) → empty plan even over high_water
         let big = "x".repeat(3000);
         let events = vec![user(1, &big), asst(2, "ok")];
-        let plan = plan_evictions(&events, &policy(100, 10), 100_000, &RecencyScorer);
+        let plan = plan_evictions(&events, &policy(100, 10), 100_000, &RecencyScorer, &GoalContext::default());
         assert!(plan.turns.is_empty());
     }
 
@@ -509,7 +710,7 @@ mod plan_tests {
                 ids: vec![Ulid::from(1u128), Ulid::from(2u128)],
             },
         ));
-        let plan = plan_evictions(&events, &policy(1_000, 2), 5_000, &RecencyScorer);
+        let plan = plan_evictions(&events, &policy(1_000, 2), 5_000, &RecencyScorer, &GoalContext::default());
         let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
         assert!(
             !ids.contains(&Ulid::from(1u128)),
@@ -548,7 +749,7 @@ mod plan_tests {
             events.push(user(i * 2 + 1, &big));
             events.push(asst(i * 2 + 2, "ok"));
         }
-        let plan = plan_evictions(&events, &policy(3_000, 2), 6_000, &RecencyScorer);
+        let plan = plan_evictions(&events, &policy(3_000, 2), 6_000, &RecencyScorer, &GoalContext::default());
         let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
         assert!(
             ids.contains(&Ulid::from(1u128)),
@@ -593,6 +794,149 @@ mod plan_tests {
         // Weighed by the summary the request carries — not 0 (cleared body) and not
         // 4242 (the pre-compaction original_tokens).
         assert_eq!(turns[0].token_estimate, estimate_tokens(&summary));
+    }
+
+    // ── Relevance rescue layer (Task 5) ───────────────────────────────────
+
+    fn turns8() -> Vec<Event> {
+        let big = "x".repeat(3000); // ~1000 tokens (chars/3)
+        let mut events = Vec::new();
+        for i in 0..8u128 {
+            events.push(user(i * 2 + 1, &big));
+            events.push(asst(i * 2 + 2, "ok"));
+        }
+        events
+    }
+    // policy(5_000, 2): high_water=5_000, low_water=4_000; current 8_000 ⇒ reclaim 4 turns.
+    fn evicted_ids_of(p: &EvictionPlan) -> Vec<Ulid> {
+        p.turns.iter().flat_map(|t| t.ids.clone()).collect()
+    }
+
+    #[test]
+    fn empty_goalcontext_is_byte_identical_to_recency() {
+        let events = turns8();
+        let a = plan_evictions(
+            &events,
+            &policy(5_000, 2),
+            8_000,
+            &RecencyScorer,
+            &GoalContext::default(),
+        );
+        let b = plan_evictions(
+            &events,
+            &policy(5_000, 2),
+            8_000,
+            &RecencyScorer,
+            &GoalContext::default(),
+        );
+        assert_eq!(a, b, "deterministic");
+        assert!(
+            evicted_ids_of(&a).contains(&Ulid::from(1u128)),
+            "oldest evicted (recency)"
+        );
+        assert!(
+            !evicted_ids_of(&a).contains(&Ulid::from(15u128)),
+            "newest protected"
+        );
+    }
+
+    #[test]
+    fn relevant_old_turn_survives_while_newer_offgoal_is_evicted() {
+        let events = turns8();
+        // default: oldest (user id 1) is evicted
+        let base = plan_evictions(
+            &events,
+            &policy(5_000, 2),
+            8_000,
+            &RecencyScorer,
+            &GoalContext::default(),
+        );
+        assert!(evicted_ids_of(&base).contains(&Ulid::from(1u128)));
+
+        // rescue user id 1: goal matches only its vector; all others orthogonal
+        let mut vecs = std::collections::HashMap::new();
+        vecs.insert(Ulid::from(1u128), vec![1.0, 0.0]);
+        for id in [3u128, 5, 7, 9, 11] {
+            vecs.insert(Ulid::from(id), vec![0.0, 1.0]);
+        }
+        let ctx = GoalContext {
+            goal: vec![1.0, 0.0],
+            vecs,
+            weight: DEFAULT_RESCUE_WEIGHT,
+        };
+        let rescued = plan_evictions(&events, &policy(5_000, 2), 8_000, &RecencyScorer, &ctx);
+        assert!(
+            !evicted_ids_of(&rescued).contains(&Ulid::from(1u128)),
+            "on-goal old turn rescued"
+        );
+        assert!(
+            evicted_ids_of(&rescued).contains(&Ulid::from(3u128)),
+            "a newer off-goal turn dropped instead"
+        );
+    }
+
+    #[test]
+    fn band_preservation_rescue_never_shrinks_quota() {
+        // GENUINELY distinct relevances (distinct unit-vector cosines) so bumps spread
+        // 0..weight and the rescue path is actually exercised — NOT all-equal (which
+        // the degenerate guard would zero out, making the test vacuous).
+        let events = turns8();
+        let base = plan_evictions(
+            &events,
+            &policy(5_000, 2),
+            8_000,
+            &RecencyScorer,
+            &GoalContext::default(),
+        );
+        let mut vecs = std::collections::HashMap::new();
+        //                      cos vs [1,0]:  1.0   0.8        0.6        0.0       0.6      0.8
+        let angled = [
+            (1u128, vec![1.0, 0.0]),
+            (3, vec![0.8, 0.6]),
+            (5, vec![0.6, 0.8]),
+            (7, vec![0.0, 1.0]),
+            (9, vec![0.6, 0.8]),
+            (11, vec![0.8, 0.6]),
+        ];
+        for (id, v) in angled {
+            vecs.insert(Ulid::from(id), v);
+        }
+        let ctx = GoalContext {
+            goal: vec![1.0, 0.0],
+            vecs,
+            weight: DEFAULT_RESCUE_WEIGHT,
+        };
+        let rescued = plan_evictions(&events, &policy(5_000, 2), 8_000, &RecencyScorer, &ctx);
+        // no-starve: rescue reorders WHICH turns go, never how MANY (same reclaim quota).
+        assert_eq!(rescued.turns.len(), base.turns.len());
+        assert!(!rescued.turns.is_empty(), "wave still fired");
+    }
+
+    #[test]
+    fn bounded_reach_weight_zero_is_pure_recency() {
+        // A maximally-relevant OLD turn is STILL evicted at weight 0 — proving the
+        // bump = weight·norm is finite and scales with weight (reach 0 at weight 0).
+        let events = turns8();
+        let mut vecs = std::collections::HashMap::new();
+        vecs.insert(Ulid::from(1u128), vec![1.0, 0.0]); // maximally relevant, but weight 0
+        let ctx = GoalContext {
+            goal: vec![1.0, 0.0],
+            vecs,
+            weight: 0.0,
+        };
+        let plan = plan_evictions(&events, &policy(5_000, 2), 8_000, &RecencyScorer, &ctx);
+        let base = plan_evictions(
+            &events,
+            &policy(5_000, 2),
+            8_000,
+            &RecencyScorer,
+            &GoalContext::default(),
+        );
+        assert_eq!(plan, base, "weight 0 ⇒ reach 0 ⇒ pure recency");
+        assert!(
+            evicted_ids_of(&plan).contains(&Ulid::from(1u128)),
+            "no rescue at weight 0"
+        );
     }
 }
 
@@ -649,7 +993,7 @@ mod steady_state_tests {
                 EventKind::AssistantMessage { text: "ok".into() },
             ));
             let live = context_window_with(&events, overhead.clone()).total_tokens;
-            let plan = plan_evictions(&events, &policy, live, &RecencyScorer);
+            let plan = plan_evictions(&events, &policy, live, &RecencyScorer, &GoalContext::default());
             apply(&mut events, &plan, &mut seq);
             let after = context_window_with(&events, overhead.clone()).total_tokens;
             // HARD: never exceeds capacity.
