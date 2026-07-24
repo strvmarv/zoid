@@ -254,6 +254,12 @@ pub fn render_shell(
             }
         }
     }
+
+    // Peek popup — drawn last so it sits on top of everything.
+    if let Some(p) = layout.peek {
+        render_peek_overlay(frame, state, p);
+    }
+
     conv_max_scroll
 }
 
@@ -1093,6 +1099,112 @@ fn render_verb_overlay(frame: &mut Frame, msgs: &[ChatMsg], state: &ShellState, 
     };
     let sel = nav(state.objects.verb_selected, 0, rows.len());
     list_overlay(frame, area, title, &rows, sel);
+}
+
+fn render_peek_overlay(frame: &mut Frame, state: &ShellState, area: Rect) {
+    use crate::state::PeekContent;
+    use ratatui::text::Line;
+
+    let Some(ps) = &state.peek else {
+        return;
+    };
+
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::new().fg(color::CHAT_ACCENT))
+        .title(Span::styled(" peek ", Style::new().fg(color::TXT)));
+    let inner = area.inner(ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    frame.render_widget(block, area);
+
+    let lines: Vec<Line<'static>> = match &ps.content {
+        PeekContent::ToolCall {
+            name,
+            args,
+            output,
+            is_error,
+            compacted,
+        } => {
+            let mut out = Vec::new();
+            // Header: tool name in bold.
+            out.push(Line::from(vec![
+                Span::styled(name.clone(), Style::new().fg(color::TXT).bold()),
+            ]));
+            // Args: pretty-printed if valid JSON, raw otherwise.
+            let args_display = if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
+                serde_json::to_string_pretty(&v).unwrap_or_else(|_| args.clone())
+            } else {
+                args.clone()
+            };
+            out.push(Line::from(Span::styled(
+                "args:",
+                Style::new().fg(color::DIM),
+            )));
+            for line in args_display.lines() {
+                out.push(Line::from(Span::styled(
+                    format!("  {line}"),
+                    Style::new().fg(color::DIM),
+                )));
+            }
+            out.push(Line::from(""));
+            // Output section.
+            if *compacted {
+                out.push(Line::from(Span::styled(
+                    "(compacted)",
+                    Style::new().fg(color::DIM),
+                )));
+            }
+            match output {
+                Some(text) => {
+                    let style = if *is_error {
+                        Style::new().fg(color::ERROR)
+                    } else {
+                        Style::new().fg(color::TXT)
+                    };
+                    for line in text.lines() {
+                        out.push(Line::from(Span::styled(line.to_string(), style)));
+                    }
+                }
+                None => {
+                    out.push(Line::from(Span::styled(
+                        "(awaiting result…)",
+                        Style::new().fg(color::DIM),
+                    )));
+                }
+            }
+            out
+        }
+        PeekContent::Delegated { summary, ok } => {
+            let (mark, mark_color) = if *ok {
+                (glyph::PASS, color::OK)
+            } else {
+                (glyph::WARNING, color::ERROR)
+            };
+            let mut out = Vec::new();
+            out.push(Line::from(vec![
+                Span::styled(format!("{mark} "), Style::new().fg(mark_color)),
+                Span::styled("delegated", Style::new().fg(color::BRANCH).bold()),
+            ]));
+            out.push(Line::from(""));
+            for line in summary.lines() {
+                out.push(Line::from(Span::styled(
+                    line.to_string(),
+                    Style::new().fg(color::TXT),
+                )));
+            }
+            out
+        }
+    };
+
+    let scroll = ps.scroll as u16;
+    frame.render_widget(
+        Paragraph::new(lines).scroll((scroll, 0)),
+        inner,
+    );
 }
 
 fn render_sessions_overlay(frame: &mut Frame, state: &ShellState, area: Rect) {
