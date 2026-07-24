@@ -188,6 +188,9 @@ pub struct TurnConfig {
     pub subagent_idle: Option<std::time::Duration>,
     /// Absolute-ceiling for a subagent dispatched from THIS turn. `None` = off.
     pub subagent_ceiling: Option<std::time::Duration>,
+    /// The agent profile registry for `dispatch_subagent` name resolution.
+    /// `None` for subagent turns (subagents can't dispatch) and tests.
+    pub agents: Option<std::sync::Arc<zoid_core::agent_profile::AgentRegistry>>,
 }
 
 // Manual `Debug`: `embed`/`embedder` hold a trait object (`dyn Embedder`) and
@@ -214,7 +217,31 @@ impl std::fmt::Debug for TurnConfig {
             .field("progress", &self.progress.is_some())
             .field("subagent_idle", &self.subagent_idle)
             .field("subagent_ceiling", &self.subagent_ceiling)
+            .field("agents", &self.agents.is_some())
             .finish()
+    }
+}
+
+/// Resolve the `agent` argument from a `dispatch_subagent` tool call against the
+/// registry. Absent/empty `agent` defaults to `"delegate"`. Returns the cloned
+/// `AgentProfile` to dispatch with, or an `Err` (listing available agents) for an
+/// unknown name so the dispatch site can emit a self-correcting ToolResult.
+pub fn resolve_agent_for_dispatch(
+    args: &serde_json::Value,
+    registry: std::sync::Arc<zoid_core::agent_profile::AgentRegistry>,
+) -> Result<(zoid_core::agent_profile::AgentProfile, String), String> {
+    let agent_name = args
+        .get("agent")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("delegate")
+        .to_string();
+    match registry.get(&agent_name) {
+        Some(profile) => Ok((profile.clone(), agent_name)),
+        None => Err(format!(
+            "dispatch_subagent: unknown agent '{agent_name}'. Available: {}",
+            registry.names().join(", ")
+        )),
     }
 }
 
@@ -248,6 +275,7 @@ pub fn chat_turn_config_with(profile: &AgentProfile, skill_menu: &str) -> TurnCo
         progress: None,
         subagent_idle: None,
         subagent_ceiling: None,
+        agents: None,
     }
 }
 
@@ -4832,6 +4860,56 @@ mod tests {
                 if id == "call-2" && output.contains("[skipped")
         ));
         assert!(skipped, "the remaining batched call must get a [skipped] result");
+    }
+
+    #[test]
+    fn resolve_agent_name_defaults_to_delegate_when_absent() {
+        let reg = std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin());
+        // No "agent" key → default "delegate".
+        let resolved = resolve_agent_for_dispatch(
+            &serde_json::json!({}),
+            reg.clone(),
+        );
+        let (profile, name) = resolved.expect("absent agent should resolve to delegate");
+        assert_eq!(name, "delegate");
+        assert_eq!(profile.name, "delegate");
+    }
+
+    #[test]
+    fn resolve_agent_name_known_returns_that_profile() {
+        let reg = std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin());
+        // "delegate" is always known.
+        let resolved = resolve_agent_for_dispatch(
+            &serde_json::json!({ "agent": "delegate" }),
+            reg.clone(),
+        );
+        let (profile, name) = resolved.unwrap();
+        assert_eq!(name, "delegate");
+        assert_eq!(profile.name, "delegate");
+    }
+
+    #[test]
+    fn resolve_agent_name_unknown_returns_err_listing_available() {
+        let reg = std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin());
+        let resolved = resolve_agent_for_dispatch(
+            &serde_json::json!({ "agent": "typo-name" }),
+            reg.clone(),
+        );
+        let err = resolved.expect_err("unknown agent should be Err");
+        assert!(err.contains("unknown agent 'typo-name'"));
+        assert!(err.contains("delegate"), "error should list available agents");
+    }
+
+    #[test]
+    fn resolve_agent_name_empty_string_defaults_to_delegate() {
+        let reg = std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin());
+        let resolved = resolve_agent_for_dispatch(
+            &serde_json::json!({ "agent": "" }),
+            reg.clone(),
+        );
+        let (profile, name) = resolved.expect("empty agent string should resolve to delegate");
+        assert_eq!(name, "delegate");
+        assert_eq!(profile.name, "delegate");
     }
 }
 
