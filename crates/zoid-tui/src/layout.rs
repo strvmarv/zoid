@@ -92,6 +92,9 @@ pub struct ShellLayout {
     pub input: Rect,
     pub status: Rect,
     pub palette: Option<Rect>,
+    /// The peek popup rect (centered over the conversation at 65% height).
+    /// `None` when no peek popup is open.
+    pub peek: Option<Rect>,
 }
 
 /// True when (col,row) falls inside `r` (half-open on right/bottom).
@@ -115,6 +118,7 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
             input: Rect::default(),
             status: Rect::default(),
             palette: None,
+            peek: None,
         };
     }
     // Vertical: title(1) · body(min) · input(grows with content) · status(1).
@@ -218,6 +222,13 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
         Overlay::Config | Overlay::ProviderSwitch | Overlay::None => None,
     };
 
+    let peek = if state.peek.is_some() {
+        let max_h = (conversation.height as f32 * 0.65).floor() as u16;
+        Some(centered(conversation, conversation.width, max_h))
+    } else {
+        None
+    };
+
     ShellLayout {
         title,
         body,
@@ -228,6 +239,7 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
         input,
         status,
         palette,
+        peek,
     }
 }
 
@@ -435,5 +447,32 @@ mod tests {
         assert!(l.rail.is_none());
         assert!(l.drawer_headers.is_empty());
         assert!(l.drawer_bodies.is_empty());
+    }
+
+    #[test]
+    fn peek_rect_none_when_peek_closed() {
+        let s = ShellState::new();
+        let l = compute(area(160, 40), &s);
+        assert!(l.peek.is_none());
+    }
+
+    #[test]
+    fn peek_rect_some_when_peek_open() {
+        use crate::state::{PeekContent, PeekState};
+        let mut s = ShellState::new();
+        s.peek = Some(PeekState {
+            content: PeekContent::Delegated { summary: "x".into(), ok: true },
+            scroll: 0,
+        });
+        let l = compute(area(160, 40), &s);
+        assert!(l.peek.is_some());
+        let p = l.peek.unwrap();
+        // 65% of a 38-row conversation area (40 - 1 title - 1 status = 38,
+        // minus input height; roughly 34-36). Just check it's < conversation
+        // height and > 0.
+        assert!(p.height > 0);
+        assert!(p.height <= l.conversation.height);
+        // Centered: x should be at or within the conversation area.
+        assert!(p.x >= l.conversation.x);
     }
 }
