@@ -37,10 +37,10 @@ const CONNECT_TIMEOUT_SECS: u64 = 20;
 /// every chunk. It also gates the wait for the *first* byte after `200 OK`, so
 /// a model whose cold weight-load exceeds this between the response headers and
 /// its first token needs a higher `ZOID_HTTP_IDLE_SECS`.
-const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 120;
+const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
 
 /// The configured stream idle timeout: `ZOID_HTTP_IDLE_SECS` (a positive
-/// integer, seconds) or the 120s default.
+/// integer, seconds) or the 300s default.
 pub(crate) fn stream_idle_timeout() -> Duration {
     std::env::var("ZOID_HTTP_IDLE_SECS")
         .ok()

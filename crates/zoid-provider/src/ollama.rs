@@ -296,7 +296,7 @@ impl OllamaProvider {
     }
 
     /// Override the stream idle/response timeout. Primarily for tests (drive a
-    /// stalled server without a 120s wait); operators use `ZOID_HTTP_IDLE_SECS`.
+    /// stalled server without a 300s wait); operators use `ZOID_HTTP_IDLE_SECS`.
     pub fn with_idle_timeout(mut self, idle: Duration) -> Self {
         self.idle_timeout = idle;
         self
