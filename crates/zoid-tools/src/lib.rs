@@ -10,6 +10,7 @@ pub mod feedback;
 pub mod git_context;
 pub mod glob;
 pub mod kill;
+pub mod list_agents;
 pub mod ls;
 pub mod read;
 pub mod recall;

@@ -5289,6 +5289,7 @@ dependencies = [
  "shlex",
  "similar",
  "tempfile",
+ "zoid-core",
  "zoid-provider",
  "zoid-web",
 ]
