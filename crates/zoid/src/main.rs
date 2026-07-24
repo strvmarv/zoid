@@ -8039,6 +8039,61 @@ mod tests {
         );
     }
 
+    /// Subagent-branch events (ModelDelta, ToolCall, ToolResult) must NOT
+    /// appear in the main conversation's ChatMsg list — the projection filters
+    /// by branch. This is the integration-level guard behind the jumpy-UI fix:
+    /// even if subagent events are in app.events, the conversation view never
+    /// shows them.
+    #[test]
+    fn subagent_branch_events_invisible_in_conversation() {
+        use zoid_core::event::{Event, EventKind, BranchId};
+        use zoid_core::projection::conversation;
+
+        let sub_branch = BranchId("subagent:01ABC".into());
+        let events = vec![
+            // Main-branch user message.
+            Event::new(Ulid::new(), None, 0, EventKind::UserMessage { text: "hello".into() }),
+            // Subagent-branch assistant text (must NOT appear).
+            // Event has no with_branch builder — set .branch directly.
+            {
+                let mut ev = Event::new(Ulid::new(), None, 1, EventKind::ModelDelta { text: "subagent working".into() });
+                ev.branch = sub_branch.clone();
+                ev
+            },
+            // Subagent-branch tool call (must NOT appear).
+            {
+                let mut ev = Event::new(Ulid::new(), None, 2, EventKind::ToolCall {
+                    id: "tc1".into(),
+                    name: "read".into(),
+                    args: r#"{"path":"src/main.rs"}"#.into(),
+                });
+                ev.branch = sub_branch;
+                ev
+            },
+            // Main-branch assistant text (must appear).
+            Event::new(Ulid::new(), None, 3, EventKind::AssistantMessage { text: "done".into() }),
+        ];
+
+        let msgs = conversation(events.iter());
+        let joined: String = msgs
+            .iter()
+            .map(|m| match m {
+                zoid_core::projection::ChatMsg::Assistant { text, .. } => text.clone(),
+                zoid_core::projection::ChatMsg::User { text, .. } => text.clone(),
+                _ => String::new(),
+            })
+            .collect();
+
+        // Main-branch messages are visible.
+        assert!(joined.contains("hello"), "user message visible: {joined}");
+        assert!(joined.contains("done"), "assistant message visible: {joined}");
+        // Subagent-branch messages are NOT visible.
+        assert!(
+            !joined.contains("subagent working"),
+            "subagent ModelDelta must not appear in conversation: {joined}"
+        );
+    }
+
     /// Regression for I-1: `Action::SessionPick` must be a no-op while a
     /// delegation is in flight, symmetric with `Submit`'s
     /// `app.streaming || !app.in_flight_subagents.is_empty()` guard. Before the fix, `SessionPick`
