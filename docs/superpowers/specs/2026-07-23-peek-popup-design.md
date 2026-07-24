@@ -141,8 +141,8 @@ pub enum PeekContent {
 ```
 
 `ShellState` gains `pub peek: Option<PeekState>`, initialized to `None` in
-`ShellState::new()` and `partial_reset()`. The `eq_fast` / `eq_full` methods
-include `peek` in their comparison.
+`ShellState::new()` (which `Default` delegates to). `ShellState` derives
+`PartialEq, Eq`, so `peek` is automatically included in equality comparisons.
 
 **Why not an `Overlay` variant?** Existing overlays are keyboard-driven with
 mouse-as-`Noop` (see `route_mouse` line 608). The peek popup needs click-away

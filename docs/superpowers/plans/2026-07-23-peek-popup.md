@@ -14,8 +14,8 @@
 
 - `ShellState` derives `#[derive(Debug, Clone, PartialEq, Eq)]` at `crates/zoid-tui/src/state.rs:388` — adding a field automatically includes it in equality. No manual `eq_fast`/`eq_full`.
 - `ShellState::new()` is at `crates/zoid-tui/src/state.rs:608`; `Default` delegates to `new()` at line 861.
-- `build_conversation` is at `crates/zoid-tui/src/chat.rs:165` and takes 4 args today: `msgs`, `ctx`, `hits: &mut Vec<CodeHit>`, `msg_starts: &mut Vec<usize>`, `question_choices: &mut Vec<QuestionChoiceHit>`. Wait — that's 5 args (msgs + ctx + 3 side-outputs). The plan adds a 6th: `peek_hits: &mut Vec<PeekHit>`.
-- There are exactly 4 callers of `build_conversation`: `conversation_lines_with_diffs` (line 71), `code_hits` (line 100), `question_choice_hits` (line 130), `conversation_view_indexed` (line 740). All must be updated with the new parameter.
+- `build_conversation` is at `crates/zoid-tui/src/chat.rs:165` and takes 5 args today: `msgs`, `ctx`, `hits: &mut Vec<CodeHit>`, `msg_starts: &mut Vec<usize>`, `question_choices: &mut Vec<QuestionChoiceHit>`. The plan adds a 6th: `peek_hits: &mut Vec<PeekHit>`.
+- There are exactly 4 callers of `build_conversation`: `conversation_lines_with_diffs` (line 60), `code_hits` (line 91), `question_choice_hits` (line 121), `conversation_view_indexed` (line 740). All must be updated with the new parameter.
 - `centered(area, w, h)` is `pub(crate)` at `crates/zoid-tui/src/layout.rs:235` — clamps w/h to area, centers horizontally, positions at 1/3 from top.
 - `in_rect(r, col, row)` is `pub` at `crates/zoid-tui/src/layout.rs:98`.
 - `ShellLayout` is at `crates/zoid-tui/src/layout.rs:85` and is constructed in exactly 2 places: the "too small" early return (line 108) and the normal return (line 221). Both must add the `peek` field.
@@ -28,7 +28,7 @@
 - Colors come from `crate::tokens::color` (e.g. `color::DIM`, `color::ERROR`, `color::TXT`, `color::CHAT_ACCENT`).
 - Glyphs come from `crate::tokens::glyph` (e.g. `glyph::PASS`, `glyph::WARNING`, `glyph::COLLAPSED`).
 - Tests for `zoid-tui` run with `cargo test -p zoid-tui --lib`.
-- Tests for the `zoid` binary run with `cargo test -p zoid --bin zoid`.
+- Tests for the `zoid` binary run with `cargo test -p zoid --bin zoid`. `test_app()` is at `crates/zoid/src/main.rs:7291`.
 - Cross-crate builds: `cargo build --workspace` and `cargo test --workspace`.
 - No co-author trailer in commits (repo `CLAUDE.md`).
 
@@ -52,7 +52,7 @@
 ### Task 1: Hit-collection layer — `PeekHit`, `PeekKind`, `peek_hits()`
 
 **Files:**
-- Modify: `crates/zoid-tui/src/chat.rs` (add types after `QuestionChoiceHit` at ~line 35; add `peek_hits()` after `question_choice_hits()` at ~line 146; add `peek_hits` param to `build_conversation` at line 165; push hits in the `Assistant` tool-call loop at ~line 258 and the `Delegated` arm at ~line 372; update all 4 callers at lines 71, 100, 130, 740)
+- Modify: `crates/zoid-tui/src/chat.rs` (add types after `QuestionChoiceHit` at ~line 35; add `peek_hits()` after `question_choice_hits()` at ~line 146; add `peek_hits` param to `build_conversation` at line 165; push hits in the `Assistant` tool-call loop at ~line 258 and the `Delegated` arm at ~line 372; update all 4 callers at lines 60, 91, 121, 740)
 - Test: `crates/zoid-tui/src/chat.rs` (new tests in the existing `#[cfg(test)] mod tests` block)
 
 **Interfaces:**
@@ -244,7 +244,7 @@ fn build_conversation(
 
 Each caller needs an extra `&mut Vec::new()` (or `&mut peeks` for `peek_hits`) argument. The callers are:
 
-1. `conversation_lines_with_diffs` (line 71) — add `&mut Vec::new(),` after `&mut Vec::new(),` (the `question_choices` arg):
+1. `conversation_lines_with_diffs` (line 60) — add `&mut Vec::new(),` after `&mut Vec::new(),` (the `question_choices` arg):
 
 ```rust
     build_conversation(
@@ -265,7 +265,7 @@ Each caller needs an extra `&mut Vec::new()` (or `&mut peeks` for `peek_hits`) a
     )
 ```
 
-2. `code_hits` (line 100) — same pattern, add `&mut Vec::new(),` after the last `&mut Vec::new(),`:
+2. `code_hits` (line 91) — same pattern, add `&mut Vec::new(),` after the last `&mut Vec::new(),`:
 
 ```rust
     build_conversation(
@@ -286,7 +286,7 @@ Each caller needs an extra `&mut Vec::new()` (or `&mut peeks` for `peek_hits`) a
     );
 ```
 
-3. `question_choice_hits` (line 130) — add `&mut Vec::new(),` after `&mut choices,`:
+3. `question_choice_hits` (line 121) — add `&mut Vec::new(),` after `&mut choices,`:
 
 ```rust
     build_conversation(
@@ -998,7 +998,7 @@ git commit -m "feat(peek): add DismissPeek/ScrollPeek/PeekClick actions and rout
 
 - [ ] **Step 1: Write failing tests**
 
-Add these tests to the `#[cfg(test)] mod tests` block in `main.rs`. Use the existing `test_app()` async helper (line 7117) and `FakeProvider` pattern. These tests verify the click-to-open and action-handling logic:
+Add these tests to the `#[cfg(test)] mod tests` block in `main.rs`. Use the existing `test_app()` async helper (line 7291) and `FakeProvider` pattern. These tests verify the click-to-open and action-handling logic:
 
 ```rust
     #[tokio::test]
