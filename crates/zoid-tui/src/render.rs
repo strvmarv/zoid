@@ -12,7 +12,7 @@ use crate::palette::{
     all_items, direct_filter, direct_items, nav, resolve_phase, selectable_matches, PaletteItem,
     Phase,
 };
-use crate::state::{DrawerId, Focus, Overlay, PaletteStage, ShellState};
+use crate::state::{DrawerId, Focus, Overlay, PaletteStage, ShellState, SessionConfirmKind};
 use crate::tokens::{color, glyph};
 use ratatui::{
     layout::{Margin, Rect},
@@ -1096,7 +1096,7 @@ fn render_verb_overlay(frame: &mut Frame, msgs: &[ChatMsg], state: &ShellState, 
 }
 
 fn render_sessions_overlay(frame: &mut Frame, state: &ShellState, area: Rect) {
-    let rows = if state.sessions.is_empty() {
+    let mut rows = if state.sessions.is_empty() {
         vec!["(no sessions for this repo)".to_string()]
     } else {
         state
@@ -1113,6 +1113,19 @@ fn render_sessions_overlay(frame: &mut Frame, state: &ShellState, area: Rect) {
             })
             .collect()
     };
+    if let Some(c) = &state.session_confirm {
+        let prompt = match c.kind {
+            SessionConfirmKind::Delete => format!(
+                " Delete \"{}\"? This permanently removes its history. [y]es / [n]o",
+                c.name
+            ),
+            SessionConfirmKind::Takeover => format!(
+                " \"{}\" is active in another instance. Take it over? [y]es / [n]o",
+                c.name
+            ),
+        };
+        rows.push(prompt);
+    }
     let sel = nav(state.session_selected, 0, rows.len());
     list_overlay(
         frame,
@@ -2275,5 +2288,27 @@ mod tests {
             (16 - 4) / 2,
             "wordmark still centered in the fallback: {text:?}"
         );
+    }
+
+    #[test]
+    fn sessions_overlay_shows_confirm_line_when_pending() {
+        use crate::state::{SessionConfirm, SessionConfirmKind};
+        use ulid::Ulid;
+
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Sessions;
+        s.sessions = vec!["test-session  ·  5m ago  ·  1k".into()];
+        s.sessions_live = vec![false];
+        s.session_selected = 0;
+        s.session_confirm = Some(SessionConfirm {
+            sid: Ulid::new(),
+            name: "test-session".into(),
+            kind: SessionConfirmKind::Delete,
+        });
+        let backend = TestBackend::new(80, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render_sessions_overlay(f, &s, f.area())).unwrap();
+        let content: String = terminal.backend().buffer().content().iter().map(|c| c.symbol().to_string()).collect();
+        assert!(content.contains("Delete"), "confirm line must contain 'Delete': {content}");
     }
 }
