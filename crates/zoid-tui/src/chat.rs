@@ -1631,4 +1631,99 @@ mod tests {
         let result = first_line("", 120);
         assert_eq!(result, "");
     }
+
+    fn join_spans(lines: &[Line<'static>]) -> String {
+        lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect::<String>()
+    }
+
+    #[test]
+    fn tool_call_line_wide_terminal_shows_full_short_command() {
+        // At width 111, a short shell command should NOT be truncated.
+        let msgs = vec![ChatMsg::Assistant {
+            thinking: None,
+            text: String::new(),
+            tool_calls: vec![ToolCallRef {
+                id: "tc1".into(),
+                name: "shell".into(),
+                args: r#"{"command": "cd /home/gomanjoe/source/zoid && cargo build"}"#.into(),
+            }],
+            ts: 0,
+        }];
+        let lines = conversation_lines(&msgs, false, true, 0, 111, None);
+        let joined = join_spans(&lines);
+        assert!(
+            joined.contains("cd /home/gomanjoe/source/zoid && cargo build"),
+            "short command must be fully visible at width 111: {joined}"
+        );
+        assert!(
+            !joined.contains('…'),
+            "no truncation when command fits in budget: {joined}"
+        );
+    }
+
+    #[test]
+    fn tool_call_line_narrow_terminal_truncates_long_command() {
+        // At width 40, a long command should be truncated.
+        let long_cmd = "a".repeat(200);
+        let args = format!(r#"{{"command": "{long_cmd}"}}"#);
+        let msgs = vec![ChatMsg::Assistant {
+            thinking: None,
+            text: String::new(),
+            tool_calls: vec![ToolCallRef {
+                id: "tc1".into(),
+                name: "shell".into(),
+                args,
+            }],
+            ts: 0,
+        }];
+        let lines = conversation_lines(&msgs, false, true, 0, 40, None);
+        let joined = join_spans(&lines);
+        assert!(
+            joined.contains('…'),
+            "long command must be truncated at narrow width: {joined}"
+        );
+    }
+
+    #[test]
+    fn result_line_wide_terminal_shows_full_output() {
+        // At width 111, a short result should NOT be truncated.
+        let msgs = vec![ChatMsg::ToolResult {
+            id: "tc1".into(),
+            name: "shell".into(),
+            output: "   Compiling zoid-core v0.5.0 (/home/gomanjoe/source/zoid)".into(),
+            is_error: false,
+            compacted: false,
+            ts: 0,
+        }];
+        let lines = conversation_lines(&msgs, false, true, 0, 111, None);
+        let joined = join_spans(&lines);
+        assert!(
+            joined.contains("Compiling zoid-core v0.5.0 (/home/gomanjoe/source/zoid)"),
+            "short result must be fully visible at width 111: {joined}"
+        );
+    }
+
+    #[test]
+    fn result_line_capped_at_120_on_very_wide_terminal() {
+        // At width 200, the budget should be capped at 120, not the full ~193.
+        let long_output = "b".repeat(200);
+        let msgs = vec![ChatMsg::ToolResult {
+            id: "tc1".into(),
+            name: "shell".into(),
+            output: long_output,
+            is_error: false,
+            compacted: false,
+            ts: 0,
+        }];
+        let lines = conversation_lines(&msgs, false, true, 0, 200, None);
+        let joined = join_spans(&lines);
+        // The output should be truncated — 200 chars won't fit in a 120 cap.
+        assert!(
+            joined.contains('…'),
+            "very long output must be truncated even at width 200 (cap 120): {joined}"
+        );
+    }
 }
