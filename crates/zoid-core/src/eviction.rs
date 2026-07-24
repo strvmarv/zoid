@@ -188,9 +188,68 @@ mod fold_tests {
     }
 }
 
-/// Slice-4 relevance context (empty now; keeps the scorer signature stable).
-#[derive(Debug, Default)]
-pub struct GoalContext {}
+/// Rescue weight in "turns of recency" units (provisional; fixed by the replay
+/// eval). Maximal relevance is worth ~this many turns of newness.
+pub const DEFAULT_RESCUE_WEIGHT: f32 = 12.0;
+
+/// Relevance context for a rescue-aware eviction pass. Empty `goal` ⇒ no rescue
+/// ⇒ byte-identical to pure recency (the degradation path).
+#[derive(Debug, Default, Clone)]
+pub struct GoalContext {
+    /// Goal (query) unit vector; empty ⇒ relevance term disabled.
+    pub goal: Vec<f32>,
+    /// event_id → cached unit vector, for candidate-turn events.
+    pub vecs: HashMap<Ulid, Vec<f32>>,
+    /// Rescue weight in turn-index units.
+    pub weight: f32,
+}
+
+/// Cosine == dot product for L2-normalized vectors; 0.0 on length mismatch.
+fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+/// Max cosine(goal, cached vector) over the turn's events; 0.0 if none cached.
+fn turn_relevance(turn: &TurnView, ctx: &GoalContext) -> f32 {
+    turn.ids
+        .iter()
+        .filter_map(|id| ctx.vecs.get(id))
+        .map(|v| cosine(&ctx.goal, v))
+        .fold(0.0f32, f32::max)
+}
+
+/// Map raws to [0,1] by DISTINCT-VALUE rank: ties share a rank, and the lowest
+/// distinct value pins to 0.0. All-equal (incl. all-zero) or len ≤ 1 ⇒ all 0.0.
+/// CRITICAL: this must be value-based, not array-position-based. In production the
+/// candidate set is mostly `raw == 0.0` (off-goal / no cached vector); those MUST
+/// all map to 0.0 (zero bump). A position-based rank would spread equal zeros
+/// across [0,1] and hand off-goal turns a spurious rescue — silently corrupting
+/// the rescue-only guarantee.
+fn rank_normalize(raws: &[f32]) -> Vec<f32> {
+    let n = raws.len();
+    if n <= 1 {
+        return vec![0.0; n];
+    }
+    let mut distinct: Vec<f32> = raws.to_vec();
+    distinct.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    distinct.dedup_by(|a, b| (*a - *b).abs() < f32::EPSILON);
+    let d = distinct.len();
+    if d <= 1 {
+        return vec![0.0; n]; // all-equal ⇒ no rescue
+    }
+    raws.iter()
+        .map(|r| {
+            let rank = distinct
+                .iter()
+                .position(|v| (v - r).abs() < f32::EPSILON)
+                .unwrap_or(0);
+            rank as f32 / (d as f32 - 1.0)
+        })
+        .collect()
+}
 
 /// Newest-first concatenation of up to `n` non-trivial user messages, the
 /// relevance query. "Non-trivial" filters empties and short confirmations
@@ -260,7 +319,60 @@ mod goal_text_tests {
     }
 }
 
-/// A candidate turn for eviction, derived positionally from the non-inert log.
+#[cfg(test)]
+mod relevance_tests {
+    use super::*;
+
+    #[test]
+    fn cosine_is_dot_for_unit_vectors_and_guards_mismatch() {
+        assert!((cosine(&[1.0, 0.0], &[1.0, 0.0]) - 1.0).abs() < 1e-6);
+        assert!(cosine(&[1.0, 0.0], &[0.0, 1.0]).abs() < 1e-6);
+        assert_eq!(cosine(&[1.0], &[1.0, 0.0]), 0.0, "length mismatch → 0");
+    }
+
+    #[test]
+    fn turn_relevance_is_max_over_cached_event_vecs() {
+        let mut vecs = std::collections::HashMap::new();
+        vecs.insert(Ulid::from(1u128), vec![1.0, 0.0]); // cos 1.0 vs goal
+        vecs.insert(Ulid::from(2u128), vec![0.0, 1.0]); // cos 0.0 vs goal
+        let ctx = GoalContext {
+            goal: vec![1.0, 0.0],
+            vecs,
+            weight: DEFAULT_RESCUE_WEIGHT,
+        };
+        let turn = TurnView {
+            ids: vec![Ulid::from(1u128), Ulid::from(2u128)],
+            index: 0,
+            token_estimate: 0,
+            topic_hint: String::new(),
+            protected: false,
+        };
+        assert!((turn_relevance(&turn, &ctx) - 1.0).abs() < 1e-6, "max, not mean");
+
+        let none = TurnView {
+            ids: vec![Ulid::from(9u128)],
+            ..turn.clone()
+        };
+        assert_eq!(turn_relevance(&none, &ctx), 0.0, "no cached vec → 0");
+    }
+
+    #[test]
+    fn rank_normalize_maps_to_unit_interval_and_degenerates_to_zero() {
+        let n = rank_normalize(&[0.37, 0.81, 0.55]);
+        assert_eq!(n[1], 1.0, "highest raw → 1.0");
+        assert_eq!(n[0], 0.0, "lowest raw → 0.0");
+        assert!((n[2] - 0.5).abs() < 1e-6, "middle → 0.5");
+        // degenerate: all-equal (incl. all-zero) → no spurious rescue
+        assert_eq!(rank_normalize(&[0.5, 0.5, 0.5]), vec![0.0, 0.0, 0.0]);
+        assert_eq!(rank_normalize(&[0.9]), vec![0.0]);
+        assert_eq!(rank_normalize(&[]), Vec::<f32>::new());
+        // TIE GUARD (B1): the common case — one on-goal turn, the rest raw==0. All the
+        // zeros MUST map to 0.0, not be spread by array position. A position-based
+        // rank returns [1.0, 0.0, 0.25, 0.5] here and hands off-goal turns a bump.
+        assert_eq!(rank_normalize(&[0.9, 0.0, 0.0, 0.0]), vec![1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(rank_normalize(&[0.0, 0.5, 0.0, 0.5]), vec![0.0, 1.0, 0.0, 1.0]);
+    }
+}
 #[derive(Debug, Clone)]
 pub struct TurnView {
     pub ids: Vec<Ulid>,
