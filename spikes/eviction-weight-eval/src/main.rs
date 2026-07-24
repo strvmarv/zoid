@@ -1,6 +1,10 @@
 //! Offline replay eval: fix DEFAULT_RESCUE_WEIGHT from real session logs.
 //!
-//! Usage: cargo run -p eviction-weight-eval -- /path/to/session.sqlite
+//! Usage:
+//!   cargo run -p eviction-weight-eval -- /path/to/session.sqlite [embedder]
+//!
+//! embedder: "fake" (default — structural smoke test) or "candle" (real bge-small
+//! embeddings; requires model weights in the zoid cache dir).
 //!
 //! Opens a real zoid session DB, replays its event log, and at every point the
 //! live gate WOULD fire (est >= high_water), re-runs `plan_evictions` for each
@@ -12,17 +16,27 @@
 use anyhow::{anyhow, Result};
 use rusqlite::Connection;
 use ulid::Ulid;
+use zoid_core::economy;
 use zoid_core::eviction::{
     self, EvictionPolicy, EvictionScorer, GoalContext, RecencyScorer, DEFAULT_RESCUE_WEIGHT,
 };
 use zoid_core::event::{Event, EventKind};
+use zoid_core::retrieval::Embedder;
+
+#[cfg(feature = "candle")]
+use zoid_embed::CandleEmbedder;
 
 const WEIGHTS: &[f32] = &[0.0, 4.0, 8.0, 12.0, 16.0, 24.0, 32.0];
+
+/// Matches the gate's OVERCOUNT_BIAS (agent.rs) — the spike must use the same
+/// scaling or fire points will be wrong.
+const OVERCOUNT_BIAS: f64 = 1.15;
 
 fn main() -> Result<()> {
     let db_path = std::env::args()
         .nth(1)
-        .ok_or_else(|| anyhow!("usage: eviction-weight-eval <session.sqlite>"))?;
+        .ok_or_else(|| anyhow!("usage: eviction-weight-eval <session.sqlite> [fake|candle]"))?;
+    let embedder_kind = std::env::args().nth(2).unwrap_or_else(|| "fake".into());
     let conn = Connection::open(&db_path)?;
     let events = load_event_log(&conn)?;
     if events.is_empty() {
@@ -30,6 +44,23 @@ fn main() -> Result<()> {
         return Ok(());
     }
     eprintln!("loaded {} events from {db_path}", events.len());
+
+    // Build the embedder for the goal vector.
+    let embedder: Box<dyn Embedder> = match embedder_kind.as_str() {
+        "fake" => Box::new(zoid_core::retrieval::FakeEmbedder::new(384)),
+        #[cfg(feature = "candle")]
+        "candle" => {
+            let cache = std::env::var("ZOID_CACHE_DIR")
+                .unwrap_or_else(|_| format!("{}/.cache/zoid", std::env::var("HOME").unwrap_or_default()));
+            let emb = CandleEmbedder::load(std::path::Path::new(&cache), false)
+                .map_err(|e| anyhow!("candle embedder load failed: {e}"))?;
+            Box::new(emb)
+        }
+        #[cfg(not(feature = "candle"))]
+        "candle" => return Err(anyhow!("candle embedder not compiled — rebuild with --features candle")),
+        other => return Err(anyhow!("unknown embedder '{other}' — use 'fake' or 'candle'")),
+    };
+    eprintln!("embedder: {embedder_kind} (model={})", embedder.model_id());
 
     // The policy used by the session (we can't know it exactly, so we use the
     // default shipped policy; the eval is about relative weight comparison).
@@ -44,9 +75,9 @@ fn main() -> Result<()> {
     let band = policy.band();
 
     // Find fire points: indices where est >= high_water.
-    let fire_points = find_fire_points(&events, &policy, band.high_water);
+    let fire_points = find_fire_points(&events, band.high_water);
     if fire_points.is_empty() {
-        eprintln!("no eviction fire points found (session never exceeded high_water)");
+        eprintln!("no eviction fire points found (session never exceeded high_water={})", band.high_water);
         return Ok(());
     }
     eprintln!("{} fire points (est >= high_water={})", fire_points.len(), band.high_water);
@@ -55,12 +86,14 @@ fn main() -> Result<()> {
     let later_recalled = collect_later_recalled(&events);
 
     // Cached vectors: load all from the DB for the session's model.
-    let vecs_by_id = load_all_vectors(&conn)?;
+    let model_id = embedder.model_id().to_string();
+    let vecs_by_id = load_vectors_for_model(&conn, &model_id)?;
+    eprintln!("{} cached vectors for model '{model_id}'", vecs_by_id.len());
 
     // For each weight, replay each fire point and accumulate metrics.
     let mut results: Vec<WeightMetrics> = Vec::new();
     for &weight in WEIGHTS {
-        let m = replay_weight(&events, &policy, &fire_points, &later_recalled, &vecs_by_id, weight);
+        let m = replay_weight(&events, &policy, &fire_points, &later_recalled, &vecs_by_id, embedder.as_ref(), weight);
         results.push(m);
     }
 
@@ -109,6 +142,7 @@ fn replay_weight(
     fire_points: &[usize],
     later_recalled: &std::collections::HashSet<Ulid>,
     vecs_by_id: &std::collections::HashMap<Ulid, Vec<f32>>,
+    embedder: &dyn Embedder,
     weight: f32,
 ) -> WeightMetrics {
     let band = policy.band();
@@ -119,24 +153,41 @@ fn replay_weight(
     let mut fire_count = 0u64;
     let mut all_green = true;
 
-    for &fp in fire_points {
-        let slice = &events[..=fp];
-        let est = estimate_tokens(slice) as u64;
+    // Precompute the weight=0 baseline plans for churn comparison.
+    let baseline_plans: Vec<Vec<Ulid>> = fire_points
+        .iter()
+        .map(|&fp| {
+            let slice = &events[..=fp];
+            let est = estimate_tokens(slice);
+            let plan = eviction::plan_evictions(slice.iter(), policy, est, &RecencyScorer, &GoalContext::default());
+            plan.turns.iter().flat_map(|t| t.ids.clone()).collect::<Vec<_>>()
+        })
+        .collect();
 
-        // Build GoalContext.
+    for (i, &fp) in fire_points.iter().enumerate() {
+        let slice = &events[..=fp];
+        let est = estimate_tokens(slice);
+
+        // Build GoalContext with a REAL goal vector (the fix for F1).
         let ctx = if weight > 0.0 {
             let refs: Vec<&Event> = slice.iter().collect();
             let text = eviction::goal_text(&refs, eviction::GOAL_WINDOW_MSGS);
             if text.is_empty() {
                 GoalContext::default()
             } else {
-                // We don't have the embedder here; use cached vectors directly.
-                // The goal vector is approximated by averaging the on-goal cached vectors.
-                // This is a simplification — the real gate embeds the goal text.
-                GoalContext {
-                    goal: Vec::new(), // empty → no rescue (can't embed without the embedder)
-                    vecs: vecs_by_id.clone(),
-                    weight,
+                let goal = embedder
+                    .embed(&[text.as_str()])
+                    .ok()
+                    .and_then(|mut v| v.pop())
+                    .unwrap_or_default();
+                if goal.is_empty() {
+                    GoalContext::default()
+                } else {
+                    GoalContext {
+                        goal,
+                        vecs: vecs_by_id.clone(),
+                        weight,
+                    }
                 }
             }
         } else {
@@ -156,37 +207,16 @@ fn replay_weight(
             all_green = false;
         }
 
-        // Churn: symmetric diff vs weight=0 baseline (computed below).
-        total_evicted += evicted.len() as u64;
-        total_regret += regret;
-        total_reclaim += reclaimed;
-        fire_count += 1;
-    }
-
-    // For churn, compare against weight=0 baseline.
-    let baseline_plans: Vec<Vec<Ulid>> = fire_points
-        .iter()
-        .map(|&fp| {
-            let slice = &events[..=fp];
-            let est = estimate_tokens(slice) as u64;
-            let plan = eviction::plan_evictions(slice.iter(), policy, est, &RecencyScorer, &GoalContext::default());
-            plan.turns.iter().flat_map(|t| t.ids.clone()).collect::<Vec<_>>()
-        })
-        .collect();
-
-    for (i, &fp) in fire_points.iter().enumerate() {
-        let slice = &events[..=fp];
-        let est = estimate_tokens(slice) as u64;
-        let ctx = GoalContext {
-            goal: Vec::new(), // simplification: no embedder in replay
-            vecs: vecs_by_id.clone(),
-            weight,
-        };
-        let plan = eviction::plan_evictions(slice.iter(), policy, est, &RecencyScorer, &ctx);
-        let this_ids: std::collections::HashSet<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
+        // Churn: symmetric diff vs weight=0 baseline.
+        let this_ids: std::collections::HashSet<Ulid> = evicted.iter().copied().collect();
         let base_ids: std::collections::HashSet<Ulid> = baseline_plans[i].iter().copied().collect();
         let churn = this_ids.symmetric_difference(&base_ids).count() as u64;
+
+        total_evicted += evicted.len() as u64;
+        total_regret += regret;
         total_churn += churn;
+        total_reclaim += reclaimed;
+        fire_count += 1;
     }
 
     let regret_rate = if total_evicted > 0 { total_regret as f64 / total_evicted as f64 } else { 0.0 };
@@ -202,10 +232,10 @@ fn replay_weight(
     }
 }
 
-fn find_fire_points(events: &[Event], _policy: &EvictionPolicy, high_water: u64) -> Vec<usize> {
+fn find_fire_points(events: &[Event], high_water: u64) -> Vec<usize> {
     let mut points = Vec::new();
     for i in 0..events.len() {
-        let est = estimate_tokens(&events[..=i]) as u64;
+        let est = estimate_tokens(&events[..=i]);
         if est >= high_water {
             points.push(i);
         }
@@ -253,9 +283,9 @@ fn load_event_log(conn: &Connection) -> Result<Vec<Event>> {
     Ok(events)
 }
 
-fn load_all_vectors(conn: &Connection) -> Result<std::collections::HashMap<Ulid, Vec<f32>>> {
-    let mut stmt = conn.prepare("SELECT event_id, vector FROM event_embeddings")?;
-    let rows = stmt.query_map([], |row| {
+fn load_vectors_for_model(conn: &Connection, model_id: &str) -> Result<std::collections::HashMap<Ulid, Vec<f32>>> {
+    let mut stmt = conn.prepare("SELECT event_id, vector FROM event_embeddings WHERE model_id = ?1")?;
+    let rows = stmt.query_map([model_id], |row| {
         let id: String = row.get(0)?;
         let blob: Vec<u8> = row.get(1)?;
         Ok((id, blob))
@@ -274,24 +304,21 @@ fn load_all_vectors(conn: &Connection) -> Result<std::collections::HashMap<Ulid,
 }
 
 fn blob_to_f32s(blob: &[u8]) -> Vec<f32> {
-    let chunk = std::mem::size_of::<f32>();
-    blob.chunks_exact(chunk)
-        .filter_map(|c| {
-            if c.len() == chunk {
-                let mut arr = [0u8; 4];
-                arr.copy_from_slice(c);
-                Some(f32::from_le_bytes(arr))
-            } else {
-                None
-            }
-        })
+    blob.chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect()
 }
 
-fn estimate_tokens(events: &[Event]) -> usize {
-    // Rough: chars/3, matching the economy estimate used by the gate.
+/// Estimate tokens matching the real gate's scaling: economy::estimate_tokens
+/// (chars/3, ceiling) × OVERCOUNT_BIAS. Does NOT include ContextOverhead (system
+/// prompt, tool defs) — the spike can't know those without the session's config,
+/// so fire points may be slightly later than the real gate. This is acceptable
+/// for relative weight comparison; document the limitation if using for absolute
+/// reclaim targeting.
+fn estimate_tokens(events: &[Event]) -> u64 {
     let chars: usize = events.iter().map(|e| event_text_len(&e.kind)).sum();
-    chars / 3
+    let raw = economy::estimate_tokens(&" ".repeat(chars)) as u64; // div_ceil(chars/3)
+    (raw as f64 * OVERCOUNT_BIAS) as u64
 }
 
 fn event_text_len(kind: &EventKind) -> usize {

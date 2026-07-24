@@ -12,10 +12,15 @@ publish = false
 # live gate WOULD fire. Run manually: cargo run -p eviction-weight-eval -- /path/to/session.sqlite
 [dependencies]
 zoid-core = { path = "../../crates/zoid-core" }
+zoid-embed = { path = "../../crates/zoid-embed", optional = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
 anyhow = "1"
 ulid = "1"
 serde_json = "1"
+
+[features]
+default = []
+candle = ["dep:zoid-embed"]
 
 [profile.release]
 opt-level = 3
