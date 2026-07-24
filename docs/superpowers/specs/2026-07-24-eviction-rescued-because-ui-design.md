@@ -97,22 +97,37 @@ TurnsEvicted {
 },
 ```
 
-`EventKind` derives `Serialize, Deserialize` — `RescueRationale` and
-`RescuedTurn` must also derive them. `EventKind` does not derive `Eq` (it can't
-— `QuestionKind::ModeMapping` carries a `Box<ModeMapping>`), so the `f32`
-fields are fine.
+`EventKind` (event.rs:69) and `Event` (event.rs:196) both derive
+`Eq, Hash, Serialize, Deserialize`. Adding `Option<RescueRationale>` (with
+`f32` fields, which do **not** impl `Eq` or `Hash`) to the `TurnsEvicted`
+variant **breaks the `Eq` and `Hash` derives on both `EventKind` and `Event`**
+(transitive). `RescueRationale` and `RescuedTurn` must derive
+`Serialize, Deserialize`.
+
+**`Eq` + `Hash` drop blast radius:** `EventKind` and `Event` lose `Eq` and
+`Hash`, retain `PartialEq`. Verified safe: no `HashSet<Event>` /
+`HashMap<Event, _>` / `BTreeMap`-keyed-on-`Event` usages exist in the
+workspace, and no `Event: Eq` or `Event: Hash` trait bounds. The round-trip
+tests (`event.rs:258`, `event.rs:303`, `round_trip.rs:39`) use `assert_eq!`,
+which requires only `PartialEq + Debug`, not `Eq`. The `Source` enum and
+`Provenance` struct (config.rs) derive `Eq + Hash` but are unrelated.
 
 ### 2.3 `ChatMsg::Evicted` + `RescueSummary` (projection.rs)
 
 ```rust
 /// An eviction wave — chip at Normal zoom, breakdown at Detail.
+/// Filtered out of the model request path (§3.1).
 Evicted {
     reclaimed_tokens: u64,
-    evicted_count: usize,
+    evicted_topics: Vec<String>,   // topic hints of evicted turns
     rescue: Option<RescueSummary>,
     ts: i64,
 },
 ```
+
+`evicted_count` is NOT a separate field — it's `evicted_topics.len()`. The
+Normal chip uses `evicted_topics.len()` for the count. Carrying both would
+invite drift. The projection extracts `evicted_topics` from `marker.spans`.
 
 `RescueSummary` is the projection-friendly (Eq-compatible) version of
 `RescueRationale` — drops `f32` scores, converts bumps to integer milli-units,
@@ -122,21 +137,28 @@ drops `Ulid`s:
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RescueSummary {
     pub goal_text: String,
-    pub weight: u16,           // rounded — display only
+    pub weight: u32,           // rounded — display only
     pub rescued: Vec<RescuedTurnSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RescuedTurnSummary {
     pub topic_hint: String,
-    pub bump_milli: u16,       // bump × 1000, rounded (e.g. 8400 = +8.4)
+    pub bump_milli: u32,       // bump × 1000, rounded (e.g. 8400 = +8.4)
 }
 ```
 
-All fields are `Eq`-compatible, so `ChatMsg` retains its `Eq` derive. The
-projection converts `RescueRationale` → `RescueSummary` at projection time:
-`weight` rounds to `u16`, each survivor's `rescue_bump` rounds to
-`(bump * 1000.0).round() as u16`, `ids` are dropped (topic hints suffice).
+All fields are `Eq`-compatible, so `ChatMsg` retains its `Eq` derive.
+
+**`u32` for milli-units, not `u16`:** `bump = weight · normalized` where
+`weight ≤ RESCUE_WEIGHT_MAX` (48.0 today, but configurable up to any value
+the future `[eviction]` config allows). `bump_milli` as `u16` saturates at
+65.535 — fragile if `rescue_weight` is ever set above ~65. Use `u32` for
+`bump_milli` and `weight` to foreclose any future config-driven overflow.
+
+The projection converts `RescueRationale` → `RescueSummary` at projection time:
+`weight` rounds to `u32`, each survivor's `rescue_bump` rounds to
+`(bump * 1000.0).round() as u32`, `ids` are dropped (topic hints suffice).
 
 ---
 
@@ -149,32 +171,85 @@ as a metadata marker (projection.rs:281–286). Instead, emit
 ```
 EventKind::TurnsEvicted { ids, reclaimed_tokens, marker, rescue } => {
     // flush pending text/calls first (same as other event kinds)
-    let evicted_count = marker.spans.len();
+    let evicted_topics: Vec<String> = marker.spans.iter()
+        .map(|s| s.topic_hint.clone()).collect();
     let rescue = rescue.as_ref().map(|r| RescueSummary {
         goal_text: r.goal_text.clone(),
-        weight: r.weight.round() as u16,
-        rescued: r.survivors.iter().filter(|s| s.rescue_bump > 0.0).map(|s| {
+        weight: r.weight.round() as u32,
+        rescued: r.survivors.iter().map(|s| {
             RescuedTurnSummary {
                 topic_hint: s.topic_hint.clone(),
-                bump_milli: (s.rescue_bump * 1000.0).round() as u16,
+                bump_milli: (s.rescue_bump * 1000.0).round() as u32,
             }
         }).collect(),
     });
     out.push(ChatMsg::Evicted {
         reclaimed_tokens: *reclaimed_tokens,
-        evicted_count,
+        evicted_topics,
         rescue,
         ts: /* the event's timestamp */,
     });
 }
 ```
 
-Survivors with `rescue_bump == 0.0` are filtered out of `rescued` — they were
-kept by recency, not by rescue. Only turns with a non-zero bump appear in the
-"rescued" list.
+Survivors with `rescue_bump == 0.0` are filtered out **at the `plan_evictions`
+source** (not just in the projection) — they were kept by recency, not by
+rescue, and including them would bloat the persisted event with off-goal
+turns that weren't rescued at all. Only turns with a non-zero bump appear in
+`RescueRationale.survivors`. The invariant: `rescue.is_some() <=> 
+!ctx.goal.is_empty()`, and `survivors` contains only candidates with
+`rescue_bump > 0.0` that were NOT evicted.
+
+**Survivor set computation:** build a `HashSet<Ulid>` of evicted ids from
+`plan.turns.iter().flat_map(|t| t.ids.iter().copied())`, then filter
+`candidates` by `!t.ids.iter().any(|id| evicted_set.contains(id))` AND
+`bump[i] > 0.0`. `group_turns` produces disjoint turns (no id overlap), so the
+set membership check is exact.
 
 `TurnsReadmitted` stays a metadata marker (no `ChatMsg` variant — re-admission
 is a recall-driven action, not a curation event the user needs to see inline).
+
+### 3.1 Model-request path — filter `ChatMsg::Evicted` out
+
+`conversation_for_branch` feeds two consumers through the same `Vec<ChatMsg>`:
+1. **The TUI** — `ProjectionCache.msgs` → `build_conversation` (chat.rs).
+2. **The model request** — `build_request_with_thinking` → `map_msg` (agent.rs:447).
+
+`map_msg` is an exhaustive match (agent.rs:448) returning `Message` (not
+`Option<Message>`). Adding `ChatMsg::Evicted` breaks it, and mapping it to a
+`Message` would inject eviction chips into the model's context window —
+breaking the design invariant that the model learns about eviction *only*
+through the system-prompt breadcrumb (agent.rs:552), never as inline transcript
+rows.
+
+**Fix:** `build_request_with_thinking` (agent.rs:570) filters `ChatMsg::Evicted`
+out of the messages before mapping:
+
+```rust
+messages: zoid_core::projection::conversation_for_branch(events.iter(), active_branch)
+    .into_iter()
+    .filter(|m| !matches!(m, ChatMsg::Evicted { .. }))
+    .map(map_msg)
+    .collect(),
+```
+
+`map_msg` still needs an `Evicted` arm (exhaustive match) — it returns an inert
+empty assistant message (unreachable in practice because the filter removes
+`Evicted` before `map_msg` runs):
+
+```rust
+ChatMsg::Evicted { .. } => Message {
+    role: zoid_provider::MsgRole::Assistant,
+    content: String::new(),
+    tool_calls: vec![],
+    tool_name: None,
+    tool_call_id: None,
+},
+```
+
+This is defense-in-depth: the filter is the real guard, but `map_msg` must
+still compile. The `Question::Approval` arm (agent.rs:493) already uses the
+same inert-message pattern for a similar "UI-only, not for the model" case.
 
 ---
 
@@ -216,22 +291,10 @@ When `rescue` is `None`:
       · zulu yankee xray whiskey n9
 ```
 
-The `evicted:` list comes from `marker.spans` (already on `ChatMsg::Evicted` as
-`evicted_count` — but the Detail view needs the topic hints, so the `ChatMsg::Evicted`
-variant must also carry the evicted topic hints). Add `evicted_topics: Vec<String>`
-to `ChatMsg::Evicted`:
-
-```rust
-Evicted {
-    reclaimed_tokens: u64,
-    evicted_count: usize,
-    evicted_topics: Vec<String>,      // topic hints of evicted turns
-    rescue: Option<RescueSummary>,
-    ts: i64,
-},
-```
-
-All `Eq`-compatible. The projection extracts them from `marker.spans`.
+The `evicted:` list comes from `evicted_topics` on `ChatMsg::Evicted` (defined
+in §2.3, extracted from `marker.spans` by the projection). The Detail view
+iterates `evicted_topics` for the evicted list and `rescue.rescued` for the
+rescued list.
 
 ### 4.3 Summary and Overview
 
@@ -252,14 +315,19 @@ plan_evictions (eviction.rs)
 
 emit_eviction (agent.rs:2851)
   └─ receives EvictionPlan by value
-  └─ constructs TurnsEvicted { ids, reclaimed_tokens, marker, rescue }
-     └─ rescue: plan.rescue (moved before the plan.turns loop consumes turns)
-  └─ Note: must extract plan.rescue BEFORE `for t in plan.turns` moves the vec
+  └─ destructure: let EvictionPlan { turns, rescue } = plan;
+     └─ iterate `turns` for ids/spans/reclaimed (no move-order issue)
+     └─ pass `rescue` into the TurnsEvicted event
+  └─ Note: use destructure at the top, not field-by-field access after a
+     consuming loop — avoids the partial-move footgun entirely
 
 projection (projection.rs)
   └─ TurnsEvicted → ChatMsg::Evicted
-     └─ RescueRationale → RescueSummary (f32 → u16 milli, drop Ulids)
+     └─ RescueRationale → RescueSummary (f32 → u32 milli, drop Ulids)
      └─ marker.spans → evicted_topics (Vec<String>)
+
+build_request_with_thinking (agent.rs:570)
+  └─ filters ChatMsg::Evicted out before map_msg (§3.1)
 
 TUI (chat.rs)
   └─ Normal: chip (one line)
@@ -272,27 +340,35 @@ TUI (chat.rs)
 ## 6. Cross-crate impact
 
 - **`eviction.rs` (zoid-core)** — `RescueRationale`, `RescuedTurn` structs;
-  `EvictionPlan.rescue` field; `EvictionPlan` drops `Eq`; `plan_evictions`
-  populates `rescue`. All existing `EvictionPlan { turns: ... }` literals must
-  add `rescue: None` (test helpers, `Default`).
-- **`event.rs` (zoid-core)** — `TurnsEvicted` gains `rescue` field; all
-  `TurnsEvicted { ... }` literals must add `rescue: None` (emit_eviction in
-  agent.rs, test event constructors).
+  `EvictionPlan.rescue` field; `EvictionPlan` drops `Eq` (retains `PartialEq`);
+  `plan_evictions` populates `rescue` (survivors with `bump > 0.0` only). All
+  existing `EvictionPlan { turns: ... }` literals must add `rescue: None`
+  (test helpers, `Default`). `GoalContext` gains `pub goal_text: String` field;
+  all `GoalContext { ... }` literals must add `goal_text: String::new()` (test
+  sites: eviction.rs ~line 346, 904, 922; production site: agent.rs:2797).
+  `Default` for `GoalContext` yields `goal_text: String::default()` = `""`,
+  consistent with `rescue: None` (empty goal ⇒ no rescue).
+- **`event.rs` (zoid-core)** — `TurnsEvicted` gains `rescue` field. `EventKind`
+  (line 69) and `Event` (line 196) both drop `Eq` **and `Hash`** (retains
+  `PartialEq`). All `TurnsEvicted { ... }` literals must add `rescue: None`
+  (emit_eviction in agent.rs, test event constructors in event.rs and agent.rs
+  test modules).
 - **`projection.rs` (zoid-core)** — `ChatMsg::Evicted` variant; `RescueSummary`,
   `RescuedTurnSummary` structs; `TurnsEvicted` no longer skipped. All exhaustive
-  `match ChatMsg` arms in `zoid-tui` and `zoid-core` must add an `Evicted` arm.
+  `match ChatMsg` arms in `zoid-tui`, `zoid-core`, **and `zoid` (`map_msg` at
+  agent.rs:448)** must add an `Evicted` arm. The `conversation_skips_evicted_turns`
+  test (projection.rs:746) must be updated — it currently asserts `msgs.len() == 1`
+  because `TurnsEvicted` is skipped; after this change it emits a `ChatMsg::Evicted`
+  row, so the assertion becomes `len == 2`.
 - **`chat.rs` (zoid-tui)** — Normal + Detail rendering for `ChatMsg::Evicted`.
-  Snapshot tests with eviction events in the seed will change (new rows appear).
-- **`agent.rs` (zoid)** — `emit_eviction` passes `plan.rescue` into the event.
-  The `preflight_gate` tracing line stays (log-level visibility is still useful).
-- **`goal_text` threading** — `plan_evictions` needs the goal text to populate
-  `RescueRationale.goal_text`. Today `goal_text` is called in `preflight_gate`
-  (agent.rs:2764), not inside `plan_evictions`. Two options: (a) pass `goal_text`
-  as a field on `GoalContext` so `plan_evictions` can read it, or (b) have
-  `preflight_gate` attach the rationale after `plan_evictions` returns. Option
-  (a) is cleaner — add `pub goal_text: String` to `GoalContext` (already has
-  `goal`, `vecs`, `weight`). `GoalContext` is `#[derive(Debug, Default, Clone)]`
-  (not `Eq`), so adding a `String` field is fine.
+  Snapshot tests with eviction events in the test seed will change (new rows appear).
+- **`agent.rs` (zoid)** — `emit_eviction` destructures `EvictionPlan` to extract
+  `rescue` before consuming `turns`. `build_request_with_thinking` (agent.rs:570)
+  filters `ChatMsg::Evicted` out of messages before `map_msg`. `map_msg` gains an
+  `Evicted` arm (inert empty assistant message, defense-in-depth). The
+  `preflight_gate` tracing line stays. The `GoalContext` construction at
+  agent.rs:2797 must add `goal_text: text.clone()` (the `text` variable is in
+  scope from agent.rs:2770 and still needed for the embed call at agent.rs:2781).
 - `cargo build --workspace && cargo test --workspace` after each task.
 
 ---
@@ -302,19 +378,28 @@ TUI (chat.rs)
 ### zoid-core (pure)
 
 - **`plan_evictions` populates rescue when goal non-empty:** extend
-  `relevant_old_turn_survives_while_newer_offgoal` — assert `plan.rescue.is_some()`,
-  the rescued turn (id 1) is in `rescue.survivors` with `rescue_bump > 0`.
+  `relevant_old_turn_survives_while_newer_offgoal_is_evicted` (eviction.rs:844)
+  — assert `plan.rescue.is_some()`, the rescued turn (id 1) is in
+  `rescue.survivors` with `rescue_bump > 0`.
 - **`plan_evictions` rescue is None when goal empty:** assert on
   `empty_goalcontext_is_byte_identical_to_recency`'s plan.
 - **`RescueRationale` carries correct data:** assert `goal_text`, `weight`, and
   specific `base_score` / `rescue_bump` / `keep_score` values for the rescue test.
 - **Projection:** `TurnsEvicted` with `rescue: Some(...)` → `ChatMsg::Evicted`
-  with `rescue: Some(RescueSummary {...})`. Verify `f32 → u16 milli` conversion.
+  with `rescue: Some(RescueSummary {...})`. Verify `f32 → u32 milli` conversion.
 - **Projection:** `TurnsEvicted` with `rescue: None` → `ChatMsg::Evicted` with
   `rescue: None`.
 - **`ChatMsg` still derives `Eq`** — all new fields are `Eq`-compatible.
 - **`EvictionPlan` `Eq` drop safe** — `bounded_reach_weight_zero_is_pure_recency`
-  uses `assert_eq!` (needs `PartialEq + Debug`, not `Eq`); no `Eq`-bound consumer.
+  (eviction.rs:935) uses `assert_eq!` (needs `PartialEq + Debug`, not `Eq`);
+  no `Eq`-bound consumer. Multiple `assert_eq!` sites (eviction.rs:832, :911,
+  :935) all survive.
+- **`EventKind`/`Event` `Eq` + `Hash` drop safe** — no `HashSet`/`HashMap`/
+  `BTreeMap` keyed on `Event`/`EventKind`; no `Eq`/`Hash` trait bounds. Round-trip
+  tests (event.rs:258, :303, round_trip.rs:39) use `assert_eq!` (`PartialEq`).
+- **`conversation_skips_evicted_turns`** (projection.rs:746) — update assertion
+  from `msgs.len() == 1` to `msgs.len() == 2` (the `TurnsEvicted` now produces a
+  `ChatMsg::Evicted` row). Verify the second message is `ChatMsg::Evicted`.
 
 ### zoid-tui
 
