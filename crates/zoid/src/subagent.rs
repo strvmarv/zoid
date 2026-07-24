@@ -25,10 +25,10 @@ use crate::agent::{run_agent_turn_cancellable, tool_specs, AgentUpdate, TurnConf
 /// Per-subagent max output tokens (mirrors the Chat loop's budget).
 const SUBAGENT_MAX_TOKENS: u32 = 4096;
 
-/// Hard cap on a subagent's tool-call iterations. 25 covers a realistic
-/// read-edit-test-debug cycle with 2–3 retries; beyond that the subagent is
-/// almost certainly stuck in a loop.
-const SUBAGENT_MAX_ITERATIONS: u32 = 25;
+/// Hard cap on a subagent's tool-call iterations. 100 covers a realistic
+/// multi-file read-edit-test-debug cycle with several retries; beyond that
+/// the subagent is almost certainly stuck in a loop.
+const SUBAGENT_MAX_ITERATIONS: u32 = 100;
 
 /// Token ceiling for a subagent's constructed context (≈ half a 64k window,
 /// leaving room for the task, tool round-trips, and output).
@@ -682,5 +682,13 @@ mod tests {
                 t.name()
             );
         }
+    }
+
+    #[test]
+    fn subagent_max_iterations_is_100() {
+        assert_eq!(
+            SUBAGENT_MAX_ITERATIONS, 100,
+            "iteration limit must be 100 (was 25, too tight for realistic cycles)"
+        );
     }
 }
