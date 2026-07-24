@@ -103,6 +103,9 @@ pub fn digests(msgs: &[ChatMsg]) -> Vec<TurnDigest> {
                     has_error: false,
                 });
             }
+            ChatMsg::Evicted { .. } => {
+                // Eviction chips are invisible at Summary zoom — not a turn.
+            }
         }
     }
     if let Some(d) = cur.take() {

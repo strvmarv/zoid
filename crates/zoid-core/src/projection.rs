@@ -9,6 +9,27 @@ pub struct ToolCallRef {
     pub args: String,
 }
 
+/// Projection-friendly (Eq-compatible) version of `RescueRationale`.
+///
+/// The event-layer `RescueRationale` carries `f32` fields (`weight`,
+/// `rescue_bump`, `keep_score`) which do not implement `Eq`, so it cannot live
+/// inside the `Eq`-derived `ChatMsg`. This struct mirrors only the fields the
+/// projection/transcript needs, with floats quantized to fixed-point integers:
+/// `weight` is rounded to the nearest whole number, and `rescue_bump` is
+/// expressed in milli-units (`bump_milli = (rescue_bump * 1000.0).round()`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RescueSummary {
+    pub goal_text: String,
+    pub weight: u32,
+    pub rescued: Vec<RescuedTurnSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RescuedTurnSummary {
+    pub topic_hint: String,
+    pub bump_milli: u32,
+}
+
 /// A conversation item: the tool-aware projection consumed by both the renderer
 /// and the provider request builder. An assistant item carries any tool calls it
 /// made in the same turn; tool results are their own items, in log order.
@@ -56,6 +77,14 @@ pub enum ChatMsg {
         question: String,
         choices: Vec<String>,
         state: QuestionCardState,
+        ts: i64,
+    },
+    /// An eviction wave — chip at Normal zoom, breakdown at Detail.
+    /// Filtered out of the model request path (§3.1 of the design spec).
+    Evicted {
+        reclaimed_tokens: u64,
+        evicted_topics: Vec<String>,
+        rescue: Option<RescueSummary>,
         ts: i64,
     },
 }
@@ -278,8 +307,30 @@ pub fn conversation_for_branch<'a>(
             EventKind::TurnsDropped { .. } => {
                 // Metadata marker; not a conversation item.
             }
-            EventKind::TurnsEvicted { .. }
-            | EventKind::TurnsReadmitted { .. }
+            EventKind::TurnsEvicted {
+                ids: _,
+                reclaimed_tokens,
+                marker,
+                rescue,
+            } => {
+                flush(&mut text, &mut calls, &mut turn_ts, &mut out, pending_thinking.take());
+                let evicted_topics: Vec<String> = marker.spans.iter().map(|s| s.topic_hint.clone()).collect();
+                let rescue = rescue.as_ref().map(|r| RescueSummary {
+                    goal_text: r.goal_text.clone(),
+                    weight: r.weight.round() as u32,
+                    rescued: r.survivors.iter().map(|s| RescuedTurnSummary {
+                        topic_hint: s.topic_hint.clone(),
+                        bump_milli: (s.rescue_bump * 1000.0).round() as u32,
+                    }).collect(),
+                });
+                out.push(ChatMsg::Evicted {
+                    reclaimed_tokens: *reclaimed_tokens,
+                    evicted_topics,
+                    rescue,
+                    ts: e.ts,
+                });
+            }
+            EventKind::TurnsReadmitted { .. }
             | EventKind::DirectiveReasserted { .. } => {
                 // Metadata marker; not a conversation item. (Out of scope: rendering
                 // the in-context breadcrumb / recall filtering is a later slice.)
@@ -767,8 +818,67 @@ mod tests {
             ),
         ];
         let msgs = conversation(&events);
-        assert_eq!(msgs.len(), 1); // only the "new" user message survives
+        assert_eq!(msgs.len(), 2); // "new" user message + eviction chip
         assert!(matches!(&msgs[0], ChatMsg::User { text, .. } if text == "new"));
+        assert!(matches!(&msgs[1], ChatMsg::Evicted { .. }));
+    }
+
+    #[test]
+    fn conversation_emits_evicted_with_rescue_summary() {
+        use crate::eviction::{RescueRationale, RescuedTurn};
+        use crate::event::{Event, EventKind, EvictedSpan, EvictionMarker};
+        use ulid::Ulid;
+        let mk = |id: u128, k| Event::new(Ulid::from(id), None, id as i64, k);
+        let events = vec![
+            mk(1, EventKind::UserMessage { text: "old".into() }),
+            mk(2, EventKind::AssistantMessage { text: "reply".into() }),
+            mk(3, EventKind::TurnsEvicted {
+                ids: vec![Ulid::from(1u128)],
+                reclaimed_tokens: 500,
+                marker: EvictionMarker {
+                    spans: vec![EvictedSpan {
+                        token_estimate: 500,
+                        topic_hint: "old".into(),
+                    }],
+                },
+                rescue: Some(RescueRationale {
+                    goal_text: "implement rescue".into(),
+                    weight: 12.0,
+                    survivors: vec![RescuedTurn {
+                        ids: vec![Ulid::from(2u128)],
+                        topic_hint: "reply".into(),
+                        base_score: 1.0,
+                        rescue_bump: 8.4,
+                        keep_score: 9.4,
+                    }],
+                }),
+            }),
+        ];
+        let msgs = conversation(&events);
+        // Find the Evicted message.
+        let evicted_msg = msgs
+            .iter()
+            .find(|m| matches!(m, ChatMsg::Evicted { .. }))
+            .expect("should have an Evicted message");
+        if let ChatMsg::Evicted {
+            reclaimed_tokens,
+            evicted_topics,
+            rescue,
+            ..
+        } = evicted_msg
+        {
+            assert_eq!(*reclaimed_tokens, 500);
+            assert_eq!(evicted_topics.len(), 1);
+            assert_eq!(evicted_topics[0], "old");
+            let r = rescue.as_ref().expect("rescue should be Some");
+            assert_eq!(r.goal_text, "implement rescue");
+            assert_eq!(r.weight, 12); // 12.0.round() as u32
+            assert_eq!(r.rescued.len(), 1);
+            assert_eq!(r.rescued[0].topic_hint, "reply");
+            assert_eq!(r.rescued[0].bump_milli, 8400); // 8.4 * 1000 = 8400
+        } else {
+            panic!("not an Evicted message");
+        }
     }
 
     use crate::event::QuestionKind;

@@ -518,6 +518,17 @@ fn map_msg(m: ChatMsg) -> Message {
                 },
             }
         }
+        ChatMsg::Evicted { .. } => Message {
+            // Defense-in-depth: build_request_with_thinking filters Evicted out
+            // before map_msg runs, so this arm should never fire in production.
+            // Emit an inert assistant message in case a future caller forgets the
+            // filter — never a tool-result, which would violate alternation.
+            role: zoid_provider::MsgRole::Assistant,
+            content: String::new(),
+            tool_calls: vec![],
+            tool_name: None,
+            tool_call_id: None,
+        },
     }
 }
 
@@ -569,6 +580,7 @@ pub fn build_request_with_thinking(
         system: Some(system),
         messages: zoid_core::projection::conversation_for_branch(events.iter(), active_branch)
             .into_iter()
+            .filter(|m| !matches!(m, zoid_core::projection::ChatMsg::Evicted { .. }))
             .map(map_msg)
             .collect(),
         max_tokens,

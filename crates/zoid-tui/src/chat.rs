@@ -491,6 +491,35 @@ fn build_conversation(
                     ctx.width,
                 );
             }
+            ChatMsg::Evicted {
+                reclaimed_tokens,
+                evicted_topics,
+                rescue,
+                ts: _,
+            } => {
+                let count = evicted_topics.len();
+                let reclaimed_k = if *reclaimed_tokens >= 1000 {
+                    format!("{:.1}k", *reclaimed_tokens as f64 / 1000.0)
+                } else {
+                    format!("{}", reclaimed_tokens)
+                };
+                let mut spans = vec![Span::styled(
+                    format!(
+                        "{} evicted {} turns · {} reclaimed",
+                        glyph::COLLAPSED,
+                        count,
+                        reclaimed_k
+                    ),
+                    Style::new().fg(color::DIM),
+                )];
+                if let Some(r) = rescue {
+                    spans.push(Span::styled(
+                        format!(" · {} rescued", r.rescued.len()),
+                        Style::new().fg(color::OK),
+                    ));
+                }
+                lines.push(Line::from(spans));
+            }
         }
     }
     // Every top-level code block advertises the click-to-copy affordance on its
@@ -994,6 +1023,39 @@ fn detail_lines(
                     &free_text,
                     width,
                 );
+            }
+            ChatMsg::Evicted {
+                reclaimed_tokens,
+                evicted_topics,
+                rescue,
+                ts: _,
+            } => {
+                // Full breakdown added in T5; for now, same chip as Normal.
+                let count = evicted_topics.len();
+                let reclaimed_k = if *reclaimed_tokens >= 1000 {
+                    format!("{:.1}k", *reclaimed_tokens as f64 / 1000.0)
+                } else {
+                    format!("{}", reclaimed_tokens)
+                };
+                out.push(Line::from(vec![
+                    Span::styled(
+                        format!(
+                            "{} evicted {} turns · {} reclaimed",
+                            glyph::EXPANDED,
+                            count,
+                            reclaimed_k
+                        ),
+                        Style::new().fg(color::DIM),
+                    ),
+                    if let Some(r) = rescue {
+                        Span::styled(
+                            format!(" · {} rescued", r.rescued.len()),
+                            Style::new().fg(color::OK),
+                        )
+                    } else {
+                        Span::raw("")
+                    },
+                ]));
             }
             ChatMsg::Assistant {
                 thinking,
