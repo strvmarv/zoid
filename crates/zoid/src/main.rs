@@ -2788,7 +2788,13 @@ where
                 match update {
                     AgentUpdate::Appended(ev) => {
                         let mut delegation_arrived = false;
-                        if let EventKind::DelegationResult { subagent_id, .. } = &ev.kind {
+                        if let EventKind::DelegationResult { subagent_id, summary, ok, .. } = &ev.kind {
+                            tracing::info!(
+                                subagent_id = %subagent_id,
+                                ok = %ok,
+                                summary_len = summary.len(),
+                                "delegation result arrived"
+                            );
                             app.in_flight_subagents.retain(|s| s.id != *subagent_id);
                             app.in_flight.lock().unwrap().remove(subagent_id);
                             if app.in_flight.lock().unwrap().is_empty() {
@@ -2846,6 +2852,7 @@ where
                         // has usually already ended). If a turn is still streaming,
                         // plan_delegation_wake arms a deferred wake for TurnComplete.
                         if delegation_arrived && plan_delegation_wake(app) {
+                            tracing::info!("spawning continuation turn after delegation");
                             spawn_turn(app);
                         }
                     }
@@ -6135,11 +6142,19 @@ async fn handle_cancel_wake(app: &mut App, id: Option<String>) -> Result<String,
 /// effect is left to the caller so this stays unit-testable without launching a
 /// real turn.
 fn plan_delegation_wake(app: &mut App) -> bool {
-    if should_wake_after_delegation(
+    let wake = should_wake_after_delegation(
         app.streaming,
         app.in_flight_subagents.is_empty(),
         app.yielded,
-    ) {
+    );
+    tracing::info!(
+        wake = %wake,
+        streaming = %app.streaming,
+        in_flight_empty = %app.in_flight_subagents.is_empty(),
+        yielded = %app.yielded,
+        "delegation wake decision"
+    );
+    if wake {
         app.wake_after_delegation = false;
         app.streaming = true;
         true
