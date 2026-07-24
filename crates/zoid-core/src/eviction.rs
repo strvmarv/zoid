@@ -228,6 +228,14 @@ fn turn_relevance(turn: &TurnView, ctx: &GoalContext) -> f32 {
 /// all map to 0.0 (zero bump). A position-based rank would spread equal zeros
 /// across [0,1] and hand off-goal turns a spurious rescue — silently corrupting
 /// the rescue-only guarantee.
+/// Tolerance for treating two cosine values as the same distinct rank tier.
+/// `f32::EPSILON` (~1.2e-7) is too tight for real bge cosines — two off-goal
+/// turns with cosines 0.3700001 and 0.3700003 would escape the dedup and spread
+/// across the rank range, handing them a spurious rescue bump. 1e-5 is still
+/// tight enough to separate genuinely different cosines while being immune to
+/// float noise from dot products over 384 dims.
+const RANK_TOL: f32 = 1e-5;
+
 fn rank_normalize(raws: &[f32]) -> Vec<f32> {
     let n = raws.len();
     if n <= 1 {
@@ -235,7 +243,7 @@ fn rank_normalize(raws: &[f32]) -> Vec<f32> {
     }
     let mut distinct: Vec<f32> = raws.to_vec();
     distinct.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    distinct.dedup_by(|a, b| (*a - *b).abs() < f32::EPSILON);
+    distinct.dedup_by(|a, b| (*a - *b).abs() < RANK_TOL);
     let d = distinct.len();
     if d <= 1 {
         return vec![0.0; n]; // all-equal ⇒ no rescue
@@ -244,7 +252,7 @@ fn rank_normalize(raws: &[f32]) -> Vec<f32> {
         .map(|r| {
             let rank = distinct
                 .iter()
-                .position(|v| (v - r).abs() < f32::EPSILON)
+                .position(|v| (v - r).abs() < RANK_TOL)
                 .unwrap_or(0);
             rank as f32 / (d as f32 - 1.0)
         })
@@ -535,7 +543,7 @@ pub fn plan_evictions<'a>(
     let evicted = evicted_ids(events.iter().copied());
     let turns = group_turns(&events, &evicted, policy.recent_n);
 
-    let mut candidates: Vec<&TurnView> = turns
+    let candidates: Vec<&TurnView> = turns
         .iter()
         .filter(|t| !t.protected && !t.ids.is_empty())
         .collect();
