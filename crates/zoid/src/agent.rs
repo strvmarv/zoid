@@ -1486,8 +1486,14 @@ async fn run_turn_inner(
                                     id: tc.id.clone(),
                                     name: tc.name.clone(),
                                     output: "dispatch_subagent: a subagent is already \
-                                             running. Wait for its DelegationResult before \
-                                             dispatching another."
+                                             running. You must WAIT for its \
+                                             DelegationResult event to arrive before \
+                                             dispatching another, editing files in the \
+                                             worktree, or calling cancel_subagent. Do NOT \
+                                             cancel the running subagent — it may be \
+                                             mid-work and canceling loses its progress. \
+                                             Stop issuing tool calls until the result \
+                                             arrives."
                                         .into(),
                                     is_error: true,
                                 },
