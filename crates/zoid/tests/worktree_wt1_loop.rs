@@ -92,10 +92,12 @@ async fn commit_after_enter_worktree_lands_on_worktree_branch_not_parent() {
     // Sub-turn 1 batches BOTH tool calls in a single assistant message:
     // enter_worktree THEN the commit. This matches the WT-1 fix's scope — the
     // turn loop reassigns `cwd_for_exec` when it processes enter_worktree, and
-    // that reassignment holds for subsequent tools *in the same batch* (it is
-    // re-initialized to config.cwd at each sub-turn boundary; the cross-turn
-    // case is handled in production by the main loop's spawn_turn reading
-    // active_worktree, which the library layer alone cannot model). Sub-turn 2
+    // that reassignment holds for every later tool in the turn — `cwd_for_exec`
+    // is turn-scoped, so it survives sub-turn boundaries too (it used to be
+    // re-initialized from config.cwd each sub-turn; that was the WT-2 bug, fenced
+    // by tests/worktree_wt2_exit_cwd.rs). The cross-TURN case is handled in
+    // production by the main loop's spawn_turn reading active_worktree, which the
+    // library layer alone cannot model. Sub-turn 2
     // just finishes. `--allow-empty` avoids staging; inline `-c user.*` keeps
     // the commit hermetic (no dependence on global git config).
     let provider = Arc::new(ScriptedProvider {

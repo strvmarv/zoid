@@ -755,6 +755,16 @@ async fn run_turn_inner(
     // a ⚠ message instead of ending silently and leaving the UI to snap back to
     // idle with no explanation.
     let mut turn_produced_content = false;
+    // Working directory for tool execution. TURN-scoped on purpose, not
+    // sub-turn-scoped: `enter_worktree`/`exit_worktree` repoint this mid-turn
+    // and the relocation must survive the sub-turn boundary. Re-initializing it
+    // from the frozen `config.cwd` snapshot on every sub-turn handed the shell a
+    // DELETED worktree path after `exit_worktree` (ENOENT — `current_dir` chdir's
+    // before exec); see tests/worktree_wt2_exit_cwd.rs. Cross-TURN state is
+    // carried by the main loop's `spawn_turn`, which rebuilds `config.cwd` from
+    // `app.active_worktree` — that path only runs between turns, never between
+    // sub-turns, which is the gap this scoping closes.
+    let mut cwd_for_exec = config.cwd.clone();
 
     'turn: loop {
         // Cancelled between sub-turns: nothing is pending here, so end cleanly.
@@ -1085,9 +1095,8 @@ async fn run_turn_inner(
             break 'turn;
         }
 
-        // Execute each pending tool in the configured working directory
+        // Execute each pending tool in the turn's current working directory
         // (blocking work off the async runtime), recording its result as an event.
-        let mut cwd_for_exec = config.cwd.clone();
         let mut pending_iter = pending.into_iter();
         while let Some(tc) = pending_iter.next() {
             // Cancelled mid-batch: skip this tool and every remaining one with a
@@ -1596,13 +1605,19 @@ async fn run_turn_inner(
                     } else {
                         None
                     };
+                    // A subagent without its own worktree inherits the parent's
+                    // CURRENT cwd, not the turn's opening snapshot: after an
+                    // `enter_worktree` earlier in this turn `config.cwd` still
+                    // points at the main checkout (so the subagent's commits
+                    // would land on the parent branch), and after an
+                    // `exit_worktree` it points at a deleted directory.
                     let cwd = wt
                         .as_ref()
                         .map(|w| {
                             std::fs::canonicalize(w.path())
                                 .unwrap_or_else(|_| w.path().to_path_buf())
                         })
-                        .unwrap_or_else(|| config.cwd.clone());
+                        .unwrap_or_else(|| cwd_for_exec.clone());
 
                     // Create the guardrail tokens + heartbeat for this subagent and
                     // register a handle BEFORE spawning, so a fast-completing
