@@ -19,14 +19,14 @@ impl Tool for Read {
                 "properties": {
                     "path":   { "type": "string", "description": "File path relative to the working directory." },
                     "offset": { "type": "integer", "description": "1-indexed line to start from (default 1)." },
-                    "limit":  { "type": "integer", "description": "Max lines to return (default 2000)." }
+                    "limit":  { "type": "integer", "description": "Max lines to return (default 500)." }
                 },
                 "required": ["path"]
             }),
         }
     }
     fn run(&self, args: &Value, cwd: &Path) -> ToolOutput {
-        const DEFAULT_LIMIT: usize = 2000;
+        const DEFAULT_LIMIT: usize = 500; // was 2000 — caps per-read context cost
         const MAX_LINE: usize = 2000; // per-line char cap (CC parity) — stops a
                                       // single giant line from blowing context.
         const MAX_BYTES: usize = 256 * 1024; // hard, non-defeatable output ceiling.
@@ -183,7 +183,7 @@ mod tests {
     #[test]
     fn over_cap_appends_truncation_notice() {
         let mut f = tempfile::NamedTempFile::new().unwrap();
-        let body: String = (1..=2100).map(|n| format!("line{n}\n")).collect();
+        let body: String = (1..=600).map(|n| format!("line{n}\n")).collect();
         write!(f, "{body}").unwrap();
         let out = Read.run(
             &json!({ "path": f.path().to_str().unwrap() }),
@@ -191,7 +191,7 @@ mod tests {
         );
         assert!(out.text.starts_with("1\tline1\n"));
         assert!(out.text.contains("truncated"));
-        assert!(out.text.contains("offset=2001"));
+        assert!(out.text.contains("offset=501"));
     }
 
     #[test]
