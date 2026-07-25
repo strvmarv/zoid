@@ -882,17 +882,16 @@ fn render_subagents_body(frame: &mut Frame, area: Rect, rows: &[crate::state::Su
         .iter()
         .take(area.height as usize)
         .map(|r| {
-            // Format: "● sub-01… · agent · truncated task"
-            let id_w = 10.min(r.id.len());
-            let id = &r.id[..id_w];
+            // Format: "● agent · truncated task" (no subagent ID — the ID is
+            // a ULID that wastes the narrow rail. The model gets the full ID
+            // via the list_subagents tool; the human just needs agent + task.)
             let agent = if r.agent.is_empty() { "delegate" } else { &r.agent };
-            let remaining = (area.width as usize).saturating_sub(id_w + agent.len() + 5);
+            let remaining = (area.width as usize).saturating_sub(agent.len() + 5);
             let task = truncate(&r.task, remaining);
             Line::from(vec![
                 Span::styled(format!("{} ", glyph::RUNNING), Style::new().fg(color::WARN)),
-                Span::styled(format!("{id} "), Style::new().fg(color::TXT)),
-                Span::styled(format!("· {agent} "), Style::new().fg(color::BRANCH)),
-                Span::styled(task, Style::new().fg(color::DIM)),
+                Span::styled(format!("{agent} "), Style::new().fg(color::BRANCH)),
+                Span::styled(format!("· {task}"), Style::new().fg(color::DIM)),
             ])
         })
         .collect();
