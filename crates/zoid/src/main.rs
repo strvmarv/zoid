@@ -1047,7 +1047,9 @@ fn select_provider(
         let base_url = effective_base_url(config);
         return (
             Arc::new(
-                zoid_provider::ollama::OllamaProvider::new(String::new()).with_base_url(base_url),
+                zoid_provider::ollama::OllamaProvider::new(String::new())
+                    .with_base_url(base_url)
+                    .with_num_ctx(zoid_provider::ollama::configured_num_ctx()),
             ),
             "ollama",
             true, // no key required → treat as ready

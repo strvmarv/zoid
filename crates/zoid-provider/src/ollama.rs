@@ -13,10 +13,39 @@ use tokio::sync::mpsc;
 /// Default model when `$ZOID_MODEL` is unset (GLM on Ollama Cloud).
 pub const DEFAULT_OLLAMA_MODEL: &str = "glm-5.2:cloud";
 
+/// Default context window requested from a **local** Ollama daemon when
+/// `ZOID_NUM_CTX` is unset. A local daemon applies its own (small) default and
+/// then silently truncates an over-long prompt rather than erroring, so the
+/// client must ask. zoid's fixed per-turn overhead is ~1,850 tokens (13 tool
+/// schemas ≈ 1,700 tokens plus the system prompt), which 32K leaves ample room
+/// around. Never sent to Ollama Cloud, which sizes context server-side.
+pub const DEFAULT_LOCAL_NUM_CTX: u32 = 32768;
+
+/// Parse a `ZOID_NUM_CTX` value. Mirrors the contract of
+/// `crate::stream_idle_timeout` (lib.rs:44): a positive integer wins, and
+/// anything else — absent, empty, zero, negative, non-numeric, or beyond u32 —
+/// falls back to `DEFAULT_LOCAL_NUM_CTX`.
+pub fn parse_num_ctx(raw: Option<&str>) -> u32 {
+    raw.and_then(|s| s.trim().parse::<u32>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_LOCAL_NUM_CTX)
+}
+
+/// The configured local context window: `ZOID_NUM_CTX` or the default. Read at
+/// provider-construction time by the bin's `ollama-local` branch.
+pub fn configured_num_ctx() -> u32 {
+    parse_num_ctx(std::env::var("ZOID_NUM_CTX").ok().as_deref())
+}
+
 /// Build the native Ollama `/api/chat` request body. System prompt is a leading
 /// `{"role":"system"}` message. Only `model`/`messages`/`stream` are sent — the
 /// native API does not take OpenAI's `max_tokens`/`stream_options`.
-pub fn request_body(req: &CompletionRequest) -> Value {
+///
+/// `num_ctx` is `Some` only for **local** daemons (`ollama-local`), which
+/// otherwise apply their own default and silently truncate. It is `None` for
+/// Ollama Cloud, which sizes context server-side — and when `None` the emitted
+/// body is byte-identical to the pre-`num_ctx` body.
+pub fn request_body(req: &CompletionRequest, num_ctx: Option<u32>) -> Value {
     let mut messages: Vec<Value> = Vec::new();
     if let Some(sys) = &req.system {
         messages.push(json!({ "role": "system", "content": sys }));
@@ -66,6 +95,9 @@ pub fn request_body(req: &CompletionRequest) -> Value {
         "keep_alive": "30m",
         "think": think,
     });
+    if let Some(n) = num_ctx {
+        body["options"] = json!({ "num_ctx": n });
+    }
     if !req.tools.is_empty() {
         body["tools"] = Value::Array(
             req.tools.iter()
@@ -268,6 +300,10 @@ pub struct OllamaProvider {
     /// "cached" (warm in KV). Cross-stream state so `parse_line`'s `done` frame
     /// can read it. Ollama implicit-cache approximation.
     last_prompt_eval: std::sync::atomic::AtomicU64,
+    /// Explicit context window for `options.num_ctx`. `Some` only for
+    /// `ollama-local`; `None` for Ollama Cloud, which sizes context
+    /// server-side and whose request body must stay byte-identical.
+    num_ctx: Option<u32>,
 }
 
 impl OllamaProvider {
@@ -280,6 +316,7 @@ impl OllamaProvider {
             client: crate::http_client(),
             idle_timeout: crate::stream_idle_timeout(),
             last_prompt_eval: std::sync::atomic::AtomicU64::new(0),
+            num_ctx: None,
         }
     }
 
@@ -301,6 +338,15 @@ impl OllamaProvider {
         self.idle_timeout = idle;
         self
     }
+
+    /// Request an explicit context window (`options.num_ctx`). Set only for
+    /// `ollama-local`: a local daemon otherwise applies its own default and
+    /// silently truncates the prompt — evicting the system prompt and tool
+    /// schemas — without ever returning an error.
+    pub fn with_num_ctx(mut self, num_ctx: u32) -> Self {
+        self.num_ctx = Some(num_ctx);
+        self
+    }
 }
 
 #[async_trait]
@@ -319,7 +365,7 @@ impl Provider for OllamaProvider {
                 .post(format!("{}/api/chat", self.base_url))
                 .header("authorization", format!("Bearer {}", self.api_key))
                 .header("content-type", "application/json")
-                .json(&request_body(req))
+                .json(&request_body(req, self.num_ctx))
                 .send(),
         )
         .await
@@ -459,12 +505,16 @@ impl Provider for OllamaProvider {
         let body = resp.text().await?;
         let window = parse_ollama_context_window(&body);
         Ok(window.map(|w| crate::model::ModelInfo {
-            context_window: w,
+            // A local daemon silently truncates past its actual context window.
+            // If we requested `num_ctx`, clamp the reported window to that value
+            // so the preflight gate and the economy view reflect the real limit
+            // — not the model's theoretical max that the daemon won't honor.
+            context_window: self.num_ctx
+                .filter(|&n| (n as u64) < w)
+                .map(|n| n as u64)
+                .unwrap_or(w),
             max_output: 0,
             tools: true,
-            // Ollama's `keep_alive` holds the KV cache warm for 30m — an implicit
-            // prompt cache. The provider doesn't report cache-read tokens
-            // separately, so we approximate them via prefix overlap in `parse_line`.
             prompt_cache: true,
             thinking: crate::model::ThinkingSupport::None,
             thinking_wire: crate::model::ThinkingWireShape::None,
@@ -478,6 +528,75 @@ mod tests {
     use crate::{Message, ToolCall, ToolSpec};
     use serde_json::json;
     use std::sync::atomic::AtomicU64;
+
+    #[test]
+    fn parse_num_ctx_accepts_positive_integers() {
+        assert_eq!(parse_num_ctx(Some("32768")), 32768);
+        assert_eq!(parse_num_ctx(Some("  8192  ")), 8192);
+        assert_eq!(parse_num_ctx(Some("1")), 1);
+    }
+
+    #[test]
+    fn parse_num_ctx_falls_back_on_invalid_input() {
+        assert_eq!(parse_num_ctx(None), DEFAULT_LOCAL_NUM_CTX);
+        assert_eq!(parse_num_ctx(Some("")), DEFAULT_LOCAL_NUM_CTX);
+        assert_eq!(parse_num_ctx(Some("0")), DEFAULT_LOCAL_NUM_CTX);
+        assert_eq!(parse_num_ctx(Some("-4096")), DEFAULT_LOCAL_NUM_CTX);
+        assert_eq!(parse_num_ctx(Some("lots")), DEFAULT_LOCAL_NUM_CTX);
+        assert_eq!(parse_num_ctx(Some("32768.5")), DEFAULT_LOCAL_NUM_CTX);
+        assert_eq!(parse_num_ctx(Some("99999999999")), DEFAULT_LOCAL_NUM_CTX);
+    }
+
+    #[test]
+    fn default_local_num_ctx_clears_zoid_fixed_overhead() {
+        assert!(DEFAULT_LOCAL_NUM_CTX >= 32768);
+    }
+
+    fn ctx_req() -> CompletionRequest {
+        CompletionRequest {
+            model: "ornith:9b".into(),
+            system: Some("be terse".into()),
+            messages: vec![Message::user("hi")],
+            max_tokens: 1024,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Off,
+            reassert: None,
+        }
+    }
+
+    #[test]
+    fn local_body_carries_options_num_ctx() {
+        let body = request_body(&ctx_req(), Some(32768));
+        assert_eq!(body["options"]["num_ctx"], json!(32768));
+    }
+
+    #[test]
+    fn cloud_body_omits_options_entirely() {
+        let body = request_body(&ctx_req(), None);
+        assert!(body.get("options").is_none());
+    }
+
+    #[test]
+    fn num_ctx_does_not_disturb_other_body_fields() {
+        let with = request_body(&ctx_req(), Some(8192));
+        let without = request_body(&ctx_req(), None);
+        for key in ["model", "stream", "messages", "keep_alive", "think"] {
+            assert_eq!(with[key], without[key], "field `{key}` changed");
+        }
+    }
+
+    #[test]
+    fn new_defaults_num_ctx_to_none_for_cloud() {
+        assert_eq!(OllamaProvider::new("k".into()).num_ctx, None);
+    }
+
+    #[test]
+    fn with_num_ctx_sets_the_field() {
+        let p = OllamaProvider::new(String::new())
+            .with_base_url("http://localhost:11434")
+            .with_num_ctx(16384);
+        assert_eq!(p.num_ctx, Some(16384));
+    }
 
     /// Call `parse_line` with a fresh (zero) `last_prompt_eval`. Used by tests
     /// that don't exercise the implicit-cache approximation (the first sub-turn:
@@ -532,7 +651,7 @@ mod tests {
             thinking: crate::ThinkingMode::Off,
             reassert: None,
         };
-        let body = request_body(&req);
+        let body = request_body(&req, None);
         assert_eq!(
             body,
             json!({
@@ -566,7 +685,7 @@ mod tests {
             reassert: None,
         };
         assert_eq!(
-            request_body(&req)["messages"],
+            request_body(&req, None)["messages"],
             json!([{ "role": "user", "content": "x" }])
         );
     }
@@ -600,7 +719,7 @@ mod tests {
             thinking: crate::ThinkingMode::Off,
             reassert: None,
         };
-        let body = request_body(&req);
+        let body = request_body(&req, None);
         assert_eq!(
             body["tools"],
             json!([{
@@ -629,7 +748,7 @@ mod tests {
             thinking: crate::ThinkingMode::Off,
             reassert: None,
         };
-        assert!(request_body(&req).get("tools").is_none());
+        assert!(request_body(&req, None).get("tools").is_none());
     }
 
 
@@ -645,7 +764,7 @@ mod tests {
             thinking: crate::ThinkingMode::Auto,
             reassert: None,
         };
-        let body = request_body(&req);
+        let body = request_body(&req, None);
         assert_eq!(body["think"], json!(false), "unknown model with ThinkingSupport::None must get think=false");
     }
 
@@ -660,7 +779,7 @@ mod tests {
             thinking: crate::ThinkingMode::Off,
             reassert: None,
         };
-        let body = request_body(&req);
+        let body = request_body(&req, None);
         assert_eq!(body["think"], json!(false));
     }
 
@@ -676,7 +795,7 @@ mod tests {
             thinking: crate::ThinkingMode::Auto,
             reassert: None,
         };
-        let body = request_body(&req);
+        let body = request_body(&req, None);
         assert_eq!(body["think"], json!(false), "non-thinking model must get think=false even when ThinkingMode::Auto");
     }
 
@@ -687,7 +806,7 @@ mod tests {
             max_tokens: 16, tools: vec![], thinking: crate::ThinkingMode::Off, reassert: None,
         };
         req.reassert = Some("STANDING REMINDER".into());
-        let body = request_body(&req);
+        let body = request_body(&req, None);
         let last = body["messages"].as_array().unwrap().last().unwrap();
         assert_eq!(last["role"], "system");
         assert_eq!(last["content"], "STANDING REMINDER");
