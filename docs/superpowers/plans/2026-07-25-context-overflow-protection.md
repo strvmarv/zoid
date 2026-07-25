@@ -1,4 +1,4 @@
-# Context Overflow Protection — Implementation Plan
+# Context Overflow Protection — Implementation Plan (Revised)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,21 +8,18 @@ Two independent fixes: (1) pre-request context trimming as a safety net,
 and (2) a lower default read limit to reduce per-call output size.
 
 **Architecture:** Two tasks, independently shippable.
-- Task 1: Pre-request emergency compaction in the agent loop — if estimated
-  tokens exceed the model's context window, force-compact the largest
-  uncompacted tool results until it fits. Safety net for any tool.
+- Task 1: Add a hard-ceiling compaction pass inside `preflight_gate` — after
+  the existing soft-threshold compaction/eviction, if the estimated tokens
+  still exceed the model's context window, force-compact the largest
+  uncompacted tool results until it fits. Uses `compact_tool_output` for
+  real summary computation (not a heuristic).
 - Task 2: Lower the `read` tool's default limit from 2000 to 500 lines.
-  Prevents a single `read` of a large file from producing 5K+ tokens.
 
-**Tech Stack:** Rust (`zoid-core`, `zoid` crates). No new dependencies.
-
-**Spec:** None — this is a gap found during local model evaluation
-(`docs/superpowers/specs/2026-07-25-local-model-evaluation-design.md`).
+**Tech Stack:** Rust (`zoid-core`, `zoid`, `zoid-tools` crates). No new deps.
 
 ## Global Constraints
 
 - **No coverage reduction.** All existing tests must pass.
-- **No release/dist profile changes.**
 - `cargo nextest run --workspace --features zoid/local-embed --no-fail-fast` is the gate.
 - **No co-author trailer** in commits (repo `AGENTS.md`).
 
@@ -32,102 +29,94 @@ and (2) a lower default read limit to reduce per-call output size.
 
 | File | Responsibility | Change |
 |---|---|---|
-| `crates/zoid/src/agent.rs` | Pre-request context trimming before provider call | Modify (Task 1) |
+| `crates/zoid/src/agent.rs` | Pass model context window to `preflight_gate`; add hard-ceiling pass | Modify (Task 1) |
 | `crates/zoid-core/src/compaction.rs` | `plan_compactions_for_overflow` — force-compact largest results | Add (Task 1) |
 | `crates/zoid-tools/src/read.rs` | `DEFAULT_LIMIT` 2000 → 500 | Modify (Task 2) |
 
 ---
 
-### Task 1: Pre-request context trimming
+### Task 1: Hard-ceiling compaction pass in `preflight_gate`
 
-**Goal:** Before each provider call, estimate the request's token count. If it
-exceeds the model's context window, force-compact uncompacted tool results
-(largest first) until the estimate fits. This is a safety net — normal
-compaction between sub-turns handles the common case; this catches the case
-where a single tool result pushes context past the limit in one sub-turn.
+**Goal:** `preflight_gate` already runs compaction against a soft threshold
+(`band.high_water`). Add a final hard-ceiling check: if the estimate still
+exceeds the model's actual context window after the soft pass, force-compact
+the largest uncompacted tool results (using real `compact_tool_output` summaries)
+until it fits or no candidates remain (best effort).
 
 **Files:**
-- Modify: `crates/zoid/src/agent.rs` (the `build_request_with_thinking` caller)
 - Modify: `crates/zoid-core/src/compaction.rs` (new `plan_compactions_for_overflow`)
+- Modify: `crates/zoid/src/agent.rs` (`preflight_gate` signature + call site)
 
 - [ ] **Step 1: Write tests for `plan_compactions_for_overflow`**
 
-Add to `crates/zoid-core/src/compaction.rs` test module:
+Add to `crates/zoid-core/src/compaction.rs` test module. Use the existing
+test helpers (`ev`, `big_tool_result`, `policy`) that are already defined:
 
 ```rust
 #[test]
 fn plan_compactions_for_overflow_compacts_largest_first() {
-    // Three tool results: 100, 200, 300 tokens. Context window is 500,
-    // overhead is 100. Request is 700 tokens — must compact the 300
-    // and the 200 to fit under 500.
-    let events = vec![
-        tool_call("tc1", "shell"),
-        tool_result("tc1", &"x".repeat(300)), // ~100 tokens
-        tool_call("tc2", "shell"),
-        tool_result("tc2", &"x".repeat(600)), // ~200 tokens
-        tool_call("tc3", "read"),
-        tool_result("tc3", &"x".repeat(900)), // ~300 tokens
-    ];
-    let policy = ContextPolicy {
-        token_ceiling: Some(500),
-        auto_evict_cold: false,
-        compact_threshold: None,
-    };
+    // Three tool results: small, medium, large. Context window ceiling
+    // is set so that only the two largest must be compacted.
+    let mut log = Vec::new();
+    log.extend(ev("tc1", "shell", big_tool_result(50)));   // ~17 tokens
+    log.extend(ev("tc2", "shell", big_tool_result(300)));  // ~100 tokens
+    log.extend(ev("tc3", "read", big_tool_result(900)));   // ~300 tokens
+    // Total ~417 + overhead ~100 = ~517. Ceiling = 350.
+    // Must compact tc3 (largest) and tc2 (second). tc1 stays.
     let plan = plan_compactions_for_overflow(
-        events.iter(),
-        &policy,
-        100, // overhead tokens
-        None, // no calibration
+        log.iter(),
+        350,   // hard ceiling (tokens)
+        100,   // overhead tokens
+        &zoid_core::context::ContextOverhead::default(),
+        None,  // no calibration
     );
-    // Must compact tc3 (largest) and tc2 (second largest).
-    assert!(plan.compactions.iter().any(|c| c.id == "tc3"));
-    assert!(plan.compactions.iter().any(|c| c.id == "tc2"));
-    // tc1 should NOT be compacted (smallest, and compacting it would
-    // over-shoot).
-    assert!(!plan.compactions.iter().any(|c| c.id == "tc1"));
+    let ids: Vec<&str> = plan.compactions.iter().map(|c| c.id.as_str()).collect();
+    assert!(ids.contains(&"tc3"), "largest must be compacted: {ids:?}");
+    assert!(ids.contains(&"tc2"), "second largest must be compacted: {ids:?}");
+    assert!(!ids.contains(&"tc1"), "smallest should not be compacted: {ids:?}");
+    // Each compaction must have a real summary (not empty).
+    for c in &plan.compactions {
+        assert!(!c.summary.is_empty(), "summary must be computed");
+        assert!(c.original_tokens > 0, "original_tokens must be set");
+    }
 }
 
 #[test]
 fn plan_compactions_for_overflow_noop_when_under_ceiling() {
-    let events = vec![
-        tool_call("tc1", "shell"),
-        tool_result("tc1", "hello"),
-    ];
-    let policy = ContextPolicy {
-        token_ceiling: Some(50000),
-        auto_evict_cold: false,
-        compact_threshold: None,
-    };
+    let mut log = Vec::new();
+    log.extend(ev("tc1", "shell", "hello world"));
     let plan = plan_compactions_for_overflow(
-        events.iter(),
-        &policy,
+        log.iter(),
+        50000,  // ceiling way above
         100,
+        &zoid_core::context::ContextOverhead::default(),
         None,
     );
     assert!(plan.compactions.is_empty());
 }
 
 #[test]
-fn plan_compactions_for_overflow_compacts_all_still_over() {
-    // Even compacting everything, context is still over the ceiling.
-    // The function should compact ALL uncompacted tool results (best effort).
-    let events = vec![
-        tool_call("tc1", "shell"),
-        tool_result("tc1", &"x".repeat(60000)), // ~20000 tokens
-    ];
-    let policy = ContextPolicy {
-        token_ceiling: Some(100),
-        auto_evict_cold: false,
-        compact_threshold: None,
-    };
+fn plan_compactions_for_overflow_skips_already_compacted() {
+    let mut log = Vec::new();
+    log.extend(ev("tc1", "shell", big_tool_result(900)));
+    // Mark tc1 as already compacted by adding a ToolResultCompacted event.
+    log.push(zoid_core::event::Event::new(
+        ulid::Ulid::new(), None, 200,
+        zoid_core::event::EventKind::ToolResultCompacted {
+            id: "tc1".into(),
+            summary: "already compacted".into(),
+            original_tokens: 300,
+        },
+    ));
     let plan = plan_compactions_for_overflow(
-        events.iter(),
-        &policy,
-        100,
+        log.iter(),
+        100,   // very low ceiling — would normally compact
+        50,
+        &zoid_core::context::ContextOverhead::default(),
         None,
     );
-    // Must compact tc1 even though it alone won't fit — best effort.
-    assert!(plan.compactions.iter().any(|c| c.id == "tc1"));
+    // tc1 is already compacted — no candidates remain.
+    assert!(plan.compactions.is_empty(), "already-compacted should be skipped");
 }
 ```
 
@@ -136,77 +125,149 @@ Expected: FAIL (function doesn't exist).
 
 - [ ] **Step 2: Implement `plan_compactions_for_overflow`**
 
-Add to `crates/zoid-core/src/compaction.rs`:
+Add to `crates/zoid-core/src/compaction.rs`. This function mirrors the
+existing `plan_compactions` loop (lines 154-210) but uses a hard ceiling
+instead of a soft threshold, and always uses `compact_tool_output` for
+real summary computation:
 
 ```rust
 /// Like `plan_compactions`, but driven by a hard ceiling (the model's
-/// context window) rather than a soft threshold. Compacts the LARGEST
-/// uncompacted tool results first until the estimated total fits under
-/// `token_ceiling + overhead`. Best effort: if even compacting everything
-/// doesn't fit, returns all available compactions (the provider will still
-/// reject, but at least we tried).
+/// actual context window) rather than a soft threshold. Compacts the
+/// LARGEST uncompacted tool results first, using real `compact_tool_output`
+/// summaries, until the estimated total fits under `ceiling + overhead`.
+/// Best effort: if even compacting everything doesn't fit, returns all
+/// available compactions. Does NOT skip items based on the no-gain guard —
+/// when the context is over the hard ceiling, even a small reduction helps
+/// (the alternative is a provider 400 error).
 pub fn plan_compactions_for_overflow<'a>(
     events: impl IntoIterator<Item = &'a Event>,
-    policy: &ContextPolicy,
+    ceiling: u64,
     overhead_tokens: u64,
+    overhead: &crate::context::ContextOverhead,
     calibration_ratio: Option<f64>,
 ) -> CompactionPlan {
-    let window = crate::context::context_window(events);
-    let total = window.total_tokens + overhead_tokens;
-    let ceiling = policy.token_ceiling.unwrap_or(u64::MAX);
+    let window = crate::context::context_window_with(events, overhead.clone());
+    let total = if let Some(r) = calibration_ratio {
+        if r > 0.0 {
+            (window.total_tokens as f64 * r) as u64
+        } else {
+            window.total_tokens
+        }
+    } else {
+        window.total_tokens
+    } + overhead_tokens;
     if total <= ceiling {
         return CompactionPlan::default();
     }
-    // Collect uncompacted tool results, sorted by token size (largest first).
-    let mut candidates: Vec<(String, u64)> = Vec::new();
-    for item in &window.items {
-        if let crate::context::ItemKind::ToolResult { id, .. } = &item.kind {
-            if !item.compacted {
-                candidates.push((id.clone(), item.tokens));
+
+    // Build the same lookup tables as plan_compactions: tool-call-id → output,
+    // already-compacted set, path → output for File items.
+    let visible: Vec<&Event> = events.into_iter().collect();
+    let mut output_of: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    let mut done: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for e in &visible {
+        match &e.kind {
+            EventKind::ToolResult { id, output, .. } => {
+                output_of.insert(id.as_str(), output.as_str());
             }
+            EventKind::ToolResultCompacted { id, .. } => {
+                done.insert(id.clone());
+            }
+            _ => {}
         }
     }
-    candidates.sort_by(|a, b| b.1.cmp(&a.1));
-    // Compact largest-first until we fit (or run out).
-    let mut savings = 0u64;
-    let mut compactions = Vec::new();
-    let deficit = total.saturating_sub(ceiling);
-    for (id, tokens) in &candidates {
-        if savings >= deficit {
+
+    // window.items is sorted tokens-desc, so iterating is largest-first.
+    let mut running = total;
+    let mut out: Vec<Compaction> = Vec::new();
+    for it in &window.items {
+        if running <= ceiling {
             break;
         }
-        // Compacting replaces the full output with 8 head lines + marker.
-        // Estimate the savings as ~90% of the original tokens.
-        let saved = tokens.saturating_mul(90) / 100;
-        savings += saved;
-        compactions.push(Compaction {
-            id: id.clone(),
-            original_tokens: *tokens,
-            summary_tokens: tokens - saved,
+        if (it.kind != ItemKind::ToolResult && it.kind != ItemKind::File) || it.pinned {
+            continue;
+        }
+        let Some(id) = tool_id_of(&it.key) else {
+            continue;
+        };
+        if done.contains(id) {
+            continue; // already compacted
+        }
+        let Some(output) = output_of.get(id) else {
+            continue;
+        };
+        let summary = compact_tool_output(output, COMPACT_HEAD_LINES);
+        let summary_tokens = estimate_tokens(&summary);
+        // Even when summary_tokens >= it.tokens (no gain), compact when over
+        // the hard ceiling — the summary replaces the output in the projection,
+        // and a small reduction is better than a provider 400.
+        running = running.saturating_sub(it.tokens.saturating_sub(summary_tokens));
+        out.push(Compaction {
+            id: id.to_string(),
+            summary,
+            original_tokens: it.tokens,
         });
     }
-    CompactionPlan { compactions }
+    CompactionPlan { compactions: out }
 }
 ```
 
 Run: `cargo test -p zoid-core --lib compaction::tests::plan_compactions_for_overflow`
 Expected: PASS.
 
-- [ ] **Step 3: Wire into the agent loop**
+- [ ] **Step 3: Wire into `preflight_gate`**
 
-In `crates/zoid/src/agent.rs`, before the `provider.stream()` call, add a
-check: estimate the request's tokens, and if it exceeds the model's context
-window, force-compact via `plan_compactions_for_overflow`.
+In `crates/zoid/src/agent.rs`:
 
-The key location is after `build_request_with_thinking` returns and before
-`provider.stream(req)` is called. The agent loop should:
-1. Compute `context_window_with(events, overhead)` to get `total_tokens`.
-2. If `total_tokens > model_context_window`, call `plan_compactions_for_overflow`.
-3. If the plan has compactions, emit `ToolResultCompacted` events.
-4. Rebuild the request (the compacted events are now in the log).
+1. Add `model_context_window: u64` parameter to `preflight_gate` (line 2766).
+2. At the call site (line 789), pass the model's context window from
+   `zoid_provider::model::model_info(&model).context_window`.
+3. At the END of `preflight_gate` (after the existing compaction + eviction
+   passes), add the hard-ceiling check:
 
-This reuses the existing `record_compactions` machinery — the only difference
-is the trigger (hard ceiling vs. soft threshold).
+```rust
+    // Hard-ceiling safety net: if the estimate still exceeds the model's
+    // actual context window, force-compact the largest uncompacted tool
+    // results. This catches the case where a single tool result (e.g.
+    // reading a 10K-line file) pushes context past the limit in one sub-turn,
+    // bypassing the soft-threshold compaction above.
+    est = estimate(events);
+    if est > model_context_window && model_context_window > 0 {
+        let plan = zoid_core::compaction::plan_compactions_for_overflow(
+            events.iter(),
+            model_context_window,
+            overhead.system_tokens,
+            overhead,
+            *calibration_ratio,
+        );
+        let compacted = !plan.compactions.is_empty();
+        if compacted {
+            let _ = ui.send(AgentUpdate::CompactionStarted).await;
+        }
+        for c in &plan.compactions {
+            emit(
+                session,
+                events,
+                ui,
+                &config.branch,
+                EventKind::ToolResultCompacted {
+                    id: c.id.clone(),
+                    summary: c.summary.clone(),
+                    original_tokens: c.original_tokens,
+                },
+                session_id,
+                now,
+            )
+            .await?;
+        }
+        if compacted {
+            let _ = ui.send(AgentUpdate::CompactionComplete).await;
+        }
+    }
+```
+
+This reuses the same emit pattern as the existing compaction pass (lines 2816-2833).
+The `estimate` closure (line 2782) already accounts for calibration + overhead.
 
 - [ ] **Step 4: Run the gate**
 
@@ -218,14 +279,17 @@ cargo nextest run --workspace --features zoid/local-embed --no-fail-fast
 
 ```bash
 git add crates/zoid/src/agent.rs crates/zoid-core/src/compaction.rs
-git commit -m "fix(agent): pre-request context trimming for small-context models
+git commit -m "fix(agent): hard-ceiling compaction pass in preflight_gate
 
-When a single turn accumulates more tool output than the model's context
-window (e.g. reading several large files), the provider rejects the
-request with a 400/404. A new plan_compactions_for_overflow force-compacts
-the largest uncompacted tool results (best effort) before the provider
-call, so the request fits. Normal compaction between sub-turns still
-handles the common case; this is the safety net."
+When a single turn accumulates more tool output than the model's
+context window (e.g. reading several large files), the provider rejects
+the request with a 400. The existing soft-threshold compaction may not
+fire in time if a single tool result jumps the context past both the
+threshold and the ceiling. A new plan_compactions_for_overflow force-
+compacts the largest uncompacted tool results (using real
+compact_tool_output summaries) after the soft pass, so the request
+fits. Best effort — if even compacting everything doesn't fit, the
+provider will still reject, but at least we tried."
 ```
 
 ---
@@ -242,25 +306,26 @@ then targeted reads for specific sections.
 
 - [ ] **Step 1: Change the default**
 
-```rust
-const DEFAULT_LIMIT: usize = 500; // was 2000 — caps per-read context cost
-```
+In `crates/zoid-tools/src/read.rs`:
 
-Update the spec description at line 22:
+Line 29: `const DEFAULT_LIMIT: usize = 500;` (was 2000)
+
+Line 22 (spec description):
 ```rust
 "limit":  { "type": "integer", "description": "Max lines to return (default 500)." }
 ```
 
 - [ ] **Step 2: Fix the test that asserts the old default**
 
-The `over_cap_appends_truncation_notice` test uses 2100 lines expecting
-2000 to be returned. With `DEFAULT_LIMIT = 500`, it needs 600 lines:
+The `over_cap_appends_truncation_notice` test (line 184) uses 2100 lines
+expecting 2000 to be returned. With `DEFAULT_LIMIT = 500`, it needs 600
+lines and a different offset assertion:
 
 ```rust
 let body: String = (1..=600).map(|n| format!("line{n}\n")).collect();
 ```
 
-And the assertion changes from `offset=2001` to `offset=501`:
+And change the offset assertion from `offset=2001` to `offset=501`:
 ```rust
 assert!(out.text.contains("offset=501"));
 ```
@@ -287,23 +352,15 @@ for the rest. The 256KB byte cap remains as the hard ceiling."
 
 ## Self-Review
 
-**Two independent fixes:**
-1. Pre-request trimming (safety net for any tool) — Task 1
-2. Lower read limit (reduces per-call output) — Task 2
+**Gilfoyle review issues resolved:**
+- C1 (Compaction struct fields): Fixed — uses `id`, `summary`, `original_tokens` matching the actual struct.
+- C2 (ItemKind::ToolResult is unit variant): Fixed — uses `tool_id_of(&it.key)` like the existing `plan_compactions`.
+- C3 (test helpers don't exist): Fixed — reuses the existing `ev` and `big_tool_result` helpers already in the test module.
+- C4 (token_ceiling is None for main chat): Fixed — the ceiling comes from `model_info(&model).context_window` passed as a parameter, not from `policy.token_ceiling`.
+- H1 (Step 3 is prose-only): Fixed — Step 3 now has a concrete code block for the hard-ceiling pass.
+- H2 (should fold into preflight_gate): Fixed — the hard-ceiling check goes at the end of `preflight_gate`, reusing the same emit pattern.
+- M1 (calibration_ratio is dead): Fixed — wired into the total estimate using the same pattern as the `estimate` closure.
+- M2 (overhead model inconsistent): Fixed — uses `ContextOverhead` type and `context_window_with`, matching the existing code.
+- L1 (90% savings heuristic): Fixed — uses real `compact_tool_output` for summary computation, like the existing `plan_compactions`.
 
-**Productivity validation (option 2 concern):**
-- 500 lines × ~50 chars/line = ~25KB ≈ ~2.5K tokens per read
-- A 10K-line file takes 20 reads to fully page through — but in practice
-  the model reads the first 500 (structure), then `grep`/`offset` for
-  specifics. Capable models already work this way.
-- The 256KB byte cap remains, so reads of files with very long lines are
-  still capped at the byte level.
-
-**Risk:**
-- Task 1 is additive — a new safety net. If `plan_compactions_for_overflow`
-  has a bug, it could over-compact, but the existing compaction tests guard
-  the core. The new function is only called when context is already over
-  the ceiling (a state that would fail anyway).
-- Task 2 is a constant change. The only risk is productivity regression for
-  models that relied on 2000-line reads. Watch for increased tool-call
-  counts in real sessions.
+**Task 2 is unchanged** (gilfoyle approved it as-is).
