@@ -2523,14 +2523,13 @@ where
         } else {
             None
         };
-        // TPS from the last turn's output tokens and the obs stream duration.
-        let stream_ms = obs_state
+        // TPS: rolling average of per-turn TPS values (session widget).
+        // Per-turn TPS is recorded at `TurnComplete`; the frame tick just reads
+        // the rolling average, not the hybrid last-tokens / avg-duration formula.
+        app.shell.tps = obs_state
             .lock()
             .ok()
-            .map(|s| s.provider_total.avg())
-            .unwrap_or(0);
-        app.shell.tps = (app.proj.last_output_tokens.unwrap_or(0) * 1000)
-            .checked_div(stream_ms)
+            .map(|s| s.provider_tps.avg())
             .unwrap_or(0);
         app.shell.input_rows = app.textarea.lines().len().max(1) as u16;
         // Empty-buffer flag for routing: a leading `:` in an empty box opens the
@@ -2991,6 +2990,30 @@ where
                         app.turn_hard = None;
                         // Clear any lingering "cancelling…" hint now the turn ended.
                         app.shell.status_hint = None;
+                        // Record per-turn TPS for the rolling average
+                        // (session widget). Both values are available now:
+                        // the turn is done, the Usage event is in the log,
+                        // and provider_total.last() is this turn's stream ms.
+                        {
+                            let stream_ms = obs_state
+                                .lock()
+                                .ok()
+                                .map(|s| s.provider_total.last())
+                                .unwrap_or(0);
+                            if stream_ms > 0 {
+                                let output_tokens = app
+                                    .proj
+                                    .last_output_tokens
+                                    .unwrap_or(0);
+                                if let Ok(mut s) = obs_state.lock() {
+                                    let tps = output_tokens
+                                        .checked_mul(1000)
+                                        .and_then(|t| t.checked_div(stream_ms))
+                                        .unwrap_or(0);
+                                    s.provider_tps.record(tps);
+                                }
+                            }
+                        }
                         // Consume a queued message if the agent is now fully idle.
                         if app.in_flight_subagents.is_empty() {
                             let mut spawned = false;

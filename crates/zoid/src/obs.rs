@@ -37,6 +37,10 @@ pub struct ObsState {
     pub iterations: RollingStats,
     pub provider_ttft: RollingStats,
     pub provider_total: RollingStats,
+    /// Per-turn TPS rolling average (session widget). Recorded at `TurnComplete`
+    /// from `output_tokens * 1000 / provider_total.last()`. Display reads
+    /// `provider_tps.avg()` (not the hybrid last-tokens / avg-duration formula).
+    pub provider_tps: RollingStats,
     pub frame: RollingStats,
     pub tools: std::collections::BTreeMap<String, ToolStat>,
     pub cache_hits: u64,
@@ -398,6 +402,35 @@ mod tests {
         assert_eq!(r.last(), 199);
         // avg is over the last 64 samples (136..=199), mean = 167.
         assert_eq!(r.avg(), 167);
+    }
+
+    #[test]
+    fn provider_tps_default_is_zero() {
+        let s = ObsState::default();
+        assert_eq!(s.provider_tps.avg(), 0, "empty window → avg 0");
+    }
+
+    #[test]
+    fn provider_tps_records_and_averages() {
+        let mut s = ObsState::default();
+        s.provider_tps.record(100);
+        s.provider_tps.record(200);
+        s.provider_tps.record(300);
+        assert_eq!(s.provider_tps.avg(), 200, "(100+200+300)/3 = 200");
+    }
+
+    #[test]
+    fn provider_tps_rolling_eviction() {
+        let mut s = ObsState::default();
+        // Fill the window with 100s.
+        for _ in 0..ROLL_CAP {
+            s.provider_tps.record(100);
+        }
+        // Push one more — the oldest 100 is evicted.
+        s.provider_tps.record(200);
+        // Window is now {100 × 63, 200 × 1} → avg = (63*100 + 200) / 64
+        let expected = (63 * 100 + 200) / ROLL_CAP as u64;
+        assert_eq!(s.provider_tps.avg(), expected, "oldest sample evicted");
     }
 
     #[test]
