@@ -1561,15 +1561,10 @@ async fn run_turn_inner(
                         .get("worktree")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
-                    let mut resolved_agent_name = String::new();
                     // Resolve the agent profile by name (default "delegate").
-                    let profile = match &config.agents {
+                    let (profile, resolved_agent_name) = match &config.agents {
                         Some(reg) => match resolve_agent_for_dispatch(&tc.args, reg.clone()) {
-                            Ok((p, name)) => {
-                                // Stash the resolved agent name for SubagentStarted.
-                                resolved_agent_name = name;
-                                p
-                            }
+                            Ok((p, name)) => (p, name),
                             Err(msg) => {
                                 emit(
                                     &session,
@@ -1590,10 +1585,10 @@ async fn run_turn_inner(
                             }
                         },
                         // No registry available (subagent turn) → fall back to builtin.
-                        None => {
-                            resolved_agent_name = "delegate".to_string();
-                            zoid_core::agent_profile::AgentProfile::builtin()
-                        }
+                        None => (
+                            zoid_core::agent_profile::AgentProfile::builtin(),
+                            "delegate".to_string(),
+                        ),
                     };
                     let sub_ulid = Ulid::new();
                     let sub_id = format!("sub-{sub_ulid}");
