@@ -786,6 +786,7 @@ async fn run_turn_inner(
         }
 
         // PRE-FLIGHT GATE (spec §3.8): shrink to fit BEFORE building the request.
+        let model_ctx = zoid_provider::model::model_info(&model).context_window;
         preflight_gate(
             &session,
             &mut events,
@@ -795,6 +796,7 @@ async fn run_turn_inner(
             now,
             &*calibration_ratio,
             &overhead_now,
+            model_ctx,
         )
         .await?;
         let req = build_request_with_thinking(
@@ -2772,6 +2774,7 @@ async fn preflight_gate(
     now: fn() -> i64,
     calibration_ratio: &Option<f64>,
     overhead: &zoid_core::context::ContextOverhead,
+    model_context_window: u64,
 ) -> Result<()> {
     let policy = &config.eviction;
     if !policy.enabled {
@@ -2920,6 +2923,45 @@ async fn preflight_gate(
         );
         emit_eviction(session, events, ui, config, session_id, now, plan).await?;
     }
+
+    // Hard-ceiling safety net: if the estimate still exceeds the model's
+    // actual context window, force-compact the largest uncompacted tool
+    // results. This catches the case where a single tool result (e.g.
+    // reading a 10K-line file) pushes context past the limit in one sub-turn,
+    // bypassing the soft-threshold compaction above.
+    est = estimate(events);
+    if est > model_context_window && model_context_window > 0 {
+        let plan = zoid_core::compaction::plan_compactions_for_overflow(
+            events.iter(),
+            model_context_window,
+            overhead,
+            *calibration_ratio,
+        );
+        let compacted = !plan.compactions.is_empty();
+        if compacted {
+            let _ = ui.send(AgentUpdate::CompactionStarted).await;
+        }
+        for c in &plan.compactions {
+            emit(
+                session,
+                events,
+                ui,
+                &config.branch,
+                EventKind::ToolResultCompacted {
+                    id: c.id.clone(),
+                    summary: c.summary.clone(),
+                    original_tokens: c.original_tokens,
+                },
+                session_id,
+                now,
+            )
+            .await?;
+        }
+        if compacted {
+            let _ = ui.send(AgentUpdate::CompactionComplete).await;
+        }
+    }
+
     Ok(())
 }
 

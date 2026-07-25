@@ -247,6 +247,118 @@ pub fn compact_tool_output(output: &str, head_lines: usize) -> String {
     }
 }
 
+/// Like `plan_compactions`, but driven by a hard ceiling (the model's
+/// actual context window) rather than a soft threshold. Compacts the
+/// LARGEST uncompacted tool results first, using real `compact_tool_output`
+/// summaries, until the estimated total fits under `ceiling`. Best effort:
+/// if even compacting everything doesn't fit, returns all available
+/// compactions. Does NOT skip items based on the no-gain guard — when the
+/// context is over the hard ceiling, even a small reduction helps (the
+/// alternative is a provider 400 error).
+pub fn plan_compactions_for_overflow<'a>(
+    events: impl IntoIterator<Item = &'a Event>,
+    ceiling: u64,
+    overhead: &ContextOverhead,
+    calibration_ratio: Option<f64>,
+) -> CompactionPlan {
+    // Collect once — we need multiple passes (window + lookup tables).
+    let events: Vec<&Event> = events.into_iter().collect();
+    let visible: &[&Event] = &events;
+    let window = context_window_with(events.iter().copied(), overhead.clone());
+
+    let current = match calibration_ratio {
+        Some(ratio) if ratio > 0.0 => (window.total_tokens as f64 * ratio) as u64,
+        _ => window.total_tokens,
+    };
+    if current <= ceiling {
+        return CompactionPlan::default();
+    }
+
+    // Already-compacted tool-result ids.
+    let done: HashSet<&str> = visible
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::ToolResultCompacted { id, .. } => Some(id.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    // Latest non-error output per tool-result id.
+    let mut output_of: HashMap<&str, &str> = HashMap::new();
+    for e in visible {
+        if let EventKind::ToolResult { id, output, is_error, .. } = &e.kind {
+            if !*is_error {
+                output_of.insert(id.as_str(), output.as_str());
+            }
+        }
+    }
+
+    // Map file paths → tool-result id and file paths → output (for File items
+    // whose key is "file:{path}", not "tool:{name}:{id}").
+    let mut path_id_of: HashMap<String, String> = HashMap::new();
+    let mut path_output_of: HashMap<String, &str> = HashMap::new();
+    {
+        let mut call_path: HashMap<String, String> = HashMap::new();
+        for e in visible {
+            match &e.kind {
+                EventKind::ToolCall { id, args, .. } => {
+                    if let Some(p) = tool_path(args) {
+                        call_path.insert(id.clone(), p);
+                    }
+                }
+                EventKind::ToolResult { id, output, .. } => {
+                    if let Some(p) = call_path.get(id) {
+                        path_id_of.insert(p.clone(), id.clone());
+                        path_output_of.insert(p.clone(), output.as_str());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // window.items is sorted tokens-desc, so iterating is largest-first.
+    let mut running = current;
+    let mut out: Vec<Compaction> = Vec::new();
+    for it in &window.items {
+        if running <= ceiling {
+            break;
+        }
+        if (it.kind != ItemKind::ToolResult && it.kind != ItemKind::File) || it.pinned {
+            continue;
+        }
+        let Some(id) = tool_id_of(&it.key) else {
+            continue;
+        };
+        // For File items, look up the tool call id via path_id_of.
+        let (tool_call_id, output) = if it.kind == ItemKind::File {
+            match path_id_of.get(id).map(|s| s.as_str()) {
+                Some(tid) => (tid, path_output_of.get(id).copied()),
+                None => continue,
+            }
+        } else {
+            (id, output_of.get(id).copied())
+        };
+        if done.contains(tool_call_id) {
+            continue; // already compacted
+        }
+        let Some(output) = output else {
+            continue;
+        };
+        let summary = compact_tool_output(output, COMPACT_HEAD_LINES);
+        let summary_tokens = estimate_tokens(&summary);
+        // Even when summary_tokens >= it.tokens (no gain), compact when over
+        // the hard ceiling — a small reduction is better than a provider 400.
+        running = running.saturating_sub(it.tokens.saturating_sub(summary_tokens));
+        out.push(Compaction {
+            id: tool_call_id.to_string(),
+            summary,
+            original_tokens: it.tokens,
+        });
+    }
+    CompactionPlan { compactions: out }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -649,5 +761,72 @@ mod tests {
             ids.dedup();
             prop_assert_eq!(ids.len(), n, "planned ids must be unique");
         }
+    }
+
+    #[test]
+    fn plan_compactions_for_overflow_compacts_largest_first() {
+        // Three tool results: tc1 small, tc2 medium, tc3 large.
+        // big_tool_result(n) ≈ n * 5.3 tokens. Compaction saves ~95%.
+        // tc1=10→53t, tc2=60→318t, tc3=200→1060t. Total ≈1431t.
+        // After compacting tc3: savings ~1020t → running ~411t.
+        // Ceiling = 350 → still over, must compact tc2 too.
+        // After compacting tc2: savings ~300t → running ~111t. Under 350.
+        let log = vec![
+            ev(EventKind::ToolCall { id: "tc1".into(), name: "shell".into(), args: "{}".into() }),
+            big_tool_result("tc1", "shell", 10),
+            ev(EventKind::ToolCall { id: "tc2".into(), name: "shell".into(), args: "{}".into() }),
+            big_tool_result("tc2", "shell", 60),
+            ev(EventKind::ToolCall { id: "tc3".into(), name: "read".into(), args: "{}".into() }),
+            big_tool_result("tc3", "read", 200),
+        ];
+        let plan = plan_compactions_for_overflow(
+            log.iter(),
+            350,  // low enough that both tc3 and tc2 must be compacted
+            &ContextOverhead::default(),
+            None,
+        );
+        let ids: Vec<&str> = plan.compactions.iter().map(|c| c.id.as_str()).collect();
+        assert!(ids.contains(&"tc3"), "largest must be compacted: {ids:?}");
+        assert!(ids.contains(&"tc2"), "second largest must be compacted: {ids:?}");
+        assert!(!ids.contains(&"tc1"), "smallest should not be compacted: {ids:?}");
+        for c in &plan.compactions {
+            assert!(!c.summary.is_empty(), "summary must be computed");
+            assert!(c.original_tokens > 0, "original_tokens must be set");
+        }
+    }
+
+    #[test]
+    fn plan_compactions_for_overflow_noop_when_under_ceiling() {
+        let log = vec![
+            ev(EventKind::ToolCall { id: "tc1".into(), name: "shell".into(), args: "{}".into() }),
+            big_tool_result("tc1", "shell", 5),
+        ];
+        let plan = plan_compactions_for_overflow(
+            log.iter(),
+            50000,
+            &ContextOverhead::default(),
+            None,
+        );
+        assert!(plan.compactions.is_empty());
+    }
+
+    #[test]
+    fn plan_compactions_for_overflow_skips_already_compacted() {
+        let log = vec![
+            ev(EventKind::ToolCall { id: "tc1".into(), name: "read".into(), args: "{}".into() }),
+            big_tool_result("tc1", "read", 200),
+            ev(EventKind::ToolResultCompacted {
+                id: "tc1".into(),
+                summary: "already compacted".into(),
+                original_tokens: 1060,
+            }),
+        ];
+        let plan = plan_compactions_for_overflow(
+            log.iter(),
+            100,
+            &ContextOverhead::default(),
+            None,
+        );
+        assert!(plan.compactions.is_empty(), "already-compacted should be skipped");
     }
 }
