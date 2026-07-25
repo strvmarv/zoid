@@ -325,6 +325,7 @@ pub enum DrawerId {
 pub struct SubagentRow {
     pub id: String,
     pub task: String,
+    pub agent: String,
 }
 
 /// Ephemeral, UI-only diff cap for the in-memory edit/write snippet cache.

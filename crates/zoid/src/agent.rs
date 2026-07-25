@@ -109,6 +109,8 @@ pub struct SubagentHandle {
     /// The task description passed to `dispatch_subagent`. Used by
     /// `list_subagents` to show what each running subagent is doing.
     pub task: String,
+    /// The agent profile name used for this subagent (e.g. "delegate").
+    pub agent: String,
 }
 
 /// Fire the `hard` token (and record `Killed`, first-writer-wins) for one
@@ -353,7 +355,7 @@ pub enum AgentUpdate {
     },
     /// A subagent was dispatched (via the dispatch_subagent tool). The UI tracks
     /// it as in-flight until its DelegationResult arrives.
-    SubagentStarted { id: String, task: String },
+    SubagentStarted { id: String, task: String, agent: String },
     /// An ephemeral, UI-only diff for an edit/write tool call. Carries the
     /// computed `FileDiff` to the TUI's in-memory cache; never persisted and
     /// never sent to the model. Keyed by tool-call id.
@@ -1559,10 +1561,15 @@ async fn run_turn_inner(
                         .get("worktree")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
+                    let mut resolved_agent_name = String::new();
                     // Resolve the agent profile by name (default "delegate").
                     let profile = match &config.agents {
                         Some(reg) => match resolve_agent_for_dispatch(&tc.args, reg.clone()) {
-                            Ok((p, _name)) => p,
+                            Ok((p, name)) => {
+                                // Stash the resolved agent name for SubagentStarted.
+                                resolved_agent_name = name;
+                                p
+                            }
                             Err(msg) => {
                                 emit(
                                     &session,
@@ -1583,7 +1590,10 @@ async fn run_turn_inner(
                             }
                         },
                         // No registry available (subagent turn) → fall back to builtin.
-                        None => zoid_core::agent_profile::AgentProfile::builtin(),
+                        None => {
+                            resolved_agent_name = "delegate".to_string();
+                            zoid_core::agent_profile::AgentProfile::builtin()
+                        }
                     };
                     let sub_ulid = Ulid::new();
                     let sub_id = format!("sub-{sub_ulid}");
@@ -1593,6 +1603,7 @@ async fn run_turn_inner(
                         .send(AgentUpdate::SubagentStarted {
                             id: sub_id.clone(),
                             task: task.clone(),
+                            agent: resolved_agent_name.clone(),
                         })
                         .await;
 
@@ -1638,6 +1649,7 @@ async fn run_turn_inner(
                                 progress: sub_progress.clone(),
                                 abort_reason: sub_abort_reason.clone(),
                                 task: task.clone(),
+                                agent: resolved_agent_name.clone(),
                             },
                         );
                     }
@@ -1951,7 +1963,8 @@ async fn run_turn_inner(
                         } else {
                             let mut lines = format!("Running subagents ({}):\n", map.len());
                             for (id, handle) in map.iter() {
-                                lines.push_str(&format!("- {id}: {}\n", handle.task));
+                                let agent = if handle.agent.is_empty() { "delegate" } else { &handle.agent };
+                                lines.push_str(&format!("- {id} [{agent}]: {}\n", handle.task));
                             }
                             lines.trim_end().to_string()
                         }
@@ -4793,8 +4806,8 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move {
             while let Some(upd) = rx.recv().await {
-                if let AgentUpdate::SubagentStarted { id, task } = upd {
-                    started_cap.lock().unwrap().push((id, task));
+                if let AgentUpdate::SubagentStarted { id, task, agent } = upd {
+                    started_cap.lock().unwrap().push((id, task, agent));
                 }
             }
         });
@@ -5293,6 +5306,7 @@ mod guardrail_types_tests {
             progress: Arc::new(AtomicI64::new(0)),
             abort_reason: Arc::new(Mutex::new(None)),
             task: String::new(),
+            agent: String::new(),
         };
         let h2 = h.clone();
         h.hard.cancel();
@@ -5310,6 +5324,7 @@ mod guardrail_types_tests {
             progress: Arc::new(AtomicI64::new(0)),
             abort_reason: Arc::new(Mutex::new(None)),
             task: String::new(),
+            agent: String::new(),
         };
         let a = mk();
         let b = mk();
@@ -5341,6 +5356,7 @@ mod guardrail_types_tests {
             progress: Arc::new(AtomicI64::new(0)),
             abort_reason: Arc::new(Mutex::new(Some(super::AbortReason::IdleTimeout))),
             task: String::new(),
+            agent: String::new(),
         };
         let mut map = HashMap::new();
         map.insert("sub-a".to_string(), h.clone());
@@ -5367,6 +5383,7 @@ mod guardrail_types_tests {
             progress: Arc::new(AtomicI64::new(0)),
             abort_reason: Arc::new(Mutex::new(None)),
             task: "implement the resolver".into(),
+            agent: "delegate".into(),
         });
         map.insert("sub-002".into(), SubagentHandle {
             cancel: CancellationToken::new(),
@@ -5374,18 +5391,20 @@ mod guardrail_types_tests {
             progress: Arc::new(AtomicI64::new(0)),
             abort_reason: Arc::new(Mutex::new(None)),
             task: "review the spec".into(),
+            agent: "reviewer".into(),
         });
 
         // Format the output the same way the agent loop arm does.
         let mut lines = format!("Running subagents ({}):\n", map.len());
         for (id, handle) in map.iter() {
-            lines.push_str(&format!("- {id}: {}\n", handle.task));
+            let agent = if handle.agent.is_empty() { "delegate" } else { &handle.agent };
+            lines.push_str(&format!("- {id} [{agent}]: {}\n", handle.task));
         }
         let output = lines.trim_end().to_string();
 
         assert!(output.contains("Running subagents (2)"));
-        assert!(output.contains("sub-001: implement the resolver"));
-        assert!(output.contains("sub-002: review the spec"));
+        assert!(output.contains("sub-001 [delegate]: implement the resolver"));
+        assert!(output.contains("sub-002 [reviewer]: review the spec"));
 
         // Empty map → "No subagents currently running."
         let empty: HashMap<String, SubagentHandle> = HashMap::new();

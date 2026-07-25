@@ -882,10 +882,17 @@ fn render_subagents_body(frame: &mut Frame, area: Rect, rows: &[crate::state::Su
         .iter()
         .take(area.height as usize)
         .map(|r| {
-            let id = truncate(&r.id, (area.width as usize).saturating_sub(2));
+            // Format: "● sub-01… · agent · truncated task"
+            let id_w = 10.min(r.id.len());
+            let id = &r.id[..id_w];
+            let agent = if r.agent.is_empty() { "delegate" } else { &r.agent };
+            let remaining = (area.width as usize).saturating_sub(id_w + agent.len() + 5);
+            let task = truncate(&r.task, remaining);
             Line::from(vec![
                 Span::styled(format!("{} ", glyph::RUNNING), Style::new().fg(color::WARN)),
-                Span::styled(id, Style::new().fg(color::TXT)),
+                Span::styled(format!("{id} "), Style::new().fg(color::TXT)),
+                Span::styled(format!("· {agent} "), Style::new().fg(color::BRANCH)),
+                Span::styled(task, Style::new().fg(color::DIM)),
             ])
         })
         .collect();

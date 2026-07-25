@@ -1596,6 +1596,7 @@ impl BodyCache {
 struct SubagentInfo {
     id: String,
     task: String,
+    agent: String,
 }
 
 /// The active worktree session: tracks the worktree's path and branch name.
@@ -3229,9 +3230,9 @@ where
                             app.shell.cache_supported = info.prompt_cache;
                         }
                     }
-                    AgentUpdate::SubagentStarted { id, task } => {
-                        app.in_flight_subagents.push(SubagentInfo { id: id.clone(), task: task.clone() });
-                        app.shell.subagent_rows.push(zoid_tui::state::SubagentRow { id, task });
+                    AgentUpdate::SubagentStarted { id, task, agent } => {
+                        app.in_flight_subagents.push(SubagentInfo { id: id.clone(), task: task.clone(), agent: agent.clone() });
+                        app.shell.subagent_rows.push(zoid_tui::state::SubagentRow { id, task, agent });
                         // Subagent status belongs in the right-rail Subagents
                         // drawer, NOT the bottom status bar. Do NOT set
                         // status_hint here — it would render on the bottom bar
@@ -6787,6 +6788,7 @@ mod tests {
             progress: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
             abort_reason: std::sync::Arc::new(std::sync::Mutex::new(None)),
             task: String::new(),
+            agent: String::new(),
         };
         let mut map = HashMap::new();
         map.insert("sub-x".to_string(), sub.clone());
@@ -8051,6 +8053,7 @@ mod tests {
         app.in_flight_subagents.push(SubagentInfo {
             id: "sub-test".into(),
             task: "test".into(),
+            agent: "delegate".into(),
         });
         app.textarea = make_input(TextArea::from(vec!["hello".to_string()]));
 
@@ -8140,6 +8143,7 @@ mod tests {
         app.in_flight_subagents.push(SubagentInfo {
             id: "sub-still-running".into(),
             task: "t".into(),
+            agent: "delegate".into(),
         });
 
         let spawn = plan_delegation_wake(&mut app);
@@ -8426,6 +8430,7 @@ mod tests {
         app.in_flight_subagents.push(SubagentInfo {
             id: "sub-test".into(),
             task: "test".into(),
+            agent: "delegate".into(),
         });
         let quit = handle_action(&mut app, zoid_tui::route::Action::SessionPick)
             .await
@@ -8460,6 +8465,7 @@ mod tests {
         app.in_flight_subagents.push(SubagentInfo {
             id: "sub-test".into(),
             task: "test".into(),
+            agent: "delegate".into(),
         });
 
         let quit = exec_command(&mut app, zoid_tui::command::Command::NewSession)
