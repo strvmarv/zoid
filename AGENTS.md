@@ -43,9 +43,11 @@ Full runbook: **`docs/RELEASING.md`**. In short:
    bump changes ~35 insta frame snapshots. Run
    `cargo insta test --accept -p zoid-tui` and confirm `git diff` is
    **version-token-only** before committing them.
-4. Verify the release gate: `cargo test --workspace --features zoid/local-embed`
-   (dist bakes in `local-embed`). Never trust a piped exit code; use
-   `--no-fail-fast` so one failing test binary can't hide others.
+4. Verify the release gate: `cargo nextest run --workspace --features zoid/local-embed --no-fail-fast`
+   (dist bakes in `local-embed`). Nextest emits a single reliable exit code
+   (no piped-exit-code hazard) and parallelizes at the test level across all
+   binaries. Use `--no-fail-fast` so one failing test doesn't hide others.
+   `cargo test --workspace --no-fail-fast` still works as a fallback.
 5. Commit, then `git tag vX.Y.Z && git push origin main --tags`. The tag push
    fires `release.yml`.
 
