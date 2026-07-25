@@ -1275,6 +1275,10 @@ fn arg_summary(args_json: &str, max_width: usize) -> String {
             .join(", "),
         other => scalar(&other),
     };
+    // Collapse newlines to spaces — a multi-line shell command in the args
+    // would otherwise split the single tool-call line across multiple
+    // terminal rows, breaking peek-hit line mapping.
+    let inner = inner.replace('\n', " ").replace('\r', "");
     truncate(&inner, max_width)
 }
 
@@ -1778,6 +1782,17 @@ mod tests {
         assert!(result.starts_with("aaaa: short"), "first arg (alphabetical) visible: {result}");
         // The last arg should be cut off — at 40 chars, not all 3 args fit.
         assert!(!result.contains("even more text here"), "later args truncated: {result}");
+    }
+
+    #[test]
+    fn arg_summary_newlines_collapsed_to_spaces() {
+        // A multi-line shell command in the args must not produce a string
+        // with literal newlines — that would split the tool-call line across
+        // multiple terminal rows, breaking peek-hit line mapping.
+        let json = r#"{"command": "cd /foo &&\nls -la"}"#;
+        let result = arg_summary(json, 120);
+        assert!(!result.contains('\n'), "newlines must be collapsed: {result:?}");
+        assert!(result.contains("cd /foo"), "content preserved: {result}");
     }
 
     #[test]
