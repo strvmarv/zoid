@@ -8,6 +8,88 @@
 
 **Tech Stack:** Rust (`serde_json`, `tokio`, `reqwest`, `async_trait`), Python 3 for the harness runner, Ollama 0.21.1 HTTP API.
 
+---
+
+## Handoff Context
+
+**Status: planned, not started.** No code written, no models pulled, no worktree
+created. The spec and this plan were produced in a session that stopped at the
+execution handoff. Start at Task 1 (Track B) or Task 6 (Track A) — they are
+independent.
+
+**Companion spec:** `docs/superpowers/specs/2026-07-25-local-model-evaluation-design.md`
+(commit `220ab58`). Read it for the candidate table, decision rule, and risks. This
+plan is the execution detail; the spec is the reasoning.
+
+### What was already measured — do not re-derive
+
+| Fact | Evidence |
+|---|---|
+| Hardware: RTX 3060 **12 GB VRAM** (~11.2 GB usable), i5-14500 6c/6t, 23 GB RAM (~17 GB free), 210 GB free `/home` | `nvidia-smi`, `lscpu`, `free -h`, `df -h` |
+| Ollama 0.21.1 at `/usr/local/bin/ollama`; `devstral` (14 GB) and `qwen2.5-coder:14b` (9 GB) already pulled | `ollama list` |
+| `qwen2.5-coder:14b` reports `qwen2.context_length: 32768`, **`parameters: None`**, `capabilities: ['completion','tools','insert']`, `Q4_K_M` | `POST /api/show` against the live daemon |
+| zoid's fixed per-turn overhead: **13 tools / 6,112 bytes ≈ 1,700 tokens** of schemas (heaviest: `edit` 778 B, `submit_feedback` 731 B, `web_fetch` 648 B) plus a ~130-token `SYSTEM_PROMPT` | temporary test over `zoid_tools::registry()` |
+| `zoid-tools` has `zoid-provider` and `serde_json` as direct `[dependencies]`, so the Task 6 generator compiles | `crates/zoid-tools/Cargo.toml` |
+
+### The defect this plan fixes
+
+`ollama::request_body` (`crates/zoid-provider/src/ollama.rs:58-68`) emits only
+`model`, `stream`, `messages`, `keep_alive`, `think`, `tools` — never
+`options.num_ctx`. Correct for Ollama Cloud, which sizes context server-side.
+Wrong for a local daemon, which applies its own default and then **silently
+truncates** rather than erroring, so:
+
+1. `is_context_length_error` (`crates/zoid-provider/src/lib.rs:343`) never fires.
+2. The first thing evicted is the system prompt and tool schemas — the model
+   loses its instructions and tools while still emitting fluent prose.
+3. `fetch_model_info` (`ollama.rs:450`) reports the model's *trained* context as
+   the ceiling, which flows into `context_ceiling` (`lib.rs:318`) and becomes the
+   economy ⑤ denominator. zoid displays a window the daemon never granted.
+
+### What already exists — no new provider is needed
+
+- `crates/zoid-model/src/lib.rs:88` — `ollama-local` is a first-class registry
+  entry: `Status::Available`, `default_base_url: "http://localhost:11434"`,
+  `models: &[]` (local tags are free-text).
+- `crates/zoid/src/main.rs:1046` — already branches on
+  `canonical_id(&config.provider) == "ollama-local"` and constructs with an empty
+  API key. **This is the only site that knows the local/cloud distinction**, and
+  it is where Task 5 adds one builder call.
+- `ollama.rs` already implements `list_models` (`/api/tags`) and
+  `fetch_model_info` (`/api/show`).
+
+### Two design decisions that are not obvious from the tasks
+
+**1. `request_body` takes `num_ctx` as a parameter rather than sniffing
+`base_url`.** The variant decision belongs at `main.rs:1046`, which already
+branches on it — not buried inside a serializer where it would be untestable
+without a live daemon. A useful side effect: passing `None` at the nine existing
+test call sites turns tests that already existed and already passed into the
+cloud byte-identity regression suite.
+
+**2. The Track A harness owns `options.num_ctx`, not the generator.** The golden
+body is dumped with no `options` key and `bench.py` injects the value per
+request. This is what fully decouples the tracks — the harness has to vary
+`num_ctx` anyway to bisect metric 4, so Track A never waits on Track B.
+
+### This plan is falsifiable — Task 7 Step 2 comes first
+
+The claim that Ollama truncates silently rather than erroring came from
+documented behavior, not measurement. **Task 7 Step 2 tests it against a model
+already on disk, before any of the ~52 GB of candidates is pulled.** If Ollama
+0.21.1 does not truncate silently — or now errors — stop and report. Track B
+remains defensible (an explicit window beats an undocumented default) but its
+urgency drops and the spec's framing needs correcting.
+
+### Repo state warning
+
+Another session was committing to this repo on 2026-07-25: commit `4c7dabc`
+(`docs: move exit-worktree CWD bug writeup to docs/bugs/`) landed on `main`
+between the spec and plan commits. **Check `main` before branching a worktree for
+Track B.**
+
+---
+
 ## Global Constraints
 
 - **Ollama Cloud request bodies must remain byte-identical to today's.** `num_ctx` is meaningful only for a local daemon. Every change is gated on `Option<u32>` being `None` for cloud.
