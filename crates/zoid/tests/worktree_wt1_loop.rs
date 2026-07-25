@@ -146,7 +146,7 @@ async fn commit_after_enter_worktree_lands_on_worktree_branch_not_parent() {
                     let (path, _branch) = create_worktree(&repo_dir, &name).unwrap().into_kept();
                     let abs = std::fs::canonicalize(&path).unwrap_or(path);
                     *created.lock().unwrap() = Some(abs.clone());
-                    let _ = reply.send(Ok(abs));
+                    let _ = reply.send(Ok((abs, None)));
                 }
                 AgentUpdate::WorktreeRequested { reply, .. } => {
                     // Exit is not scripted in this test.

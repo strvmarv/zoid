@@ -403,11 +403,13 @@ pub enum AgentUpdate {
         res: Result<(zoid_plugin::manifest::PluginManifest, zoid_core::wizard::UpstreamScan), String>,
     },
     /// The agent (or user via `:worktree`) requested a worktree relocation.
-    /// `reply` carries the new absolute cwd (or an error) back to the awaiting
-    /// turn so its in-flight tool execution repoints atomically (WT-1/WT-2).
+    /// `reply` carries the new absolute cwd + optional warning (or an error)
+    /// back to the awaiting turn so its in-flight tool execution repoints
+    /// atomically (WT-1/WT-2). The warning is non-None when a branch with
+    /// unmerged commits is retained on exit.
     WorktreeRequested {
         action: WorktreeAction,
-        reply: tokio::sync::oneshot::Sender<Result<std::path::PathBuf, String>>,
+        reply: tokio::sync::oneshot::Sender<Result<(std::path::PathBuf, Option<String>), String>>,
     },
     /// The wake watcher's timer elapsed; the main loop should drain any wakes
     /// whose `fire_at_ms <= now` (inject if idle, else defer to TurnComplete).
@@ -1703,7 +1705,7 @@ async fn run_turn_inner(
                         })
                         .await;
                     match rx.await {
-                        Ok(Ok(new_cwd)) => {
+                        Ok(Ok((new_cwd, _warn))) => {
                             cwd_for_exec = new_cwd;
                             emit(
                                 &session,
@@ -1760,8 +1762,9 @@ async fn run_turn_inner(
                         })
                         .await;
                     match rx.await {
-                        Ok(Ok(new_cwd)) => {
+                        Ok(Ok((new_cwd, warn))) => {
                             cwd_for_exec = new_cwd;
+                            let output = warn.unwrap_or_else(|| "exited worktree".into());
                             emit(
                                 &session,
                                 &mut events,
@@ -1770,7 +1773,7 @@ async fn run_turn_inner(
                                 EventKind::ToolResult {
                                     id: tc.id,
                                     name: tc.name,
-                                    output: "exited worktree".into(),
+                                    output,
                                     is_error: false,
                                 },
                                 session_id,

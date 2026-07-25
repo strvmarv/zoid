@@ -17,7 +17,10 @@ impl Tool for ExitWorktree {
             name: "exit_worktree".into(),
             description: "Exit the current git worktree and return to the main \
                           checkout. If the worktree has uncommitted changes, it \
-                          will be kept on disk for manual cleanup."
+                          will be kept on disk for manual cleanup. If the branch \
+                          has commits not yet merged to HEAD, the branch ref is \
+                          retained (the worktree directory is still removed) and \
+                          the tool result includes a warning with the branch name."
                 .into(),
             parameters: json!({
                 "type": "object",

@@ -106,7 +106,7 @@ fn into_kept_preserves_dir_and_branch_on_disk() {
     );
 
     // Clean up: remove the kept worktree explicitly.
-    zoid::worktree::remove_worktree(tmp.path(), "wt-keep1").unwrap();
+    zoid::worktree::remove_worktree(tmp.path(), "wt-keep1", true).unwrap();
     assert!(!path.exists(), "cleaned up after test");
 }
 
@@ -122,7 +122,7 @@ fn remove_worktree_deletes_dir_prunes_and_deletes_branch() {
     assert!(path.exists(), "dir exists after into_kept");
 
     // Now explicitly remove.
-    zoid::worktree::remove_worktree(tmp.path(), &kept_name).unwrap();
+    zoid::worktree::remove_worktree(tmp.path(), &kept_name, true).unwrap();
 
     assert!(!path.exists(), "dir removed by remove_worktree");
     let repo = git2::Repository::open(tmp.path()).unwrap();
@@ -163,7 +163,7 @@ fn enter_exit_round_trip_restores_cwd_and_cleans_up() {
     std::fs::remove_file(path.join("work.txt")).unwrap();
 
     // Now simulate exit: remove_worktree.
-    zoid::worktree::remove_worktree(tmp.path(), &name).unwrap();
+    zoid::worktree::remove_worktree(tmp.path(), &name, true).unwrap();
 
     assert!(!path.exists(), "worktree dir removed on exit");
     let repo = git2::Repository::open(tmp.path()).unwrap();
@@ -207,5 +207,5 @@ fn name_collision_enters_existing_worktree() {
     );
 
     // Clean up.
-    zoid::worktree::remove_worktree(tmp.path(), &name1).unwrap();
+    zoid::worktree::remove_worktree(tmp.path(), &name1, true).unwrap();
 }

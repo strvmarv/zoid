@@ -6126,7 +6126,7 @@ fn compute_worktree_switch(
     action: zoid::agent::WorktreeAction,
     subagent_running: bool,
     repo_root: &std::path::Path,
-) -> Result<std::path::PathBuf, String> {
+) -> Result<(std::path::PathBuf, Option<String>), String> {
     use zoid::agent::WorktreeAction;
     match action {
         WorktreeAction::Enter { name } => {
@@ -6159,7 +6159,7 @@ fn compute_worktree_switch(
                 path: path.clone(),
                 name: sess_name,
             });
-            Ok(path)
+            Ok((path, None))
         }
         WorktreeAction::Exit => {
             let wt = match active.take() {
@@ -6173,12 +6173,25 @@ fn compute_worktree_switch(
             // Absolute repo root computed BEFORE any removal, so tooling never
             // points at a deleted dir (WT-2).
             let root = std::fs::canonicalize(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
-            // Clean → remove (dir + prune + branch). Dirty → keep (WorktreeSession
+            // Clean → remove (dir + prune). Dirty → keep (WorktreeSession
             // has no Drop, so doing nothing preserves the user's work).
             if is_worktree_clean(&wt.path) {
-                let _ = zoid::worktree::remove_worktree(repo_root, &wt.name);
+                // Check if the branch has commits not on HEAD — if so, keep
+                // the branch ref so the work isn't orphaned. The worktree
+                // directory is still removed; only the branch is retained.
+                let has_unmerged = zoid::worktree::branch_has_unmerged_commits(repo_root, &wt.name);
+                let _ = zoid::worktree::remove_worktree(repo_root, &wt.name, !has_unmerged);
+                if has_unmerged {
+                    let warn = format!(
+                        "exited worktree — branch '{}' retained (has unmerged commits). \
+                         Merge to main or delete with: git branch -d {}",
+                        wt.name, wt.name,
+                    );
+                    tracing::warn!(branch = %wt.name, "{warn}");
+                    return Ok((root, Some(warn)));
+                }
             }
-            Ok(root)
+            Ok((root, None))
         }
     }
 }
@@ -6188,7 +6201,7 @@ fn compute_worktree_switch(
 fn handle_worktree_request(
     app: &mut App,
     action: zoid::agent::WorktreeAction,
-    reply: Option<tokio::sync::oneshot::Sender<Result<std::path::PathBuf, String>>>,
+    reply: Option<tokio::sync::oneshot::Sender<Result<(std::path::PathBuf, Option<String>), String>>>,
 ) {
     let subagent_running = !app.in_flight_subagents.is_empty();
     let result = compute_worktree_switch(
@@ -6198,7 +6211,7 @@ fn handle_worktree_request(
         std::path::Path::new("."),
     );
     match &result {
-        Ok(cwd) => {
+        Ok((cwd, _warn)) => {
             // WT-2: the Session drawer's cwd display (not clobbered by the poller).
             app.shell.cwd = cwd.display().to_string();
         }
@@ -9251,7 +9264,7 @@ mod worktree_switch_tests {
     fn enter_returns_absolute_worktree_path_and_sets_active() {
         let repo = init_repo();
         let mut active = None;
-        let cwd = compute_worktree_switch(
+        let (cwd, _warn) = compute_worktree_switch(
             &mut active,
             WorktreeAction::Enter { name: "feature-x".into() },
             false,
@@ -9290,7 +9303,7 @@ mod worktree_switch_tests {
         let repo = init_repo();
         let mut active = None;
         compute_worktree_switch(&mut active, WorktreeAction::Enter { name: "a".into() }, false, repo.path()).unwrap();
-        let cwd = compute_worktree_switch(&mut active, WorktreeAction::Exit, false, repo.path()).expect("exit should succeed");
+        let (cwd, _warn) = compute_worktree_switch(&mut active, WorktreeAction::Exit, false, repo.path()).expect("exit should succeed");
         assert!(cwd.is_absolute());
         assert_eq!(
             cwd.canonicalize().unwrap(),
@@ -9314,7 +9327,7 @@ mod worktree_switch_tests {
         // can be re-entered without error.
         let repo = init_repo();
         let mut active = None;
-        let cwd = compute_worktree_switch(&mut active, WorktreeAction::Enter { name: "keep".into() }, false, repo.path()).unwrap();
+        let (cwd, _warn) = compute_worktree_switch(&mut active, WorktreeAction::Enter { name: "keep".into() }, false, repo.path()).unwrap();
         // Dirty it: modify the tracked file inside the worktree.
         std::fs::write(cwd.join("f.txt"), "uncommitted change").unwrap();
         compute_worktree_switch(&mut active, WorktreeAction::Exit, false, repo.path()).unwrap();
@@ -9328,9 +9341,62 @@ mod worktree_switch_tests {
             "uncommitted bytes must survive a dirty exit"
         );
         // Re-enter the same name — must NOT error (idempotent re-enter).
-        let cwd2 = compute_worktree_switch(&mut active, WorktreeAction::Enter { name: "keep".into() }, false, repo.path()).unwrap();
+        let (cwd2, _warn) = compute_worktree_switch(&mut active, WorktreeAction::Enter { name: "keep".into() }, false, repo.path()).unwrap();
         assert!(cwd2.exists());
         assert!(active.is_some());
+    }
+
+    #[test]
+    fn clean_exit_with_unmerged_commits_retains_branch() {
+        // A clean worktree (no uncommitted changes) with commits not on HEAD
+        // must retain the branch ref on exit — the work isn't orphaned.
+        let repo = init_repo();
+        let mut active = None;
+        let (cwd, _warn) = compute_worktree_switch(
+            &mut active,
+            WorktreeAction::Enter { name: "unmerged".into() },
+            false,
+            repo.path(),
+        )
+        .unwrap();
+        // Commit a new file in the worktree — the branch now has a commit
+        // not on HEAD (main).
+        std::fs::write(cwd.join("new.txt"), "new content").unwrap();
+        std::process::Command::new("git")
+            .args(["-C"])
+            .arg(&cwd)
+            .args(["add", "."])
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["-C"])
+            .arg(&cwd)
+            .args(["commit", "-m", "new commit on branch"])
+            .output()
+            .unwrap();
+        // Exit — the worktree is clean (no uncommitted changes), but the
+        // branch has an unmerged commit.
+        let (root, warn) = compute_worktree_switch(
+            &mut active,
+            WorktreeAction::Exit,
+            false,
+            repo.path(),
+        )
+        .unwrap();
+        assert!(active.is_none(), "exit clears active");
+        // The branch must still exist (not deleted).
+        let branch_exists = std::process::Command::new("git")
+            .args(["-C"])
+            .arg(repo.path())
+            .args(["rev-parse", "--verify", "unmerged"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        assert!(branch_exists, "branch 'unmerged' must be retained — has unmerged commits");
+        // The warning must mention the branch name and "retained".
+        let warn = warn.expect("warning should be Some when branch is retained");
+        assert!(warn.contains("unmerged"), "warning mentions branch name: {warn}");
+        assert!(warn.contains("retained"), "warning says 'retained': {warn}");
     }
 
     #[test]

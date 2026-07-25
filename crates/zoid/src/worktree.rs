@@ -102,7 +102,7 @@ impl Drop for WorktreeGuard {
 /// registration, and delete the branch. This is the same logic `Drop`
 /// performs, factored out so the Chat-agent exit path can call it directly
 /// on a worktree that was previously `into_kept()`'d.
-pub fn remove_worktree(repo_root: &Path, name: &str) -> Result<()> {
+pub fn remove_worktree(repo_root: &Path, name: &str, delete_branch: bool) -> Result<()> {
     let path = repo_root.join(".zoid").join("worktrees").join(name);
     let _ = std::fs::remove_dir_all(&path);
     if let Ok(repo) = Repository::open(repo_root) {
@@ -111,9 +111,36 @@ pub fn remove_worktree(repo_root: &Path, name: &str) -> Result<()> {
             po.valid(true).working_tree(true);
             let _ = wt.prune(Some(&mut po));
         }
-        if let Ok(mut branch) = repo.find_branch(name, git2::BranchType::Local) {
-            let _ = branch.delete();
+        if delete_branch {
+            if let Ok(mut branch) = repo.find_branch(name, git2::BranchType::Local) {
+                let _ = branch.delete();
+            }
         }
     }
     Ok(())
+}
+
+/// Whether the worktree branch has commits not reachable from the repo's
+/// HEAD (i.e., unmerged work). Returns `false` if the branch doesn't exist
+/// or git operations fail (conservative — don't block cleanup on errors).
+pub fn branch_has_unmerged_commits(repo_root: &Path, name: &str) -> bool {
+    let Ok(repo) = Repository::open(repo_root) else {
+        return false;
+    };
+    let Ok(branch) = repo.find_branch(name, git2::BranchType::Local) else {
+        return false;
+    };
+    let Some(branch_oid) = branch.get().target() else {
+        return false;
+    };
+    let Ok(head_oid) = repo.head() else {
+        return false;
+    };
+    let Some(head_oid) = head_oid.target() else {
+        return false;
+    };
+    // If the branch tip is a descendant of HEAD, it has commits not in HEAD
+    // — i.e., unmerged work. graph_descendant_of(branch, head) = true means
+    // branch is ahead of HEAD.
+    repo.graph_descendant_of(branch_oid, head_oid).unwrap_or(false)
 }
