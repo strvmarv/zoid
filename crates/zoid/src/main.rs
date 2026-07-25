@@ -3006,12 +3006,17 @@ where
                                     .proj
                                     .last_output_tokens
                                     .unwrap_or(0);
-                                if let Ok(mut s) = obs_state.lock() {
-                                    let tps = output_tokens
-                                        .checked_mul(1000)
-                                        .and_then(|t| t.checked_div(stream_ms))
-                                        .unwrap_or(0);
-                                    s.provider_tps.record(tps);
+                                // Skip zero-output turns (errors, cancellations,
+                                // context-length retries) — they're not meaningful
+                                // TPS samples and would pollute the rolling average.
+                                if output_tokens > 0 {
+                                    if let Ok(mut s) = obs_state.lock() {
+                                        let tps = output_tokens
+                                            .checked_mul(1000)
+                                            .and_then(|t| t.checked_div(stream_ms))
+                                            .unwrap_or(0);
+                                        s.provider_tps.record(tps);
+                                    }
                                 }
                             }
                         }
