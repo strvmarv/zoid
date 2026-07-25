@@ -518,6 +518,17 @@ fn map_msg(m: ChatMsg) -> Message {
                 },
             }
         }
+        ChatMsg::Evicted { .. } => Message {
+            // Defense-in-depth: build_request_with_thinking filters Evicted out
+            // before map_msg runs, so this arm should never fire in production.
+            // Emit an inert assistant message in case a future caller forgets the
+            // filter — never a tool-result, which would violate alternation.
+            role: zoid_provider::MsgRole::Assistant,
+            content: String::new(),
+            tool_calls: vec![],
+            tool_name: None,
+            tool_call_id: None,
+        },
     }
 }
 
@@ -569,6 +580,7 @@ pub fn build_request_with_thinking(
         system: Some(system),
         messages: zoid_core::projection::conversation_for_branch(events.iter(), active_branch)
             .into_iter()
+            .filter(|m| !matches!(m, zoid_core::projection::ChatMsg::Evicted { .. }))
             .map(map_msg)
             .collect(),
         max_tokens,
@@ -2775,6 +2787,7 @@ async fn preflight_gate(
                 Default::default()
             } else {
                 let model = emb.model_id().to_string();
+                let goal_text = text.clone();
                 let goal = {
                     let emb = emb.clone();
                     tokio::task::spawn_blocking(move || {
@@ -2800,6 +2813,7 @@ async fn preflight_gate(
                         weight: zoid_core::eviction::resolve_rescue_weight(
                             config.eviction.rescue_weight,
                         ),
+                        goal_text,
                     }
                 }
             }
@@ -2859,13 +2873,14 @@ async fn emit_eviction(
     now: fn() -> i64,
     plan: zoid_core::eviction::EvictionPlan,
 ) -> Result<()> {
-    if plan.turns.is_empty() {
+    let zoid_core::eviction::EvictionPlan { turns, rescue } = plan;
+    if turns.is_empty() {
         return Ok(());
     }
     let mut ids = Vec::new();
     let mut reclaimed = 0u64;
     let mut spans = Vec::new();
-    for t in plan.turns {
+    for t in turns {
         reclaimed += t.token_estimate;
         spans.push(zoid_core::event::EvictedSpan {
             token_estimate: t.token_estimate,
@@ -2882,6 +2897,7 @@ async fn emit_eviction(
             ids,
             reclaimed_tokens: reclaimed,
             marker: zoid_core::event::EvictionMarker { spans },
+            rescue,
         },
         session_id,
         now,
@@ -3087,6 +3103,7 @@ mod tests {
                             topic_hint: "setup".into(),
                         }],
                     },
+                    rescue: None,
                 },
             ),
         ]);
@@ -4116,6 +4133,7 @@ mod tests {
                 ids: vec![Ulid::from(1u128)],
                 reclaimed_tokens: 10,
                 marker: EvictionMarker { spans: vec![] },
+                rescue: None,
             },
         );
         for e in [&e1, &e2, &evicted] {
@@ -4331,6 +4349,7 @@ mod tests {
                 ids: vec![Ulid::from(1u128)],
                 reclaimed_tokens: 10,
                 marker: EvictionMarker { spans: vec![] },
+                rescue: None,
             },
         );
         for e in [&e1, &e2, &evicted] {

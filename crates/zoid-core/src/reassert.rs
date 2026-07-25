@@ -99,6 +99,7 @@ mod tests {
             ids: vec![log[0].id],
             reclaimed_tokens: 1000,
             marker: EvictionMarker { spans: vec![] },
+            rescue: None,
         }));
         assert_eq!(cumulative_appended(&log), before, "evicted events still counted");
     }

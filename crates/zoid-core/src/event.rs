@@ -66,7 +66,7 @@ pub enum QuestionKind {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum EventKind {
     UserMessage {
         text: String,
@@ -157,6 +157,7 @@ pub enum EventKind {
         ids: Vec<Ulid>,
         reclaimed_tokens: u64,
         marker: EvictionMarker,
+        rescue: Option<crate::eviction::RescueRationale>,
     },
     /// Undo / recall re-admission: projections stop skipping these ids.
     TurnsReadmitted {
@@ -193,7 +194,7 @@ pub enum EventKind {
     WakeCancelled { wake_id: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Event {
     pub id: Ulid,
     pub parent: Option<Ulid>,
@@ -445,6 +446,7 @@ mod tests {
             ids: vec![Ulid::from(1u128), Ulid::from(2u128)],
             reclaimed_tokens: 4200,
             marker: m,
+            rescue: None,
         };
         let s = serde_json::to_string(&k).unwrap();
         let back: EventKind = serde_json::from_str(&s).unwrap();
