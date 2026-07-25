@@ -17,6 +17,7 @@ pub mod recall;
 pub mod search;
 pub mod subagent_dispatch;
 pub mod subagent_kill;
+pub mod subagent_list;
 pub mod wake;
 pub mod worktree_enter;
 pub mod worktree_exit;

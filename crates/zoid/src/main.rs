@@ -6763,6 +6763,7 @@ mod tests {
             hard: tokio_util::sync::CancellationToken::new(),
             progress: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
             abort_reason: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            task: String::new(),
         };
         let mut map = HashMap::new();
         map.insert("sub-x".to_string(), sub.clone());

@@ -106,6 +106,9 @@ pub struct SubagentHandle {
     pub progress: std::sync::Arc<std::sync::atomic::AtomicI64>,
     /// First-writer-wins abort reason, set by whichever firer trips first.
     pub abort_reason: std::sync::Arc<std::sync::Mutex<Option<AbortReason>>>,
+    /// The task description passed to `dispatch_subagent`. Used by
+    /// `list_subagents` to show what each running subagent is doing.
+    pub task: String,
 }
 
 /// Fire the `hard` token (and record `Killed`, first-writer-wins) for one
@@ -1619,6 +1622,7 @@ async fn run_turn_inner(
                                 hard: sub_hard.clone(),
                                 progress: sub_progress.clone(),
                                 abort_reason: sub_abort_reason.clone(),
+                                task: task.clone(),
                             },
                         );
                     }
@@ -1917,6 +1921,37 @@ async fn run_turn_inner(
                             id: tc.id,
                             name: tc.name,
                             output: format!("{{\"cancelled\": {fired}}}"),
+                            is_error: false,
+                        },
+                        session_id,
+                        now,
+                    )
+                    .await?;
+                }
+                Some(zoid_tools::ToolKind::Emitting) if tc.name == "list_subagents" => {
+                    let output = if let Some(reg) = &config.in_flight {
+                        let map = reg.lock().unwrap();
+                        if map.is_empty() {
+                            "No subagents currently running.".to_string()
+                        } else {
+                            let mut lines = format!("Running subagents ({}):\n", map.len());
+                            for (id, handle) in map.iter() {
+                                lines.push_str(&format!("- {id}: {}\n", handle.task));
+                            }
+                            lines.trim_end().to_string()
+                        }
+                    } else {
+                        "No subagents currently running.".to_string()
+                    };
+                    emit(
+                        &session,
+                        &mut events,
+                        ui,
+                        &config.branch,
+                        EventKind::ToolResult {
+                            id: tc.id,
+                            name: tc.name,
+                            output,
                             is_error: false,
                         },
                         session_id,
@@ -5242,6 +5277,7 @@ mod guardrail_types_tests {
             hard: CancellationToken::new(),
             progress: Arc::new(AtomicI64::new(0)),
             abort_reason: Arc::new(Mutex::new(None)),
+            task: String::new(),
         };
         let h2 = h.clone();
         h.hard.cancel();
@@ -5258,6 +5294,7 @@ mod guardrail_types_tests {
             hard: CancellationToken::new(),
             progress: Arc::new(AtomicI64::new(0)),
             abort_reason: Arc::new(Mutex::new(None)),
+            task: String::new(),
         };
         let a = mk();
         let b = mk();
@@ -5288,6 +5325,7 @@ mod guardrail_types_tests {
             hard: CancellationToken::new(),
             progress: Arc::new(AtomicI64::new(0)),
             abort_reason: Arc::new(Mutex::new(Some(super::AbortReason::IdleTimeout))),
+            task: String::new(),
         };
         let mut map = HashMap::new();
         map.insert("sub-a".to_string(), h.clone());
@@ -5300,5 +5338,47 @@ mod guardrail_types_tests {
             Some(super::AbortReason::IdleTimeout),
             "a reason set by the timeout supervisor must NOT be overwritten by Killed"
         );
+    }
+
+    #[test]
+    fn list_subagents_formats_id_and_task() {
+        use std::collections::HashMap;
+        use tokio_util::sync::CancellationToken;
+
+        let mut map: HashMap<String, SubagentHandle> = HashMap::new();
+        map.insert("sub-001".into(), SubagentHandle {
+            cancel: CancellationToken::new(),
+            hard: CancellationToken::new(),
+            progress: Arc::new(AtomicI64::new(0)),
+            abort_reason: Arc::new(Mutex::new(None)),
+            task: "implement the resolver".into(),
+        });
+        map.insert("sub-002".into(), SubagentHandle {
+            cancel: CancellationToken::new(),
+            hard: CancellationToken::new(),
+            progress: Arc::new(AtomicI64::new(0)),
+            abort_reason: Arc::new(Mutex::new(None)),
+            task: "review the spec".into(),
+        });
+
+        // Format the output the same way the agent loop arm does.
+        let mut lines = format!("Running subagents ({}):\n", map.len());
+        for (id, handle) in map.iter() {
+            lines.push_str(&format!("- {id}: {}\n", handle.task));
+        }
+        let output = lines.trim_end().to_string();
+
+        assert!(output.contains("Running subagents (2)"));
+        assert!(output.contains("sub-001: implement the resolver"));
+        assert!(output.contains("sub-002: review the spec"));
+
+        // Empty map → "No subagents currently running."
+        let empty: HashMap<String, SubagentHandle> = HashMap::new();
+        let output = if empty.is_empty() {
+            "No subagents currently running.".to_string()
+        } else {
+            format!("Running subagents ({}):", empty.len())
+        };
+        assert_eq!(output, "No subagents currently running.");
     }
 }

@@ -93,6 +93,10 @@ pub fn chat_tools(
     let mut tools = zoid_tools::registry_with_kill(kill);
     tools.push(Box::new(InvokeSkillTool::new(skills)));
     tools.push(Box::new(zoid_tools::list_agents::ListAgents::new(agents)));
+    // `list_subagents` shows which subagents are currently running (id + task).
+    // Chat-only (needs the shared in_flight registry); never in the subagent
+    // registry so a subagent can't list its siblings.
+    tools.push(Box::new(zoid_tools::subagent_list::ListSubagents));
     // `recall` is always offered in chat (never gated on eviction.enabled): the
     // cold tier is a standing capability, and a prior session may hold paged-out
     // turns worth recalling even when eviction is currently off. It is NOT in the
@@ -217,5 +221,6 @@ mod tests {
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert!(names.contains(&"schedule_wake"), "chat_tools includes schedule_wake");
         assert!(names.contains(&"cancel_wake"), "chat_tools includes cancel_wake");
+        assert!(names.contains(&"list_subagents"), "chat_tools includes list_subagents");
     }
 }
