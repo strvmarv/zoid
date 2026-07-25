@@ -84,6 +84,30 @@ binary couldn't be run to capture the output.
    This prevents the ENOENT crash but masks the root cause. A `tracing::warn`
    should accompany it so the bad CWD is logged for diagnosis.
 
+### Root cause (found by parallel agent)
+
+`cwd_for_exec` was initialized from `config.cwd` at the start of each
+**sub-turn** (inside the `'turn` loop in `run_turn_inner`, agent.rs:1090),
+not per-turn. When `exit_worktree` updated `cwd_for_exec` to the repo root
+in one sub-turn, the next sub-turn iteration reset it via
+`let mut cwd_for_exec = config.cwd.clone()` — which still held the old
+worktree path from the turn's frozen `config` snapshot. The shell then
+tried to `spawn()` with the deleted worktree as CWD → ENOENT.
+
+Cross-turn CWD is handled correctly: `spawn_turn` rebuilds `config.cwd`
+from `app.active_worktree` between turns, and after exit that's `None`
+so `config.cwd` is `PathBuf::from(".")` which resolves to the process
+CWD (the main checkout). The bug was only in the sub-turn scope.
+
+### Fix
+
+Move `cwd_for_exec` initialization from inside the `'turn` loop (per-sub-turn)
+to before the loop (per-turn). The CWD update from `exit_worktree` now
+survives the sub-turn boundary. Committed as `5315980`.
+
+Includes integration test `worktree_wt2_exit_cwd.rs` verifying the CWD
+survives `exit_worktree` across sub-turn boundaries.
+
 ### Key files
 
 - `crates/zoid-tools/src/shell.rs` — `Shell::run` / `spawn_and_wait` (the
