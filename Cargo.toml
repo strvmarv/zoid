@@ -58,3 +58,11 @@ lto = "thin"
 # embedding leaf crate fast without changing the rest of the release build.
 [profile.release.package.zoid-embed]
 opt-level = 3
+
+# The hot compaction code in zoid-core (estimate_tokens, output.lines,
+# compaction walking) runs 2.5x faster under opt-level=1. Surgical
+# override mirroring the release profile's zoid-embed pattern — only
+# the leaf crate pays the compile cost, every dependent test binary
+# gets the optimized code.
+[profile.test.package.zoid-core]
+opt-level = 1
