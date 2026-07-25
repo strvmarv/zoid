@@ -503,15 +503,18 @@ fn build_conversation(
                 } else {
                     format!("{}", reclaimed_tokens)
                 };
-                let mut spans = vec![Span::styled(
-                    format!(
-                        "{} evicted {} turns · {} reclaimed",
-                        glyph::COLLAPSED,
-                        count,
-                        reclaimed_k
+                // Amber for the evicted count, dim for the reclaimed separator +
+                // value, green for the rescued count (when present).
+                let mut spans = vec![
+                    Span::styled(
+                        format!("{} evicted {} turns", glyph::COLLAPSED, count),
+                        Style::new().fg(color::WARN),
                     ),
-                    Style::new().fg(color::DIM),
-                )];
+                    Span::styled(
+                        format!(" · {} reclaimed", reclaimed_k),
+                        Style::new().fg(color::DIM),
+                    ),
+                ];
                 if let Some(r) = rescue {
                     spans.push(Span::styled(
                         format!(" · {} rescued", r.rescued.len()),
@@ -1030,32 +1033,75 @@ fn detail_lines(
                 rescue,
                 ts: _,
             } => {
-                // Full breakdown added in T5; for now, same chip as Normal.
+                blank_between_turns(&mut out);
                 let count = evicted_topics.len();
                 let reclaimed_k = if *reclaimed_tokens >= 1000 {
                     format!("{:.1}k", *reclaimed_tokens as f64 / 1000.0)
                 } else {
                     format!("{}", reclaimed_tokens)
                 };
-                out.push(Line::from(vec![
+                // Header chip: amber evicted count, dim reclaimed, green rescued.
+                let mut header = vec![
                     Span::styled(
-                        format!(
-                            "{} evicted {} turns · {} reclaimed",
-                            glyph::EXPANDED,
-                            count,
-                            reclaimed_k
-                        ),
+                        format!("{} evicted {} turns", glyph::EXPANDED, count),
+                        Style::new().fg(color::WARN),
+                    ),
+                    Span::styled(
+                        format!(" · {} reclaimed", reclaimed_k),
                         Style::new().fg(color::DIM),
                     ),
-                    if let Some(r) = rescue {
-                        Span::styled(
-                            format!(" · {} rescued", r.rescued.len()),
-                            Style::new().fg(color::OK),
-                        )
-                    } else {
-                        Span::raw("")
-                    },
-                ]));
+                ];
+                if let Some(r) = rescue {
+                    header.push(Span::styled(
+                        format!(" · {} rescued", r.rescued.len()),
+                        Style::new().fg(color::OK),
+                    ));
+                }
+                out.push(Line::from(header));
+
+                // Full indented breakdown.
+                if let Some(r) = rescue {
+                    // goal text
+                    out.push(Line::from(vec![
+                        Span::styled("    goal: ", Style::new().fg(color::DIM)),
+                        Span::styled(r.goal_text.clone(), Style::new().fg(color::TXT)),
+                    ]));
+                    // weight
+                    out.push(Line::from(vec![
+                        Span::styled("    weight: ", Style::new().fg(color::DIM)),
+                        Span::styled(format!("{}", r.weight), Style::new().fg(color::TXT)),
+                    ]));
+                    // rescued turns (with bump values formatted as +N.N)
+                    if !r.rescued.is_empty() {
+                        out.push(Line::from(vec![
+                            Span::styled("    rescued:", Style::new().fg(color::OK)),
+                        ]));
+                        for s in &r.rescued {
+                            // bump_milli == rescue_bump * 1000; render as +N.N.
+                            let bump = format!("{:+.1}", s.bump_milli as f64 / 1000.0);
+                            out.push(Line::from(vec![
+                                Span::styled("      ", Style::new()),
+                                Span::styled(
+                                    format!("{} ", s.topic_hint.clone()),
+                                    Style::new().fg(color::TXT),
+                                ),
+                                Span::styled(bump, Style::new().fg(color::OK)),
+                            ]));
+                        }
+                    }
+                }
+                // evicted turns (with topic hints)
+                if !evicted_topics.is_empty() {
+                    out.push(Line::from(vec![
+                        Span::styled("    evicted:", Style::new().fg(color::WARN)),
+                    ]));
+                    for t in evicted_topics {
+                        out.push(Line::from(vec![
+                            Span::styled("      ", Style::new()),
+                            Span::styled(t.clone(), Style::new().fg(color::DIM)),
+                        ]));
+                    }
+                }
             }
             ChatMsg::Assistant {
                 thinking,
