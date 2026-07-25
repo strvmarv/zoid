@@ -105,7 +105,7 @@ Track B.**
 
 **Track B — modified:**
 - `crates/zoid-provider/src/ollama.rs` — the whole fix. Gains `DEFAULT_LOCAL_NUM_CTX`, `parse_num_ctx`, `configured_num_ctx`; `request_body` gains a `num_ctx` parameter; `OllamaProvider` gains a `num_ctx` field, a `with_num_ctx` builder, and a clamp in `fetch_model_info`.
-- `crates/zoid/src/main.rs:1046-1054` — the `ollama-local` construction branch gains one builder call. This is the only place that knows the local/cloud distinction.
+- `crates/zoid/src/main.rs:1046-1054` — the `ollama-local` construction branch gains one builder call. This is the only place that knows the local/cloud distinction. (Note: `provider_for_id` at `main.rs:1174` also constructs an `OllamaProvider` for `ollama-local`, but it's used only for `list_models()` which calls `/api/tags` — `num_ctx` is irrelevant there.)
 
 **Track A — created in scratchpad** (`$SCRATCH` = `/tmp/claude-1000/-home-gomanjoe-source-zoid/bde42ca9-c9a7-4e07-a2cd-55795be6b453/scratchpad`):
 - `$SCRATCH/golden_body.json` — one zoid-generated request body, the benchmark payload.
@@ -220,7 +220,7 @@ Pure parser (no env mutation in tests, per lib.rs:373-375)."
 ### Task 2: Emit `options.num_ctx` in the request body
 
 **Files:**
-- Modify: `crates/zoid-provider/src/ollama.rs:19` (signature), `:58-79` (body), `:322` (call site), and the nine test call sites at `:535, :569, :603, :632, :648, :663, :679, :690`
+- Modify: `crates/zoid-provider/src/ollama.rs:19` (signature), `:58-79` (body), `:322` (call site), and the eight test call sites at `:535, :569, :603, :632, :648, :663, :679, :690`
 - Test: same file, `mod tests`
 
 **Interfaces:**
@@ -308,7 +308,7 @@ Update the live call site at line 322 from `.json(&request_body(req))` to:
 
 This will not compile until Task 3 adds the field. To keep Task 2 independently green, use `.json(&request_body(req, None))` here and change it to `self.num_ctx` in Task 3.
 
-Update all nine test call sites mechanically: `request_body(&req)` → `request_body(&req, None)`.
+Update all eight test call sites mechanically: `request_body(&req)` → `request_body(&req, None)`.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -533,8 +533,11 @@ Expected: builds clean, all tests pass.
 - [ ] **Step 3: Smoke-test against the live daemon**
 
 ```bash
-ZOID_NUM_CTX=16384 ZOID_LOG=debug cargo run -- --provider ollama-local --model qwen2.5-coder:14b
+ZOID_NUM_CTX=16384 ZOID_MODEL=qwen2.5-coder:14b ZOID_LOG=debug cargo run
 ```
+
+(Provider is set via `config.toml` — ensure `provider = "ollama-local"`
+in the active config. The CLI has no `--provider`/`--model` flags.)
 
 Send one turn, then confirm the daemon allocated the window:
 
@@ -867,7 +870,9 @@ Record for each rung: loaded or not, the VRAM/RAM split from `ollama ps`, `promp
 
 - [ ] **Step 3: Validate tool calls through zoid's own parser**
 
-A tool call that Ollama emits but zoid cannot parse is a failure. Feed one captured response frame per candidate through `ollama::parse_line` rather than trusting the shape by eye:
+A tool call that Ollama emits but zoid cannot parse is a failure. Feed one captured response frame per candidate through `ollama::parse_line` rather than trusting the shape by eye.
+
+First, extract the raw tool-call frames from `results.json`:
 
 ```bash
 cd /home/gomanjoe/source/zoid
@@ -880,18 +885,47 @@ for m, e in r.items():
 "
 ```
 
-For any candidate that produced a tool call, reconstruct the NDJSON frame and assert `parse_line` yields a `ProviderEvent::ToolCall`. A candidate whose frame does not parse **fails metric 3 regardless of its benchmark scores**.
+Then, for any candidate that produced a tool call, reconstruct the NDJSON
+frame and assert `parse_line` yields a `ProviderEvent::ToolCall`. Create a
+throwaway integration test (similar to Task 6's generator):
+
+```rust
+// crates/zoid-provider/tests/_tmp_parse_check.rs
+use std::sync::atomic::AtomicU64;
+use zoid_provider::ollama::parse_line;
+use zoid_provider::ProviderEvent;
+
+#[test]
+fn candidate_tool_calls_parse() {
+    // Reconstruct a minimal NDJSON frame containing the tool call.
+    // The frame shape: {"message":{"content":"","tool_calls":[{...}]}}
+    let frame = r#"{"message":{"content":"","tool_calls":[{"function":{"name":"ls","arguments":{"path":"."}}}]}}"#;
+    let counter = AtomicU64::new(0);
+    let events = parse_line(frame, &counter);
+    assert!(
+        events.iter().any(|e| matches!(e, ProviderEvent::ToolCall { .. })),
+        "tool call frame must parse to ProviderEvent::ToolCall"
+    );
+}
+```
+
+Replace the hardcoded `frame` with one reconstructed from each candidate's
+actual tool-call JSON (load from `results.json`, build the frame, feed to
+`parse_line`). A candidate whose frame does not parse **fails metric 3
+regardless of its benchmark scores**.
+
+Delete the throwaway test after the check: `rm crates/zoid-provider/tests/_tmp_parse_check.rs`
 
 - [ ] **Step 4: Run metric 5 — multi-turn survival**
 
-For each candidate that passed metric 3, drive a 5-step loop: after each tool call, append a synthetic `{"role":"tool","tool_name":<name>,"content":<plausible result>}` message and re-send. Record whether the model keeps issuing well-formed tool calls through step 5 or degrades into prose.
+For each candidate that passed metric 3, drive a 5-step loop: after each tool call, append a synthetic `{"role":"tool","tool_name":<name>,"content":<plausible result>}` message and re-send. Record whether the model keeps issuing well-formed tool calls through step 5 or degrades into prose. (Non-passers will report `survived 0/5` — that's expected.)
 
 ```bash
 python3 - <<'PY'
 import sys, json
 SCRATCH = "/tmp/claude-1000/-home-gomanjoe-source-zoid/bde42ca9-c9a7-4e07-a2cd-55795be6b453/scratchpad"
 sys.path.insert(0, SCRATCH)
-from bench import run, GOLDEN
+from bench import GOLDEN
 import urllib.request, copy
 
 FAKE = {"ls": "src/\nCargo.toml\nREADME.md",
