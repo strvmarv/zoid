@@ -6504,6 +6504,7 @@ fn spawn_turn(app: &mut App) {
         band_headroom_pct: app.economy.band_headroom_pct,
         recent_n: app.economy.recent_n,
         max_output: None, // Slice-4 catalog supplies this; None → derived reserve
+        rescue_weight: app.config.eviction.rescue_weight,
     };
     turn_config.reassert_interval = app.economy.reassert_interval_tokens;
     // Resolve thinking mode from config + model capability.

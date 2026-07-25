@@ -31,7 +31,7 @@ pub struct AgentsConfig {
     pub source_dirs: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     pub provider: String,
     pub base_url: Option<String>,
@@ -45,6 +45,7 @@ pub struct Config {
     pub thinking: ThinkingConfig,
     pub approval: ApprovalConfig,
     pub embed: EmbedConfig,
+    pub eviction: EvictionConfig,
     pub ui: UiConfig,
     pub subagent: SubagentConfig,
     pub wake: WakeConfig,
@@ -126,6 +127,15 @@ impl Default for EmbedConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct EvictionConfig {
+    /// Rescue weight in turn-index units ("maximal relevance is worth this
+    /// many turns of newness"). None ⇒ DEFAULT_RESCUE_WEIGHT const.
+    /// Range: ~4–32; see 4b design §5. 0 disables rescue (= pure recency).
+    /// Negative, NaN, and +∞ are clamped at the read site (§3.1).
+    pub rescue_weight: Option<f32>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SubagentConfig {
     /// Idle (no-progress) timeout in seconds; 0 = disabled. Default 300.
@@ -170,6 +180,7 @@ impl Default for Config {
             thinking: ThinkingConfig::default(),
             approval: ApprovalConfig::default(),
             embed: EmbedConfig::default(),
+            eviction: EvictionConfig::default(),
             ui: UiConfig::default(),
             subagent: SubagentConfig::default(),
             wake: WakeConfig::default(),
@@ -274,6 +285,44 @@ mod tests {
         assert!(!cfg.embed.enabled);
         assert_eq!(cfg.embed.max_vectors, 1000);
         assert!(cfg.embed.auto_download); // default preserved when absent
+    }
+
+    #[test]
+    fn eviction_defaults_to_none() {
+        let c = Config::default();
+        assert!(c.eviction.rescue_weight.is_none());
+    }
+
+    #[test]
+    fn eviction_section_parses_and_merges() {
+        let (p, _warn) = parse_toml("[eviction]\nrescue_weight = 16.0").unwrap();
+        assert_eq!(p.eviction.rescue_weight, Some(16.0));
+        let (cfg, _prov) = merge(&[(Source::UserGlobal, p)]);
+        assert_eq!(cfg.eviction.rescue_weight, Some(16.0));
+    }
+
+    #[test]
+    fn eviction_absent_section_is_none() {
+        let (p, _warn) = parse_toml("model = \"a\"").unwrap();
+        assert!(p.eviction.rescue_weight.is_none());
+        let (cfg, _prov) = merge(&[(Source::UserGlobal, p)]);
+        assert!(cfg.eviction.rescue_weight.is_none());
+    }
+
+    #[test]
+    fn eviction_overrides_across_layers() {
+        let (user, _) = parse_toml("[eviction]\nrescue_weight = 8.0").unwrap();
+        let (proj, _) = parse_toml("[eviction]\nrescue_weight = 16.0").unwrap();
+        let (cfg, _) = merge(&[(Source::UserGlobal, user), (Source::Project, proj)]);
+        assert_eq!(cfg.eviction.rescue_weight, Some(16.0)); // project wins
+    }
+
+    #[test]
+    fn eviction_inf_parses_without_error() {
+        // TOML deserializes 1e308 into f32::INFINITY — not a parse error.
+        // Clamping happens at the read site (resolve_rescue_weight), not here.
+        let (p, _warn) = parse_toml("[eviction]\nrescue_weight = 1e308").unwrap();
+        assert_eq!(p.eviction.rescue_weight, Some(f32::INFINITY));
     }
 
     #[test]
@@ -384,6 +433,12 @@ pub struct PartialEmbed {
 
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default)]
+pub struct PartialEviction {
+    pub rescue_weight: Option<f32>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(default)]
 pub struct PartialSubagent {
     pub idle_timeout_secs: Option<u64>,
     pub hard_timeout_secs: Option<u64>,
@@ -424,6 +479,7 @@ pub struct PartialConfig {
     pub thinking: PartialThinking,
     pub approval: PartialApproval,
     pub embed: PartialEmbed,
+    pub eviction: PartialEviction,
     pub ui: PartialUi,
     pub subagent: PartialSubagent,
     #[serde(default)]
@@ -588,6 +644,9 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         }
         if let Some(v) = p.embed.auto_download {
             cfg.embed.auto_download = v;
+        }
+        if let Some(v) = p.eviction.rescue_weight {
+            cfg.eviction.rescue_weight = Some(v);
         }
     }
     (cfg, prov)
