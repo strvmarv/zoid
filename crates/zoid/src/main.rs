@@ -635,8 +635,8 @@ fn pick_choice(n_sessions: usize, selected: usize, key: PickKey) -> PickOutcome 
 /// `Paragraph` so that the selected row stays within the visible window.
 ///
 /// `selected_line` is the index of the cursor row within the `lines` Vec the
-/// picker builds (title + blank + session rows + optional delete-confirm +
-/// "Create new" + blank + hint). `visible_height` is the inner area height
+/// picker builds (title + blank + "Create new" + session rows + optional
+/// delete-confirm + blank + hint). `visible_height` is the inner area height
 /// (the block's bordered area minus 2).
 ///
 /// Pure — no IO. Returns 0 when everything fits. Otherwise the offset grows
@@ -672,8 +672,8 @@ enum PickResult {
 /// The startup session picker (spec §2). A self-contained render+input loop
 /// entered after crossterm raw mode is set up but before `run()`. Shows one row
 /// per session for the current CWD (name, age, tokens, live marker) plus a
-/// trailing "Create new session" row. Arrow keys move, Enter selects, Esc
-/// aborts to a clean exit. Selecting a live session takes it over immediately
+/// leading "Create new session" row (pinned at the top, always visible). Arrow
+/// keys move, Enter selects, Esc aborts to a clean exit. Selecting a live session takes it over immediately
 /// (no confirm card — spec §1). Returns the chosen session id + name, or
 /// `CreateNew`.
 async fn pick_session(
@@ -9118,18 +9118,17 @@ mod tests {
     }
 
     // --- picker_scroll_offset tests ---
-    // The startup picker can list more sessions than fit on screen. Without a
-    // scroll offset, Paragraph clips the bottom rows (the "Create new session"
-    // row and the hint), so they're invisible but still selectable — the user
-    // can arrow down into nothingness and hit Enter on an unseen row. The fix
-    // is a pure y-offset that keeps the selected row within the visible window.
+    // The startup picker can list more sessions than fit on screen. The pure
+    // y-offset keeps the selected row within the visible window. Layout (new):
+    // line 0 = title, 1 = blank, 2 = "Create new", 3.. = session rows.
+    // "Create new" is pinned at line 2 and can never clip — the offset's job is
+    // to keep the selected *session* row visible, not to rescue "Create new".
 
     #[test]
     fn scroll_offset_zero_when_everything_fits() {
-        // 3 session rows + title/blanks/create/hint = 7 lines; visible_height=20
-        // easily fits them all, so no scrolling is needed.
-        assert_eq!(picker_scroll_offset(2 + 1, 20), 0); // last session row
-        assert_eq!(picker_scroll_offset(2 + 3, 20), 0); // create-new row
+        // A short list fits entirely within a tall terminal; no scrolling.
+        assert_eq!(picker_scroll_offset(2, 20), 0); // "Create new" at line 2
+        assert_eq!(picker_scroll_offset(5, 20), 0); // a session row at line 5
     }
 
     #[test]
@@ -9141,10 +9140,21 @@ mod tests {
     }
 
     #[test]
-    fn scroll_offset_keeps_create_new_row_visible() {
-        // 10 sessions → create-new is at line 2+10=12. visible_height=5.
+    fn scroll_offset_keeps_last_session_row_visible() {
+        // 10 sessions → last session row is at line 2 + 10 = 12. visible_height=5.
         // Offsetting by 12-5+1=8 puts line 12 as the last visible row.
+        // (Under the old layout this test was named "keeps_create_new_row_visible"
+        // — but "Create new" is now pinned at line 2 and never needs this.)
         assert_eq!(picker_scroll_offset(12, 5), 8);
+    }
+
+    #[test]
+    fn scroll_offset_create_new_never_triggers_scroll() {
+        // "Create new" is at line 2 — always within the first screen regardless
+        // of visible_height, so selecting it always yields offset 0.
+        assert_eq!(picker_scroll_offset(2, 20), 0);
+        assert_eq!(picker_scroll_offset(2, 5), 0);
+        assert_eq!(picker_scroll_offset(2, 3), 0);
     }
 
     #[test]
