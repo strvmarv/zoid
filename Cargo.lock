@@ -5184,7 +5184,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-embed"
-version = "0.1.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -5200,7 +5200,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-mcp"
-version = "0.1.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -5270,7 +5270,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-testkit"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "serde_json",
  "ulid",
