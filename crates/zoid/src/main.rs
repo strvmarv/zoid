@@ -2510,6 +2510,13 @@ where
     let mut motion_tick = tokio::time::interval(tick_period);
     motion_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+    // Slower tick (5 FPS) for the subagent-only case: when the main loop is idle
+    // but subagents are running, we only need to animate the drawer spinner, not
+    // the caret. 30 FPS would burn CPU for no visible benefit.
+    let subagent_tick_period = std::time::Duration::from_millis(200);
+    let mut subagent_tick = tokio::time::interval(subagent_tick_period);
+    subagent_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     // Off-load `git status` to a background task so the subprocess never blocks
     // the render loop (it previously ran synchronously on the loop every second,
     // hitching typing/scrolling). The loop reads the latest value non-blocking.
@@ -3499,12 +3506,13 @@ where
                     }
                 }
             }
-            _ = motion_tick.tick(), if app.streaming || !app.in_flight_subagents.is_empty() || app.shell.compacting || app.shell.active_tool.is_some() || app.zoom_changed_at.is_some() => {
-                // Wake to redraw the blinking caret or the activity spinner (which
-                // animates while streaming OR delegating). Zoom is instant now (the
-                // reveal animation was retired for cross-zoom anchoring), so
-                // `zoom_changed_at` stays None; the guard is left in place harmlessly.
-                // Idle + not-streaming never ticks.
+            _ = motion_tick.tick(), if app.streaming || app.shell.compacting || app.shell.active_tool.is_some() || app.zoom_changed_at.is_some() => {
+                // 30 FPS wake for caret blink / tool spinner / compaction.
+                // Idle + not-streaming never ticks here.
+            }
+            _ = subagent_tick.tick(), if !app.streaming && !app.in_flight_subagents.is_empty() => {
+                // 5 FPS wake for the subagent drawer spinner only.
+                // Excluded when streaming (the 30 FPS tick covers it).
             }
         }
     }
