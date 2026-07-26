@@ -1667,6 +1667,25 @@ struct SubagentInfo {
     agent: String,
 }
 
+/// A subagent waiting for a pool slot to open. Created when `dispatch_subagent`
+/// finds the global in-flight set at capacity; drained by `DelegationResult`.
+/// Carries the resolved profile + parent cwd so `spawn_queued_subagent` can
+/// spawn without re-resolving the agent or recomputing the worktree base.
+/// `agent`/`tool_call_id`/`session_id` are carried for parity with the
+/// `SubagentQueued` event and future observability (the spawn currently uses
+/// `resolved_name` and the live `app.session_id`).
+#[allow(dead_code)]
+struct QueuedSubagent {
+    task: String,
+    agent: String,
+    resolved_profile: zoid_core::agent_profile::AgentProfile,
+    resolved_name: String,
+    cwd: PathBuf,
+    want_worktree: bool,
+    tool_call_id: String,
+    session_id: Ulid,
+}
+
 /// The active worktree session: tracks the worktree's path and branch name.
 /// Set by the `WorktreeRequested` handler when entering; cleared on exit.
 /// `spawn_turn` reads `active_worktree` to override `turn_config.cwd`.
@@ -1768,6 +1787,10 @@ struct App {
     session_ids: Vec<Ulid>,
     /// In-flight subagents, tracked for the Subagents drawer + busy guard.
     in_flight_subagents: Vec<SubagentInfo>,
+    /// Subagents waiting for a pool slot (`dispatch_subagent` called while the
+    /// global `in_flight` set is at `max_concurrent`). Drained on each
+    /// `DelegationResult` by the `spawn_queued_subagent` helper.
+    queued_subagents: std::collections::VecDeque<QueuedSubagent>,
     /// The active worktree session (None when in the main checkout).
     active_worktree: Option<WorktreeSession>,
     /// Active worktree path the git poller should open (None = main checkout).
@@ -2302,6 +2325,7 @@ async fn main() -> Result<()> {
         session_started_ms,
         session_ids: Vec::new(),
         in_flight_subagents: Vec::new(),
+        queued_subagents: std::collections::VecDeque::new(),
         active_worktree: None,
         active_wt_tx: tokio::sync::watch::channel(None).0,
         in_flight: std::sync::Arc::new(std::sync::Mutex::new(
@@ -2989,6 +3013,20 @@ where
                                 app.subagent_kill_armed = false;
                             }
                             app.shell.subagent_rows.retain(|s| s.id != *subagent_id);
+                            // A slot just freed. Drain the queue: while a slot is
+                            // open AND the queue is non-empty, spawn the next
+                            // queued subagent. Check queue emptiness FIRST so
+                            // the short-circuit never pops an empty deque. A
+                            // `max_concurrent` of 0 means unlimited — spawn all
+                            // queued (they shouldn't normally be queued, but be
+                            // safe).
+                            let max = app.config.subagent.max_concurrent;
+                            while !app.queued_subagents.is_empty()
+                                && (max == 0 || app.in_flight.lock().unwrap().len() < max)
+                            {
+                                let qs = app.queued_subagents.pop_front().unwrap();
+                                spawn_queued_subagent(app, qs);
+                            }
                             delegation_arrived = true;
                         }
                         // A tool result ends the in-flight indicator for that tool.
@@ -3309,6 +3347,31 @@ where
                         // drawer, NOT the bottom status bar. Do NOT set
                         // status_hint here — it would render on the bottom bar
                         // and overlap the layout.
+                    }
+                    AgentUpdate::SubagentQueued {
+                        tool_call_id,
+                        task,
+                        agent,
+                        resolved_profile,
+                        resolved_name,
+                        want_worktree,
+                        cwd,
+                    } => {
+                        // A dispatch_subagent call found the pool full. Enqueue
+                        // it; the next DelegationResult drains the queue and
+                        // spawns via spawn_queued_subagent. session_id is the
+                        // orchestrator's (the dispatching turn), carried so the
+                        // queued spawn tags its events correctly.
+                        app.queued_subagents.push_back(QueuedSubagent {
+                            task,
+                            agent,
+                            resolved_profile,
+                            resolved_name,
+                            cwd,
+                            want_worktree,
+                            tool_call_id,
+                            session_id: app.session_id,
+                        });
                     }
                     AgentUpdate::EditDiff { id, diff } => {
                         if app.config.ui.edit_diff {
@@ -6585,6 +6648,96 @@ async fn drain_due_wakes(app: &mut App) -> anyhow::Result<bool> {
     Ok(true)
 }
 
+/// Spawn a queued subagent now that a pool slot has opened. Replicates the
+/// handle-creation + spawn path from the agent loop's `dispatch_subagent`
+/// arm: mint the ULID + id, create the guardrail tokens (cancel/hard/
+/// progress/abort_reason), **register the handle in `app.in_flight`** (NOT
+/// just the UI list — without this `fire_subagent_kill` and the timeout
+/// supervisor can't reach it), notify the UI via `SubagentStarted` (non-
+/// blocking `try_send` since this is a sync fn), create the worktree if
+/// requested, and call `spawn_subagent`. Params come from `app.*` so the
+/// queued spawn matches a direct spawn (same provider/model/session/clock).
+fn spawn_queued_subagent(app: &mut App, qs: QueuedSubagent) {
+    let sub_ulid = Ulid::new();
+    let sub_id = format!("sub-{sub_ulid}");
+
+    let sub_cancel = tokio_util::sync::CancellationToken::new();
+    let sub_hard = tokio_util::sync::CancellationToken::new();
+    let sub_progress = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(now_ms()));
+    let sub_abort_reason = std::sync::Arc::new(std::sync::Mutex::new(None));
+
+    // Register the handle BEFORE spawning so a fast-completing subagent can't
+    // emit DelegationResult (which removes the id) before we insert it, and so
+    // fire_subagent_kill / the timeout supervisor can reach it.
+    app.in_flight.lock().unwrap().insert(
+        sub_id.clone(),
+        zoid::agent::SubagentHandle {
+            cancel: sub_cancel.clone(),
+            hard: sub_hard.clone(),
+            progress: sub_progress.clone(),
+            abort_reason: sub_abort_reason.clone(),
+            task: qs.task.clone(),
+            agent: qs.resolved_name.clone(),
+        },
+    );
+
+    // Notify the UI (the existing SubagentStarted handler pushes to
+    // in_flight_subagents + shell.subagent_rows — no change needed). Use
+    // try_send: this is a sync fn called from the non-async DelegationResult
+    // drain loop, so it cannot `.await` on the channel.
+    let _ = app.ui_tx.try_send(AgentUpdate::SubagentStarted {
+        id: sub_id.clone(),
+        task: qs.task.clone(),
+        agent: qs.resolved_name.clone(),
+    });
+
+    // Worktree (if requested — carried from the original dispatch call).
+    let wt = if qs.want_worktree && std::path::Path::new(".git").exists() {
+        zoid::worktree::create_worktree(std::path::Path::new("."), &format!("sub-{sub_ulid}")).ok()
+    } else {
+        None
+    };
+    let cwd = wt
+        .as_ref()
+        .map(|w| {
+            std::fs::canonicalize(w.path()).unwrap_or_else(|_| w.path().to_path_buf())
+        })
+        .unwrap_or_else(|| qs.cwd.clone());
+
+    // Spawn — pull params from `app` so the queued spawn matches a direct one.
+    zoid::spawn_subagent::spawn_subagent(
+        qs.task,
+        qs.resolved_profile,
+        app.events.snapshot(),
+        app.provider.clone(),
+        cwd,
+        app.model.clone(),
+        // Thinking mode: resolve the same way spawn_turn does.
+        {
+            let model_support = app
+                .fetched_model_info
+                .map(|info| info.thinking)
+                .unwrap_or_else(|| zoid_provider::model::model_info(&app.model).thinking);
+            resolve_thinking(&app.config.thinking, model_support)
+        },
+        app.session.clone(),
+        app.session_id,
+        app.ui_tx.clone(),
+        now_ms,
+        sub_id.clone(),
+        wt,
+        app.config.approval.clone(),
+        sub_cancel,
+        sub_hard,
+        sub_progress,
+        sub_abort_reason,
+        (app.config.subagent.idle_timeout_secs > 0)
+            .then(|| std::time::Duration::from_secs(app.config.subagent.idle_timeout_secs)),
+        (app.config.subagent.hard_timeout_secs > 0)
+            .then(|| std::time::Duration::from_secs(app.config.subagent.hard_timeout_secs)),
+    );
+}
+
 fn spawn_turn(app: &mut App) {
     let provider = app.provider.clone();
     let session = app.session.clone();
@@ -6672,6 +6825,7 @@ fn spawn_turn(app: &mut App) {
         .then(|| std::time::Duration::from_secs(app.config.subagent.idle_timeout_secs));
     turn_config.subagent_ceiling = (app.config.subagent.hard_timeout_secs > 0)
         .then(|| std::time::Duration::from_secs(app.config.subagent.hard_timeout_secs));
+    turn_config.max_concurrent = app.config.subagent.max_concurrent;
     turn_config.agents = Some(app.agents.clone());
     // The live-fetched context window (from ModelInfoFetched / ctx_ceiling),
     // not the static table's conservative default. This is what the
@@ -7597,6 +7751,7 @@ mod tests {
             session_started_ms: 0,
             session_ids: Vec::new(),
             in_flight_subagents: Vec::new(),
+            queued_subagents: std::collections::VecDeque::new(),
             active_worktree: None,
             active_wt_tx: tokio::sync::watch::channel(None).0,
         in_flight: std::sync::Arc::new(std::sync::Mutex::new(

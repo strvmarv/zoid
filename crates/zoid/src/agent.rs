@@ -201,6 +201,10 @@ pub struct TurnConfig {
     /// `fetch_model_info` / `ModelInfoFetched`), not the static table's
     /// conservative default. 0 = unknown → hard-ceiling pass is skipped.
     pub context_window: u64,
+    /// Max concurrent subagents (global pool). 0 = unlimited. Default 3.
+    /// Wired in `spawn_turn` from `app.config.subagent.max_concurrent` so the
+    /// pool check in `dispatch_subagent` honors the user's config.
+    pub max_concurrent: usize,
 }
 
 // Manual `Debug`: `embed`/`embedder` hold a trait object (`dyn Embedder`) and
@@ -287,6 +291,7 @@ pub fn chat_turn_config_with(profile: &AgentProfile, skill_menu: &str) -> TurnCo
         subagent_ceiling: None,
         agents: None,
         context_window: 0,
+        max_concurrent: 3,
     }
 }
 
@@ -362,6 +367,21 @@ pub enum AgentUpdate {
     /// A subagent was dispatched (via the dispatch_subagent tool). The UI tracks
     /// it as in-flight until its DelegationResult arrives.
     SubagentStarted { id: String, task: String, agent: String },
+    /// A `dispatch_subagent` call was queued because the global pool is full.
+    /// Carries everything the main loop needs to spawn the subagent once a
+    /// slot opens (the resolved profile, the parent's cwd for worktree
+    /// creation, and the `want_worktree` flag parsed at dispatch time). The
+    /// main loop pushes this onto `App.queued_subagents` and drains it on
+    /// each `DelegationResult`.
+    SubagentQueued {
+        tool_call_id: String,
+        task: String,
+        agent: String,
+        resolved_profile: zoid_core::agent_profile::AgentProfile,
+        resolved_name: String,
+        want_worktree: bool,
+        cwd: PathBuf,
+    },
     /// An ephemeral, UI-only diff for an edit/write tool call. Carries the
     /// computed `FileDiff` to the TUI's in-memory cache; never persisted and
     /// never sent to the model. Keyed by tool-call id.
@@ -1522,36 +1542,10 @@ async fn run_turn_inner(
                     );
                 }
                 Some(zoid_tools::ToolKind::Emitting) if tc.name == "dispatch_subagent" => {
-                    // v1: sequential dispatch. Refuse if a subagent is in flight.
-                    if let Some(set) = &config.in_flight {
-                        if !set.lock().unwrap().is_empty() {
-                            emit(
-                                &session,
-                                &mut events,
-                                ui,
-                                &config.branch,
-                                EventKind::ToolResult {
-                                    id: tc.id.clone(),
-                                    name: tc.name.clone(),
-                                    output: "dispatch_subagent: a subagent is already \
-                                             running. You must WAIT for its \
-                                             DelegationResult event to arrive before \
-                                             dispatching another, editing files in the \
-                                             worktree, or calling cancel_subagent. Do NOT \
-                                             cancel the running subagent — it may be \
-                                             mid-work and canceling loses its progress. \
-                                             Stop issuing tool calls until the result \
-                                             arrives."
-                                        .into(),
-                                    is_error: true,
-                                },
-                                session_id,
-                                now,
-                            )
-                            .await?;
-                            continue;
-                        }
-                    }
+                    // Parse task + resolve agent profile + want_worktree BEFORE the
+                    // pool check: the queue path needs all of them so the main loop
+                    // can spawn without re-resolving (Task 4 Step 3). cwd is the
+                    // parent's CURRENT `cwd_for_exec` (worktree created at spawn).
                     let task = tc
                         .args
                         .get("task")
@@ -1610,6 +1604,49 @@ async fn run_turn_inner(
                             "delegate".to_string(),
                         ),
                     };
+                    // Pool check: if the global in-flight set is at capacity, queue
+                    // the dispatch instead of spawning. Returns a non-error "queued"
+                    // tool result and signals the main loop to enqueue the subagent;
+                    // the next `DelegationResult` drains the queue. `max_concurrent`
+                    // of 0 means unlimited (never queue).
+                    if let Some(set) = &config.in_flight {
+                        let n = set.lock().unwrap().len();
+                        if n >= config.max_concurrent && config.max_concurrent > 0 {
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::ToolResult {
+                                    id: tc.id.clone(),
+                                    name: tc.name.clone(),
+                                    output: format!(
+                                        "subagent queued ({n} running, max {})",
+                                        config.max_concurrent
+                                    ),
+                                    is_error: false,
+                                },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                            // Signal the main loop to queue the subagent. Carries
+                            // the resolved profile + parent cwd so the main loop
+                            // can spawn without re-resolving.
+                            let _ = ui
+                                .send(AgentUpdate::SubagentQueued {
+                                    tool_call_id: tc.id.clone(),
+                                    task: task.clone(),
+                                    agent: resolved_agent_name.clone(),
+                                    resolved_profile: profile.clone(),
+                                    resolved_name: resolved_agent_name.clone(),
+                                    want_worktree,
+                                    cwd: cwd_for_exec.clone(),
+                                })
+                                .await;
+                            continue;
+                        }
+                    }
                     let sub_ulid = Ulid::new();
                     let sub_id = format!("sub-{sub_ulid}");
 
@@ -4971,6 +5008,12 @@ mod tests {
             std::collections::HashMap::new(),
         ));
         config.in_flight = Some(shared.clone());
+        // Concurrency: with the default pool size (3), two dispatches both
+        // succeed — the single-in-flight guard is gone. The pool now bounds
+        // concurrency, so a SECOND dispatch while ONE is running is allowed
+        // (not rejected). Set the pool to 1 to keep the sequential-rejection
+        // semantics this test was built to check.
+        config.max_concurrent = 1;
 
         let out = run_agent_turn(
             config,
@@ -5003,9 +5046,18 @@ mod tests {
             "first dispatch should succeed: {:?}",
             results[0]
         );
+        // With max_concurrent = 1, the second dispatch hits the pool cap and is
+        // queued (not an error — a non-error "queued" tool result). The
+        // rejection-when-full behavior now returns a queued response instead
+        // of an error; the SubagentQueued event carries it to the main loop.
         assert!(
-            results[1].1,
-            "second dispatch should be rejected (sequential guard): {:?}",
+            !results[1].1,
+            "second dispatch at capacity is queued (non-error), not rejected: {:?}",
+            results[1]
+        );
+        assert!(
+            results[1].0.starts_with("subagent queued"),
+            "second dispatch tool result should announce it was queued: {:?}",
             results[1]
         );
     }
