@@ -181,6 +181,7 @@ pub async fn run_subagent(
         subagent_idle: None,
         subagent_ceiling: None,
         agents: None,
+        context_window: 0, // subagents: eviction disabled, hard-ceiling pass skipped
     };
     // Subagents have no session-scoped companion (the `show` tool is chat-only
     // and is never in the subagent tool registry), so this hub is never

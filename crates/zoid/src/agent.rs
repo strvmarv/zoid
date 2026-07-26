@@ -196,6 +196,11 @@ pub struct TurnConfig {
     /// The agent profile registry for `dispatch_subagent` name resolution.
     /// `None` for subagent turns (subagents can't dispatch) and tests.
     pub agents: Option<std::sync::Arc<zoid_core::agent_profile::AgentRegistry>>,
+    /// The model's actual context window (tokens). Used by the hard-ceiling
+    /// compaction pass in `preflight_gate` — the live-fetched value (from
+    /// `fetch_model_info` / `ModelInfoFetched`), not the static table's
+    /// conservative default. 0 = unknown → hard-ceiling pass is skipped.
+    pub context_window: u64,
 }
 
 // Manual `Debug`: `embed`/`embedder` hold a trait object (`dyn Embedder`) and
@@ -281,6 +286,7 @@ pub fn chat_turn_config_with(profile: &AgentProfile, skill_menu: &str) -> TurnCo
         subagent_idle: None,
         subagent_ceiling: None,
         agents: None,
+        context_window: 0,
     }
 }
 
@@ -798,7 +804,7 @@ async fn run_turn_inner(
         }
 
         // PRE-FLIGHT GATE (spec §3.8): shrink to fit BEFORE building the request.
-        let model_ctx = zoid_provider::model::model_info(&model).context_window;
+        let model_ctx = config.context_window;
         preflight_gate(
             &session,
             &mut events,

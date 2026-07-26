@@ -6587,6 +6587,10 @@ fn spawn_turn(app: &mut App) {
     turn_config.subagent_ceiling = (app.config.subagent.hard_timeout_secs > 0)
         .then(|| std::time::Duration::from_secs(app.config.subagent.hard_timeout_secs));
     turn_config.agents = Some(app.agents.clone());
+    // The live-fetched context window (from ModelInfoFetched / ctx_ceiling),
+    // not the static table's conservative default. This is what the
+    // hard-ceiling compaction pass uses to decide if the request fits.
+    turn_config.context_window = app.shell.ctx_ceiling;
     // Mint fresh cancellation tokens for this turn and keep clones so
     // `Action::CancelTurn` (Esc/Ctrl-C) can fire them. Cleared on `TurnComplete`.
     let cancel = tokio_util::sync::CancellationToken::new();
