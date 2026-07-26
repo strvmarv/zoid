@@ -78,7 +78,7 @@ impl Default for SubagentConfig {
 
 - [ ] **Step 2: Add to `PartialSubagent` and the merge**
 
-Find `PartialSubagent` (search for `PartialSubagent` in config.rs). Add:
+Find `PartialSubagent` (config.rs, search for `PartialSubagent`). Add:
 ```rust
 pub max_concurrent: Option<usize>,
 ```
@@ -91,7 +91,24 @@ if let Some(v) = p.subagent.max_concurrent {
 }
 ```
 
-Add `subagent_max_concurrent: Source` to `Provenance` and its `Default` impl.
+Add `subagent_max_concurrent: Source` to `Provenance`.
+
+**C1 fix — all construction sites:** `Provenance` has no `Default`
+derive and is constructed by name at **three** sites:
+1. `config.rs:512` (the `merge` function)
+2. `main.rs:7539` (the `test_app()` helper)
+3. `crates/zoid-tui/tests/shell_snapshot.rs:933` (snapshot test)
+
+Deriving `Default` on `Provenance` (it's `Copy + all-fields-are-Source`,
+trivial) removes the footgun permanently. Add `#[derive(Default)]` to
+`Provenance` and `Source` (if not already). Then update the `merge` site
+to use `..Provenance::default()` for the new field, and the other two
+sites don't need changes (they already spread `..Default::default()` or
+will pick up the derived default).
+
+If deriving `Default` is too invasive (e.g., `Source` doesn't derive
+`Default`), instead enumerate all three sites and add
+`subagent_max_concurrent: Source::Default` to each.
 
 - [ ] **Step 3: Write tests**
 
@@ -198,8 +215,20 @@ if spawned {
 } else if take_deferred_delegation_wake(app) {
     spawn_turn(app);
 }
-// drain_due_wakes ...
+// Preserve the !app.streaming guard around drain_due_wakes — a
+// queued message or deferred wake may have just set streaming=true
+// and called spawn_turn. Draining while streaming would double-spawn.
+if !app.streaming {
+    drain_due_wakes(app).await?;
+}
 ```
+
+**Note:** `take_deferred_delegation_wake` (main.rs:6506) is
+`wake = app.wake_after_delegation && !app.yielded` — it has no
+`is_empty()` term and needs **no change**. The per-result wake
+works because `plan_delegation_wake` (Step 3) now arms
+`wake_after_delegation` regardless of pool state. Do NOT modify
+`take_deferred_delegation_wake`.
 
 - [ ] **Step 5: Run the gate + commit**
 
@@ -259,12 +288,21 @@ gate in place. Update the hint message to say:
 "N subagents running — press Esc to kill them or wait for completion"
 ```
 
-- [ ] **Step 5: Run the gate + commit**
+- [ ] **Step 5: Update the `submit_while_delegating_queues_message` test**
+
+The test at main.rs:8150 asserts that `Submit` while subagents are
+running queues the message (`!app.streaming`, `pending_message == Some(...)`).
+After Step 3, `Submit` with `streaming=false` spawns a turn immediately
+(subagents running is no longer a blocker). Update the test to reflect
+the new behavior: `Submit` while subagents run and no turn is streaming
+spawns a turn (`app.streaming == true`, `pending_message == None`).
+
+The test for the *actual* queue path (`Submit` while `streaming=true`
+AND subagents running) should still assert `pending_message == Some(...)`.
+
+- [ ] **Step 6: Run the gate + commit**
 
 ```bash
-cargo nextest run --workspace --features zoid/local-embed --no-fail-fast
-git commit -m "feat(agent): unblock main loop while subagents run"
-```
 
 ---
 
@@ -290,10 +328,9 @@ struct QueuedSubagent {
     resolved_profile: zoid_core::agent_profile::AgentProfile,
     resolved_name: String,
     cwd: PathBuf,
-    branch: zoid_core::event::BranchId,
+    want_worktree: bool,
     tool_call_id: String,
     session_id: ulid::Ulid,
-    want_worktree: bool,
 }
 ```
 
@@ -304,7 +341,7 @@ queued_subagents: std::collections::VecDeque<QueuedSubagent>,
 
 Initialize in the `App` constructor: `queued_subagents: VecDeque::new()`.
 
-- [ ] **Step 2: Add `max_concurrent` to `TurnConfig`**
+- [ ] **Step 2: Add `max_concurrent` to `TurnConfig` and wire it in `spawn_turn`**
 
 In `crates/zoid/src/agent.rs`, add to `TurnConfig` (line 147):
 
@@ -313,7 +350,20 @@ In `crates/zoid/src/agent.rs`, add to `TurnConfig` (line 147):
 pub max_concurrent: usize,
 ```
 
-Default in the `TurnConfig` constructor (line 288): `max_concurrent: 3,`.
+Default in the `TurnConfig` constructor (the `chat_turn_config_with`
+function, ~line 270): `max_concurrent: 3,`.
+
+**C2 fix — wire in `spawn_turn`:** In `crates/zoid/src/main.rs`,
+`spawn_turn` (~line 6589) sets `turn_config.subagent_idle` and
+`turn_config.subagent_ceiling` from `app.config.subagent.*`. Add
+alongside them:
+
+```rust
+turn_config.max_concurrent = app.config.subagent.max_concurrent;
+```
+
+Without this, the pool check always sees the hardcoded default (3),
+ignoring the user's config.
 
 - [ ] **Step 3: Replace the single-in-flight guard in `dispatch_subagent`**
 
@@ -363,14 +413,22 @@ Move the `task` extraction (lines 1555-1560) and the agent resolution
 
 - [ ] **Step 4: Add `SubagentQueued` to `AgentUpdate`**
 
-In `crates/zoid/src/agent.rs`, add a new variant:
+In `crates/zoid/src/agent.rs`, add a new variant. **C3 fix:** The variant
+must carry the resolved profile (Option A) — not just `task`/`agent` —
+so the main loop can spawn without re-resolving. `AgentProfile` is
+`Clone + Send` (already moved into `tokio::spawn` in `spawn_subagent`).
 
 ```rust
 /// A dispatch_subagent call was queued because the pool is full.
+/// Carries everything needed to spawn when a slot opens.
 SubagentQueued {
     tool_call_id: String,
     task: String,
     agent: String,
+    resolved_profile: zoid_core::agent_profile::AgentProfile,
+    resolved_name: String,
+    want_worktree: bool,
+    cwd: PathBuf,
 },
 ```
 
@@ -379,39 +437,27 @@ SubagentQueued {
 In `crates/zoid/src/main.rs`, in the `AgentUpdate` match:
 
 ```rust
-AgentUpdate::SubagentQueued { tool_call_id, task, agent } => {
-    // Resolve the profile and cwd the same way dispatch_subagent does.
-    // For now, store the minimal info needed to spawn later.
-    // The task/agent were already resolved in the agent loop; we need
-    // to carry enough to spawn. In practice, the simplest approach:
-    // store the raw task + agent name + the turn's cwd/branch.
+AgentUpdate::SubagentQueued {
+    tool_call_id, task, agent, resolved_profile, resolved_name,
+    want_worktree, cwd,
+} => {
     app.queued_subagents.push_back(QueuedSubagent {
         task,
         agent,
-        resolved_profile: app.base_profile.clone(), // resolved later
-        resolved_name: agent,
-        cwd: /* current turn cwd */,
-        branch: /* current branch */,
+        resolved_profile,
+        resolved_name,
+        cwd,
+        branch: zoid_core::event::BranchId::default(),
         tool_call_id,
         session_id: app.session_id,
-        want_worktree: false, // queued subagents don't get worktrees (simplification)
+        want_worktree,
     });
 }
 ```
 
-**Complexity note:** The profile resolution and worktree creation happen
-in the agent loop, not the main loop. The queued subagent needs the
-resolved profile. Two options:
-- **Option A:** Carry the resolved `AgentProfile` through the
-  `SubagentQueued` event. The agent loop resolves it before sending.
-  Simplest — the profile is already resolved by the time the pool check
-  fires.
-- **Option B:** Re-resolve in the main loop. Needs the `AgentRegistry`
-  in `App`, which is available (`app.agents`).
-
-**Recommendation:** Option A. Add `resolved_profile: AgentProfile` and
-`resolved_name: String` to `SubagentQueued`. The agent loop already has
-both.
+**M2 fix:** `want_worktree` is carried from the agent loop (parsed
+from the tool args before the pool check). A queued subagent with
+`worktree=true` gets its worktree when spawned — no behavior cliff.
 
 - [ ] **Step 6: Drain the queue on `DelegationResult`**
 
@@ -425,19 +471,114 @@ if let EventKind::DelegationResult { subagent_id, .. } = &ev.kind {
     // ... (existing kill_armed reset)
 
     // Drain: if a slot opened and the queue is non-empty, spawn the next.
-    while app.in_flight.lock().unwrap().len() < app.config.subagent.max_concurrent
+    // M5 fix: treat max_concurrent = 0 as unlimited (never drain from
+    // queue — but with 0 the pool check never queues either, so the
+    // queue is always empty in that mode).
+    let max = app.config.subagent.max_concurrent;
+    while max == 0 || app.in_flight.lock().unwrap().len() < max
         && !app.queued_subagents.is_empty()
     {
         let qs = app.queued_subagents.pop_front().unwrap();
-        // Spawn the subagent (same path as dispatch_subagent's spawn).
         spawn_queued_subagent(app, qs);
     }
 }
 ```
 
-`spawn_queued_subagent` is a helper in `main.rs` that mirrors the
-`spawn_subagent` call in `agent.rs:1672` — creates the ULID, handle,
-worktree (if any), and calls `spawn_subagent::spawn_subagent`.
+**H4 fix — `spawn_queued_subagent` must register the handle:**
+
+The helper must replicate the full spawn path from `agent.rs:1653-1693`:
+create the ULID, create the `SubagentHandle` (cancel + hard + progress +
+abort_reason), **insert it into `app.in_flight`** (the handle registry —
+NOT just the UI list), send `SubagentStarted`, create the worktree (if
+`want_worktree`), and call `crate::spawn_subagent::spawn_subagent`.
+
+```rust
+fn spawn_queued_subagent(app: &mut App, qs: QueuedSubagent) {
+    let sub_ulid = ulid::Ulid::new();
+    let sub_id = format!("sub-{sub_ulid}");
+
+    let sub_cancel = tokio_util::sync::CancellationToken::new();
+    let sub_hard = tokio_util::sync::CancellationToken::new();
+    let sub_progress = std::sync::Arc::new(
+        std::sync::atomic::AtomicI64::new(now_ms())
+    );
+    let sub_abort_reason = std::sync::Arc::new(
+        std::sync::Mutex::new(None)
+    );
+
+    // Register the handle BEFORE spawning (H4 — without this,
+    // fire_subagent_kill and the timeout supervisor can't reach it).
+    app.in_flight.lock().unwrap().insert(
+        sub_id.clone(),
+        zoid::agent::SubagentHandle {
+            cancel: sub_cancel.clone(),
+            hard: sub_hard.clone(),
+            progress: sub_progress.clone(),
+            abort_reason: sub_abort_reason.clone(),
+            task: qs.task.clone(),
+            agent: qs.resolved_name.clone(),
+        },
+    );
+
+    // Notify the UI (existing handler at main.rs:3307 pushes to
+    // in_flight_subagents + shell.subagent_rows — no change needed).
+    let _ = app.ui_tx.send(AgentUpdate::SubagentStarted {
+        id: sub_id.clone(),
+        task: qs.task.clone(),
+        agent: qs.resolved_name.clone(),
+    }).await;
+
+    // Worktree (if requested — carried from the original dispatch call).
+    let wt = if qs.want_worktree && std::path::Path::new(".git").exists() {
+        crate::worktree::create_worktree(
+            std::path::Path::new("."),
+            &format!("sub-{sub_ulid}"),
+        ).ok()
+    } else {
+        None
+    };
+    let cwd = wt.as_ref()
+        .map(|w| std::fs::canonicalize(w.path())
+            .unwrap_or_else(|_| w.path().to_path_buf()))
+        .unwrap_or_else(|| qs.cwd.clone());
+
+    // Spawn — pull params from `app` (M1 fix: explicit param sources).
+    crate::spawn_subagent::spawn_subagent(
+        qs.task,
+        qs.resolved_profile,
+        app.events.snapshot(),        // seed: current event log
+        app.provider.clone(),          // provider
+        cwd,
+        app.model.clone(),             // model
+        // thinking mode — resolve the same way spawn_turn does:
+        zoid_provider::ThinkingMode::Off, // simplified; resolve from config
+        app.session.clone(),           // session (shared actor)
+        app.session_id,                // session_id
+        app.ui_tx.clone(),             // ui channel
+        now_ms as fn() -> i64,         // clock
+        sub_id.clone(),
+        wt,
+        app.config.approval.clone(),   // approval config
+        sub_cancel,
+        sub_hard,
+        sub_progress,
+        sub_abort_reason,
+        // idle/ceiling from config (same as spawn_turn):
+        (app.config.subagent.idle_timeout_secs > 0)
+            .then(|| std::time::Duration::from_secs(
+                app.config.subagent.idle_timeout_secs)),
+        (app.config.subagent.hard_timeout_secs > 0)
+            .then(|| std::time::Duration::from_secs(
+                app.config.subagent.hard_timeout_secs)),
+    );
+}
+```
+
+**Note:** The existing `SubagentStarted` handler (main.rs:3307) needs
+**no change** — it pushes to `in_flight_subagents` and
+`shell.subagent_rows`, which is correct for both direct and queued
+spawns. The handle registration into `app.in_flight` happens in the
+helper (not the handler), matching the agent-loop pattern.
 
 - [ ] **Step 7: Write tests**
 
@@ -476,8 +617,12 @@ AgentUpdate::SessionTakenOver => {
         cancel.cancel();
     }
     app.streaming = false;
-    // Kill all in-flight subagents (concurrency: they may be running)
-    fire_subagent_kill(&app.in_flight, None); // None = kill all
+    // Kill all in-flight subagents (concurrency: they may be running).
+    // fire_subagent_kill is pub in agent.rs, signature:
+    //   (reg: &Arc<Mutex<HashMap<String, SubagentHandle>>>, target: Option<&str>) -> usize
+    // target=None kills all. Already called from main.rs:4015 with the
+    // same signature, so the import path is established.
+    zoid::agent::fire_subagent_kill(&app.in_flight, None);
     app.in_flight_subagents.clear();
     app.in_flight.lock().unwrap().clear();
     app.queued_subagents.clear();
@@ -486,10 +631,6 @@ AgentUpdate::SessionTakenOver => {
         Some("session taken over by another instance".into());
 }
 ```
-
-Note: `fire_subagent_kill` is in `agent.rs` and takes
-`(&Arc<Mutex<HashMap<String, SubagentHandle>>>, target: Option<&str>)`.
-`None` kills all. Import or call it via the agent module.
 
 - [ ] **Step 2: Run the gate + commit**
 
@@ -502,25 +643,38 @@ git commit -m "fix(agent): kill subagents on session takeover"
 
 ## Self-Review
 
-**Gilfoyle review (spec) issues addressed:**
-- C1 (wake logic drops results): Task 2 — per-result wake, drops `is_empty()` from `should_wake_after_delegation` and `plan_delegation_wake`
-- C2 (TurnComplete gate blocks post-turn logic): Task 2 Step 4 — removes the `if` wrapper
-- H1 (4 user actions still blocked): Task 3 — `Submit` unblocked; session/worktree management stays gated (documented)
-- H2 (takeover orphans subagents): Task 5 — `fire_subagent_kill` on `SessionTakenOver`
-- H3 (in_flight vs in_flight_subagents): Task 4 — pool check on `in_flight` (handle registry), queue on `App.queued_subagents`
-- M1-M3: documented in spec, no code action needed
+**Gilfoyle review (plan) issues addressed:**
+- C1 (Provenance breaks 3 sites): Step 2 derives `Default` on `Provenance` or enumerates all 3 sites
+- C2 (spawn_turn never sets max_concurrent): Task 4 Step 2 adds `turn_config.max_concurrent = app.config.subagent.max_concurrent`
+- C3 (SubagentQueued variant contradicts Step 5): Task 4 Step 4 carries full `resolved_profile: AgentProfile` (Option A, definitive)
+- H1 (take_deferred_delegation_wake unchanged): Task 2 Step 4 explicitly notes no change needed
+- H2 (TurnComplete drain guard): Task 2 Step 4 preserves `if !app.streaming` around `drain_due_wakes`
+- H3 (submit_while_delegating test breaks): Task 3 Step 5 updates the test
+- H4 (spawn_queued_subagent must register handle): Task 4 Step 6 enumerates handle creation + `in_flight.insert` explicitly
+- H5 (fire_subagent_kill signature): Task 5 Step 1 uses `zoid::agent::fire_subagent_kill(&app.in_flight, None)` (2-arg, correct)
+- M1 (app param sources): Task 4 Step 6 lists each `app.*` source for `spawn_subagent` params
+- M2 (want_worktree cliff): Task 4 carries `want_worktree` through `SubagentQueued` and `QueuedSubagent`
+- M3 (SubagentStarted handler): Task 4 Step 6 confirms no change needed
+- M5 (max_concurrent=0 drain): Task 4 Step 6 treats 0 as unlimited in the drain guard
+
+**SQLite (M4):** Per-subagent connections deferred. The shared session
+actor serializes appends — correct for correctness, but 3 concurrent
+subagents each calling `session.append().await` serialize on the actor's
+single thread, adding latency proportional to concurrent event rate.
+Per-connection optimization is the follow-up if write contention becomes
+measurable. This is a deliberate phasing decision, not a bug.
 
 **Risk areas:**
 - Task 4 is the largest task — the `dispatch_subagent` refactor moves
   profile resolution above the pool check and adds a new `AgentUpdate`
   variant. Test thoroughly.
-- The `SubagentQueued` event carries a full `AgentProfile` — it's a
-  `Clone`-able struct, but it's large. Acceptable for a rare event.
-- The `spawn_queued_subagent` helper in Task 4 Step 6 duplicates some
-  logic from `agent.rs:1672`. DRY by extracting a shared `spawn_subagent_from_main`
-  function if the duplication is significant.
-- SQLite per-subagent connections (spec §6) are NOT in this plan — the
-  subagent still uses the shared `SessionHandle` actor for appends. The
-  actor's mpsc channel serializes writes. This is safe for correctness;
-  the per-connection optimization is a follow-up if write contention
+- The `SubagentQueued` event carries a full `AgentProfile` — it's
+  `Clone + Send` (confirmed), large but acceptable for a rare event.
+- The `spawn_queued_subagent` helper in Task 4 Step 6 duplicates the
+  handle-creation + spawn logic from `agent.rs:1653-1693`. DRY by
+  extracting a shared function if the duplication is significant.
+- SQLite per-subagent connections are NOT in this plan — the subagent
+  still uses the shared `SessionHandle` actor for appends. The actor's
+  mpsc channel serializes writes. This is safe for correctness; the
+  per-connection optimization is a follow-up if write contention
   becomes measurable.
