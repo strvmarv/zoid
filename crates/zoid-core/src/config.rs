@@ -147,6 +147,8 @@ pub struct SubagentConfig {
     pub idle_timeout_secs: u64,
     /// Absolute wall-clock ceiling in seconds; 0 = disabled. Default 1800.
     pub hard_timeout_secs: u64,
+    /// Maximum number of subagents that may run concurrently. Default 3.
+    pub max_concurrent: usize,
 }
 
 impl Default for SubagentConfig {
@@ -154,6 +156,7 @@ impl Default for SubagentConfig {
         Self {
             idle_timeout_secs: 900,
             hard_timeout_secs: 1800,
+            max_concurrent: 3,
         }
     }
 }
@@ -244,6 +247,20 @@ mod tests {
         assert_eq!(cfg.subagent.hard_timeout_secs, 0); // 0 = off, still a valid value
         assert_eq!(prov.subagent_idle_timeout_secs, Source::UserGlobal);
         assert_eq!(prov.subagent_hard_timeout_secs, Source::UserGlobal);
+    }
+
+    #[test]
+    fn subagent_max_concurrent_defaults_to_3() {
+        let c = Config::default();
+        assert_eq!(c.subagent.max_concurrent, 3);
+    }
+
+    #[test]
+    fn subagent_max_concurrent_overrides_via_toml() {
+        let (pc, _) = parse_toml("[subagent]\nmax_concurrent = 1").unwrap();
+        let layers = vec![(Source::UserGlobal, pc)];
+        let (cfg, _) = merge(&layers);
+        assert_eq!(cfg.subagent.max_concurrent, 1);
     }
 
     #[test]
@@ -383,6 +400,7 @@ pub struct Provenance {
     pub ui_edit_diff_inline: Source,
     pub subagent_idle_timeout_secs: Source,
     pub subagent_hard_timeout_secs: Source,
+    pub subagent_max_concurrent: Source,
     pub wake_enabled: Source,
 }
 
@@ -449,6 +467,7 @@ pub struct PartialEviction {
 pub struct PartialSubagent {
     pub idle_timeout_secs: Option<u64>,
     pub hard_timeout_secs: Option<u64>,
+    pub max_concurrent: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -528,6 +547,7 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         ui_edit_diff_inline: Source::Default,
         subagent_idle_timeout_secs: Source::Default,
         subagent_hard_timeout_secs: Source::Default,
+        subagent_max_concurrent: Source::Default,
         wake_enabled: Source::Default,
     };
     for (src, p) in layers {
@@ -582,6 +602,10 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         if let Some(v) = p.subagent.hard_timeout_secs {
             cfg.subagent.hard_timeout_secs = v;
             prov.subagent_hard_timeout_secs = *src;
+        }
+        if let Some(v) = p.subagent.max_concurrent {
+            cfg.subagent.max_concurrent = v;
+            prov.subagent_max_concurrent = *src;
         }
         if let Some(v) = p.wake.enabled {
             cfg.wake.enabled = v;

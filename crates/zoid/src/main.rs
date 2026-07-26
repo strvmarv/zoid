@@ -7550,6 +7550,7 @@ mod tests {
                     thinking_effort: Source::Default,
                     subagent_idle_timeout_secs: Source::Default,
                     subagent_hard_timeout_secs: Source::Default,
+                    subagent_max_concurrent: Source::Default,
                     approval: Source::Default,
                     reassert_interval_tokens: Source::Default,
                     num_ctx: Source::Default,
