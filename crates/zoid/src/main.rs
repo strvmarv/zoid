@@ -628,6 +628,31 @@ fn pick_choice(n_sessions: usize, selected: usize, key: PickKey) -> PickOutcome 
     }
 }
 
+/// Compute the vertical scroll offset (in lines) for the startup picker's
+/// `Paragraph` so that the selected row stays within the visible window.
+///
+/// `selected_line` is the index of the cursor row within the `lines` Vec the
+/// picker builds (title + blank + session rows + optional delete-confirm +
+/// "Create new" + blank + hint). `visible_height` is the inner area height
+/// (the block's bordered area minus 2).
+///
+/// Pure — no IO. Returns 0 when everything fits. Otherwise the offset grows
+/// so the selected line is the last visible row (when the cursor moves down
+/// past the bottom) or the first visible row (when it moves back up past the
+/// top), matching the natural scrolling behaviour of a list.
+fn picker_scroll_offset(selected_line: usize, visible_height: usize) -> u16 {
+    if visible_height == 0 {
+        return 0;
+    }
+    // No scrolling needed while the selected line still fits in the first screen.
+    if selected_line < visible_height {
+        return 0;
+    }
+    // selected_line is at or below the bottom edge: scroll so it becomes the
+    // last visible row. selected - visible + 1 is the first line to show.
+    (selected_line - visible_height + 1) as u16
+}
+
 /// The startup picker's resolution: which session to load (or whether to
 /// create a new one) before `run()` begins.
 enum PickResult {
@@ -738,7 +763,27 @@ async fn pick_session(
             let block = Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::new().fg(Color::DarkGray));
-            f.render_widget(Paragraph::new(lines).block(block), area);
+            // Keep the selected row on screen when the list is taller than the
+            // terminal. Session rows start at line 2 (title + blank); the
+            // "Create new" row sits after the session rows and the optional
+            // delete-confirm line. Paragraph clips content past the inner
+            // height, so without a scroll offset the bottom rows (Create new,
+            // hint) become invisible but still selectable — see
+            // `picker_scroll_offset`.
+            let selected_line = if selected < n {
+                2 + selected
+            } else {
+                // "Create new" row: title + blank + n session rows + (delete
+                // confirm line if pending) + the create row's own index.
+                2 + n + pending_delete.is_some() as usize
+            };
+            // Visible height = inner area (borders take 2 rows).
+            let visible_height = area.height.saturating_sub(2) as usize;
+            let scroll_y = picker_scroll_offset(selected_line, visible_height);
+            f.render_widget(
+                Paragraph::new(lines).scroll((scroll_y, 0)).block(block),
+                area,
+            );
         })?;
 
         if let Some(Ok(CEvent::Key(key))) = term_events.next().await {
@@ -9040,6 +9085,60 @@ mod tests {
             pick_choice(2, 2, PickKey::Delete),
             PickOutcome::Pending(2)
         );
+    }
+
+    // --- picker_scroll_offset tests ---
+    // The startup picker can list more sessions than fit on screen. Without a
+    // scroll offset, Paragraph clips the bottom rows (the "Create new session"
+    // row and the hint), so they're invisible but still selectable — the user
+    // can arrow down into nothingness and hit Enter on an unseen row. The fix
+    // is a pure y-offset that keeps the selected row within the visible window.
+
+    #[test]
+    fn scroll_offset_zero_when_everything_fits() {
+        // 3 session rows + title/blanks/create/hint = 7 lines; visible_height=20
+        // easily fits them all, so no scrolling is needed.
+        assert_eq!(picker_scroll_offset(2 + 1, 20), 0); // last session row
+        assert_eq!(picker_scroll_offset(2 + 3, 20), 0); // create-new row
+    }
+
+    #[test]
+    fn scroll_offset_advances_when_cursor_moves_below_view() {
+        // visible_height=4. Lines 0..3 visible initially. Selecting line 5
+        // (a session row in a long list) must scroll so line 5 is the last
+        // visible row → offset = 5 - 4 + 1 = 2.
+        assert_eq!(picker_scroll_offset(5, 4), 2);
+    }
+
+    #[test]
+    fn scroll_offset_keeps_create_new_row_visible() {
+        // 10 sessions → create-new is at line 2+10=12. visible_height=5.
+        // Offsetting by 12-5+1=8 puts line 12 as the last visible row.
+        assert_eq!(picker_scroll_offset(12, 5), 8);
+    }
+
+    #[test]
+    fn scroll_offset_only_grows_never_shrinks_jumps_back() {
+        // Once scrolled down, moving the cursor back up should pull the offset
+        // back so the selected row is the *first* visible one when it would
+        // otherwise be clipped at the top. visible_height=4, selected=3 →
+        // offset 0 (line 3 is the last of the 0..3 window). selected=2 → 0.
+        assert_eq!(picker_scroll_offset(3, 4), 0);
+        assert_eq!(picker_scroll_offset(2, 4), 0);
+    }
+
+    #[test]
+    fn scroll_offset_clamps_when_cursor_far_above_window() {
+        // If the selected line is behind the current natural offset, the offset
+        // must drop so the selected line becomes visible. selected=2, h=4 → 0.
+        assert_eq!(picker_scroll_offset(2, 4), 0);
+    }
+
+    #[test]
+    fn scroll_offset_zero_when_visible_height_exceeds_content() {
+        // selected line within the first screen even for huge heights.
+        assert_eq!(picker_scroll_offset(0, 100), 0);
+        assert_eq!(picker_scroll_offset(50, 100), 0);
     }
 
     // --- boot_decision tests ---
