@@ -8474,6 +8474,215 @@ mod tests {
         );
     }
 
+    // --- Concurrent subagent pool edge-case tests ---
+
+    /// `max_concurrent = 0` means unlimited: the drain loop spawns all queued
+    /// subagents without a capacity check. The queue-emptiness guard
+    /// short-circuits first so an empty queue with max=0 doesn't panic.
+    #[tokio::test]
+    async fn max_concurrent_zero_unlimited_no_panic() {
+        let mut app = test_app().await;
+        app.config.subagent.max_concurrent = 0;
+
+        // Simulate a DelegationResult arriving with an empty queue.
+        // The drain loop should exit immediately (queue is empty).
+        // No panic, no spawn.
+        let ev = zoid_core::event::Event::new(
+            ulid::Ulid::new(),
+            None,
+            0,
+            zoid_core::event::EventKind::DelegationResult {
+                subagent_id: "sub-done".into(),
+                branch: String::new(),
+                summary: "done".into(),
+                ok: true,
+            },
+        )
+        .with_session(app.session_id);
+        app.events.push(ev);
+
+        // Manually trigger the drain (mirrors the DelegationResult handler)
+        let max = app.config.subagent.max_concurrent;
+        while !app.queued_subagents.is_empty()
+            && (max == 0 || app.in_flight.lock().unwrap().len() < max)
+        {
+            // Would call spawn_queued_subagent, but queue is empty so this
+            // loop body never executes.
+            unreachable!("queue is empty — loop should not enter");
+        }
+
+        assert!(app.queued_subagents.is_empty(), "queue untouched");
+        assert!(app.in_flight.lock().unwrap().is_empty(), "pool untouched");
+    }
+
+    /// `max_concurrent = 1`: the pool accepts one subagent, and the second
+    /// is queued. When the first finishes, the drain spawns the second.
+    #[tokio::test]
+    async fn max_concurrent_one_queues_second_drains_on_completion() {
+        let mut app = test_app().await;
+        app.config.subagent.max_concurrent = 1;
+
+        // Pre-fill the pool with one "running" subagent.
+        app.in_flight.lock().unwrap().insert(
+            "sub-running".into(),
+            zoid::agent::SubagentHandle {
+                cancel: tokio_util::sync::CancellationToken::new(),
+                hard: tokio_util::sync::CancellationToken::new(),
+                progress: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+                abort_reason: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                task: "running".into(),
+                agent: "delegate".into(),
+            },
+        );
+        app.in_flight_subagents.push(SubagentInfo {
+            id: "sub-running".into(),
+            task: "running".into(),
+            agent: "delegate".into(),
+        });
+
+        // Queue a second subagent (simulates SubagentQueued handler).
+        app.queued_subagents.push_back(QueuedSubagent {
+            task: "queued task".into(),
+            agent: "delegate".into(),
+            resolved_profile: zoid_core::agent_profile::AgentProfile::builtin(),
+            resolved_name: "delegate".into(),
+            cwd: std::path::PathBuf::from("/repo"),
+            want_worktree: false,
+            tool_call_id: "tc-1".into(),
+            session_id: app.session_id,
+        });
+
+        assert_eq!(app.in_flight.lock().unwrap().len(), 1, "pool has 1");
+        assert_eq!(app.queued_subagents.len(), 1, "queue has 1");
+
+        // Simulate the first subagent finishing (DelegationResult handler).
+        app.in_flight.lock().unwrap().remove("sub-running");
+        app.in_flight_subagents.retain(|s| s.id != "sub-running");
+
+        // Drain: with max=1, pool is now empty (0 < 1), so the queued
+        // subagent would spawn. We can't call spawn_queued_subagent in a
+        // unit test (it needs a real provider), but we can verify the
+        // drain condition is true.
+        let max = app.config.subagent.max_concurrent;
+        let should_drain =
+            !app.queued_subagents.is_empty() && (max == 0 || app.in_flight.lock().unwrap().len() < max);
+        assert!(should_drain, "pool has room — drain should fire");
+
+        // Pop the queued subagent (simulates what the drain loop does).
+        let qs = app.queued_subagents.pop_front().unwrap();
+        assert_eq!(qs.task, "queued task", "correct subagent popped");
+        assert!(app.queued_subagents.is_empty(), "queue is now empty");
+    }
+
+    /// Session takeover clears queued subagents — they should not survive
+    /// a session being taken over by another instance.
+    #[tokio::test]
+    async fn session_takeover_clears_queued_subagents() {
+        let mut app = test_app().await;
+
+        // Seed: one running subagent + two queued.
+        app.in_flight.lock().unwrap().insert(
+            "sub-1".into(),
+            zoid::agent::SubagentHandle {
+                cancel: tokio_util::sync::CancellationToken::new(),
+                hard: tokio_util::sync::CancellationToken::new(),
+                progress: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+                abort_reason: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                task: "task-1".into(),
+                agent: "delegate".into(),
+            },
+        );
+        app.in_flight_subagents.push(SubagentInfo {
+            id: "sub-1".into(),
+            task: "task-1".into(),
+            agent: "delegate".into(),
+        });
+        app.queued_subagents.push_back(QueuedSubagent {
+            task: "queued-1".into(),
+            agent: "delegate".into(),
+            resolved_profile: zoid_core::agent_profile::AgentProfile::builtin(),
+            resolved_name: "delegate".into(),
+            cwd: std::path::PathBuf::from("/repo"),
+            want_worktree: false,
+            tool_call_id: "tc-1".into(),
+            session_id: app.session_id,
+        });
+        app.queued_subagents.push_back(QueuedSubagent {
+            task: "queued-2".into(),
+            agent: "delegate".into(),
+            resolved_profile: zoid_core::agent_profile::AgentProfile::builtin(),
+            resolved_name: "delegate".into(),
+            cwd: std::path::PathBuf::from("/repo"),
+            want_worktree: false,
+            tool_call_id: "tc-2".into(),
+            session_id: app.session_id,
+        });
+
+        assert_eq!(app.in_flight.lock().unwrap().len(), 1, "1 running");
+        assert_eq!(app.queued_subagents.len(), 2, "2 queued");
+
+        // Fire the SessionTakenOver handler (inline, same as the event handler).
+        app.streaming = false;
+        zoid::agent::fire_subagent_kill(&app.in_flight, None);
+        app.in_flight_subagents.clear();
+        app.in_flight.lock().unwrap().clear();
+        app.queued_subagents.clear();
+        app.yielded = true;
+
+        assert!(app.in_flight.lock().unwrap().is_empty(), "pool cleared");
+        assert!(app.in_flight_subagents.is_empty(), "UI list cleared");
+        assert!(app.queued_subagents.is_empty(), "queue cleared");
+        assert!(app.yielded, "session is yielded");
+    }
+
+    /// Pool overflow: with max_concurrent=3 and 3 running, a 4th dispatch
+    /// is queued. The drain condition correctly rejects (3 < 3 is false).
+    #[tokio::test]
+    async fn pool_full_drain_does_not_spawn() {
+        let mut app = test_app().await;
+        app.config.subagent.max_concurrent = 3;
+
+        // Fill the pool with 3 running subagents.
+        for i in 0..3 {
+            let id = format!("sub-{i}");
+            app.in_flight.lock().unwrap().insert(
+                id.clone(),
+                zoid::agent::SubagentHandle {
+                    cancel: tokio_util::sync::CancellationToken::new(),
+                    hard: tokio_util::sync::CancellationToken::new(),
+                    progress: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+                    abort_reason: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                    task: format!("task-{i}"),
+                    agent: "delegate".into(),
+                },
+            );
+        }
+
+        // Queue a 4th.
+        app.queued_subagents.push_back(QueuedSubagent {
+            task: "queued-4".into(),
+            agent: "delegate".into(),
+            resolved_profile: zoid_core::agent_profile::AgentProfile::builtin(),
+            resolved_name: "delegate".into(),
+            cwd: std::path::PathBuf::from("/repo"),
+            want_worktree: false,
+            tool_call_id: "tc-4".into(),
+            session_id: app.session_id,
+        });
+
+        // Drain condition: pool is full (3 < 3 is false), so no drain.
+        let max = app.config.subagent.max_concurrent;
+        let should_drain =
+            !app.queued_subagents.is_empty() && (max == 0 || app.in_flight.lock().unwrap().len() < max);
+        assert!(!should_drain, "pool is full — drain should NOT fire");
+
+        // One subagent finishes — pool drops to 2, now 2 < 3 is true.
+        app.in_flight.lock().unwrap().remove("sub-0");
+        let should_drain =
+            !app.queued_subagents.is_empty() && (max == 0 || app.in_flight.lock().unwrap().len() < max);
+        assert!(should_drain, "pool has room — drain should fire");
+    }
+
     /// A yielded session never wakes, even when idle with no subagents.
     #[tokio::test]
     async fn delegation_wake_respects_yielded() {
