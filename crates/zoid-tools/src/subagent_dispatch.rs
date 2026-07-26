@@ -13,8 +13,13 @@ impl Tool for DispatchSubagent {
         ToolSpec {
             name: "dispatch_subagent".into(),
             description: "Dispatch a subagent to execute a task in isolation. Returns the subagent's \
-                          ID immediately; the result arrives later as a DelegationResult event. Use \
-                          worktree: true for file isolation when subagents might edit the same files."
+                          ID immediately; the result arrives later as a DelegationResult event. Up to \
+                          max_concurrent subagents (default 3) may run simultaneously — additional \
+                          dispatches are queued and start when a slot frees. Do NOT poll for completion \
+                          or edit files in the main worktree while a subagent is running (they share \
+                          the working directory unless worktree: true). Wait for the DelegationResult \
+                          event. Use worktree: true for file isolation when subagents might edit the \
+                          same files."
                 .into(),
             parameters: json!({
                 "type": "object",
