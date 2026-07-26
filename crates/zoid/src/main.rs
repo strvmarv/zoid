@@ -595,9 +595,10 @@ enum PickOutcome {
 }
 
 /// Handle one keystroke in the startup picker. `n_sessions` is the number of
-/// session rows (the "Create new" row is at index `n_sessions`, so the total
-/// row count is `n_sessions + 1`). `selected` is the current cursor index.
-/// Pure — no IO, no terminal. Spec §2.
+/// session rows; the total row count is `n_sessions + 1`. Logical index 0 is
+/// the "Create new" row (rendered at the top); indices `1..=n_sessions` are
+/// session rows (most-recent first). `selected` is the current cursor index.
+/// Pure — no IO, no terminal.
 fn pick_choice(n_sessions: usize, selected: usize, key: PickKey) -> PickOutcome {
     let total = n_sessions + 1; // sessions + "Create new"
     let cur = selected.min(total.saturating_sub(1));
@@ -611,18 +612,20 @@ fn pick_choice(n_sessions: usize, selected: usize, key: PickKey) -> PickOutcome 
             PickOutcome::Pending(next)
         }
         PickKey::Enter => {
-            if cur < n_sessions {
-                PickOutcome::Resume(cur)
-            } else {
+            // Index 0 = "Create new"; indices 1..=n_sessions = session rows.
+            if cur == 0 {
                 PickOutcome::CreateNew
+            } else {
+                PickOutcome::Resume(cur)
             }
         }
         PickKey::Esc => PickOutcome::Abort,
         PickKey::Delete => {
-            if cur < n_sessions {
-                PickOutcome::DeleteConfirm(cur)
-            } else {
+            // Can't delete "Create new" (index 0) — no-op.
+            if cur == 0 {
                 PickOutcome::Pending(cur)
+            } else {
+                PickOutcome::DeleteConfirm(cur)
             }
         }
     }
@@ -9027,33 +9030,40 @@ mod tests {
     }
 
     // --- pick_choice tests ---
+    // Convention: logical index 0 = "Create new", indices 1..=n = session rows.
+    // The wrap math is unchanged from the old layout; only the
+    // session/Create-new boundary moved from "cur < n" to "cur == 0".
 
     #[test]
     fn pick_choice_down_advances_selection() {
+        // Down from Create-new (0) → first session (1).
         assert_eq!(pick_choice(3, 0, PickKey::Down), PickOutcome::Pending(1));
     }
 
     #[test]
     fn pick_choice_up_wraps() {
-        // n_sessions=3 → total rows = 4 (0..3). Up from 0 → 3.
+        // n_sessions=3 → total rows = 4 (0..3). Up from 0 (Create new) → 3 (last session).
         assert_eq!(pick_choice(3, 0, PickKey::Up), PickOutcome::Pending(3));
     }
 
     #[test]
     fn pick_choice_down_wraps() {
-        // n_sessions=2 → total rows = 3 (0,1,2). Down from 2 → 0.
-        assert_eq!(pick_choice(2, 2, PickKey::Down), PickOutcome::Pending(0));
+        // n_sessions=3 → total rows = 4 (0,1,2,3). Down from 3 (last session) → 0 (Create new).
+        assert_eq!(pick_choice(3, 3, PickKey::Down), PickOutcome::Pending(0));
     }
 
     #[test]
     fn pick_choice_enter_on_session_resumes() {
+        // Index 1 is the first session row. Enter → Resume(1).
         assert_eq!(pick_choice(3, 1, PickKey::Enter), PickOutcome::Resume(1));
+        // Index 3 is the last session row (n_sessions=3). Enter → Resume(3).
+        assert_eq!(pick_choice(3, 3, PickKey::Enter), PickOutcome::Resume(3));
     }
 
     #[test]
     fn pick_choice_enter_on_create_new() {
-        // n_sessions=3 → "Create new" is row 3. Enter on row 3 → CreateNew.
-        assert_eq!(pick_choice(3, 3, PickKey::Enter), PickOutcome::CreateNew);
+        // Index 0 is "Create new". Enter → CreateNew.
+        assert_eq!(pick_choice(3, 0, PickKey::Enter), PickOutcome::CreateNew);
     }
 
     #[test]
@@ -9069,21 +9079,23 @@ mod tests {
 
     #[test]
     fn pick_choice_delete_on_session_row() {
-        assert_eq!(
-            pick_choice(2, 0, PickKey::Delete),
-            PickOutcome::DeleteConfirm(0)
-        );
+        // Indices 1 and 2 are session rows (n_sessions=2). Delete → DeleteConfirm.
         assert_eq!(
             pick_choice(2, 1, PickKey::Delete),
             PickOutcome::DeleteConfirm(1)
+        );
+        assert_eq!(
+            pick_choice(2, 2, PickKey::Delete),
+            PickOutcome::DeleteConfirm(2)
         );
     }
 
     #[test]
     fn pick_choice_delete_on_create_new_is_noop() {
+        // Index 0 is "Create new". Delete is a no-op → Pending(0).
         assert_eq!(
-            pick_choice(2, 2, PickKey::Delete),
-            PickOutcome::Pending(2)
+            pick_choice(2, 0, PickKey::Delete),
+            PickOutcome::Pending(0)
         );
     }
 
