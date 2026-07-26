@@ -143,17 +143,17 @@ pub struct EvictionConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SubagentConfig {
-    /// Idle (no-progress) timeout in seconds; 0 = disabled. Default 300.
+    /// Idle (no-progress) timeout in seconds; 0 = disabled. Default 900.
     pub idle_timeout_secs: u64,
-    /// Absolute wall-clock ceiling in seconds; 0 = disabled. Default 900.
+    /// Absolute wall-clock ceiling in seconds; 0 = disabled. Default 1800.
     pub hard_timeout_secs: u64,
 }
 
 impl Default for SubagentConfig {
     fn default() -> Self {
         Self {
-            idle_timeout_secs: 300,
-            hard_timeout_secs: 900,
+            idle_timeout_secs: 900,
+            hard_timeout_secs: 1800,
         }
     }
 }
@@ -227,10 +227,10 @@ mod tests {
     }
 
     #[test]
-    fn subagent_defaults_are_300_and_900() {
+    fn subagent_defaults_are_900_and_1800() {
         let c = Config::default();
-        assert_eq!(c.subagent.idle_timeout_secs, 300);
-        assert_eq!(c.subagent.hard_timeout_secs, 900);
+        assert_eq!(c.subagent.idle_timeout_secs, 900);
+        assert_eq!(c.subagent.hard_timeout_secs, 1800);
     }
 
     #[test]
