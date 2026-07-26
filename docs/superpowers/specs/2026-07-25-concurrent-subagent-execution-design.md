@@ -1,6 +1,11 @@
-# Concurrent Subagent Execution — Design
+# Concurrent Subagent Execution — Design (Revised)
 
-> **Status:** DESIGN (brainstormed 2026-07-25). Ready for `writing-plans`.
+> **Status:** DESIGN (brainstormed + gilfoyle-reviewed, 2026-07-25). Ready for `writing-plans`.
+>
+> **Revision:** Addresses gilfoyle review: C1 (wake logic drops results), C2
+> (TurnComplete gate blocks all post-turn logic), H1 (4 user actions still
+> blocked), H2 (takeover orphans subagents), H3 (in_flight vs
+> in_flight_subagents conflation), M1-M3 (under-specification).
 
 ---
 
@@ -9,9 +14,8 @@
 Allow the main chat loop to continue operating — accepting user input,
 streaming turns, dispatching new subagents — while one or more subagents
 execute work in the background. Today the main loop blocks while any
-subagent is in flight (`in_flight_subagents.is_empty()` is a gate on
-`spawn_turn`). This unlocks parallelism between the orchestrator and its
-delegates.
+subagent is in flight. The `in_flight_subagents.is_empty()` gate appears
+in **six** locations across `main.rs`, all of which must be addressed.
 
 ---
 
@@ -19,230 +23,326 @@ delegates.
 
 1. **DelegationResult arrival mid-turn:** Queue it. The result waits until
    the current turn completes, then the orchestrator gets a continuation
-   turn via `wake_after_delegation`. This is the **current behavior** —
-   just unblocked from requiring the main turn to be idle.
-
+   turn. The wake must fire per-result, not per-pool-empty.
 2. **Queued message + delegation continuation:** Both fire when the turn
-   completes. Queued message first (user-initiated), then the delegation
-   continuation (system-initiated). The existing `pending_message` +
-   `wake_after_delegation` flags already handle ordering; the change is
-   removing the `in_flight_subagents.is_empty()` gate from the idle check.
-
+   completes. Queued message first, then continuation.
 3. **Concurrent subagent dispatch:** Limit to N concurrent subagents
-   (configurable, default 3). The N is a **global pool**, not per-turn.
-   Excess `dispatch_subagent` calls queue until a slot frees. This
-   replaces the current single-in-flight guard.
-
-4. **Subagent progress in the UI:** Keep it in the subagents drawer only.
-   The conversation stays clean; the drawer tracks in-flight work with
-   live status (running/done/failed). No inline chips in the conversation
-   for subagent progress (the existing delegated chip stays for the
-   dispatch → result summary, but it's not updated live).
-
-5. **Cross-turn subagent dispatch:** The model can dispatch subagents while
-   subagents from a previous turn are still running, subject to the global
-   N concurrent limit.
-
-6. **SQLite write isolation:** Each subagent gets its own SQLite connection
-   to the same DB file. WAL mode (already enabled) allows concurrent
-   readers + one writer. The subagent's events go directly to SQLite via
-   its own connection, bypassing the main session actor's mpsc queue.
-   The main session actor continues to handle main-branch appends; the
-   subagent's branch events are isolated by branch ID.
+   (configurable, default 3). Global pool, not per-turn. Excess calls queue.
+4. **Subagent progress in the UI:** Subagents drawer only. Conversation
+   stays clean.
+5. **Cross-turn subagent dispatch:** Allowed, subject to the global pool.
+6. **SQLite write isolation:** Each subagent gets its own `EventStore`
+   connection to the same DB file (WAL mode + `busy_timeout`). Subagent-
+   branch events go directly to SQLite, bypassing the main session actor.
+   The `DelegationResult` event (on the default branch) is still appended
+   by the main loop via the session actor.
 
 ---
 
-## 3. Architecture
+## 3. The six `is_empty()` gates
 
-### 3.1 Current flow
+Every `in_flight_subagents.is_empty()` gate must be addressed. Leaving
+any unchanged silently drops results or blocks the user.
 
-```
-User message → spawn_turn → model streams → dispatch_subagent
-  → main turn YIELDS (streaming = false, busy = true)
-  → subagent runs in tokio::spawn (separate branch)
-  → DelegationResult arrives on AgentUpdate channel
-  → main loop consumes it at TurnComplete
-  → wake_after_delegation fires a continuation turn
-```
+### 3.1 The idle check (main.rs:6547)
 
-The main loop is blocked between dispatch and result arrival. The user
-can queue a message (`pending_message`) but it won't fire until the
-subagent finishes AND the turn completes.
+**Current:** `let idle = !app.streaming && app.in_flight_subagents.is_empty() && !app.yielded;`
 
-### 3.2 New flow
+**New:** `let idle = !app.streaming && !app.yielded;`
 
-```
-User message → spawn_turn → model streams → dispatch_subagent
-  → main turn CONTINUES streaming (busy = false, subagent runs in background)
-  → user can type, queue messages, start new turns
-  → DelegationResult arrives on AgentUpdate channel
-  → if main turn is streaming: wake_after_delegation = true (deferred)
-  → if main turn is idle: continuation turn fires immediately
-  → queued message fires first (pending_message), then continuation
-```
+Subagents in flight no longer block the main loop.
 
-### 3.3 The idle check
+### 3.2 The busy flag (main.rs:2741)
 
-Current (main.rs:6547):
+**Current:** `app.shell.busy = app.streaming || !app.in_flight_subagents.is_empty();`
+
+**New:** `app.shell.busy = app.streaming;`
+
+The subagents drawer independently shows in-flight work. The motion-tick
+guard (main.rs:3402) keeps `!app.in_flight_subagents.is_empty()` so the
+spinner animates while subagents run — this is intentional (the drawer's
+spinner should spin even when the status bar shows "idle").
+
+### 3.3 The wake logic — `should_wake_after_delegation` (main.rs:6350)
+
+**Current:**
 ```rust
-let idle = !app.streaming && app.in_flight_subagents.is_empty() && !app.yielded;
+fn should_wake_after_delegation(streaming, in_flight_empty, yielded) -> bool {
+    !streaming && in_flight_empty && !yielded
+}
 ```
 
-New:
+**Problem:** With N>1, subagent A finishes while B runs. `in_flight_empty
+= false` → wake returns `false` → A's result is never surfaced as a
+continuation turn.
+
+**New:** Drop the `in_flight_empty` term. A continuation turn should fire
+whenever a `DelegationResult` arrives and the main turn isn't streaming,
+regardless of whether other subagents are still running:
+
 ```rust
-let idle = !app.streaming && !app.yielded;
+fn should_wake_after_delegation(streaming, yielded) -> bool {
+    !streaming && !yielded
+}
 ```
 
-Subagents in flight no longer block the main loop. The `busy` flag
-becomes:
+### 3.4 The wake arming — `plan_delegation_wake` (main.rs:6474-6500)
+
+**Current:** The else-branch (6495) only arms `wake_after_delegation` if
+`app.in_flight_subagents.is_empty()`.
+
+**New:** Remove the `is_empty()` condition. Arm the wake whenever the main
+turn isn't streaming and hasn't yielded:
+
 ```rust
-app.shell.busy = app.streaming;
+if !app.streaming && !app.yielded {
+    app.wake_after_delegation = true;
+}
 ```
 
-The subagents drawer independently shows in-flight work.
+### 3.5 The `TurnComplete` handler (main.rs:3092)
 
-### 3.4 Concurrent subagent pool
+**Current:** ALL post-turn logic (queued message, deferred wake,
+`drain_due_wakes`) is gated inside `if app.in_flight_subagents.is_empty()`.
 
-Current: a single in-flight guard (`in_flight` HashMap, but
-`dispatch_subagent` is sequential within a turn — the agent loop holds
-until the DelegationResult).
+**New:** Remove the gate. The post-turn logic runs on every `TurnComplete`:
 
-New: a global pool with a configurable max:
+```rust
+AgentUpdate::TurnComplete => {
+    // ... (existing streaming=false, cancel token cleanup)
+    // No in_flight_subagents gate — run unconditionally:
+    if let Some(text) = app.pending_message.take() { ... }
+    if app.wake_after_delegation { ... }
+    drain_due_wakes(...)
+}
+```
+
+### 3.6 User action gates (main.rs:3959, 4113, 4176, 5881, 6303)
+
+**Current:** Five user actions gate on `!app.in_flight_subagents.is_empty()`:
+- `Submit` (3959) — queue message
+- `:new` / `NewSession` (5881) — start new session
+- `:session resume` / `SessionPick` (4113) — switch session
+- `:session delete` / `SessionDelete` (4176) — delete session
+- `:worktree` / `handle_worktree_request` (6303) — enter worktree
+
+**Decision:**
+
+- **`Submit` (3959):** Remove the subagent gate. The user can submit while
+  subagents run. The `streaming` gate remains — if a turn is streaming, the
+  message queues. If the main loop is idle but subagents are running, the
+  message spawns a turn immediately.
+
+- **`SessionPick`, `NewSession`, `SessionDelete`, `handle_worktree_request`:**
+  These change the session/cwd context. With subagents writing to the
+  current session's DB on their own branches, switching sessions mid-
+  subagent is safe (branch isolation), but the subagents would continue
+  writing to the OLD session's DB. **Keep these gated** — session/worktree
+  management is blocked while subagents are in flight. The user sees a
+  hint: "N subagents running — wait or Esc to kill". This is a deliberate
+  UX cliff: killing subagents to switch sessions is a reasonable tradeoff.
+
+---
+
+## 4. Session takeover (H2)
+
+**Current:** `SessionTakenOver` (main.rs:3140) clears `in_flight_subagents`
+(UI only) and sets `yielded = true`, but does NOT kill the running
+subagent tasks. Today this is safe because the main loop is blocked —
+takeover can't arrive while a subagent runs.
+
+**New:** `SessionTakenOver` must fire `fire_subagent_kill` to cancel all
+in-flight subagents before yielding:
+
+```rust
+AgentUpdate::SessionTakenOver => {
+    if let Some(cancel) = &app.turn_cancel { cancel.cancel(); }
+    app.streaming = false;
+    // Kill all in-flight subagents (concurrency: they may be running)
+    fire_subagent_kill(&app.in_flight);
+    app.in_flight_subagents.clear();
+    app.in_flight.lock().unwrap().clear();
+    app.yielded = true;
+    ...
+}
+```
+
+`fire_subagent_kill` already exists and fires the `CancelToken` in each
+`SubagentHandle`. The subagent's `run_agent_turn_cancellable` checks the
+token each iteration and exits cleanly.
+
+---
+
+## 5. Concurrent subagent pool
+
+### 5.1 The two registries (H3)
+
+There are TWO distinct structures — the spec must not conflate them:
+
+- **`app.in_flight`** (`Arc<Mutex<HashMap<String, SubagentHandle>>>`):
+  the live `SubagentHandle` registry. Used by `fire_subagent_kill` and
+  the timeout supervisor. Each handle carries a `CancelToken`.
+- **`app.in_flight_subagents`** (`Vec<SubagentInfo>`): the UI drawer's
+  display list (`id`, `task`, `agent`).
+
+Both must stay in sync. The pool limit applies to the count in
+`app.in_flight` (the real registry). The UI list mirrors it.
+
+### 5.2 Pool structure
+
+Add a `queued_subagents: VecDeque<QueuedSubagent>` to `App`. When the
+pool is full, `dispatch_subagent` pushes to the queue instead of
+spawning. When a `DelegationResult` removes an ID from the pool, the
+next queued subagent is spawned.
+
+```rust
+struct QueuedSubagent {
+    task: String,
+    agent: String,   // profile name
+    // Carried from the dispatch_subagent tool call:
+    branch: BranchId,
+    cwd: PathBuf,
+    // ... other run_subagent params
+}
+```
+
+### 5.3 The `dispatch_subagent` tool response
+
+**Current:** The tool returns a hard error if any subagent is in flight
+(agent.rs:1525-1553).
+
+**New:** When the pool is full, the tool returns a "queued" response
+(not an error):
+
+```json
+{"output": "subagent queued (N running, position M in queue)"}
+```
+
+The model can continue working (other tool calls, reasoning). When a
+slot frees, the subagent starts and the `SubagentStarted` event is
+appended as usual. The `DelegationResult` arrives later.
+
+When the pool has room, the tool returns the normal "dispatched"
+response.
+
+### 5.4 Config
 
 ```toml
 [subagent]
-max_concurrent = 3  # default
+max_concurrent = 3  # default; 1 restores sequential behavior (main loop still unblocked)
 ```
 
-The `dispatch_subagent` tool, when the pool is full, returns a "queued"
-response to the model. The model can continue working (other tool calls,
-reasoning) and the subagent starts when a slot frees. When a subagent
-finishes, its `DelegationResult` is delivered as before, and the next
-queued subagent starts.
-
-Implementation: the `in_flight` HashMap becomes a bounded pool. A
-`VecDeque<QueuedSubagent>` holds overflow. When a `DelegationResult`
-removes an ID from the pool, the next queued subagent is spawned.
-
-### 3.5 SQLite write isolation
-
-Each subagent opens its own `EventStore` connection to the same DB file:
-
-```rust
-let store = EventStore::open(db_path)?;
-// WAL mode + busy_timeout (already configured) handle concurrent writes
-```
-
-The subagent's `run_subagent` function currently takes a `SessionHandle`
-clone. It would instead take an `EventStore` (or a lightweight
-`SubagentSession` wrapper that owns its own connection). Appends go
-directly to SQLite, bypassing the main session actor.
-
-The main session actor continues to own:
-- Main-branch appends (conversation events)
-- Session metadata (create, rename, delete, touch, list)
-- Snapshot requests (loads from SQLite, which sees all branches)
-
-Cross-branch reads (e.g., the main loop's `snapshot` loading all events)
-already work — WAL mode guarantees a reader sees a consistent snapshot
-even while a writer is appending.
-
-**Risk:** the `EventStore::append` path currently assumes single-writer
-access (no row-level locking). With two writers (main actor + subagent),
-SQLite's WAL handles the page-level locking, but the `busy_timeout` (5s)
-must be sufficient. If both writers contend on the same page (the events
-table), one waits up to 5s. In practice, appends are fast (single INSERT
-+ FTS update), so contention should be sub-millisecond.
+`max_concurrent = 1` means: one subagent at a time, but the main loop is
+free for the user. Excess dispatches queue.
 
 ---
 
-## 4. Config
+## 6. SQLite write isolation
 
-```toml
-[subagent]
-max_concurrent = 3          # max simultaneous subagents (global pool)
-# existing:
-idle_timeout_secs = 300     # per-subagent idle timeout
-hard_timeout_secs = 900     # per-subagent absolute timeout
-```
+### 6.1 The invariant
 
-`max_concurrent = 1` restores the current sequential behavior (one
-subagent at a time, main loop still unblocked).
+Subagent-branch events are isolated by `BranchId`. Each subagent writes
+to its own branch. The only shared-branch event is `DelegationResult`,
+which is on the default branch and is still appended by the **main loop**
+via the session actor (not by the subagent's direct connection).
+
+### 6.2 The per-subagent connection
+
+`run_subagent` currently takes a `SessionHandle` clone. It would instead
+take an `EventStore` (or a `SubagentSession` wrapper) that owns its own
+`Connection` to the same DB file. WAL mode + `busy_timeout = 5000`
+handles concurrent writers.
+
+### 6.3 Signature churn (M2)
+
+`run_agent_turn_cancellable` and every `emit`/`emit_with_tokens` call
+take `session: &SessionHandle`. To bypass the actor, either:
+
+- **Option A:** A `SubagentSession` struct that implements the same
+  `append()` / `snapshot()` async interface but owns its own
+  `EventStore`. Threaded through ~20 call sites as a replacement for
+  `SessionHandle`.
+
+- **Option B:** Make `run_agent_turn_cancellable` generic over the
+  session type. More invasive but cleaner.
+
+**Recommendation:** Option A. The subagent turn loop calls `append` and
+`snapshot` (for recall). A `SubagentSession` wrapper that owns an
+`EventStore` and implements the same interface is the smallest diff.
+
+### 6.4 Write ordering (M1)
+
+The main session actor serializes main-branch appends (total order).
+Direct subagent connections break that total order for subagent-branch
+events — but subagent-branch events are isolated by `BranchId` and
+replayed independently. SQLite WAL serializes writers via the exclusive
+write lock; commit order across connections is nondeterministic but
+safe because branches don't interleave. This invariant must be stated
+in the implementation plan.
 
 ---
 
-## 5. UI changes
+## 7. Economy token ledger (M3)
 
-- **Subagents drawer:** already shows in-flight subagents. No change
-  needed — it reads `app.in_flight_subagents` which is already maintained.
-  When a subagent finishes, its row is removed (existing behavior).
-- **Busy state:** `app.shell.busy` reflects only `app.streaming`, not
-  subagents. The user sees "idle" when the main turn is done, even if
-  subagents are running.
-- **Queued subagents:** the drawer could show a "queued" count when
-  subagents are waiting for a slot. Minor enhancement.
-- **Conversation:** no change. The delegated chip appears when
-  `dispatch_subagent` is called (existing) and is updated when the
-  `DelegationResult` arrives (existing).
+`token_ledger` sums ALL events regardless of branch. Concurrent
+subagents inflate the economy view's total live (not just on reload).
+The projection cache (`app.proj.ledger_total`) is computed from
+`app.events.iter()` which includes subagent-branch events.
+
+**Mitigation:** The economy drawer already shows the total. With
+concurrent subagents, the total includes their spend — which is
+correct (they ARE spending tokens). The per-branch breakdown is a
+future enhancement. No code change needed for correctness; the total
+is honest.
 
 ---
 
-## 6. Event ordering
+## 8. Event ordering
 
-The `DelegationResult` event is on the **default branch** (main branch),
-not the subagent's branch. It's appended by the main loop when the
-subagent's result arrives on the `AgentUpdate` channel. This doesn't
-change — the subagent sends its result via the channel, and the main loop
-appends the `DelegationResult` event.
+`DelegationResult` events are on the **default branch** (verified:
+`spawn_subagent.rs:153-164` creates them via `Event::new(...)` without
+`.with_branch()`, so `BranchId::default()`). They are appended by the
+main loop when the subagent's result arrives on the `AgentUpdate`
+channel. This doesn't change.
 
 With concurrent subagents, multiple `DelegationResult` events may arrive
 while a turn is streaming. Each one:
-1. Removes the subagent ID from `in_flight`
+1. Removes the subagent ID from `in_flight` and `in_flight_subagents`
 2. If the pool has queued subagents, spawns the next one
-3. Sets `wake_after_delegation = true` (if the main turn is streaming)
-4. If the main turn is idle, fires a continuation turn immediately
+3. If the main turn is not streaming and not yielded: arms
+   `wake_after_delegation = true`
+4. If the main turn is streaming: `wake_after_delegation` stays armed
+   (set by `plan_delegation_wake` at TurnComplete)
 
-Multiple `wake_after_delegation` flags collapse to one continuation turn
-(the flag is a bool, not a counter). The continuation turn sees all
-pending `DelegationResult` events in the log and can act on them.
+At `TurnComplete` (now unconditionally, not gated on `is_empty()`):
+1. Queued message fires first (`pending_message`)
+2. Then `wake_after_delegation` fires a continuation turn
+3. Then `drain_due_wakes` fires scheduled wakes
 
----
-
-## 7. Risks
-
-1. **SQLite write contention:** two writers on the same DB. WAL mode +
-   `busy_timeout = 5000` handles it, but high-frequency appends from
-   both the main turn and 3 subagents could cause contention. Mitigation:
-   measure; if contention is real, batch subagent appends (buffer in
-   memory, flush periodically or on completion).
-
-2. **Context budget with concurrent subagents:** each subagent consumes
-   context on its own branch. The main turn's context is unaffected
-   (branch isolation). But the economy view's token ledger sums across
-   all branches — concurrent subagents inflate the total. Mitigation:
-   the ledger already tracks per-branch; the UI could show per-branch
-   breakdown.
-
-3. **Subagent kill propagation:** the current Esc → cancel-subagent flow
-   arms a kill state and the next Esc fires all in-flight. With N
-   concurrent, the first Esc arms, the second fires ALL. This is already
-   the behavior (`subagent_kill_armed`). No change needed.
-
-4. **Race on `DelegationResult` + `TurnComplete`:** if a `DelegationResult`
-   arrives in the same event-loop tick as `TurnComplete`, the ordering
-   matters. The current code processes `AgentUpdate` events in order, so
-   `DelegationResult` is processed before the `TurnComplete` handler
-   checks `wake_after_delegation`. This is correct.
+The continuation turn sees all pending `DelegationResult` events in the
+log and can act on them. Multiple results collapse to one continuation
+turn (the flag is a bool).
 
 ---
 
-## 8. Out of scope
+## 9. Risks
 
-- **Parallel tool calls within a single sub-turn:** the model already
-  can't call multiple tools in one response. This is a provider/protocol
-  limitation, not a zoid limitation. Out of scope.
-- **Distributed subagents:** subagents running on a different machine.
-  Out of scope.
-- **Subagent-to-subagent communication:** subagents dispatching their own
-  subagents. Already possible (recursive `dispatch_subagent`), but the
-  concurrent pool would need to account for nested dispatches. Defer.
+1. **SQLite write contention:** two+ writers on the same DB. WAL +
+   `busy_timeout` handles it. Mitigation: measure; batch if needed.
+2. **Economy ledger inflation:** concurrent subagents inflate the total.
+   This is correct (they are spending). Per-branch breakdown is future.
+3. **Session takeover orphans:** fixed by firing `fire_subagent_kill` in
+   the `SessionTakenOver` handler (§4).
+4. **Race on `DelegationResult` + `TurnComplete`:** the main loop
+   processes `AgentUpdate` events in order. `DelegationResult` is
+   processed before `TurnComplete` checks `wake_after_delegation`.
+   Correct.
+
+---
+
+## 10. Out of scope
+
+- Parallel tool calls within a single sub-turn (provider/protocol limit)
+- Distributed subagents (different machines)
+- Subagent-to-subagent communication (recursive dispatch with pool accounting)
+- Per-branch economy breakdown in the UI
