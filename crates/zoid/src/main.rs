@@ -2747,21 +2747,25 @@ where
             Some(kind == RefreshKind::Hit)
         };
 
-        // Cache peek hits for click hit-testing. Computed from the same
-        // `app.proj.msgs` the body was built from, so line indices match
-        // the painted frame. Without this, handle_conversation_click would
-        // recompute from live `app.events` (which may have grown during
-        // streaming, shifting line numbers and causing click misses).
-        app.peek_cache = PeekCache {
-            hits: zoid_tui::chat::peek_hits(
-                &app.proj.msgs,
-                app.streaming,
-                true,
-                app.tz_offset_secs,
-                body_w,
-                None,
-            ),
-        };
+        // Cache peek hits for click hit-testing — only when the body was
+        // rebuilt (not a cache hit). peek_hits calls build_conversation (O(n))
+        // so recomputing on every frame is expensive for large conversations.
+        // On a cache hit, the existing peek_cache is still valid (same msgs,
+        // same line indices). Only recompute when streaming (the last message
+        // is growing, shifting line indices) or when the body was rebuilt.
+        let body_rebuilt = !matches!(cache_hit, Some(true));
+        if body_rebuilt || app.streaming {
+            app.peek_cache = PeekCache {
+                hits: zoid_tui::chat::peek_hits(
+                    &app.proj.msgs,
+                    app.streaming,
+                    true,
+                    app.tz_offset_secs,
+                    body_w,
+                    None,
+                ),
+            };
+        }
 
         // Tail-follow: when engaged, pin the viewport to the latest line before
         // drawing — this is what makes the view show the latest output on startup
@@ -2956,6 +2960,9 @@ where
         if frame_reveal_none && app.zoom_changed_at.is_some() {
             app.zoom_changed_at = None;
         }
+
+        // Diagnostic: time the frame render.
+        let frame_start = std::time::Instant::now();
 
         // Diagnostic: log every select! wake with guard state (no rate limit
         // — temporary, remove after the bug is found).
@@ -3539,6 +3546,11 @@ where
                 tracing::info!("select! woken by: subagent_tick");
                 // Excluded when streaming (the 30 FPS tick covers it).
             }
+        }
+        // Diagnostic: log frame render time if slow.
+        let frame_ms = frame_start.elapsed().as_millis();
+        if frame_ms > 50 {
+            tracing::info!(frame_ms = frame_ms, "slow frame render");
         }
     }
 }
