@@ -3037,8 +3037,9 @@ where
                         // A subagent finished: if the orchestrator is now idle,
                         // wake it into a continuation turn so it actually sees the
                         // result (it was fire-and-forget, so the dispatching turn
-                        // has usually already ended). If a turn is still streaming,
-                        // plan_delegation_wake arms a deferred wake for TurnComplete.
+                        // has usually already ended). Per-result: each
+                        // DelegationResult gets its own wake decision — no
+                        // waiting for the whole pool to drain.
                         if delegation_arrived && plan_delegation_wake(app) {
                             tracing::info!("spawning continuation turn after delegation");
                             spawn_turn(app);
@@ -3088,53 +3089,51 @@ where
                                 }
                             }
                         }
-                        // Consume a queued message if the agent is now fully idle.
-                        if app.in_flight_subagents.is_empty() {
-                            let mut spawned = false;
-                            if let Some(text) = app.pending_message.take() {
-                                if !text.trim().is_empty() && !app.yielded {
-                                    let first = !app
-                                        .events
-                                        .iter()
-                                        .any(|e| matches!(e.kind, EventKind::UserMessage { .. }));
-                                    app.record(EventKind::UserMessage { text: text.clone() })
-                                        .await?;
-                                    if first {
-                                        let name = derive_session_name(
-                                            Some(&text),
-                                            now_ms(),
-                                            app.tz_offset_secs,
-                                        );
-                                        app.session
-                                            .rename_session(app.session_id, name.clone())
-                                            .await
-                                            .ok();
-                                        app.shell.session_name = name;
-                                    }
-                                    app.streaming = true;
-                                    spawn_turn(app);
-                                    spawned = true;
+                        // Consume a queued message if the agent is now idle.
+                        let mut spawned = false;
+                        if let Some(text) = app.pending_message.take() {
+                            if !text.trim().is_empty() && !app.yielded {
+                                let first = !app
+                                    .events
+                                    .iter()
+                                    .any(|e| matches!(e.kind, EventKind::UserMessage { .. }));
+                                app.record(EventKind::UserMessage { text: text.clone() })
+                                    .await?;
+                                if first {
+                                    let name = derive_session_name(
+                                        Some(&text),
+                                        now_ms(),
+                                        app.tz_offset_secs,
+                                    );
+                                    app.session
+                                        .rename_session(app.session_id, name.clone())
+                                        .await
+                                        .ok();
+                                    app.shell.session_name = name;
                                 }
-                            }
-                            // No queued user message ran: fire a deferred delegation
-                            // wake (a subagent finished mid-turn) so the orchestrator
-                            // continues and sees the result. A queued message that DID
-                            // run already carries the result in context, so just clear
-                            // the flag in that case. Note the ordering: a pending user
-                            // message takes priority here, so a bare delegation
-                            // continuation intentionally precedes a queued user message
-                            // only when no message was queued — a message queued while a
-                            // subagent ran executes on the following turn, never lost.
-                            if spawned {
-                                app.wake_after_delegation = false;
-                            } else if take_deferred_delegation_wake(app) {
+                                app.streaming = true;
                                 spawn_turn(app);
+                                spawned = true;
                             }
-                            // A wake may have come due while this turn ran; now
-                            // that we're idle, drain it (spawns its own turn).
-                            if !app.streaming {
-                                let _ = drain_due_wakes(app).await?;
-                            }
+                        }
+                        // No queued user message ran: fire a deferred delegation
+                        // wake (a subagent finished mid-turn) so the orchestrator
+                        // continues and sees the result. A queued message that DID
+                        // run already carries the result in context, so just clear
+                        // the flag in that case. Note the ordering: a pending user
+                        // message takes priority here, so a bare delegation
+                        // continuation intentionally precedes a queued user message
+                        // only when no message was queued — a message queued while a
+                        // subagent ran executes on the following turn, never lost.
+                        if spawned {
+                            app.wake_after_delegation = false;
+                        } else if take_deferred_delegation_wake(app) {
+                            spawn_turn(app);
+                        }
+                        // A wake may have come due while this turn ran; now
+                        // that we're idle, drain it (spawns its own turn).
+                        if !app.streaming {
+                            let _ = drain_due_wakes(app).await?;
                         }
                     }
                     AgentUpdate::SessionTakenOver => {
@@ -6344,11 +6343,13 @@ fn is_worktree_clean(path: &std::path::Path) -> bool {
 }
 
 /// Whether a just-recorded `DelegationResult` should wake the orchestrator into
-/// a continuation turn *now*: it is idle (no turn streaming), every subagent has
-/// finished, and the session has not been yielded/taken over. Pure decision — no
-/// side effects — so it can be exhaustively unit-tested.
-fn should_wake_after_delegation(streaming: bool, in_flight_empty: bool, yielded: bool) -> bool {
-    !streaming && in_flight_empty && !yielded
+/// a continuation turn *now*: it is idle (no turn streaming) and the session has
+/// not been yielded/taken over. Per-result: no longer waits for every subagent
+/// to finish — each result gets its own wake decision, and a still-running turn
+/// defers (handled by `plan_delegation_wake`). Pure decision — no side effects —
+/// so it can be exhaustively unit-tested.
+fn should_wake_after_delegation(streaming: bool, yielded: bool) -> bool {
+    !streaming && !yielded
 }
 
 /// Project the pending-wake set from the event log: every `WakeScheduled`
@@ -6463,24 +6464,22 @@ async fn handle_cancel_wake(app: &mut App, id: Option<String>) -> Result<String,
 /// Called after a `DelegationResult` has been recorded into `app.events` and the
 /// finished subagent dropped from the in-flight sets. Decides whether the
 /// orchestrator should continue so it actually *sees* the result:
-/// - idle now → mark streaming and return `true` (the caller `spawn_turn`s);
-/// - a turn is still streaming but this was the last subagent → arm
-///   `wake_after_delegation` so `TurnComplete` continues once the turn ends;
-/// - other subagents still running, or yielded → do nothing.
+/// - idle now (not streaming, not yielded) → mark streaming and return `true`
+///   (the caller `spawn_turn`s);
+/// - a turn is still streaming, or yielded → do nothing (the result sits in the
+///   event log for the next turn's context).
+///
+/// Per-result: each `DelegationResult` gets its own wake decision — there is no
+/// waiting for the whole subagent pool to drain.
 ///
 /// Returns `true` iff the caller should `spawn_turn(app)` now. The spawn side
 /// effect is left to the caller so this stays unit-testable without launching a
 /// real turn.
 fn plan_delegation_wake(app: &mut App) -> bool {
-    let wake = should_wake_after_delegation(
-        app.streaming,
-        app.in_flight_subagents.is_empty(),
-        app.yielded,
-    );
+    let wake = should_wake_after_delegation(app.streaming, app.yielded);
     tracing::info!(
         wake = %wake,
         streaming = %app.streaming,
-        in_flight_empty = %app.in_flight_subagents.is_empty(),
         yielded = %app.yielded,
         "delegation wake decision"
     );
@@ -6489,20 +6488,22 @@ fn plan_delegation_wake(app: &mut App) -> bool {
         app.streaming = true;
         true
     } else {
-        // Defer only when the sole reason we can't wake now is a still-running
-        // turn (all subagents done, not yielded). If subagents remain, the last
-        // one's result will re-enter this path.
-        if app.in_flight_subagents.is_empty() && !app.yielded {
+        // Defer: arm the wake when not yielded, regardless of streaming.
+        // If streaming, the wake fires at TurnComplete (the continuation
+        // turn sees the DelegationResult in the event log). If idle, it
+        // fires immediately via should_wake_after_delegation returning true.
+        if !app.yielded {
             app.wake_after_delegation = true;
         }
         false
     }
 }
 
-/// At `TurnComplete`, once all subagents are done and no queued user message was
-/// consumed, decide whether a deferred delegation wake should now continue the
-/// conversation. Clears the flag either way. Returns `true` iff the caller
-/// should `spawn_turn(app)`.
+/// At `TurnComplete`, if no queued user message was consumed, decide whether a
+/// deferred delegation wake should now continue the conversation. Clears the
+/// flag either way. Returns `true` iff the caller should `spawn_turn(app)`.
+/// (Per-result wakes mean this flag is rarely armed now — kept for the
+/// transitional case where a result arrived while streaming.)
 fn take_deferred_delegation_wake(app: &mut App) -> bool {
     let wake = app.wake_after_delegation && !app.yielded;
     app.wake_after_delegation = false;
@@ -8176,25 +8177,26 @@ mod tests {
 
     // --- Wake-on-DelegationResult (orchestrator-sees-subagent-output fix) ---
 
-    /// The pure idle decision: wake only when idle, all subagents done, and not
-    /// yielded.
+    /// The pure idle decision: wake only when idle (no turn streaming) and not
+    /// yielded. Per-result: fires on each `DelegationResult` regardless of other
+    /// in-flight subagents — the last one's `TurnComplete` re-enters the path.
     #[test]
     fn should_wake_after_delegation_truth_table() {
         assert!(
-            should_wake_after_delegation(false, true, false),
-            "idle + no subagents + not yielded → wake"
+            should_wake_after_delegation(false, false),
+            "idle + not yielded → wake"
         );
         assert!(
-            !should_wake_after_delegation(true, true, false),
+            !should_wake_after_delegation(true, false),
             "a turn is still streaming → do not wake now"
         );
         assert!(
-            !should_wake_after_delegation(false, false, false),
-            "other subagents still in flight → do not wake"
+            !should_wake_after_delegation(false, true),
+            "session yielded/taken over → do not wake"
         );
         assert!(
-            !should_wake_after_delegation(false, true, true),
-            "session yielded/taken over → do not wake"
+            !should_wake_after_delegation(true, true),
+            "streaming and yielded → do not wake"
         );
     }
 
@@ -8217,12 +8219,13 @@ mod tests {
     }
 
     /// A DelegationResult arriving mid-turn (a turn is still streaming) does NOT
-    /// spawn now; it arms the deferred flag for TurnComplete instead.
+    /// spawn now — and, per-result, no longer arms a deferred flag: each result
+    /// fires its own wake when idle, so there's nothing to defer. The in-flight
+    /// turn is left untouched.
     #[tokio::test]
     async fn delegation_wake_streaming_defers() {
         let mut app = test_app().await;
         app.streaming = true; // a turn is running
-        assert!(app.in_flight_subagents.is_empty());
 
         let spawn = plan_delegation_wake(&mut app);
 
@@ -8234,12 +8237,13 @@ mod tests {
         assert!(app.streaming, "the in-flight turn is untouched");
     }
 
-    /// When other subagents are still in flight, the finishing one triggers no
-    /// wake and no deferred flag — the LAST one will.
+    /// Per-result wake: a DelegationResult arriving while the orchestrator is
+    /// idle (not streaming, not yielded) wakes NOW even if other subagents are
+    /// still in flight — each result gets its own continuation turn.
     #[tokio::test]
-    async fn delegation_wake_waits_for_last_subagent() {
+    async fn delegation_wake_fires_per_result_with_subagents_in_flight() {
         let mut app = test_app().await;
-        app.streaming = false;
+        app.streaming = false; // idle
         app.in_flight_subagents.push(SubagentInfo {
             id: "sub-still-running".into(),
             task: "t".into(),
@@ -8248,10 +8252,11 @@ mod tests {
 
         let spawn = plan_delegation_wake(&mut app);
 
-        assert!(!spawn, "do not wake while subagents remain");
+        assert!(spawn, "wake per-result even while subagents remain");
+        assert!(app.streaming, "wake marks the turn as streaming");
         assert!(
             !app.wake_after_delegation,
-            "no deferred wake while subagents remain"
+            "immediate wake needs no deferred flag"
         );
     }
 
