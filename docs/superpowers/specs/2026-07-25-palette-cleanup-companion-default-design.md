@@ -195,7 +195,70 @@ one-thing, reality-does-another bug.
 
 ---
 
-## 4. Out of scope
+## 4. Animate the subagent glyph in the subagents drawer
+
+### 4.1 What changes
+
+The subagents drawer currently renders each running subagent with a static
+`glyph::RUNNING` ('◐') glyph. During long delegations the drawer looks frozen.
+Animate it using the existing `TOOL_FRAMES` moon-phase animation (◐◑◓◒), the
+same animation used by the tool indicator in the status bar.
+
+### 4.2 How
+
+`render_subagents_body` (`crates/zoid-tui/src/render.rs:874`) currently takes
+`&[SubagentRow]`. It needs the current spinner frame. The `ShellState` already
+has `spinner: char` (updated per-frame at `main.rs:2801`), but it uses the
+`SPINNER` array, not `TOOL_FRAMES`. Two options:
+
+- **Option A:** Add a `tool_frame: char` to `ShellState` (computed alongside
+  `spinner` using `TOOL_FRAMES` instead of `SPINNER`). Pass it to
+  `render_subagents_body`.
+- **Option B:** Pass `state.spinner` directly (it already animates per-frame).
+  Use it instead of `glyph::RUNNING`.
+
+**Recommendation:** Option B — `state.spinner` already animates per-frame
+using the `SPINNER` array. The `SPINNER` and `TOOL_FRAMES` are both moon-phase
+animations. Using `state.spinner` avoids a new field and reuses the existing
+per-frame computation. The visual is slightly different (SPINNER is a 10-frame
+cycle, TOOL_FRAMES is 4-frame), but both read as "working" and the subagent
+glyph animates.
+
+Change the render call at line 593:
+```rust
+DrawerId::Subagents => render_subagents_body(frame, body_rect, &state.subagent_rows, state.spinner),
+```
+
+Change `render_subagents_body` signature:
+```rust
+fn render_subagents_body(frame: &mut Frame, area: Rect, rows: &[SubagentRow], spinner: char) {
+```
+
+Replace `glyph::RUNNING` at line 892 with `spinner`:
+```rust
+Span::styled(format!("{} ", spinner), Style::new().fg(color::WARN)),
+```
+
+### 4.3 Reduced motion
+
+`state.spinner` is already computed with `reduced_motion` awareness
+(`spinner_frame` returns 0 when `reduced_motion` is true, freezing on the
+first frame). No extra handling needed.
+
+### 4.4 Files
+
+- `crates/zoid-tui/src/render.rs` — pass `state.spinner` to
+  `render_subagents_body`, replace `glyph::RUNNING` with `spinner`
+
+### 4.5 Tests
+
+No new tests needed — the animation is a render-side visual change. Existing
+snapshot tests that include the subagents drawer will regenerate (if any).
+The `subagent_rows` state is unchanged.
+
+---
+
+## 5. Out of scope
 
 - Companion `port`/`open` in the settings overlay (advanced, TOML only)
 - Removing `:delegate` or `:drawer` commands (still useful from the input)

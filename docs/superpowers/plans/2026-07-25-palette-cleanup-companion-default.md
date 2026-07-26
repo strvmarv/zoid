@@ -275,9 +275,52 @@ git commit -m "feat(companion): boot OR, settings overlay row, live toggle"
 
 ---
 
+### Task 4: Animate subagent glyph in the subagents drawer
+
+**Goal:** Replace the static `glyph::RUNNING` ('◐') in `render_subagents_body` with the per-frame animated `state.spinner`, so running subagents look alive during long delegations.
+
+**Files:**
+- Modify: `crates/zoid-tui/src/render.rs`
+
+- [ ] **Step 1: Pass `state.spinner` to `render_subagents_body`**
+
+In `crates/zoid-tui/src/render.rs`, find the `DrawerId::Subagents` call (line ~593):
+```rust
+DrawerId::Subagents => render_subagents_body(frame, body_rect, &state.subagent_rows),
+```
+Change to:
+```rust
+DrawerId::Subagents => render_subagents_body(frame, body_rect, &state.subagent_rows, state.spinner),
+```
+
+- [ ] **Step 2: Update `render_subagents_body` signature and glyph**
+
+Find `fn render_subagents_body` (line ~874). Add `spinner: char` parameter:
+```rust
+fn render_subagents_body(frame: &mut Frame, area: Rect, rows: &[crate::state::SubagentRow], spinner: char) {
+```
+
+Replace `glyph::RUNNING` at line ~892 with `spinner`:
+```rust
+Span::styled(format!("{} ", spinner), Style::new().fg(color::WARN)),
+```
+
+`state.spinner` is already computed per-frame with `reduced_motion` awareness (frozen on frame 0 when reduced motion is on), so no extra handling is needed.
+
+- [ ] **Step 3: Run the gate + commit**
+
+```bash
+cargo nextest run --workspace --features zoid/local-embed --no-fail-fast
+git commit -m "feat(tui): animate subagent glyph in subagents drawer"
+```
+
+If any snapshot tests fail due to the spinner glyph change, regenerate with `cargo insta accept`.
+
+---
+
 ## Self-Review
 
-**Gilfoyle review issues addressed:**
+**Gilfoyle review (spec) issues addressed:**
 - Blocker 1 (overlay toggle no-op): Task 3 Step 3 adds the `ConfigToggle` arm, Step 4 adds the live-apply
 - Blocker 2 (Provenance sites): Task 2 Step 4 enumerates all 10 sites
 - Test breakage (palette): Task 1 Steps 2-3 update the test + snapshot
@@ -285,3 +328,8 @@ git commit -m "feat(companion): boot OR, settings overlay row, live toggle"
 - Test breakage (config_view): Task 2 Step 4 fixes Provenance literals, Task 3 Step 5 regenerates ALL config-overlay snapshots (3 snapshots, not just 1)
 - Env var: Task 2 Step 5 adds `ZOID_COMPANION_ENABLED`
 - Naming: Spec §1 clarifies `:` stage1 vs Ctrl+P `all_items()`
+
+**Subagent animation (Task 4):**
+- Uses existing `state.spinner` (per-frame, reduced-motion aware) — no new state
+- Single-file change (`render.rs`) — pass `spinner` param, replace `glyph::RUNNING`
+- No new tests (render-side visual change)
