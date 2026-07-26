@@ -92,6 +92,10 @@ pub struct EconomyConfig {
     /// Re-assert the system prompt at the live edge every N estimated-appended
     /// tokens of novel content. 0 disables. Default 100_000. Units: estimate_tokens (chars/3).
     pub reassert_interval_tokens: u64,
+    /// Explicit context window for local Ollama (`options.num_ctx`). None →
+    /// falls back to `ZOID_NUM_CTX` env var, then `DEFAULT_LOCAL_NUM_CTX`
+    /// (32768). Only sent to a local daemon; cloud sizes context server-side.
+    pub num_ctx: Option<u32>,
 }
 
 impl Default for EconomyConfig {
@@ -103,6 +107,7 @@ impl Default for EconomyConfig {
             band_headroom_pct: 20,
             recent_n: 4,
             reassert_interval_tokens: 100_000,
+            num_ctx: None,
         }
     }
 }
@@ -369,6 +374,7 @@ pub struct Provenance {
     pub band_headroom_pct: Source,
     pub recent_n: Source,
     pub reassert_interval_tokens: Source,
+    pub num_ctx: Source,
     pub reduced_motion: Source,
     pub thinking_enabled: Source,
     pub thinking_effort: Source,
@@ -389,6 +395,7 @@ pub struct PartialEconomy {
     pub band_headroom_pct: Option<u8>,
     pub recent_n: Option<usize>,
     pub reassert_interval_tokens: Option<u64>,
+    pub num_ctx: Option<u32>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -512,6 +519,7 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         band_headroom_pct: Source::Default,
         recent_n: Source::Default,
         reassert_interval_tokens: Source::Default,
+        num_ctx: Source::Default,
         reduced_motion: Source::Default,
         thinking_enabled: Source::Default,
         thinking_effort: Source::Default,
@@ -562,6 +570,10 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         if let Some(v) = p.economy.reassert_interval_tokens {
             cfg.economy.reassert_interval_tokens = v;
             prov.reassert_interval_tokens = *src;
+        }
+        if let Some(v) = p.economy.num_ctx {
+            cfg.economy.num_ctx = Some(v);
+            prov.num_ctx = *src;
         }
         if let Some(v) = p.subagent.idle_timeout_secs {
             cfg.subagent.idle_timeout_secs = v;

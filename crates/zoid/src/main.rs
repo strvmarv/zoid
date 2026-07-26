@@ -1049,7 +1049,7 @@ fn select_provider(
             Arc::new(
                 zoid_provider::ollama::OllamaProvider::new(String::new())
                     .with_base_url(base_url)
-                    .with_num_ctx(zoid_provider::ollama::configured_num_ctx()),
+                    .with_num_ctx(zoid_provider::ollama::configured_num_ctx(config.economy.num_ctx)),
             ),
             "ollama",
             true, // no key required → treat as ready
@@ -7114,6 +7114,7 @@ mod tests {
             band_headroom_pct: 20,
             recent_n: 4,
             reassert_interval_tokens: 100_000,
+            num_ctx: None,
         };
         let p = policy_from_config(&econ, 200_000);
         assert!(!p.auto_evict_cold);
@@ -7481,6 +7482,7 @@ mod tests {
                     subagent_hard_timeout_secs: Source::Default,
                     approval: Source::Default,
                     reassert_interval_tokens: Source::Default,
+                    num_ctx: Source::Default,
                     ui_edit_diff: Source::Default,
                     ui_edit_diff_inline: Source::Default,
                     wake_enabled: Source::Default,

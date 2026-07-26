@@ -31,10 +31,15 @@ pub fn parse_num_ctx(raw: Option<&str>) -> u32 {
         .unwrap_or(DEFAULT_LOCAL_NUM_CTX)
 }
 
-/// The configured local context window: `ZOID_NUM_CTX` or the default. Read at
-/// provider-construction time by the bin's `ollama-local` branch.
-pub fn configured_num_ctx() -> u32 {
-    parse_num_ctx(std::env::var("ZOID_NUM_CTX").ok().as_deref())
+/// The configured local context window. Precedence: `ZOID_NUM_CTX` env var
+/// (back-compat) > `[economy] num_ctx` in config.toml > `DEFAULT_LOCAL_NUM_CTX`.
+/// Read at provider-construction time by the bin's `ollama-local` branch.
+pub fn configured_num_ctx(config_num_ctx: Option<u32>) -> u32 {
+    if let Some(raw) = std::env::var("ZOID_NUM_CTX").ok() {
+        // Env var present: it wins (back-compat). Invalid value → default.
+        return parse_num_ctx(Some(&raw));
+    }
+    config_num_ctx.unwrap_or(DEFAULT_LOCAL_NUM_CTX)
 }
 
 /// Build the native Ollama `/api/chat` request body. System prompt is a leading
