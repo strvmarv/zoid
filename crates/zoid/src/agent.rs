@@ -572,7 +572,19 @@ pub fn build_request_with_thinking(
         None => system.to_string(),
     };
     let max_tokens = match thinking {
-        ThinkingMode::Off => 4096,
+        ThinkingMode::Off => {
+            let info = zoid_provider::model::model_info(model);
+            // Even with thinking disabled in the request, thinking-capable models
+            // may produce internal reasoning tokens that count against the output
+            // budget. A 4096 budget can be exhausted by reasoning before the tool
+            // call JSON completes, producing truncated/malformed arguments. Bump
+            // the budget for thinking-capable models.
+            if info.thinking != zoid_provider::model::ThinkingSupport::None {
+                8192
+            } else {
+                4096
+            }
+        }
         ThinkingMode::Auto | ThinkingMode::Effort(_) => {
             let info = zoid_provider::model::model_info(model);
             if info.max_output > 0 {
