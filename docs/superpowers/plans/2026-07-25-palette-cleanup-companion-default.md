@@ -247,13 +247,24 @@ if app.config.companion.enabled && !app.shell.companion_on {
 }
 ```
 
-- [ ] **Step 5: Regenerate the `config_overlay_frame` snapshot**
+- [ ] **Step 5: Regenerate ALL config-overlay snapshots**
 
-The Interface section now has a companion row, so the snapshot changes:
+The companion row in the Interface section changes every snapshot that
+renders the config overlay via `build_sections`. There are 3 snapshot
+tests affected:
+- `config_overlay_frame`
+- `config_overlay_provider_picker`
+- `config_overlay_narrow_degrades`
+
+Regenerate all of them:
 ```bash
-cargo insta test --workspace --features zoid/local-embed -- config_overlay_frame
+cargo insta test --workspace --features zoid/local-embed -- config_overlay
 cargo insta accept
 ```
+
+Also verify `config_key_prompt_masks_entry` — if the masked-entry view
+replaces the fields column, its snapshot may stay unchanged. Check the
+`.new` file (if any) and `--reject` if it's a false positive.
 
 - [ ] **Step 6: Run the gate + commit**
 
@@ -271,6 +282,6 @@ git commit -m "feat(companion): boot OR, settings overlay row, live toggle"
 - Blocker 2 (Provenance sites): Task 2 Step 4 enumerates all 10 sites
 - Test breakage (palette): Task 1 Steps 2-3 update the test + snapshot
 - Test breakage (config): Task 2 Step 6 adds `enabled` assertions
-- Test breakage (config_view): Task 2 Step 4 fixes Provenance literals, Task 3 Step 5 regenerates snapshot
+- Test breakage (config_view): Task 2 Step 4 fixes Provenance literals, Task 3 Step 5 regenerates ALL config-overlay snapshots (3 snapshots, not just 1)
 - Env var: Task 2 Step 5 adds `ZOID_COMPANION_ENABLED`
 - Naming: Spec §1 clarifies `:` stage1 vs Ctrl+P `all_items()`
