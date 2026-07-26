@@ -10,6 +10,33 @@
 
 # Release Notes
 
+## 0.6.0
+
+Local models, agents as a first-class entity, peek popups, session management, and active context management that keeps small-context models productive.
+
+### New
+
+- **Local Ollama support** — connect zoid to a local Ollama daemon (`provider = "ollama-local"`). zoid requests an explicit context window from the daemon, so a local model never silently truncates your prompt. Configure the window size directly in your config file — no environment variables required.
+- **Agent profiles** — define named agent profiles (e.g. `gilfoyle-tech-reviewer`) as simple `agent.md` files. zoid discovers them from configured source directories, lists them with the new `list_agents` tool, and lets you pick one when dispatching a subagent. Profiles carry a system prompt and tool set without touching code.
+- **Peek popups** — click any tool-call line or delegated-chip in the conversation to open a scrollable popup showing the full tool output or delegation summary. Press `Esc` or click away to dismiss.
+- **Session delete** — delete sessions right from the startup picker with an inline confirm. Cleanup is transactional — events, FTS index, and embeddings are all removed together.
+- **Context budget awareness** — when running on a model with a small context window, zoid tells the assistant how much room it has and nudges it toward efficient tool use: search before reading, page through large files instead of loading them whole, and retrieve compacted content on demand. The assistant self-regulates its context consumption instead of overflowing.
+- **Relevance-rescued eviction** — when zoid evicts old turns to make room, it now uses embedding similarity to prefer evicting turns that are least relevant to the current task, keeping the most useful context in the window. A configurable `rescue_weight` controls the balance between relevance and recency.
+- **Eviction chips** — the conversation now shows a chip when turns are evicted, so you can see what was dropped. Zoom to Detail for a breakdown of the eviction span.
+- **Thinking badge** — the old thinking marker line is replaced with a compact inline `·thinking` badge at Normal zoom, keeping the conversation readable while showing the model is reasoning.
+- **Average TPS** — the session widget now shows a rolling per-turn tokens-per-second figure, so you can see how fast the model is generating.
+- **Faster test suite** — the release gate now runs through `cargo-nextest`, which parallelizes at the test level and reports a single reliable pass/fail. Targeted build-profile optimization and fixture right-sizing cut execution time by ~30% with no coverage loss.
+
+### Fixes
+
+- **Context overflow protection** — when a single turn accumulates more tool output than the model's context window (e.g. reading several large files), zoid now force-compacts the largest tool results before sending the request, instead of letting the provider reject it. The compaction uses the model's real context window — including live-fetched values from Ollama — not a static fallback.
+- **Tool call truncation on thinking models** — models that produce internal reasoning tokens could exhaust the output budget before completing a tool call, producing malformed arguments. zoid now doubles the output budget for thinking-capable models even when thinking is disabled in the request.
+- **Smaller default file reads** — the `read` tool now returns 500 lines by default (was 2000), reducing per-call context cost from ~10K to ~2.5K tokens. The assistant can still page through large files with `offset` and `limit`.
+- **Width-aware truncation** — tool-call summaries and first-line previews now cap to the available conversation width instead of a fixed 120 columns, so wide terminals show more and narrow ones don't clip.
+- **Subagent drawer cleanup** — the subagent ID is no longer shown in the right-rail display; the agent profile name is shown instead when available.
+
+> **Beta note:** builds are for evaluation and expire ~30 days after release — run `zoid update` periodically to stay current.
+
 ## 0.5.0
 
 Add-ons open up: browse a community catalog from inside zoid, set up an MCP server in a few keystrokes — always seeing exactly what you're about to trust — and hand the mouse back to your terminal when you just want to copy some text.

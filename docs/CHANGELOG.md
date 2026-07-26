@@ -6,6 +6,106 @@
 > notes (what ships to the public releases repo) live in the root
 > `RELEASES.md`.
 
+## 0.6.0
+
+Local model support, agent profiles, peek popups, session delete,
+relevance-rescued eviction, and context-management hardening. ~145
+commits since v0.5.0.
+
+Agent profiles (spec: 2026-07-23-agents-as-entity-design.md).
+- `AgentRegistry` in `zoid-core` discovers `agent.md` files from
+  configured `[agents] source_dirs`. Each file carries a name,
+  description, system prompt, and tool-set mode. `parse_agent_md`
+  extracts the frontmatter + markdown body.
+- `list_agents` tool — surfaces available agent profiles to the model.
+- `dispatch_subagent` gains an `agent` parameter — the model names a
+  profile, and zoid resolves it to the profile's system prompt + tool
+  set instead of the default subagent profile.
+- TUI: subagents drawer shows the agent profile name (not the raw ID).
+
+Peek popups.
+- Click any tool-call line or delegated-chip in the conversation to open
+  a scrollable popup showing the full tool output or delegation summary.
+  `PeekState` / `PeekContent` on `ShellState`; `peek_hits` in
+  `zoid-tui::chat` maps click coordinates to peek targets. Esc/click-away
+  dismisses.
+
+Session delete.
+- `SessionHandle::delete_session` actor command + `EventStore::delete_session`
+  (transactional: events, FTS index, embeddings all removed together).
+- Startup picker: `Delete` key arms an inline confirm; `y` confirms,
+  `n`/`Esc` cancels. Live sessions can't be deleted (guarded).
+- `SessionDelete`/`ConfirmYes`/`ConfirmNo` actions wired into
+  `route_sessions_key`.
+
+Relevance-rescued eviction (spec: ACM eviction-weight eval).
+- `GoalContext` in `zoid-core::eviction` — embeds the recent goal text
+  and computes cosine similarity against candidate turn embeddings to
+  prefer evicting turns least relevant to the current task.
+- `rescue_weight` config in `[eviction]` — controls the balance between
+  relevance and recency (0 = pure recency, default 0.3).
+- `RecencyScorer` + `plan_evictions` use the goal context to re-rank
+  eviction candidates.
+- TUI: eviction chip at Normal zoom (shows what was dropped); breakdown
+  at Detail zoom (span, token estimate, topic hint).
+- `ChatMsg::Evicted` variant in the projection + all match arms;
+  `build_request_with_thinking` filters evicted messages from the
+  provider request.
+
+Local Ollama (`ollama-local` provider). Spec:
+2026-07-25-local-model-evaluation-design.md.
+- `ZOID_NUM_CTX` env var + `OllamaProvider::with_num_ctx` builder +
+  `options.num_ctx` in the native `/api/chat` request body. A local daemon
+  applies its own (small) default and silently truncates rather than
+  erroring, so the client must request a window explicitly. Cloud path is
+  byte-identical (`num_ctx = None` → no `options` key).
+- `[economy] num_ctx` in `config.toml` — no env var needed. Precedence:
+  `ZOID_NUM_CTX` env (back-compat) > `[economy] num_ctx` > default 32768.
+- `fetch_model_info` clamps the reported context window to the requested
+  `num_ctx` so the economy view reflects the real limit.
+
+Context overflow protection. Plan:
+2026-07-25-context-overflow-protection.md.
+- `plan_compactions_for_overflow` in `zoid-core::compaction` — like
+  `plan_compactions` but driven by a hard ceiling (the model's actual
+  context window) rather than a soft threshold. Compacts the largest
+  uncompacted tool results first, using real `compact_tool_output`
+  summaries. Ports File-item handling from `plan_compactions`.
+- Hard-ceiling pass at the end of `preflight_gate` — after the existing
+  soft-threshold compaction + eviction, if the estimate still exceeds
+  the model's context window, force-compacts via
+  `plan_compactions_for_overflow`. Uses `TurnConfig.context_window` (the
+  live-fetched value from `ModelInfoFetched` / `ctx_ceiling`), not the
+  static `model_info` table's conservative default.
+- `read` tool default limit lowered from 2000 to 500 lines.
+
+Context budget hint for small-context models.
+- When `ctx_ceiling < 64K`, appends a context-efficiency section to the
+  system prompt: prefer `grep`/`glob` before reading, use `limit`/`offset`,
+  stop early, use `recall` for compacted content.
+
+Max tokens for thinking-capable models.
+- `ThinkingMode::Off` now checks `model_info(model).thinking` — if the
+  model supports thinking, `max_tokens` is bumped from 4096 to 8192.
+
+UI improvements.
+- Thinking badge replaces the thinking marker line at Normal zoom.
+- Average TPS (rolling per-turn) in the session widget.
+- Width-aware truncation: tool-call summaries and first-line previews
+  cap to the available conversation width, not a fixed 120 columns.
+- System prompt expanded with environment context (git branch, worktree,
+  session info).
+
+Test-suite performance. Spec/Plan:
+2026-07-25-test-suite-performance-design.md.
+- `cargo nextest` adopted as the release gate (`AGENTS.md:46`).
+- `[profile.test.package.zoid-core] opt-level = 1` — surgical override.
+- `economy_integration` fixtures shrunk from 2000 to 100 lines.
+- Results: cargo test 139.6s → 95.2s (-32%), nextest 108.3s → 77.5s (-28%).
+
+Workspace version inheritance.
+- `zoid-mcp`, `zoid-embed`, `zoid-testkit` now use `version.workspace = true`.
+
 ## 0.5.0
 
 Plugin distribution lands: a deterministic Claude-plugin converter (Spec 1), a
