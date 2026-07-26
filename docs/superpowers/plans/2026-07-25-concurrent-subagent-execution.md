@@ -99,16 +99,19 @@ derive and is constructed by name at **three** sites:
 2. `main.rs:7539` (the `test_app()` helper)
 3. `crates/zoid-tui/tests/shell_snapshot.rs:933` (snapshot test)
 
-Deriving `Default` on `Provenance` (it's `Copy + all-fields-are-Source`,
-trivial) removes the footgun permanently. Add `#[derive(Default)]` to
-`Provenance` and `Source` (if not already). Then update the `merge` site
-to use `..Provenance::default()` for the new field, and the other two
-sites don't need changes (they already spread `..Default::default()` or
-will pick up the derived default).
+Deriving `Default` on `Provenance` requires `Source` to derive `Default`.
+`Source` (config.rs:358) currently derives only `Debug, Clone, PartialEq`
+— no `Default`. Add `Default` to `Source`'s derive list, then add
+`#[derive(Default)]` to `Provenance`. This removes the footgun permanently
+— all existing construction sites pick up the new field automatically
+via `..Provenance::default()`.
 
-If deriving `Default` is too invasive (e.g., `Source` doesn't derive
-`Default`), instead enumerate all three sites and add
-`subagent_max_concurrent: Source::Default` to each.
+If adding `Default` to `Source` is undesirable (e.g., `Source::Env` has
+no meaningful default), instead enumerate all 3 construction sites and
+add `subagent_max_concurrent: Source::Default` to each:
+1. `config.rs:512` (the `merge` function)
+2. `main.rs:7539` (the `test_app()` helper)
+3. `crates/zoid-tui/tests/shell_snapshot.rs:933` (snapshot test)
 
 - [ ] **Step 3: Write tests**
 
@@ -303,6 +306,9 @@ AND subagents running) should still assert `pending_message == Some(...)`.
 - [ ] **Step 6: Run the gate + commit**
 
 ```bash
+cargo nextest run --workspace --features zoid/local-embed --no-fail-fast
+git commit -m "feat(agent): unblock main loop while subagents run"
+```
 
 ---
 
@@ -372,44 +378,55 @@ In `crates/zoid/src/agent.rs` (line 1524-1553), replace the
 
 ```rust
 Some(zoid_tools::ToolKind::Emitting) if tc.name == "dispatch_subagent" => {
+    // Parse task + resolve agent profile BEFORE the pool check (moved
+    // from below — the queue path needs them).
+    let task = tc.args.get("task").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if task.trim().is_empty() { /* existing error path */ continue; }
+
+    // Resolve agent profile (existing resolution logic, lines 1574-1612).
+    let (profile, resolved_agent_name) = /* ... existing ... */;
+
+    // Parse want_worktree (existing, line 1579).
+    let want_worktree = /* ... existing ... */;
+
     // Pool check: if at capacity, return a "queued" response (not an error).
     if let Some(set) = &config.in_flight {
         let n = set.lock().unwrap().len();
         if n >= config.max_concurrent && config.max_concurrent > 0 {
             emit(
-                &session,
-                &mut events,
-                ui,
-                &config.branch,
+                &session, &mut events, ui, &config.branch,
                 EventKind::ToolResult {
                     id: tc.id.clone(),
                     name: tc.name.clone(),
-                    output: format!(
-                        "subagent queued ({n} running, max {})",
-                        config.max_concurrent
-                    ),
+                    output: format!("subagent queued ({n} running, max {})", config.max_concurrent),
                     is_error: false,
                 },
-                session_id,
-                now,
-            )
-            .await?;
-            // Signal the main loop to queue the subagent.
+                session_id, now,
+            ).await?;
+            // Signal the main loop to queue the subagent. Carry the
+            // resolved profile + cwd so the main loop can spawn without
+            // re-resolving. cwd = parent's cwd (worktree created at spawn).
             let _ = ui.send(AgentUpdate::SubagentQueued {
                 tool_call_id: tc.id.clone(),
                 task: task.clone(),
                 agent: resolved_agent_name.clone(),
+                resolved_profile: profile.clone(),
+                resolved_name: resolved_agent_name.clone(),
+                want_worktree,
+                cwd: cwd_for_exec.clone(),
             }).await;
             continue;
         }
     }
-    // ... (rest of dispatch: resolve profile, create handle, spawn — unchanged)
+    // ... (rest of dispatch: create handle, spawn — unchanged from
+    // the existing code at lines 1613-1716)
 ```
 
-**Note:** The `task` and `agent` variables are parsed AFTER the current
-guard. For the queue path, they need to be parsed before the pool check.
-Move the `task` extraction (lines 1555-1560) and the agent resolution
-(lines 1574-1612) above the pool check.
+**Note:** The `task`, `agent` resolution, and `want_worktree` parsing
+are moved ABOVE the pool check (they were previously at lines 1555-1612
+and 1579). The `cwd` for the `SubagentQueued` message is the parent's
+`cwd_for_exec` — `spawn_queued_subagent` handles worktree creation at
+spawn time, so the queued subagent doesn't need a pre-computed worktree cwd.
 
 - [ ] **Step 4: Add `SubagentQueued` to `AgentUpdate`**
 
@@ -447,10 +464,9 @@ AgentUpdate::SubagentQueued {
         resolved_profile,
         resolved_name,
         cwd,
-        branch: zoid_core::event::BranchId::default(),
+        want_worktree,
         tool_call_id,
         session_id: app.session_id,
-        want_worktree,
     });
 }
 ```
@@ -471,12 +487,12 @@ if let EventKind::DelegationResult { subagent_id, .. } = &ev.kind {
     // ... (existing kill_armed reset)
 
     // Drain: if a slot opened and the queue is non-empty, spawn the next.
-    // M5 fix: treat max_concurrent = 0 as unlimited (never drain from
-    // queue — but with 0 the pool check never queues either, so the
-    // queue is always empty in that mode).
+    // M5 fix: treat max_concurrent = 0 as unlimited (never queue, but
+    // if somehow queued, spawn all). Check queue emptiness FIRST to
+    // avoid panicking on pop_front().unwrap() when max == 0.
     let max = app.config.subagent.max_concurrent;
-    while max == 0 || app.in_flight.lock().unwrap().len() < max
-        && !app.queued_subagents.is_empty()
+    while !app.queued_subagents.is_empty()
+        && (max == 0 || app.in_flight.lock().unwrap().len() < max)
     {
         let qs = app.queued_subagents.pop_front().unwrap();
         spawn_queued_subagent(app, qs);
@@ -522,11 +538,12 @@ fn spawn_queued_subagent(app: &mut App, qs: QueuedSubagent) {
 
     // Notify the UI (existing handler at main.rs:3307 pushes to
     // in_flight_subagents + shell.subagent_rows — no change needed).
-    let _ = app.ui_tx.send(AgentUpdate::SubagentStarted {
+    // Use try_send (non-blocking) — the main loop is not async here.
+    let _ = app.ui_tx.try_send(AgentUpdate::SubagentStarted {
         id: sub_id.clone(),
         task: qs.task.clone(),
         agent: qs.resolved_name.clone(),
-    }).await;
+    });
 
     // Worktree (if requested — carried from the original dispatch call).
     let wt = if qs.want_worktree && std::path::Path::new(".git").exists() {
@@ -643,19 +660,26 @@ git commit -m "fix(agent): kill subagents on session takeover"
 
 ## Self-Review
 
-**Gilfoyle review (plan) issues addressed:**
-- C1 (Provenance breaks 3 sites): Step 2 derives `Default` on `Provenance` or enumerates all 3 sites
+**Gilfoyle review (plan, 1st pass) issues addressed:**
+- C1 (Provenance breaks 3 sites): Step 2 — add `Default` to `Source` derive, then derive `Default` on `Provenance`; fallback: enumerate all 3 sites
 - C2 (spawn_turn never sets max_concurrent): Task 4 Step 2 adds `turn_config.max_concurrent = app.config.subagent.max_concurrent`
 - C3 (SubagentQueued variant contradicts Step 5): Task 4 Step 4 carries full `resolved_profile: AgentProfile` (Option A, definitive)
-- H1 (take_deferred_delegation_wake unchanged): Task 2 Step 4 explicitly notes no change needed
-- H2 (TurnComplete drain guard): Task 2 Step 4 preserves `if !app.streaming` around `drain_due_wakes`
-- H3 (submit_while_delegating test breaks): Task 3 Step 5 updates the test
-- H4 (spawn_queued_subagent must register handle): Task 4 Step 6 enumerates handle creation + `in_flight.insert` explicitly
-- H5 (fire_subagent_kill signature): Task 5 Step 1 uses `zoid::agent::fire_subagent_kill(&app.in_flight, None)` (2-arg, correct)
-- M1 (app param sources): Task 4 Step 6 lists each `app.*` source for `spawn_subagent` params
-- M2 (want_worktree cliff): Task 4 carries `want_worktree` through `SubagentQueued` and `QueuedSubagent`
-- M3 (SubagentStarted handler): Task 4 Step 6 confirms no change needed
-- M5 (max_concurrent=0 drain): Task 4 Step 6 treats 0 as unlimited in the drain guard
+
+**Gilfoyle review (plan, 2nd pass) issues addressed:**
+- Issue 1 (spawn_queued_subagent sync but .await): use `try_send` (non-blocking) instead of `send().await`
+- Issue 2 (QueuedSubagent has branch in handler but not struct): removed `branch` from handler; `spawn_queued_subagent` generates its own branch
+- Issue 3 (drain loop operator precedence panic): restructured to `!queue.is_empty() && (max == 0 || len < max)` — checks queue first
+- Issue 4 (Step 3 send site missing 4 fields): Step 3 now sends all 7 fields, with task/agent/want_worktree/cwd parsed before the pool check
+- Issue 5 (Task 3 Step 6 empty bash block): filled in
+
+**Spec review issues addressed (earlier):**
+- C1 (wake logic drops results): Task 2 — per-result wake
+- C2 (TurnComplete gate): Task 2 Step 4 — removes the `if` wrapper, preserves `!app.streaming` drain guard
+- H1 (4 user actions still blocked): Task 3 — `Submit` unblocked; session/worktree stays gated
+- H2 (takeover orphans): Task 5 — `fire_subagent_kill` on `SessionTakenOver`
+- H3 (in_flight vs in_flight_subagents): Task 4 — pool check on `in_flight`, queue on `App.queued_subagents`
+- H4 (spawn_queued_subagent must register handle): Task 4 Step 6 — explicit handle creation + `in_flight.insert`
+- H5 (fire_subagent_kill signature): Task 5 — `zoid::agent::fire_subagent_kill(&app.in_flight, None)`
 
 **SQLite (M4):** Per-subagent connections deferred. The shared session
 actor serializes appends — correct for correctness, but 3 concurrent
