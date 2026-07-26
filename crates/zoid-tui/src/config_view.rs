@@ -229,14 +229,24 @@ pub fn build_sections(
     };
     let interface = Section {
         title: "Interface".into(),
-        rows: vec![FieldRow {
-            label: "reduced motion",
-            value: onoff(cfg.reduced_motion),
-            kind: FieldKind::Bool,
-            source: prov.reduced_motion,
-            env_shadowed: prov.reduced_motion == Source::Env,
-            secret_key: None,
-        }],
+        rows: vec![
+            FieldRow {
+                label: "reduced motion".into(),
+                value: onoff(cfg.reduced_motion),
+                kind: FieldKind::Bool,
+                source: prov.reduced_motion,
+                env_shadowed: prov.reduced_motion == Source::Env,
+                secret_key: None,
+            },
+            FieldRow {
+                label: "companion".into(),
+                value: onoff(cfg.companion.enabled),
+                kind: FieldKind::Bool,
+                source: prov.companion_enabled,
+                env_shadowed: prov.companion_enabled == Source::Env,
+                secret_key: None,
+            },
+        ],
     };
     let secrets = Section {
         title: "Secrets".into(),

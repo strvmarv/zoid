@@ -2377,7 +2377,7 @@ async fn main() -> Result<()> {
 
     spawn_heartbeat(&app);
 
-    if companion_at_boot {
+    if companion_at_boot || app.config.companion.enabled {
         enable_companion(&mut app);
     }
 
@@ -3840,6 +3840,12 @@ fn apply_config_write(
     // Live-apply the bits the running UI caches (economy auto-applies on the
     // next turn via spawn_turn's policy_from_config(&app.economy, ...)).
     app.shell.reduced_motion = app.config.reduced_motion;
+    // Live-apply companion: start or stop the server to match the new config.
+    if app.config.companion.enabled && !app.shell.companion_on {
+        enable_companion(app);
+    } else if !app.config.companion.enabled && app.shell.companion_on {
+        disable_companion(app);
+    }
     // Live-apply the model (mirrors the startup logic that derives model/shell.model
     // from config) before recomputing ctx_ceiling, so the ceiling denominator and
     // the drawer label both reflect the newly-saved model.
@@ -4525,6 +4531,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                     )),
                     "reduced motion" => Some(("reduced_motion", !app.config.reduced_motion)),
                     "thinking" => Some(("thinking.enabled", !app.config.thinking.enabled)),
+                    "companion" => Some(("companion.enabled", !app.config.companion.enabled)),
                     _ => None,
                 };
                 if let Some((key, new)) = write {
