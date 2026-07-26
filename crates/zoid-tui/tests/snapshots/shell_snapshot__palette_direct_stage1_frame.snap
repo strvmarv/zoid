@@ -10,16 +10,16 @@ expression: "draw(&s, &seeded(), 160, 40)"
 "                                                                                                                  █ ╰─────────────────────────────────────────╯ "
 "                     ┌ : ───────────────────────────────────────────────────────────────────┐                     █                                             "
 "                     │ session                                                              │                     █ ╭ ▾ session ──────────────────────────────╮ "
-"                     │ drawer                                                               │                     █ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(118, " ")]
-"                     │ mode                                                                 │                     █ │🤖  ·                                    │ " Hidden by multi-width symbols: [(118, " ")]
-"                     │ companion                                                            │                     █ │⌚ tok 0  tps 0                          │ " Hidden by multi-width symbols: [(118, " ")]
-"                     │ compact                                                              │                     █ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(118, " ")]
-"                     │ delegate                                                             │                     █ │📁 cwd                                   │ " Hidden by multi-width symbols: [(118, " ")]
-"                     │ config                                                               │                     █ ╰─────────────────────────────────────────╯ "
-"                     │ help                                                                 │                     █                                             "
-"                     │ q                                                                    │                     █ ╭ ▾ context · tokens ─────────────────────╮ "
-"                     │ quit                                                                 │                     █ │churn                              cache │ "
-"                     │↑↓ move · ⏎ select · esc close · type to filter                       │                     █ │                                         │ "
+"                     │ mode                                                                 │                     █ │🟢 (unnamed)                             │ " Hidden by multi-width symbols: [(118, " ")]
+"                     │ companion                                                            │                     █ │🤖  ·                                    │ " Hidden by multi-width symbols: [(118, " ")]
+"                     │ compact                                                              │                     █ │⌚ tok 0  tps 0                          │ " Hidden by multi-width symbols: [(118, " ")]
+"                     │ config                                                               │                     █ │📊 ctx 0                                 │ " Hidden by multi-width symbols: [(118, " ")]
+"                     │ help                                                                 │                     █ │📁 cwd                                   │ " Hidden by multi-width symbols: [(118, " ")]
+"                     │ q                                                                    │                     █ ╰─────────────────────────────────────────╯ "
+"                     │ quit                                                                 │                     █                                             "
+"                     │↑↓ move · ⏎ select · esc close · type to filter                       │                     █ ╭ ▾ context · tokens ─────────────────────╮ "
+"                     │                                                                      │                     █ │churn                              cache │ "
+"                     │                                                                      │                     █ │                                         │ "
 "                     │                                                                      │                     █ │                                         │ "
 "                     │                                                                      │                     █ │                                         │ "
 "                     │                                                                      │                     █ │                                         │ "

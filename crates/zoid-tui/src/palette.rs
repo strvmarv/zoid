@@ -122,10 +122,6 @@ fn stage1_items() -> Vec<PaletteItem> {
             command: Command::Unknown("session".into()),
         },
         PaletteItem {
-            label: "drawer".into(),
-            command: Command::Unknown("drawer".into()),
-        },
-        PaletteItem {
             label: "mode".into(),
             command: Command::SwitchMode(String::new()),
         },
@@ -136,10 +132,6 @@ fn stage1_items() -> Vec<PaletteItem> {
         PaletteItem {
             label: "compact".into(),
             command: Command::CompactNow,
-        },
-        PaletteItem {
-            label: "delegate".into(),
-            command: Command::Delegate(String::new()),
         },
         PaletteItem {
             label: "config".into(),
@@ -707,11 +699,9 @@ mod tests {
             labels,
             vec![
                 "session",
-                "drawer",
                 "mode",
                 "companion",
                 "compact",
-                "delegate",
                 "config",
                 "help",
                 "q",
@@ -835,7 +825,7 @@ mod tests {
         // not Run (which would close the overlay on an empty mode switch).
         let s = shell_for_direct(":");
         let mut s = s;
-        s.palette.selected = 2; // "mode" is the 3rd row (index 2) in stage1_items.
+        s.palette.selected = 1; // "mode" is the 2nd row (index 1) in stage1_items.
         assert_eq!(
             direct_selected_action(&s),
             DirectAction::Fill(":mode ".into())
