@@ -1014,29 +1014,31 @@ fn handle_conversation_click(app: &mut App, layout: &zoid_tui::layout::ShellLayo
     }
 
     // Peek hits — clicking a tool-call line or delegated chip opens a popup.
-    let peeks = zoid_tui::chat::peek_hits(&msgs, app.streaming, true, app.tz_offset_secs, width, None);
-    if let Some(hit) = peeks.into_iter().find(|h| h.line == clicked_line) {
+    // Use the cached hits from the last painted frame to avoid line-index
+    // desync during streaming (app.events may have grown since the frame).
+    let peeks = &app.peek_cache.hits;
+    if let Some(hit) = peeks.iter().find(|h| h.line == clicked_line) {
         use zoid_tui::state::{PeekContent, PeekState};
         use zoid_tui::chat::PeekKind;
         use zoid_core::projection::ChatMsg;
-        let content = match hit.kind {
+        let content = match &hit.kind {
             PeekKind::ToolCall { id, name, args } => {
                 let result = msgs.iter().find_map(|m| {
                     if let ChatMsg::ToolResult { id: rid, output, is_error, compacted, .. } = m {
-                        if rid == &id { Some((output.clone(), *is_error, *compacted)) } else { None }
+                        if rid == id { Some((output.clone(), *is_error, *compacted)) } else { None }
                     } else { None }
                 });
                 match result {
                     Some((output, is_error, compacted)) => PeekContent::ToolCall {
-                        name,
-                        args,
+                        name: name.clone(),
+                        args: args.clone(),
                         output: Some(output),
                         is_error,
                         compacted,
                     },
                     None => PeekContent::ToolCall {
-                        name,
-                        args,
+                        name: name.clone(),
+                        args: args.clone(),
                         output: None,
                         is_error: false,
                         compacted: false,
@@ -1044,7 +1046,7 @@ fn handle_conversation_click(app: &mut App, layout: &zoid_tui::layout::ShellLayo
                 }
             }
             PeekKind::Delegated { summary, ok } => {
-                PeekContent::Delegated { summary, ok }
+                PeekContent::Delegated { summary: summary.clone(), ok: *ok }
             }
         };
         app.shell.peek = Some(PeekState { content, scroll: 0 });
@@ -1578,6 +1580,15 @@ struct BodyCache {
     msg_count: usize,
 }
 
+/// Cached peek hits from the last painted frame. Used for click hit-testing
+/// to avoid a line-index desync during streaming — `handle_conversation_click`
+/// reads these instead of recomputing from the live, mutating `app.events`.
+struct PeekCache {
+    hits: Vec<zoid_tui::chat::PeekHit>,
+    width: usize,
+    scroll: u16,
+}
+
 impl BodyCache {
     /// Rebuild the body iff `key` changed; cheap no-op otherwise. Returns
     /// `true` when the cache was reused (a full-frame "hit": nothing to
@@ -1759,6 +1770,9 @@ struct App {
     proj: ProjectionCache,
     /// Cached rendered conversation body; reused across scroll/typing frames.
     body_cache: BodyCache,
+    /// Cached peek hits from the last painted frame. Avoids line-index desync
+    /// during streaming: clicks use these instead of recomputing from live events.
+    peek_cache: PeekCache,
     /// The Overview dashboard body, rebuilt per-frame while at `Zoom::Overview`
     /// (only while the user is viewing it). Empty at every other altitude.
     overview_body: Vec<ratatui::text::Line<'static>>,
@@ -2316,6 +2330,7 @@ async fn main() -> Result<()> {
         started: std::time::Instant::now(),
         proj: ProjectionCache::default(),
         body_cache: BodyCache::default(),
+        peek_cache: PeekCache { hits: Vec::new(), width: 0, scroll: 0 },
         overview_body: Vec::new(),
         zoom_changed_at: None,
         last_conv_max_scroll: 0,
@@ -2721,6 +2736,24 @@ where
             Some(kind == RefreshKind::Hit)
         };
 
+        // Cache peek hits for click hit-testing. Computed from the same
+        // `app.proj.msgs` the body was built from, so line indices match
+        // the painted frame. Without this, handle_conversation_click would
+        // recompute from live `app.events` (which may have grown during
+        // streaming, shifting line numbers and causing click misses).
+        app.peek_cache = PeekCache {
+            hits: zoid_tui::chat::peek_hits(
+                &app.proj.msgs,
+                app.streaming,
+                true,
+                app.tz_offset_secs,
+                body_w,
+                None,
+            ),
+            width: body_w,
+            scroll: app.shell.conversation_scroll,
+        };
+
         // Tail-follow: when engaged, pin the viewport to the latest line before
         // drawing — this is what makes the view show the latest output on startup
         // and follow new events (including live streaming) as they append. Applied
@@ -2764,9 +2797,11 @@ where
         // tick below redraws at MOTION_FPS while busy so it actually animates.
         app.shell.busy = app.streaming;
         // Only a chat turn carries a cancellation token; delegation has none, so
-        // Esc/Ctrl-C routes to CancelTurn only while this is true (and keeps its
-        // normal focus behavior during a delegation).
-        app.shell.cancellable = app.turn_cancel.is_some();
+        // Esc/Ctrl-C routes to CancelTurn while this is true. Also true when
+        // subagents are in flight (no main turn) so the two-press subagent-kill
+        // path in CancelTurn is reachable.
+        app.shell.cancellable = app.turn_cancel.is_some()
+            || !app.in_flight_subagents.is_empty();
         app.shell.spinner = zoid_tui::tokens::glyph::SPINNER[zoid_tui::motion::spinner_frame(
             elapsed,
             80,
@@ -4742,10 +4777,15 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::QuestionAbort => {
             // Esc = hard abort: dropping the sender makes the loop record a
-            // balanced "[user aborted]" result and end the turn.
+            // balanced "[user aborted]" result and end the turn. Also fire
+            // the turn's cancel token so a long-running tool or streaming
+            // behind the question is interrupted, not just the question.
             app.pending_answer = None; // drop the Sender
             app.shell.question = None;
             app.shell.overlay = zoid_tui::state::Overlay::None;
+            if let Some(cancel) = &app.turn_cancel {
+                cancel.cancel();
+            }
         }
         Action::OpenProviderSwitch => {
             use zoid_tui::state::{Overlay, SwitchPane};
@@ -7746,6 +7786,7 @@ mod tests {
             started: std::time::Instant::now(),
             proj: ProjectionCache::default(),
             body_cache: BodyCache::default(),
+        peek_cache: PeekCache { hits: Vec::new(), width: 0, scroll: 0 },
             overview_body: Vec::new(),
             zoom_changed_at: None,
             last_conv_max_scroll: 0,
@@ -10014,7 +10055,14 @@ mod tests {
         let peeks = zoid_tui::chat::peek_hits(&msgs, false, true, 0, width, None);
         assert!(!peeks.is_empty(), "should have at least one peek hit");
 
-        let clicked_line = peeks[0].line;
+        // Populate the peek cache (normally done during frame render).
+        app.peek_cache = PeekCache {
+            hits: peeks,
+            width,
+            scroll: 0,
+        };
+
+        let clicked_line = app.peek_cache.hits[0].line;
         let row = layout.conversation.y + clicked_line as u16;
         handle_conversation_click(&mut app, &layout, row);
 

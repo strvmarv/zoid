@@ -2435,6 +2435,11 @@ async fn run_turn_inner(
                     let cwd = cwd_for_exec.clone();
                     let out = tokio::select! {
                         biased;
+                        _ = cancel.cancelled() => {
+                            // Graceful cancel during a Network tool: return a
+                            // non-fatal skip so the batch drain can end the turn.
+                            zoid_tools::ToolOutput::err("[skipped: turn aborted]")
+                        }
                         _ = hard.cancelled() => {
                             zoid_tools::ToolOutput::err("[killed: hard-stop]")
                         }
@@ -2462,9 +2467,10 @@ async fn run_turn_inner(
                         now,
                     )
                     .await?;
-                    if hard.is_cancelled() {
-                        // Hard-stop mid-batch: answer every remaining call so no
-                        // tool_use is left without a tool_result, then end.
+                    if hard.is_cancelled() || cancel.is_cancelled() {
+                        // Hard-stop or graceful-cancel mid-batch: answer every
+                        // remaining call so no tool_use is left without a
+                        // tool_result, then end.
                         // Mirrors the Local arm's drain (search/spawn_blocking is
                         // detached; here the async future is dropped — the reqwest
                         // connection is abandoned mid-flight).
@@ -2516,6 +2522,13 @@ async fn run_turn_inner(
                     });
                     let mut out = tokio::select! {
                         biased;
+                        _ = cancel.cancelled() => {
+                            // Graceful cancel during a Local tool: kill the
+                            // shell's process group (same as hard) and return a
+                            // non-fatal skip. The blocking task is detached.
+                            config.kill.kill();
+                            zoid_tools::ToolOutput::err("[skipped: turn aborted]")
+                        }
                         _ = hard.cancelled() => {
                             // Force-kill the shell's process group (sticky kill:
                             // also reaps a child that registers a moment later).
@@ -2563,9 +2576,10 @@ async fn run_turn_inner(
                         now,
                     )
                     .await?;
-                    if hard.is_cancelled() {
-                        // Hard-stop mid-batch: answer every remaining call so no
-                        // tool_use is left without a tool_result, then end.
+                    if hard.is_cancelled() || cancel.is_cancelled() {
+                        // Hard-stop or graceful-cancel mid-batch: answer every
+                        // remaining call so no tool_use is left without a
+                        // tool_result, then end.
                         for rest in pending_iter.by_ref() {
                             emit(
                                 &session,
