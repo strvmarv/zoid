@@ -1767,8 +1767,6 @@ struct App {
     ui_tx: mpsc::Sender<AgentUpdate>,
     /// Monotonic clock start for motion timing (Ⓡ2).
     started: std::time::Instant,
-    /// Rate-limit for the main-loop guard-state trace (diagnostic).
-    last_trace: std::time::Instant,
     /// Cached projections over the event log, refreshed only when it grows.
     proj: ProjectionCache,
     /// Cached rendered conversation body; reused across scroll/typing frames.
@@ -2331,7 +2329,6 @@ async fn main() -> Result<()> {
         feedback_reply: None,
         ui_tx,
         started: std::time::Instant::now(),
-        last_trace: std::time::Instant::now(),
         proj: ProjectionCache::default(),
         body_cache: BodyCache::default(),
         peek_cache: PeekCache { hits: Vec::new() },
@@ -2961,24 +2958,6 @@ where
             app.zoom_changed_at = None;
         }
 
-        // Diagnostic: time the frame render.
-        let frame_start = std::time::Instant::now();
-
-        // Diagnostic: log every select! wake with guard state (no rate limit
-        // — temporary, remove after the bug is found).
-        {
-            tracing::info!(
-                streaming = app.streaming,
-                in_flight_subagents = app.in_flight_subagents.len(),
-                in_flight_handles = app.in_flight.lock().unwrap().len(),
-                queued = app.queued_subagents.len(),
-                compacting = app.shell.compacting,
-                active_tool = ?app.shell.active_tool,
-                zoom_changed = app.zoom_changed_at.is_some(),
-                "main loop select! guard state"
-            );
-        }
-
         tokio::select! {
             biased;
             // Terminal events and ui_rx first — ensures TurnComplete and other
@@ -2986,7 +2965,6 @@ where
             // 30 FPS when streaming=true and can trap the loop if frame render
             // takes >33ms, starving the ui_rx that would clear `streaming`).
             maybe_term = term_events.next() => {
-                tracing::info!("select! woken by: term_events");
                 match maybe_term {
                     Some(Ok(CEvent::Key(key))) => {
                         if handle_action(app, route_key(&app.shell, key)).await? {
@@ -3069,7 +3047,6 @@ where
                 }
             }
             Some(update) = ui_rx.recv() => {
-                tracing::info!("select! woken by: ui_rx");
                 match update {
                     AgentUpdate::Appended(ev) => {
                         let mut delegation_arrived = false;
@@ -3539,18 +3516,11 @@ where
                 }
             }
             _ = motion_tick.tick(), if app.streaming || app.shell.compacting || app.shell.active_tool.is_some() || app.zoom_changed_at.is_some() => {
-                tracing::info!("select! woken by: motion_tick");
                 // Idle + not-streaming never ticks here.
             }
             _ = subagent_tick.tick(), if !app.streaming && !app.in_flight_subagents.is_empty() => {
-                tracing::info!("select! woken by: subagent_tick");
                 // Excluded when streaming (the 30 FPS tick covers it).
             }
-        }
-        // Diagnostic: log frame render time if slow.
-        let frame_ms = frame_start.elapsed().as_millis();
-        if frame_ms > 50 {
-            tracing::info!(frame_ms = frame_ms, "slow frame render");
         }
     }
 }
@@ -7836,7 +7806,6 @@ mod tests {
             feedback_reply: None,
             ui_tx,
             started: std::time::Instant::now(),
-        last_trace: std::time::Instant::now(),
             proj: ProjectionCache::default(),
             body_cache: BodyCache::default(),
         peek_cache: PeekCache { hits: Vec::new() },
