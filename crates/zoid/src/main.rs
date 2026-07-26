@@ -1585,8 +1585,6 @@ struct BodyCache {
 /// reads these instead of recomputing from the live, mutating `app.events`.
 struct PeekCache {
     hits: Vec<zoid_tui::chat::PeekHit>,
-    width: usize,
-    scroll: u16,
 }
 
 impl BodyCache {
@@ -2330,7 +2328,7 @@ async fn main() -> Result<()> {
         started: std::time::Instant::now(),
         proj: ProjectionCache::default(),
         body_cache: BodyCache::default(),
-        peek_cache: PeekCache { hits: Vec::new(), width: 0, scroll: 0 },
+        peek_cache: PeekCache { hits: Vec::new() },
         overview_body: Vec::new(),
         zoom_changed_at: None,
         last_conv_max_scroll: 0,
@@ -2750,8 +2748,6 @@ where
                 body_w,
                 None,
             ),
-            width: body_w,
-            scroll: app.shell.conversation_scroll,
         };
 
         // Tail-follow: when engaged, pin the viewport to the latest line before
@@ -7786,7 +7782,7 @@ mod tests {
             started: std::time::Instant::now(),
             proj: ProjectionCache::default(),
             body_cache: BodyCache::default(),
-        peek_cache: PeekCache { hits: Vec::new(), width: 0, scroll: 0 },
+        peek_cache: PeekCache { hits: Vec::new() },
             overview_body: Vec::new(),
             zoom_changed_at: None,
             last_conv_max_scroll: 0,
@@ -10058,8 +10054,6 @@ mod tests {
         // Populate the peek cache (normally done during frame render).
         app.peek_cache = PeekCache {
             hits: peeks,
-            width,
-            scroll: 0,
         };
 
         let clicked_line = app.peek_cache.hits[0].line;
