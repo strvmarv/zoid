@@ -1767,6 +1767,8 @@ struct App {
     ui_tx: mpsc::Sender<AgentUpdate>,
     /// Monotonic clock start for motion timing (Ⓡ2).
     started: std::time::Instant,
+    /// Rate-limit for the main-loop guard-state trace (diagnostic).
+    last_trace: std::time::Instant,
     /// Cached projections over the event log, refreshed only when it grows.
     proj: ProjectionCache,
     /// Cached rendered conversation body; reused across scroll/typing frames.
@@ -2329,6 +2331,7 @@ async fn main() -> Result<()> {
         feedback_reply: None,
         ui_tx,
         started: std::time::Instant::now(),
+        last_trace: std::time::Instant::now(),
         proj: ProjectionCache::default(),
         body_cache: BodyCache::default(),
         peek_cache: PeekCache { hits: Vec::new() },
@@ -2952,6 +2955,26 @@ where
         // actually been painted, so the final full-body frame is never skipped.
         if frame_reveal_none && app.zoom_changed_at.is_some() {
             app.zoom_changed_at = None;
+        }
+
+        // Diagnostic: log which select! arm wakes and the guard state, so a
+        // busy-spinning main loop can be traced. Rate-limited to 1/s to avoid
+        // flooding the trace log.
+        {
+            let now = std::time::Instant::now();
+            if now.duration_since(app.last_trace) >= std::time::Duration::from_secs(1) {
+                app.last_trace = now;
+                tracing::info!(
+                    streaming = app.streaming,
+                    in_flight_subagents = app.in_flight_subagents.len(),
+                    in_flight_handles = app.in_flight.lock().unwrap().len(),
+                    queued = app.queued_subagents.len(),
+                    compacting = app.shell.compacting,
+                    active_tool = ?app.shell.active_tool,
+                    zoom_changed = app.zoom_changed_at.is_some(),
+                    "main loop select! guard state"
+                );
+            }
         }
 
         tokio::select! {
@@ -7799,6 +7822,7 @@ mod tests {
             feedback_reply: None,
             ui_tx,
             started: std::time::Instant::now(),
+        last_trace: std::time::Instant::now(),
             proj: ProjectionCache::default(),
             body_cache: BodyCache::default(),
         peek_cache: PeekCache { hits: Vec::new() },
