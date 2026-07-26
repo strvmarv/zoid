@@ -205,6 +205,9 @@ fn load_config() -> (
     if let Ok(v) = std::env::var("ZOID_COMPANION_OPEN") {
         envp.companion.open = Some(matches!(v.trim(), "1" | "true" | "yes"));
     }
+    if let Ok(v) = std::env::var("ZOID_COMPANION_ENABLED") {
+        envp.companion.enabled = Some(matches!(v.trim(), "1" | "true" | "yes"));
+    }
     layers.push((Source::Env, envp));
     let (cfg, prov) = merge(&layers);
     (cfg, prov, warnings)
@@ -7771,6 +7774,7 @@ mod tests {
                     ui_edit_diff: Source::Default,
                     ui_edit_diff_inline: Source::Default,
                     wake_enabled: Source::Default,
+                    companion_enabled: Source::Default,
                 }
             },
             secrets: None,

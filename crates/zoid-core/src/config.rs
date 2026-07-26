@@ -60,6 +60,8 @@ pub struct ApprovalConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompanionConfig {
+    /// Master switch: false (default) → companion server never starts.
+    pub enabled: bool,
     /// TCP port for the companion server; 0 = OS-assigned ephemeral.
     pub port: u16,
     /// Auto-open the browser when the companion is enabled.
@@ -69,6 +71,7 @@ pub struct CompanionConfig {
 impl Default for CompanionConfig {
     fn default() -> Self {
         Self {
+            enabled: false,
             port: 0,
             open: true,
         }
@@ -291,6 +294,15 @@ mod tests {
         let (dflt, _) = merge(&[]);
         assert_eq!(dflt.companion.port, 0);
         assert!(dflt.companion.open);
+
+        // Default is false
+        let (cfg, _) = merge(&vec![(Source::Default, PartialConfig::default())]);
+        assert!(!cfg.companion.enabled, "companion.enabled defaults to false");
+
+        // TOML overrides
+        let (pc, _) = parse_toml("[companion]\nenabled = true\nport = 9123\nopen = false").unwrap();
+        let (cfg, _) = merge(&vec![(Source::UserGlobal, pc)]);
+        assert!(cfg.companion.enabled, "companion.enabled overridden via TOML");
     }
 
     #[test]
@@ -402,6 +414,7 @@ pub struct Provenance {
     pub subagent_hard_timeout_secs: Source,
     pub subagent_max_concurrent: Source,
     pub wake_enabled: Source,
+    pub companion_enabled: Source,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -444,6 +457,7 @@ pub struct PartialThinking {
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default)]
 pub struct PartialCompanion {
+    pub enabled: Option<bool>,
     pub port: Option<u16>,
     pub open: Option<bool>,
 }
@@ -549,6 +563,7 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         subagent_hard_timeout_secs: Source::Default,
         subagent_max_concurrent: Source::Default,
         wake_enabled: Source::Default,
+        companion_enabled: Source::Default,
     };
     for (src, p) in layers {
         if let Some(v) = &p.provider {
@@ -639,6 +654,10 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
                     cfg.agents.source_dirs.push(d.clone());
                 }
             }
+        }
+        if let Some(v) = p.companion.enabled {
+            cfg.companion.enabled = v;
+            prov.companion_enabled = *src;
         }
         if let Some(v) = p.companion.port {
             cfg.companion.port = v;
