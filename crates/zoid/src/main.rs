@@ -3181,7 +3181,11 @@ where
                             cancel.cancel();
                         }
                         app.streaming = false;
+                        // Kill all in-flight subagents (concurrency: they may be running)
+                        zoid::agent::fire_subagent_kill(&app.in_flight, None);
                         app.in_flight_subagents.clear();
+                        app.in_flight.lock().unwrap().clear();
+                        app.queued_subagents.clear();
                         app.yielded = true;
                         app.shell.status_hint =
                             Some("session taken over by another instance".into());
