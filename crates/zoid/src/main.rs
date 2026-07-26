@@ -6530,6 +6530,26 @@ fn spawn_turn(app: &mut App) {
     }
     let tools = std::sync::Arc::new(tools);
     let mut turn_config = zoid::agent::chat_turn_config_with(&profile, &menu);
+    // Context awareness: for small-context models, append a budget hint to the
+    // system prompt so the model self-regulates its tool usage — prefers grep
+    // over full-file reads, uses limit/offset, and avoids reading more than
+    // necessary. Only added when the context window is under 64K (large-window
+    // cloud models don't need the nudge).
+    if app.shell.ctx_ceiling > 0 && app.shell.ctx_ceiling < 64_000 {
+        let ctx_k = app.shell.ctx_ceiling / 1000;
+        turn_config.system = format!(
+            "{system}\n\n\
+             ## Context budget\n\
+             You have a {ctx_k}K token context window. Be context-efficient:\n\
+             - Use `grep` or `glob` to find what you need before reading files.\n\
+             - Use the `limit` and `offset` parameters on `read` for large files.\n\
+             - Avoid reading more files than necessary. Read the most relevant file first.\n\
+             - If you need to read multiple files, prioritize by relevance and stop early.\n\
+             - Large tool outputs are compacted automatically; use `recall` to retrieve them.",
+            system = turn_config.system,
+            ctx_k = ctx_k,
+        );
+    }
     // If the session is inside a worktree, override the turn's cwd to the
     // worktree's path. This is the seam: `TurnConfig.cwd` is built fresh
     // each turn from `App` state, so a session-level field is how the new
