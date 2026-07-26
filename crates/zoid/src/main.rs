@@ -707,7 +707,9 @@ async fn pick_session(
             )
         })
         .collect();
-    let mut selected: usize = 0;
+    // Index 0 = "Create new" (top row); index 1 = first session. Start on the
+    // most-recent session so the common case (resume recent) is one Enter away.
+    let mut selected: usize = if n > 0 { 1 } else { 0 };
     let mut term_events = EventStream::new();
     let mut pending_delete: Option<usize> = None;
 
@@ -722,12 +724,29 @@ async fn pick_session(
             )));
             lines.push(Line::from(""));
 
+            // "Create new" is pinned at the top (line 2), directly under the
+            // title/blank header, so it is always visible regardless of how
+            // many sessions exist.
+            let create_text = "  Create new session".to_string();
+            let create_style = if selected == 0 {
+                Style::new()
+                    .fg(Color::White)
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::new().fg(Color::DarkGray)
+            };
+            lines.push(Line::from(Span::styled(create_text, create_style)));
+
             for (i, s) in sessions.iter().enumerate() {
+                // Session rows occupy logical indices 1..=n, so session `i`
+                // (0-indexed in `sessions`) is at logical index `i + 1`.
+                let logical = i + 1;
                 let age = fmt_since(s.last_touched_ts, boot_ts);
                 let tokens = human_tokens(s.token_total);
                 let live_marker = if live[i] { " ●" } else { "" };
                 let row_text = format!("  {}  ·  {}  ·  {}{}", s.name, age, tokens, live_marker);
-                let style = if i == selected {
+                let style = if logical == selected {
                     Style::new()
                         .fg(Color::White)
                         .bg(Color::DarkGray)
@@ -739,7 +758,8 @@ async fn pick_session(
             }
 
             if let Some(idx) = pending_delete {
-                if let Some(s) = sessions.get(idx) {
+                // `idx` is a logical index into the session space (1..=n).
+                if let Some(s) = sessions.get(idx - 1) {
                     lines.push(Line::from(Span::styled(
                         format!(" Delete \"{}\"? [y]es / [n]o", s.name),
                         Style::new().fg(Color::Yellow),
@@ -747,16 +767,6 @@ async fn pick_session(
                 }
             }
 
-            let create_text = "  Create new session".to_string();
-            let create_style = if selected == n {
-                Style::new()
-                    .fg(Color::White)
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::new().fg(Color::DarkGray)
-            };
-            lines.push(Line::from(Span::styled(create_text, create_style)));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 " ↑↓ move · ⏎ select · esc abort",
@@ -767,18 +777,15 @@ async fn pick_session(
                 .borders(Borders::ALL)
                 .border_style(Style::new().fg(Color::DarkGray));
             // Keep the selected row on screen when the list is taller than the
-            // terminal. Session rows start at line 2 (title + blank); the
-            // "Create new" row sits after the session rows and the optional
-            // delete-confirm line. Paragraph clips content past the inner
-            // height, so without a scroll offset the bottom rows (Create new,
-            // hint) become invisible but still selectable — see
-            // `picker_scroll_offset`.
-            let selected_line = if selected < n {
-                2 + selected
+            // terminal. Layout: line 0 = title, 1 = blank, 2 = "Create new",
+            // 3.. = session rows. "Create new" (selected == 0) is at line 2 —
+            // always within the first screen. Session rows (selected >= 1) are
+            // at line 2 + selected. The delete-confirm line renders below the
+            // session rows so it never shifts the selected row's line.
+            let selected_line = if selected == 0 {
+                2
             } else {
-                // "Create new" row: title + blank + n session rows + (delete
-                // confirm line if pending) + the create row's own index.
-                2 + n + pending_delete.is_some() as usize
+                2 + selected
             };
             // Visible height = inner area (borders take 2 rows).
             let visible_height = area.height.saturating_sub(2) as usize;
@@ -796,7 +803,8 @@ async fn pick_session(
                         crossterm::event::KeyCode::Char('y')
                         | crossterm::event::KeyCode::Char('Y')
                         | crossterm::event::KeyCode::Enter => {
-                            if let Some(s) = sessions.get(idx) {
+                            // `idx` is a logical index (1..=n); session `idx - 1`.
+                            if let Some(s) = sessions.get(idx - 1) {
                                 let _ = session.delete_session(s.id).await;
                             }
                             sessions = session
@@ -816,8 +824,15 @@ async fn pick_session(
                                     )
                                 })
                                 .collect();
-                            if selected >= n {
+                            // After a delete, clamp the cursor to a valid
+                            // session row (1..=n). If no sessions remain,
+                            // land on "Create new" (index 0). Never reset to 0
+                            // when sessions still exist — index 0 is "Create
+                            // new", not the first session.
+                            if n == 0 {
                                 selected = 0;
+                            } else if selected > n {
+                                selected = n;
                             }
                             pending_delete = None;
                         }
@@ -842,7 +857,8 @@ async fn pick_session(
                 match pick_choice(n, selected, pick_key) {
                     PickOutcome::Pending(new_sel) => selected = new_sel,
                     PickOutcome::Resume(idx) => {
-                        let s = &sessions[idx];
+                        // idx is a logical index (1..=n); session `idx - 1`.
+                        let s = &sessions[idx - 1];
                         return Ok(PickResult::Resume {
                             id: s.id,
                             name: s.name.clone(),
@@ -854,7 +870,9 @@ async fn pick_session(
                         anyhow::bail!("startup picker aborted");
                     }
                     PickOutcome::DeleteConfirm(idx) => {
-                        if live.get(idx).copied().unwrap_or(false) {
+                        // idx is a logical index (1..=n); session `idx - 1`.
+                        let sess_idx = idx - 1;
+                        if live.get(sess_idx).copied().unwrap_or(false) {
                             continue;
                         }
                         pending_delete = Some(idx);
