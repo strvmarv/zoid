@@ -2978,6 +2978,11 @@ where
         }
 
         tokio::select! {
+            biased;
+            // Terminal events and ui_rx first — ensures TurnComplete and other
+            // agent updates are never starved by the motion tick (which fires at
+            // 30 FPS when streaming=true and can trap the loop if frame render
+            // takes >33ms, starving the ui_rx that would clear `streaming`).
             maybe_term = term_events.next() => {
                 match maybe_term {
                     Some(Ok(CEvent::Key(key))) => {
