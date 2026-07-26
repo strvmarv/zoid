@@ -590,7 +590,7 @@ fn render_rail(
                 DrawerId::Repo => render_repo_body(frame, state, body_rect),
                 DrawerId::Session => render_session_body(frame, state, body_rect), // Task 13
                 DrawerId::Tasks => render_tasks_body(frame, body_rect, tasks),
-                DrawerId::Subagents => render_subagents_body(frame, body_rect, &state.subagent_rows),
+                DrawerId::Subagents => render_subagents_body(frame, body_rect, &state.subagent_rows, state.spinner),
             }
         }
     }
@@ -871,7 +871,7 @@ fn render_tasks_body(frame: &mut Frame, area: Rect, items: &[zoid_core::tasks::T
 /// The subagents drawer body: one compact row per in-flight subagent — a
 /// running glyph + truncated id. Empty → dim "none". Capped to the body rows
 /// the allocator gave the drawer.
-fn render_subagents_body(frame: &mut Frame, area: Rect, rows: &[crate::state::SubagentRow]) {
+fn render_subagents_body(frame: &mut Frame, area: Rect, rows: &[crate::state::SubagentRow], spinner: char) {
     use crate::text::truncate;
     if rows.is_empty() {
         let line = Line::from(Span::styled("none", Style::new().fg(color::DIM)));
@@ -889,7 +889,7 @@ fn render_subagents_body(frame: &mut Frame, area: Rect, rows: &[crate::state::Su
             let remaining = (area.width as usize).saturating_sub(agent.len() + 5);
             let task = truncate(&r.task, remaining);
             Line::from(vec![
-                Span::styled(format!("{} ", glyph::RUNNING), Style::new().fg(color::WARN)),
+                Span::styled(format!("{} ", spinner), Style::new().fg(color::WARN)),
                 Span::styled(format!("{agent} "), Style::new().fg(color::BRANCH)),
                 Span::styled(format!("· {task}"), Style::new().fg(color::DIM)),
             ])
