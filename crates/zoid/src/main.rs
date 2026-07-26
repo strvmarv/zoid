@@ -2738,7 +2738,7 @@ where
         // streaming or delegating. The spinner frame is wall-clock-derived here
         // (kept out of the pure renderer for snapshot determinism); the motion
         // tick below redraws at MOTION_FPS while busy so it actually animates.
-        app.shell.busy = app.streaming || !app.in_flight_subagents.is_empty();
+        app.shell.busy = app.streaming;
         // Only a chat turn carries a cancellation token; delegation has none, so
         // Esc/Ctrl-C routes to CancelTurn only while this is true (and keeps its
         // normal focus behavior during a delegation).
@@ -3953,9 +3953,11 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 app.shell.status_hint = Some("session taken over — :session new or :session resume".into());
                 return Ok(false);
             }
-            // Busy (streaming or delegating) but not yielded: stash the message
-            // for after the turn, as an alternative to ESC-steering.
-            if app.streaming || !app.in_flight_subagents.is_empty() {
+            // Busy (a turn streaming) but not yielded: stash the message for
+            // after the turn, as an alternative to ESC-steering. Background
+            // subagents are no longer a blocker — the new turn and the
+            // subagents run concurrently.
+            if app.streaming {
                 let text = app.textarea.lines().join("\n");
                 if text.trim().is_empty() {
                     return Ok(false); // don't queue empty — no phantom "queued:" hint
@@ -4110,7 +4112,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::SessionPick => {
             if app.streaming || !app.in_flight_subagents.is_empty() {
-                app.shell.status_hint = Some("finish the current turn first".into());
+                app.shell.status_hint = Some(busy_block_hint(app).into());
                 app.shell.close_overlay();
                 return Ok(false);
             }
@@ -4173,7 +4175,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::SessionDelete => {
             if app.streaming || !app.in_flight_subagents.is_empty() {
-                app.shell.status_hint = Some("finish the current turn first".into());
+                app.shell.status_hint = Some(busy_block_hint(app).into());
                 app.shell.close_overlay();
                 return Ok(false);
             }
@@ -5878,7 +5880,7 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
         }
         Command::NewSession => {
             if app.streaming || !app.in_flight_subagents.is_empty() {
-                app.shell.status_hint = Some("finish the current turn first".into());
+                app.shell.status_hint = Some(busy_block_hint(app).into());
                 app.shell.close_overlay();
                 return Ok(false);
             }
@@ -6352,6 +6354,23 @@ fn should_wake_after_delegation(streaming: bool, yielded: bool) -> bool {
     !streaming && !yielded
 }
 
+/// Hint shown when session/worktree management is blocked because the main
+/// turn is streaming or background subagents are still in flight. `Submit` is
+/// no longer blocked by running subagents (the main loop runs concurrently),
+/// but switching sessions or worktrees mid-flight would orphan the subagents'
+/// output, so those actions stay gated.
+fn busy_block_hint(app: &App) -> String {
+    let n = app.in_flight_subagents.len();
+    if n > 0 {
+        format!(
+            "{n} subagent{} running — press Esc to kill them or wait for completion",
+            if n == 1 { "" } else { "s" }
+        )
+    } else {
+        "finish the current turn first".into()
+    }
+}
+
 /// Project the pending-wake set from the event log: every `WakeScheduled`
 /// whose `wake_id` has no later `WakeFired`/`WakeCancelled`. Keyed by
 /// `(fire_at_ms, wake_id)` so the map is ordered by fire time (and same-ms
@@ -6545,7 +6564,7 @@ async fn drain_due_wakes(app: &mut App) -> anyhow::Result<bool> {
     if due.is_empty() {
         return Ok(false);
     }
-    let idle = !app.streaming && app.in_flight_subagents.is_empty() && !app.yielded;
+    let idle = !app.streaming && !app.yielded;
     if !idle {
         // Busy: leave the wakes pending and park the watcher so it does not spin
         // on the past deadline. TurnComplete's drain fires them when idle.
@@ -8145,11 +8164,12 @@ mod tests {
         assert!(is_live(true, Some(99), Some(1000), 1000, alive));
     }
 
-    /// Submit while delegating queues the message instead of being a noop.
-    /// The textarea is cleared, the message is stashed, and a "queued:" hint
-    /// appears — but no turn is spawned and no event is recorded.
+    /// Submit while subagents run but no turn is streaming spawns a turn
+    /// immediately (the main loop is unblocked while subagents run). The
+    /// textarea is cleared, a UserMessage is recorded, and `streaming` flips
+    /// on — `pending_message` stays `None`.
     #[tokio::test]
-    async fn submit_while_delegating_queues_message() {
+    async fn submit_while_delegating_spawns_turn() {
         let mut app = test_app().await;
         app.in_flight_subagents.push(SubagentInfo {
             id: "sub-test".into(),
@@ -8163,13 +8183,48 @@ mod tests {
             .unwrap();
 
         assert!(!quit, "Submit must not signal quit");
+        assert!(
+            !app.in_flight_subagents.is_empty(),
+            "in_flight untouched by a spawned turn"
+        );
+        assert!(app.streaming, "a turn is spawned while subagents run");
+        assert!(
+            !app.events.is_empty(),
+            "UserMessage recorded for the spawned turn"
+        );
+        assert_eq!(
+            app.pending_message,
+            None,
+            "message is not queued when not streaming"
+        );
+        assert!(app.textarea.lines()[0].is_empty(), "textarea cleared");
+    }
+
+    /// Submit while a turn is streaming (with subagents also running) still
+    /// queues the message for after the turn — `streaming` is the real
+    /// blocker; subagents alone no longer are.
+    #[tokio::test]
+    async fn submit_while_streaming_and_delegating_queues_message() {
+        let mut app = test_app().await;
+        app.streaming = true;
+        app.in_flight_subagents.push(SubagentInfo {
+            id: "sub-test".into(),
+            task: "test".into(),
+            agent: "delegate".into(),
+        });
+        app.textarea = make_input(TextArea::from(vec!["hello".to_string()]));
+
+        let quit = handle_action(&mut app, zoid_tui::route::Action::Submit)
+            .await
+            .unwrap();
+
+        assert!(!quit, "Submit must not signal quit");
         assert!(!app.in_flight_subagents.is_empty(), "in_flight untouched");
-        assert!(!app.streaming, "no turn spawned");
-        assert!(app.events.is_empty(), "no UserMessage recorded yet");
+        assert!(app.streaming, "no new turn spawned while streaming");
         assert_eq!(
             app.pending_message.as_deref(),
             Some("hello"),
-            "message queued"
+            "message queued while streaming"
         );
         assert!(app.textarea.lines()[0].is_empty(), "textarea cleared");
         assert!(app.shell.status_hint.as_deref().unwrap().contains("queued"));
@@ -8556,7 +8611,7 @@ mod tests {
         );
         assert_eq!(
             app.shell.status_hint.as_deref(),
-            Some("finish the current turn first"),
+            Some("1 subagent running — press Esc to kill them or wait for completion"),
             "blocked SessionPick should surface the busy hint"
         );
     }
@@ -8592,7 +8647,7 @@ mod tests {
         );
         assert_eq!(
             app.shell.status_hint.as_deref(),
-            Some("finish the current turn first"),
+            Some("1 subagent running — press Esc to kill them or wait for completion"),
             "blocked NewSession should surface the busy hint"
         );
     }
