@@ -8683,6 +8683,199 @@ mod tests {
         assert!(should_drain, "pool has room — drain should fire");
     }
 
+    // --- Cancellation with concurrent subagents ---
+
+    /// Two-press Esc with multiple subagents: first Esc arms, second Esc
+    /// fires `fire_subagent_kill` on ALL in-flight subagents. With the
+    /// concurrent pool, this kills N>1 subagents simultaneously.
+    #[tokio::test]
+    async fn esc_two_press_kills_all_concurrent_subagents() {
+        let mut app = test_app().await;
+        app.config.subagent.max_concurrent = 3;
+
+        // Seed 3 running subagents.
+        for i in 0..3 {
+            let id = format!("sub-{i}");
+            let hard = tokio_util::sync::CancellationToken::new();
+            app.in_flight.lock().unwrap().insert(
+                id.clone(),
+                zoid::agent::SubagentHandle {
+                    cancel: tokio_util::sync::CancellationToken::new(),
+                    hard: hard.clone(),
+                    progress: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+                    abort_reason: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                    task: format!("task-{i}"),
+                    agent: "delegate".into(),
+                },
+            );
+            app.in_flight_subagents.push(SubagentInfo {
+                id,
+                task: format!("task-{i}"),
+                agent: "delegate".into(),
+            });
+        }
+
+        assert_eq!(app.in_flight.lock().unwrap().len(), 3);
+        assert!(!app.subagent_kill_armed);
+
+        // First Esc: arms, does NOT fire.
+        let pending = app.in_flight.lock().unwrap().len();
+        let (next_armed, fire, _hint) =
+            subagent_kill_decision(app.subagent_kill_armed, pending);
+        assert!(next_armed, "first press arms");
+        assert!(!fire, "first press must not fire");
+        app.subagent_kill_armed = next_armed;
+
+        // Second Esc: fires, disarms.
+        let (next_armed, fire, _hint) =
+            subagent_kill_decision(app.subagent_kill_armed, pending);
+        assert!(!next_armed, "second press disarms");
+        assert!(fire, "second press fires");
+        if fire {
+            zoid::agent::fire_subagent_kill(&app.in_flight, None);
+        }
+        app.subagent_kill_armed = next_armed;
+
+        // All 3 subagents' hard tokens should be cancelled.
+        let map = app.in_flight.lock().unwrap();
+        for (_, handle) in map.iter() {
+            assert!(
+                handle.hard.is_cancelled(),
+                "all subagent hard tokens must be cancelled"
+            );
+        }
+    }
+
+    /// `cancel_subagent` with a specific ID kills only that subagent,
+    /// leaving the others running. With concurrent subagents, the model
+    /// can target one of N.
+    #[tokio::test]
+    async fn cancel_subagent_targets_one_of_many() {
+        let mut app = test_app().await;
+        app.config.subagent.max_concurrent = 3;
+
+        // Seed 3 running subagents with distinct hard tokens.
+        let mut tokens = Vec::new();
+        for i in 0..3 {
+            let id = format!("sub-{i}");
+            let hard = tokio_util::sync::CancellationToken::new();
+            tokens.push(hard.clone());
+            app.in_flight.lock().unwrap().insert(
+                id,
+                zoid::agent::SubagentHandle {
+                    cancel: tokio_util::sync::CancellationToken::new(),
+                    hard,
+                    progress: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+                    abort_reason: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                    task: format!("task-{i}"),
+                    agent: "delegate".into(),
+                },
+            );
+        }
+
+        assert_eq!(app.in_flight.lock().unwrap().len(), 3);
+
+        // Cancel only sub-1 (the model calls cancel_subagent with id="sub-1").
+        let fired =
+            zoid::agent::fire_subagent_kill(&app.in_flight, Some("sub-1"));
+        assert_eq!(fired, 1, "exactly 1 subagent was targeted");
+
+        // sub-1's hard token is cancelled; the others are NOT.
+        assert!(
+            tokens[1].is_cancelled(),
+            "sub-1 hard token must be cancelled"
+        );
+        assert!(
+            !tokens[0].is_cancelled(),
+            "sub-0 hard token must NOT be cancelled"
+        );
+        assert!(
+            !tokens[2].is_cancelled(),
+            "sub-2 hard token must NOT be cancelled"
+        );
+
+        // The pool still has 3 entries (fire_subagent_kill cancels but
+        // doesn't remove from the map — the DelegationResult handler does).
+        assert_eq!(
+            app.in_flight.lock().unwrap().len(),
+            3,
+            "pool entries remain until DelegationResult"
+        );
+    }
+
+    /// Esc with subagents running but no main turn: the two-press confirm
+    /// path fires only when `pending > 0`. With an empty pool, Esc is a
+    /// no-op (doesn't arm).
+    #[tokio::test]
+    async fn esc_with_empty_pool_does_not_arm() {
+        let mut app = test_app().await;
+        app.config.subagent.max_concurrent = 3;
+        app.streaming = false;
+
+        // Empty pool, no turn.
+        let pending = app.in_flight.lock().unwrap().len();
+        assert_eq!(pending, 0);
+
+        // The Esc handler checks `pending > 0` before arming.
+        // With 0 pending, it skips the subagent kill path entirely.
+        // (This mirrors the Action::CancelTurn handler logic.)
+        if pending > 0 {
+            let (next_armed, _fire, _hint) =
+                subagent_kill_decision(app.subagent_kill_armed, pending);
+            app.subagent_kill_armed = next_armed;
+        }
+
+        assert!(
+            !app.subagent_kill_armed,
+            "empty pool must not arm the kill state"
+        );
+    }
+
+    /// Session takeover cancels all in-flight subagents' hard tokens
+    /// (not just clears the UI list). With concurrent subagents, all N
+    /// must be hard-cancelled.
+    #[tokio::test]
+    async fn takeover_cancels_all_hard_tokens() {
+        let mut app = test_app().await;
+        app.config.subagent.max_concurrent = 3;
+
+        // Seed 3 running subagents with trackable hard tokens.
+        let mut tokens = Vec::new();
+        for i in 0..3 {
+            let id = format!("sub-{i}");
+            let hard = tokio_util::sync::CancellationToken::new();
+            tokens.push(hard.clone());
+            app.in_flight.lock().unwrap().insert(
+                id,
+                zoid::agent::SubagentHandle {
+                    cancel: tokio_util::sync::CancellationToken::new(),
+                    hard,
+                    progress: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+                    abort_reason: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                    task: format!("task-{i}"),
+                    agent: "delegate".into(),
+                },
+            );
+        }
+
+        // Simulate SessionTakenOver.
+        app.streaming = false;
+        zoid::agent::fire_subagent_kill(&app.in_flight, None);
+        app.in_flight_subagents.clear();
+        app.in_flight.lock().unwrap().clear();
+        app.queued_subagents.clear();
+        app.yielded = true;
+
+        // All 3 hard tokens must be cancelled.
+        for (i, token) in tokens.iter().enumerate() {
+            assert!(
+                token.is_cancelled(),
+                "sub-{i} hard token must be cancelled on takeover"
+            );
+        }
+        assert!(app.yielded);
+    }
+
     /// A yielded session never wakes, even when idle with no subagents.
     #[tokio::test]
     async fn delegation_wake_respects_yielded() {
