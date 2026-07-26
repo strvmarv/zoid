@@ -2957,24 +2957,19 @@ where
             app.zoom_changed_at = None;
         }
 
-        // Diagnostic: log which select! arm wakes and the guard state, so a
-        // busy-spinning main loop can be traced. Rate-limited to 1/s to avoid
-        // flooding the trace log.
+        // Diagnostic: log every select! wake with guard state (no rate limit
+        // — temporary, remove after the bug is found).
         {
-            let now = std::time::Instant::now();
-            if now.duration_since(app.last_trace) >= std::time::Duration::from_secs(1) {
-                app.last_trace = now;
-                tracing::info!(
-                    streaming = app.streaming,
-                    in_flight_subagents = app.in_flight_subagents.len(),
-                    in_flight_handles = app.in_flight.lock().unwrap().len(),
-                    queued = app.queued_subagents.len(),
-                    compacting = app.shell.compacting,
-                    active_tool = ?app.shell.active_tool,
-                    zoom_changed = app.zoom_changed_at.is_some(),
-                    "main loop select! guard state"
-                );
-            }
+            tracing::info!(
+                streaming = app.streaming,
+                in_flight_subagents = app.in_flight_subagents.len(),
+                in_flight_handles = app.in_flight.lock().unwrap().len(),
+                queued = app.queued_subagents.len(),
+                compacting = app.shell.compacting,
+                active_tool = ?app.shell.active_tool,
+                zoom_changed = app.zoom_changed_at.is_some(),
+                "main loop select! guard state"
+            );
         }
 
         tokio::select! {
@@ -2984,6 +2979,7 @@ where
             // 30 FPS when streaming=true and can trap the loop if frame render
             // takes >33ms, starving the ui_rx that would clear `streaming`).
             maybe_term = term_events.next() => {
+                tracing::info!("select! woken by: term_events");
                 match maybe_term {
                     Some(Ok(CEvent::Key(key))) => {
                         if handle_action(app, route_key(&app.shell, key)).await? {
@@ -3066,6 +3062,7 @@ where
                 }
             }
             Some(update) = ui_rx.recv() => {
+                tracing::info!("select! woken by: ui_rx");
                 match update {
                     AgentUpdate::Appended(ev) => {
                         let mut delegation_arrived = false;
@@ -3535,11 +3532,11 @@ where
                 }
             }
             _ = motion_tick.tick(), if app.streaming || app.shell.compacting || app.shell.active_tool.is_some() || app.zoom_changed_at.is_some() => {
-                // 30 FPS wake for caret blink / tool spinner / compaction.
+                tracing::info!("select! woken by: motion_tick");
                 // Idle + not-streaming never ticks here.
             }
             _ = subagent_tick.tick(), if !app.streaming && !app.in_flight_subagents.is_empty() => {
-                // 5 FPS wake for the subagent drawer spinner only.
+                tracing::info!("select! woken by: subagent_tick");
                 // Excluded when streaming (the 30 FPS tick covers it).
             }
         }
