@@ -52,6 +52,36 @@ Windowing the event log itself is NOT needed — `Arc<Event>` means bodies
 are shared, not copied, and the eviction policy already compacts old
 events. The cost is the projection passes, not storage.
 
+## Investigate aggressive context eviction (25-50k floor instead of 200-300k)
+
+Context is being evicted down to 25-50k instead of the normal 200-300k
+floor. This causes the model to lose large parts of its conversation history
+mid-session — likely the root cause of the state confusion, duplicate
+dispatches, and fragmented responses observed during long sessions.
+
+Likely related to commits `09fc3f8` (hard-ceiling compaction pass) and
+`e410be2` (use live-fetched context window in hard-ceiling compaction).
+The `e410be2` commit changed the hard-ceiling pass to use
+`config.context_window` (from `app.shell.ctx_ceiling`) instead of the
+static `model_info` table. If `ctx_ceiling` is set to a small value
+(e.g. via `ModelInfoFetched` reporting a smaller window, or a model
+string not matching the table), the `effective_target` gets clamped down
+and eviction becomes much more aggressive.
+
+Investigate:
+1. What value `app.shell.ctx_ceiling` resolves to for the active model
+   (should be 1M for glm-5.2, but may be smaller if live-fetched info
+   overrides the static table).
+2. Whether the `ModelInfoFetched` path (main.rs:3386) sets a different
+   context window than the static table.
+3. Whether the hard-ceiling compaction at agent.rs:3002 is triggering
+   when it shouldn't (with 1M ceiling, 300k context should never trip
+   `est > model_context_window`).
+4. Whether the calibration ratio is off, causing `est` to be overestimated
+   and triggering premature eviction.
+5. Whether `recent_n: 4` is too aggressive — only 4 recent turns are
+   protected, so if those turns are short, post-eviction context is tiny.
+
 ## Tool call rendering truncated too short in the UI (DONE)
 
 Fixed — tool-call lines and result previews now use more of the available
