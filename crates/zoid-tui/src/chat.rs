@@ -34,29 +34,6 @@ pub struct QuestionChoiceHit {
     pub choice: String,
 }
 
-/// A clickable tool-call line or delegated chip — the `⏎ peek` hint. Maps a
-/// rendered line to the data needed to populate a peek popup. Collected as a
-/// side-output of `build_conversation`, like `CodeHit`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PeekHit {
-    /// The rendered line index (transcript coordinates, same as CodeHit).
-    pub line: usize,
-    pub kind: PeekKind,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PeekKind {
-    ToolCall {
-        id: String,
-        name: String,
-        args: String,
-    },
-    Delegated {
-        summary: String,
-        ok: bool,
-    },
-}
-
 /// Default number of most-recent edit/write results shown with an inline diff.
 pub const DEFAULT_INLINE_K: usize = 5;
 
@@ -105,7 +82,6 @@ pub fn conversation_lines_with_diffs(
         &mut hits,
         &mut Vec::new(),
         &mut Vec::new(),
-        &mut Vec::new(),
     )
 }
 
@@ -133,7 +109,6 @@ pub fn code_hits(
             inline_k: 0,
         },
         &mut hits,
-        &mut Vec::new(),
         &mut Vec::new(),
         &mut Vec::new(),
     );
@@ -166,40 +141,8 @@ pub fn question_choice_hits(
         &mut Vec::new(),
         &mut Vec::new(),
         &mut choices,
-        &mut Vec::new(),
     );
     choices
-}
-
-/// The clickable tool-call / delegated-chip map for the same inputs
-/// `conversation_lines` renders at Normal altitude. Like `code_hits`, called
-/// on demand (on a click), so the extra build cost is paid then.
-pub fn peek_hits(
-    msgs: &[ChatMsg],
-    streaming: bool,
-    caret_on: bool,
-    tz_offset_secs: i32,
-    width: usize,
-    question: Option<&crate::question::QuestionState>,
-) -> Vec<PeekHit> {
-    let mut peeks = Vec::new();
-    build_conversation(
-        msgs,
-        &RenderCtx {
-            streaming,
-            caret_on,
-            tz_offset_secs,
-            width,
-            question,
-            edit_diffs: &[],
-            inline_k: 0,
-        },
-        &mut Vec::new(),
-        &mut Vec::new(),
-        &mut Vec::new(),
-        &mut peeks,
-    );
-    peeks
 }
 
 /// Frame-level context threaded unchanged through `build_conversation`.
@@ -225,7 +168,6 @@ fn build_conversation(
     hits: &mut Vec<CodeHit>,
     msg_starts: &mut Vec<usize>,
     question_choices: &mut Vec<QuestionChoiceHit>,
-    peek_hits: &mut Vec<PeekHit>,
 ) -> Vec<Line<'static>> {
     let last = msgs.len().saturating_sub(1);
     if msgs.is_empty() {
@@ -326,19 +268,7 @@ fn build_conversation(
                             format!("({})", arg_summary(&tc.args, args_budget)),
                             Style::new().fg(color::DIM),
                         ),
-                        Span::styled(
-                            format!(" {} peek", glyph::RETURN),
-                            Style::new().fg(color::DIM),
-                        ),
                     ]));
-                    peek_hits.push(PeekHit {
-                        line: lines.len() - 1,
-                        kind: PeekKind::ToolCall {
-                            id: tc.id.clone(),
-                            name: tc.name.clone(),
-                            args: tc.args.clone(),
-                        },
-                    });
                 }
                 // Append a dim "·thinking" badge to the last rendered line of
                 // this turn if reasoning was present. Replaces the old
@@ -442,18 +372,7 @@ fn build_conversation(
                         Style::new().fg(color::BRANCH).bg(color::DELEGATE_BG),
                     ),
                     Span::styled(format!("  {mark} "), Style::new().fg(mark_color)),
-                    Span::styled(
-                        format!("{} peek", glyph::RETURN),
-                        Style::new().fg(color::DIM),
-                    ),
                 ]));
-                peek_hits.push(PeekHit {
-                    line: lines.len() - 1,
-                    kind: PeekKind::Delegated {
-                        summary: summary.clone(),
-                        ok: *ok,
-                    },
-                });
             }
             ChatMsg::Question {
                 id: _,
@@ -855,7 +774,6 @@ pub fn conversation_view_indexed(
                 },
                 &mut hits,
                 &mut starts,
-                &mut Vec::new(),
                 &mut Vec::new(),
             )
         }
@@ -1277,7 +1195,7 @@ fn arg_summary(args_json: &str, max_width: usize) -> String {
     };
     // Collapse newlines to spaces — a multi-line shell command in the args
     // would otherwise split the single tool-call line across multiple
-    // terminal rows, breaking peek-hit line mapping.
+    // terminal rows, breaking line mapping.
     let inner = inner.replace('\n', " ").replace('\r', "");
     truncate(&inner, max_width)
 }
@@ -1788,7 +1706,7 @@ mod tests {
     fn arg_summary_newlines_collapsed_to_spaces() {
         // A multi-line shell command in the args must not produce a string
         // with literal newlines — that would split the tool-call line across
-        // multiple terminal rows, breaking peek-hit line mapping.
+        // multiple terminal rows, breaking line mapping.
         let json = r#"{"command": "cd /foo &&\nls -la"}"#;
         let result = arg_summary(json, 120);
         assert!(!result.contains('\n'), "newlines must be collapsed: {result:?}");
@@ -2061,82 +1979,5 @@ mod tests {
             joined.contains("I need to consider the tradeoffs."),
             "Detail zoom must show the full thinking text: {joined}"
         );
-    }
-
-    #[test]
-    fn peek_hits_finds_tool_call_line() {
-        let msgs = vec![
-            ChatMsg::User { text: "hello".into(), ts: 0 },
-            ChatMsg::Assistant {
-                text: "let me check".into(),
-                tool_calls: vec![ToolCallRef {
-                    id: "tc1".into(),
-                    name: "shell".into(),
-                    args: r#"{"command":"ls"}"#.into(),
-                }],
-                ts: 100,
-                thinking: None,
-            },
-        ];
-        let hits = peek_hits(&msgs, false, true, 0, 80, None);
-        assert_eq!(hits.len(), 1);
-        assert!(matches!(
-            &hits[0].kind,
-            PeekKind::ToolCall { id, name, .. } if id == "tc1" && name == "shell"
-        ));
-        // The hit line should correspond to the tool-call rendered line.
-        // The assistant text "let me check" is on one line (stamped), then
-        // the tool call line follows. So the hit line is >= 1.
-        assert!(hits[0].line >= 1);
-    }
-
-    #[test]
-    fn peek_hits_finds_delegated_chip() {
-        let msgs = vec![
-            ChatMsg::User { text: "do the thing".into(), ts: 0 },
-            ChatMsg::Delegated { summary: "all done".into(), ok: true },
-        ];
-        let hits = peek_hits(&msgs, false, true, 0, 80, None);
-        assert_eq!(hits.len(), 1);
-        assert!(matches!(
-            &hits[0].kind,
-            PeekKind::Delegated { summary, ok } if summary == "all done" && *ok
-        ));
-    }
-
-    #[test]
-    fn peek_hits_empty_for_prose_only() {
-        let msgs = vec![
-            ChatMsg::User { text: "hello".into(), ts: 0 },
-            ChatMsg::Assistant {
-                text: "hi there".into(),
-                tool_calls: vec![],
-                ts: 100,
-                thinking: None,
-            },
-        ];
-        let hits = peek_hits(&msgs, false, true, 0, 80, None);
-        assert!(hits.is_empty());
-    }
-
-    #[test]
-    fn peek_hits_multiple_tool_calls_each_get_own_hit() {
-        let msgs = vec![
-            ChatMsg::Assistant {
-                text: String::new(),
-                tool_calls: vec![
-                    ToolCallRef { id: "a".into(), name: "read".into(), args: "{}".into() },
-                    ToolCallRef { id: "b".into(), name: "edit".into(), args: "{}".into() },
-                ],
-                ts: 100,
-                thinking: None,
-            },
-        ];
-        let hits = peek_hits(&msgs, false, true, 0, 80, None);
-        assert_eq!(hits.len(), 2);
-        assert!(matches!(&hits[0].kind, PeekKind::ToolCall { id, .. } if id == "a"));
-        assert!(matches!(&hits[1].kind, PeekKind::ToolCall { id, .. } if id == "b"));
-        // Each tool call is on its own line, so hit lines must differ.
-        assert_ne!(hits[0].line, hits[1].line);
     }
 }

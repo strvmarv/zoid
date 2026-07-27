@@ -4,7 +4,7 @@ expression: "draw_zoom(&compacted_msgs(), Zoom::Detail, 140)"
 ---
 "00:00 › grep the repo for TODOs                                                                                                             "
 "00:00 zoid searching                                                                                                                        "
-"  ● search(query: TODO) ⏎ peek                                                                                                              "
+"  ● search(query: TODO)                                                                                                                     "
 "  ✓ search ⊟                                                                                                                                "
 "row 0                                                                                                                                       "
 "… (compacted: 199 more lines, ~700 tokens elided)                                                                                           "

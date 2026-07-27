@@ -4,7 +4,7 @@ expression: "draw(&msgs, false)"
 ---
 " zoid CHAT ⎇ main                                           "
 "00:00 › run the build                                       "
-"  ● shell(command: false) ⏎ peek                            "
+"  ● shell(command: false)                                   "
 "  ⚠ shell → boom                                            "
 "                                                            "
 "00:00 zoid the command failed.                              "
