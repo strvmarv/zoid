@@ -1360,6 +1360,25 @@ fn git_status_at(dir: &std::path::Path) -> (usize, usize, usize) {
     (a1 + a2, r1 + r2, f1 + f2)
 }
 
+/// What `apply_event` changed. Determines whether the caller invalidates
+/// `body_cache` and whether the economy projections need a dirty-flag refresh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectionImpact {
+    /// No `msgs` change, no body change. Economy projections may need refresh.
+    Economy,
+    /// `msgs` content changed but `msg_count` did not. Carries the index of
+    /// the mutated message. `None` means "mutation at the end" (streaming
+    /// append to the last message — BodyCache incremental path handles it).
+    /// `Some(i)` means message at index `i` was mutated — the caller checks
+    /// `i == msgs.len() - 1` to decide whether to invalidate `body_cache`.
+    MsgsMutated { mutated_index: Option<usize> },
+    /// A new ChatMsg was appended (msg_count changed). Full body rebuild.
+    MsgsAppended,
+    /// Could not apply incrementally — caller must do a full refresh.
+    #[allow(dead_code)]
+    FullRefresh,
+}
+
 /// Cached projections over the append-only event log. Recomputed only when the
 /// event count changes — the log only ever grows, so its length uniquely
 /// identifies the projection inputs. This is the core render-loop optimization:
@@ -1387,15 +1406,42 @@ struct ProjectionCache {
     /// Used for TPS (tokens per second) in the session drawer.
     /// `None` until the first turn's Usage event arrives.
     last_output_tokens: Option<u64>,
+    // NEW — dirty flags for deferred economy rebuilds.
+    window_dirty: bool,
+    churn_dirty: bool,
+    // NEW — ids of non-Approval QuestionAsked events, so ToolResults with
+    // the same id are suppressed (mirrors conversation_for_branch's pre-pass).
+    question_ids: std::collections::HashSet<String>,
+    // NEW — cumulative thinking tokens (maintained incrementally by Usage).
+    thinking_total: u64,
+    // NEW — pending assistant-turn accumulator (mirrors conversation_for_branch
+    // locals). ModelDelta/ToolCall accumulate here; tier-2 events flush.
+    pending_text: Option<String>,
+    pending_calls: Vec<zoid_core::projection::ToolCallRef>,
+    pending_turn_ts: Option<i64>,
+    pending_thinking: Option<String>,
 }
 
 impl ProjectionCache {
-    /// Refresh all projections iff the event count changed; a cheap no-op
-    /// otherwise. Returns `true` when a recompute happened.
+    /// Refresh projections. When `events_len` matches (no full invalidation),
+    /// rebuild only dirty economy projections. When `events_len` is `None`
+    /// (full invalidation — session resume, first frame), rebuild everything.
     fn refresh(&mut self, events: &zoid::eventlog::EventLog) -> bool {
         if self.events_len == Some(events.len()) {
-            return false;
+            let mut rebuilt = false;
+            if self.window_dirty {
+                self.window = zoid_core::context::context_window(events.iter());
+                self.window_dirty = false;
+                rebuilt = true;
+            }
+            if self.churn_dirty {
+                self.churn = zoid_core::economy::churn_timeline(events.iter());
+                self.churn_dirty = false;
+                rebuilt = true;
+            }
+            return rebuilt;
         }
+        // Full invalidation — rebuild everything from scratch.
         self.msgs = conversation(events.iter());
         self.window = zoid_core::context::context_window(events.iter());
         self.churn = zoid_core::economy::churn_timeline(events.iter());
@@ -1403,6 +1449,7 @@ impl ProjectionCache {
         let ledger = zoid_core::economy::token_ledger(events.iter());
         self.ledger_total = ledger.total;
         self.cached_total = ledger.cached;
+        self.thinking_total = ledger.thinking;
         // Find the last Usage event's real input token count — the provider's
         // actual prompt size, far more accurate than the chars/4 estimate.
         // `EventLog::iter()` is double-ended, so `.rev()` works directly.
@@ -1416,45 +1463,327 @@ impl ProjectionCache {
             .rev()
             .find_map(|e| e.tokens.map(|t| t.output))
             .filter(|&t| t > 0);
+        self.window_dirty = false;
+        self.churn_dirty = false;
+        self.question_ids = events
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EventKind::QuestionAsked { id, kind, .. }
+                    if !matches!(kind, zoid_core::event::QuestionKind::Approval) =>
+                    Some(id.clone()),
+                _ => None,
+            })
+            .collect();
         self.events_len = Some(events.len());
+        self.pending_text = None;
+        self.pending_calls = Vec::new();
+        self.pending_turn_ts = None;
+        self.pending_thinking = None;
         true
     }
 
-    /// Incrementally apply a single new event to the cached `msgs` projection.
-    /// Handles `ModelDelta` (append text to the last assistant message) and
-    /// `ToolCall` (append to its tool_calls) in O(1). Returns `true` when the
-    /// event was applied incrementally. For all other event kinds, returns
-    /// `false` — the caller must do a full `refresh` on the next frame.
-    fn apply_streaming(&mut self, ev: &Event) -> bool {
+    /// Flush the pending assistant turn into `msgs` as a `ChatMsg::Assistant`.
+    /// Returns `true` if a message was pushed (pending text/calls were
+    /// non-empty), `false` otherwise. Carries `pending_thinking` into the
+    /// flushed message, matching `conversation_for_branch`'s `flush()`.
+    ///
+    /// When the flush is a no-op (no pending text/calls), `pending_thinking`
+    /// is **dropped** (not put back) — matching the reference fold, where
+    /// `flush()` takes `thinking` by value and it goes out of scope when
+    /// the flush doesn't push. The `ModelThinking` handler re-stashes
+    /// thinking immediately after calling flush, so there's no risk of
+    /// losing it on the `ModelThinking` path.
+    fn flush_pending_assistant(&mut self) -> bool {
+        let text = self.pending_text.take();
+        let calls = std::mem::take(&mut self.pending_calls);
+        let ts = self.pending_turn_ts.take();
+        let thinking = self.pending_thinking.take();
+        if text.is_some() || !calls.is_empty() {
+            self.msgs.push(zoid_core::projection::ChatMsg::Assistant {
+                text: text.unwrap_or_default(),
+                tool_calls: calls,
+                ts: ts.unwrap_or(0),
+                thinking,
+            });
+            true
+        } else {
+            // No pending turn — thinking is dropped (matches reference fold).
+            false
+        }
+    }
+
+    /// Finalize any pending state after a turn ends. Mirrors the trailing
+    /// flush in `conversation_for_branch` (projection.rs:344–356): if
+    /// `pending_thinking` is set with no pending text/calls, emit a
+    /// standalone `ChatMsg::Assistant { text: "", thinking: Some(...) }`.
+    fn finalize_pending(&mut self) -> ProjectionImpact {
+        let flushed = self.flush_pending_assistant();
+        if flushed {
+            return ProjectionImpact::MsgsAppended;
+        }
+        // Trailing standalone-thinking: no text/calls, but thinking is set.
+        if let Some(thinking) = self.pending_thinking.take() {
+            self.msgs.push(zoid_core::projection::ChatMsg::Assistant {
+                text: String::new(),
+                tool_calls: Vec::new(),
+                ts: self.pending_turn_ts.take().unwrap_or(0),
+                thinking: Some(thinking),
+            });
+            return ProjectionImpact::MsgsAppended;
+        }
+        ProjectionImpact::Economy
+    }
+
+    /// Incrementally apply a single new event to the cached projections.
+    /// Returns a `ProjectionImpact` describing what changed, so the caller
+    /// knows whether to invalidate `body_cache`.
+    fn apply_event(&mut self, ev: &Event) -> ProjectionImpact {
         use zoid_core::event::EventKind;
-        use zoid_core::projection::{ChatMsg, ToolCallRef};
+        use zoid_core::projection::{
+            ChatMsg, QuestionCardState, RescueSummary, RescuedTurnSummary, ToolCallRef,
+        };
+        let bump_len = || ProjectionImpact::MsgsMutated { mutated_index: None };
+        // token_ledger sums `e.tokens` across ALL events (not just Usage), so the
+        // incremental path must do the same — accumulate tokens here, before the
+        // kind-specific match. `last_input_tokens`/`last_output_tokens` track the
+        // most recent non-zero values (used for TPS + ctx_used).
+        if let Some(t) = ev.tokens {
+            self.ledger_total += t.input + t.output;
+            self.cached_total += t.cached;
+            self.thinking_total += t.thinking;
+            if t.input > 0 {
+                self.last_input_tokens = Some(t.input);
+            }
+            if t.output > 0 {
+                self.last_output_tokens = Some(t.output);
+            }
+        }
         match &ev.kind {
+            // Streaming hot path — ALWAYS accumulate into pending_text/
+            // pending_calls, never append to the last assistant message.
+            // This matches the reference fold (projection.rs:224–235), which
+            // always accumulates into locals and only emits a ChatMsg::Assistant
+            // on flush. Appending to the last assistant would diverge after any
+            // event that pushes a new Assistant (ModelThinking, AssistantMessage,
+            // finalize_pending) — the fold starts a fresh pending turn, while
+            // append-to-last would mutate the just-pushed message.
             EventKind::ModelDelta { text } => {
-                if let Some(ChatMsg::Assistant { text: t, .. }) = self.msgs.last_mut() {
-                    t.push_str(text);
-                } else {
-                    self.msgs.push(ChatMsg::Assistant {
-                        thinking: None,
-                        text: text.clone(),
-                        tool_calls: Vec::new(),
-                        ts: ev.ts,
-                    });
-                }
+                self.pending_text.get_or_insert_with(String::new).push_str(text);
+                self.pending_turn_ts.get_or_insert(ev.ts);
                 self.events_len = Some(self.events_len.unwrap_or(0) + 1);
-                true
+                bump_len()
             }
             EventKind::ToolCall { id, name, args } => {
-                if let Some(ChatMsg::Assistant { tool_calls, .. }) = self.msgs.last_mut() {
-                    tool_calls.push(ToolCallRef {
-                        id: id.clone(),
-                        name: name.clone(),
-                        args: args.clone(),
-                    });
-                }
+                self.pending_turn_ts.get_or_insert(ev.ts);
+                self.pending_calls.push(ToolCallRef {
+                    id: id.clone(),
+                    name: name.clone(),
+                    args: args.clone(),
+                });
                 self.events_len = Some(self.events_len.unwrap_or(0) + 1);
-                true
+                bump_len()
             }
-            _ => false, // structural event — needs a full refresh
+
+            // Tier 1 — bookkeeping.
+            EventKind::Usage => {
+                // Token accumulation happens above (before the match) for all
+                // event kinds — token_ledger sums `e.tokens` across every event,
+                // not just Usage. Here we only flag the churn timeline dirty.
+                self.churn_dirty = true;
+                self.events_len = Some(self.events_len.unwrap_or(0) + 1);
+                ProjectionImpact::Economy
+            }
+            EventKind::Tasks { items } => {
+                self.tasks = items.clone();
+                self.events_len = Some(self.events_len.unwrap_or(0) + 1);
+                ProjectionImpact::Economy
+            }
+            EventKind::WakeScheduled { .. }
+            | EventKind::WakeFired { .. }
+            | EventKind::WakeCancelled { .. } => {
+                self.events_len = Some(self.events_len.unwrap_or(0) + 1);
+                ProjectionImpact::Economy
+            }
+            EventKind::TurnsDropped { .. }
+            | EventKind::ContextMutation { .. }
+            | EventKind::DirectiveReasserted { .. }
+            | EventKind::TurnsReadmitted { .. } => {
+                self.window_dirty = true;
+                self.churn_dirty = true;
+                self.events_len = Some(self.events_len.unwrap_or(0) + 1);
+                ProjectionImpact::Economy
+            }
+
+            // Tier 2 — append-only msgs change.
+            EventKind::UserMessage { text } => {
+                self.flush_pending_assistant();
+                self.msgs.push(ChatMsg::User {
+                    text: text.clone(),
+                    ts: ev.ts,
+                });
+                self.window_dirty = true;
+                self.churn_dirty = true;
+                self.events_len = Some(self.events_len.unwrap_or(0) + 1);
+                ProjectionImpact::MsgsAppended
+            }
+            EventKind::AssistantMessage { text } => {
+                self.flush_pending_assistant();
+                self.msgs.push(ChatMsg::Assistant {
+                    thinking: None,
+                    text: text.clone(),
+                    tool_calls: Vec::new(),
+                    ts: ev.ts,
+                });
+                self.window_dirty = true;
+                self.churn_dirty = true;
+                self.events_len = Some(self.events_len.unwrap_or(0) + 1);
+                ProjectionImpact::MsgsAppended
+            }
+            EventKind::ModelThinking { text } => {
+                let flushed = self.flush_pending_assistant();
+                self.pending_thinking = Some(text.clone());
+                self.events_len = Some(self.events_len.unwrap_or(0) + 1);
+                if flushed {
+                    bump_len()
+                } else {
+                    ProjectionImpact::Economy
+                }
+            }
+            EventKind::ToolResult {
+                id,
+                name,
+                output,
+                is_error,
+            } => {
+                self.flush_pending_assistant();
+                if self.question_ids.contains(id.as_str()) {
+                    self.events_len = Some(self.events_len.unwrap_or(0) + 1);
+                    return bump_len();
+                }
+                self.msgs.push(ChatMsg::ToolResult {
+                    id: id.clone(),
+                    name: name.clone(),
+                    output: output.clone(),
+                    is_error: *is_error,
+                    compacted: false,
+                    ts: ev.ts,
+                });
+                self.window_dirty = true;
+                self.churn_dirty = true;
+                self.events_len = Some(self.events_len.unwrap_or(0) + 1);
+                ProjectionImpact::MsgsAppended
+            }
+            EventKind::QuestionAsked {
+                id,
+                kind,
+                question,
+                choices,
+            } => {
+                self.flush_pending_assistant();
+                if !matches!(kind, zoid_core::event::QuestionKind::Approval) {
+                    self.question_ids.insert(id.clone());
+                }
+                self.msgs.push(ChatMsg::Question {
+                    id: id.clone(),
+                    kind: kind.clone(),
+                    question: question.clone(),
+                    choices: choices.clone(),
+                    state: QuestionCardState::Open {
+                        selected: 0,
+                        free_text: String::new(),
+                    },
+                    ts: ev.ts,
+                });
+                self.window_dirty = true;
+                self.churn_dirty = true;
+                self.events_len = Some(self.events_len.unwrap_or(0) + 1);
+                ProjectionImpact::MsgsAppended
+            }
+            EventKind::QuestionAnswered { id, answer } => {
+                if let Some((idx, ChatMsg::Question { state, .. })) = self
+                    .msgs
+                    .iter_mut()
+                    .enumerate()
+                    .rev()
+                    .find(|(_, m)| matches!(m, ChatMsg::Question { id: qid, .. } if qid == id))
+                {
+                    *state = QuestionCardState::Answered {
+                        answer: answer.clone(),
+                    };
+                    self.events_len = Some(self.events_len.unwrap_or(0) + 1);
+                    ProjectionImpact::MsgsMutated {
+                        mutated_index: Some(idx),
+                    }
+                } else {
+                    self.events_len = Some(self.events_len.unwrap_or(0) + 1);
+                    ProjectionImpact::Economy
+                }
+            }
+            EventKind::DelegationResult { summary, ok, .. } => {
+                self.flush_pending_assistant();
+                self.msgs.push(ChatMsg::Delegated {
+                    summary: summary.clone(),
+                    ok: *ok,
+                });
+                self.window_dirty = true;
+                self.churn_dirty = true;
+                self.events_len = Some(self.events_len.unwrap_or(0) + 1);
+                ProjectionImpact::MsgsAppended
+            }
+            EventKind::TurnsEvicted {
+                reclaimed_tokens,
+                marker,
+                rescue,
+                ..
+            } => {
+                self.flush_pending_assistant();
+                let evicted_topics: Vec<String> =
+                    marker.spans.iter().map(|s| s.topic_hint.clone()).collect();
+                let rescue = rescue.as_ref().map(|r| RescueSummary {
+                    goal_text: r.goal_text.clone(),
+                    weight: r.weight.round() as u32,
+                    rescued: r
+                        .survivors
+                        .iter()
+                        .map(|s| RescuedTurnSummary {
+                            topic_hint: s.topic_hint.clone(),
+                            bump_milli: (s.rescue_bump * 1000.0).round() as u32,
+                        })
+                        .collect(),
+                });
+                self.msgs.push(ChatMsg::Evicted {
+                    reclaimed_tokens: *reclaimed_tokens,
+                    evicted_topics,
+                    rescue,
+                    ts: ev.ts,
+                });
+                self.window_dirty = true;
+                self.churn_dirty = true;
+                self.events_len = Some(self.events_len.unwrap_or(0) + 1);
+                ProjectionImpact::MsgsAppended
+            }
+
+            // Tier 3 — content mutation.
+            EventKind::ToolResultCompacted { id, summary, .. } => {
+                if let Some((idx, ChatMsg::ToolResult { output, compacted, .. })) = self
+                    .msgs
+                    .iter_mut()
+                    .enumerate()
+                    .rev()
+                    .find(|(_, m)| matches!(m, ChatMsg::ToolResult { id: rid, .. } if rid == id))
+                {
+                    *output = summary.clone();
+                    *compacted = true;
+                    self.window_dirty = true;
+                    self.events_len = Some(self.events_len.unwrap_or(0) + 1);
+                    ProjectionImpact::MsgsMutated {
+                        mutated_index: Some(idx),
+                    }
+                } else {
+                    self.events_len = Some(self.events_len.unwrap_or(0) + 1);
+                    ProjectionImpact::Economy
+                }
+            }
         }
     }
 }
@@ -3008,29 +3337,43 @@ where
                         if matches!(ev.kind, EventKind::ToolResult { .. }) {
                             app.tool_complete = true;
                         }
-                        // Incremental streaming: ModelDelta and ToolCall events
-                        // append directly into the cached ChatMsg vec in O(1)
-                        // instead of triggering a full O(n) conversation() fold
-                        // on the next frame. Structural events (ToolResult,
-                        // Usage, etc.) return false and get a full refresh.
-                        //
-                        // Subagent-branch events are persisted to SQLite and
-                        // pushed into app.events, but the projection cache only
-                        // cares about main-branch events for the conversation
-                        // view. Skip the incremental streaming path AND cache
-                        // invalidation for subagent-branch events — no UI churn.
-                        // DelegationResult events are on the default branch, so
-                        // they flow through here normally.
+                        // Incremental projection: apply_event handles every
+                        // EventKind in O(1) (append to msgs, in-place mutation,
+                        // or bookkeeping update). Returns a ProjectionImpact
+                        // describing what changed — the caller uses it to
+                        // decide whether body_cache needs invalidation.
+                        // Subagent-branch events are persisted but skipped
+                        // (the projection only tracks the main branch).
                         let is_subagent_branch =
                             ev.branch != zoid_core::event::BranchId::default();
-                        if !is_subagent_branch && !app.proj.apply_streaming(&ev) {
-                            // Structural event — invalidate the projection cache
-                            // AND the body cache so both do a full rebuild on
-                            // the next frame. Compaction events replace content
-                            // in existing messages (same count) so the BodyCache's
-                            // msg_count check would skip the rebuild without this.
-                            app.proj.events_len = None;
-                            app.body_cache.key = None;
+                        if !is_subagent_branch {
+                            let impact = app.proj.apply_event(&ev);
+                            match impact {
+                                ProjectionImpact::Economy => {
+                                    // msgs unchanged — body_cache NOT invalidated.
+                                }
+                                ProjectionImpact::MsgsMutated { mutated_index } => {
+                                    match mutated_index {
+                                        None => {
+                                            // Last-message mutation — BodyCache incremental path.
+                                        }
+                                        Some(i) if i == app.proj.msgs.len() - 1 => {
+                                            // Last-message mutation — BodyCache incremental path.
+                                        }
+                                        Some(_) => {
+                                            // Non-last mutation — full body rebuild.
+                                            app.body_cache.key = None;
+                                        }
+                                    }
+                                }
+                                ProjectionImpact::MsgsAppended => {
+                                    app.body_cache.key = None;
+                                }
+                                ProjectionImpact::FullRefresh => {
+                                    app.proj.events_len = None;
+                                    app.body_cache.key = None;
+                                }
+                            }
                         }
                         // #6b: when a compaction marker arrives, free the raw body
                         // of the ToolResult it summarizes. Safe: request/render carry
@@ -3063,6 +3406,13 @@ where
                     }
                     AgentUpdate::TurnComplete => {
                         app.streaming = false;
+                        // Finalize any pending assistant-turn state (trailing
+                        // standalone-thinking flush — mirrors the fold's
+                        // trailing flush at projection.rs:344–356).
+                        let impact = app.proj.finalize_pending();
+                        if matches!(impact, ProjectionImpact::MsgsAppended) {
+                            app.body_cache.key = None;
+                        }
                         // Don't clear the tool immediately — set tool_complete for
                         // the 2s minimum-display debounce (mirrors compaction).
                         app.tool_complete = true;
@@ -7873,6 +8223,82 @@ mod tests {
         assert_eq!(cache.msgs.len(), 2);
     }
 
+    #[test]
+    fn apply_event_parity_with_full_refresh() {
+        use zoid_core::event::{Event, EventKind, TokenStat};
+        use ulid::Ulid;
+
+        // Build a realistic event sequence covering every tier:
+        // UserMessage, ModelDelta, ModelThinking, ToolCall, ToolResult,
+        // Usage, QuestionAsked, QuestionAnswered, DelegationResult,
+        // TurnsEvicted, ToolResultCompacted, Tasks, WakeScheduled.
+        let mut events: Vec<Event> = Vec::new();
+        let mut ts = 1000i64;
+        let mut mk = |kind: EventKind| {
+            let e = Event::new(Ulid::new(), None, ts, kind);
+            ts += 1;
+            e
+        };
+
+        events.push(mk(EventKind::UserMessage { text: "hello".into() }));
+        events.push(mk(EventKind::ModelDelta { text: "res".into() }));
+        events.push(mk(EventKind::ModelThinking { text: "hmm".into() }));
+        events.push(mk(EventKind::ToolCall { id: "t1".into(), name: "read".into(), args: r#"{"path":"f.rs"}"#.into() }));
+        // ToolResult with tokens
+        let mut tr = mk(EventKind::ToolResult { id: "t1".into(), name: "read".into(), output: "file contents".into(), is_error: false });
+        tr.tokens = Some(TokenStat { input: 100, output: 50, cached: 20, thinking: 5 });
+        events.push(tr);
+        events.push(mk(EventKind::Usage));
+        events.push(mk(EventKind::QuestionAsked { id: "q1".into(), kind: zoid_core::event::QuestionKind::Ask, question: "which?".into(), choices: vec!["a".into(), "b".into()] }));
+        events.push(mk(EventKind::QuestionAnswered { id: "q1".into(), answer: "a".into() }));
+        events.push(mk(EventKind::AssistantMessage { text: "final answer".into() }));
+        events.push(mk(EventKind::DelegationResult { subagent_id: "s1".into(), branch: "subagent:s1".into(), summary: "done".into(), ok: true }));
+        events.push(mk(EventKind::ToolResultCompacted { id: "t1".into(), summary: "compacted summary".into(), original_tokens: 500 }));
+        events.push(mk(EventKind::Tasks { items: vec![] }));
+        events.push(mk(EventKind::WakeScheduled { wake_id: "w1".into(), fire_at_ms: 99999, note: "reminder".into() }));
+        events.push(mk(EventKind::WakeFired { wake_id: "w1".into() }));
+        events.push(mk(EventKind::WakeCancelled { wake_id: "w2".into() }));
+        events.push(mk(EventKind::TurnsDropped { turns_dropped: 1 }));
+        events.push(mk(EventKind::ContextMutation { item: "msg:0".into(), op: zoid_core::event::MutationOp::Pin }));
+        events.push(mk(EventKind::DirectiveReasserted { at_cumulative: 500 }));
+        events.push(mk(EventKind::TurnsReadmitted { ids: vec![Ulid::from(42u128)] }));
+        events.push(mk(EventKind::TurnsEvicted {
+            ids: vec![Ulid::from(1u128)],
+            reclaimed_tokens: 1000,
+            marker: zoid_core::event::EvictionMarker { spans: vec![zoid_core::event::EvictedSpan { token_estimate: 500, topic_hint: "topic".into() }] },
+            rescue: None,
+        }));
+
+        let log = zoid::eventlog::EventLog::from_vec(events.clone());
+
+        // Full refresh from scratch (the reference).
+        let mut full = ProjectionCache::default();
+        full.refresh(&log);
+
+        // Incremental: apply each event one at a time, then refresh dirty flags.
+        let mut incr = ProjectionCache::default();
+        for ev in &events {
+            let _ = incr.apply_event(ev);
+        }
+        // Flush dirty economy projections.
+        incr.refresh(&log);
+
+        // Parity: msgs
+        assert_eq!(incr.msgs, full.msgs, "msgs must match");
+        // Parity: ledger
+        assert_eq!(incr.ledger_total, full.ledger_total, "ledger_total");
+        assert_eq!(incr.cached_total, full.cached_total, "cached_total");
+        assert_eq!(incr.thinking_total, full.thinking_total, "thinking_total");
+        // Parity: last tokens
+        assert_eq!(incr.last_input_tokens, full.last_input_tokens, "last_input_tokens");
+        assert_eq!(incr.last_output_tokens, full.last_output_tokens, "last_output_tokens");
+        // Parity: tasks
+        assert_eq!(incr.tasks, full.tasks, "tasks");
+        // Parity: window + churn (rebuilt from dirty flags)
+        assert_eq!(incr.window, full.window, "context window");
+        assert_eq!(incr.churn, full.churn, "churn timeline");
+    }
+
     /// The `PluginScan` main-loop path (`apply_plugin_scan`) for the bundled
     /// `superpowers` plugin: a successful fetch materializes the mode into the
     /// first mode dir, the rebuilt registry surfaces it under the manifest's
@@ -8898,9 +9324,9 @@ mod tests {
     }
 
     /// A subagent-branch event must NOT be applied to the projection cache
-    /// via `apply_streaming`. The `msgs` vector must be unchanged.
+    /// via `apply_event`. The `msgs` vector must be unchanged.
     #[tokio::test]
-    async fn subagent_branch_event_skips_apply_streaming() {
+    async fn subagent_branch_event_skips_apply_event() {
         let mut app = test_app().await;
         // Seed the projection with one main-branch user message so the cache
         // is populated (events_len = Some(1), msgs has 1 item).
@@ -8936,8 +9362,11 @@ mod tests {
         // Process it the same way the Appended handler does, but with the
         // branch guard applied (the code under test).
         let is_subagent_branch = sub_ev.branch != zoid_core::event::BranchId::default();
-        if !is_subagent_branch && !app.proj.apply_streaming(&sub_ev) {
-            app.proj.events_len = None;
+        if !is_subagent_branch {
+            let impact = app.proj.apply_event(&sub_ev);
+            if matches!(impact, ProjectionImpact::FullRefresh) {
+                app.proj.events_len = None;
+            }
         }
         app.events.push(sub_ev);
 
@@ -8956,13 +9385,12 @@ mod tests {
         assert_eq!(app.events.len(), 2, "event pushed into app.events");
     }
 
-    /// A main-branch ModelDelta must still be applied via `apply_streaming`
+    /// A main-branch ModelDelta must still be applied via `apply_event`
     /// (existing behavior preserved).
     #[tokio::test]
-    async fn main_branch_event_applies_streaming() {
+    async fn main_branch_event_applies_event() {
         let mut app = test_app().await;
-        // Seed with a user message so apply_streaming can find a last Assistant
-        // msg to append to (or it creates a new one).
+        // Seed with a user message so apply_event has a populated cache.
         let ev = Event::new(
             Ulid::new(),
             None,
@@ -8983,13 +9411,14 @@ mod tests {
         );
 
         let is_subagent_branch = main_ev.branch != zoid_core::event::BranchId::default();
-        if !is_subagent_branch && !app.proj.apply_streaming(&main_ev) {
-            app.proj.events_len = None;
+        if !is_subagent_branch {
+            let _ = app.proj.apply_event(&main_ev);
+            let _ = app.proj.finalize_pending();
         }
         app.events.push(main_ev);
 
-        // apply_streaming should have added an Assistant msg (ModelDelta creates
-        // a new one if none exists, or appends to the last one).
+        // apply_event accumulates ModelDelta into pending_text; finalize_pending
+        // flushes it as a ChatMsg::Assistant, so msgs grows by 1.
         assert_eq!(
             app.proj.msgs.len(),
             msgs_before + 1,
