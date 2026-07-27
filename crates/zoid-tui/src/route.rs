@@ -10,7 +10,7 @@ use crate::layout::{in_rect, ShellLayout};
 use crate::palette::{all_items, nav, selectable_matches};
 use crate::state::{ConfigCol, DrawerId, Focus, Overlay, ShellState};
 use ratatui::crossterm::event::{
-    KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -220,6 +220,16 @@ fn alt(key: &KeyEvent, c: char) -> bool {
 }
 
 pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
+    // On Windows, crossterm emits both a `Press` and a `Release` event for every
+    // keypress (Unix only emits `Press` unless keyboard-enhancement flags are on).
+    // Without this guard, each arrow key moves the palette selection by 2 rows,
+    // Enter fires twice, Esc closes immediately, and typed characters double.
+    // Filtering to `Press` only is a no-op on Unix and fixes the double-fire on
+    // Windows. This is the single chokepoint for all TUI key routing.
+    if key.kind != KeyEventKind::Press {
+        return Action::Noop;
+    }
+
     // 0. An open inline question card captures input (soft-capture): while
     // state.question is Some, typing goes to the card's free-text buffer,
     // arrows move the highlight, Enter submits, Esc cancels. The message

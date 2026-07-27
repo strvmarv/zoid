@@ -686,7 +686,7 @@ async fn pick_session(
     repo_name: &str,
     boot_ts: i64,
 ) -> Result<PickResult> {
-    use crossterm::event::{Event as CEvent, EventStream};
+    use crossterm::event::{Event as CEvent, EventStream, KeyEventKind};
     use futures_util::StreamExt;
     use ratatui::style::{Color, Modifier, Style};
     use ratatui::text::{Line, Span};
@@ -800,6 +800,11 @@ async fn pick_session(
         })?;
 
         if let Some(Ok(CEvent::Key(key))) = term_events.next().await {
+            // Windows double-fire guard (see route_key for full explanation):
+            // crossterm emits both Press and Release on Windows; ignore non-Press.
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
             // Inline confirm for pending delete — captures all keys.
             if let Some(idx) = pending_delete {
                     match key.code {
