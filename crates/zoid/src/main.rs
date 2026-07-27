@@ -1412,7 +1412,7 @@ struct ProjectionCache {
     // NEW — ids of non-Approval QuestionAsked events, so ToolResults with
     // the same id are suppressed (mirrors conversation_for_branch's pre-pass).
     question_ids: std::collections::HashSet<String>,
-    // NEW — cumulative thinking tokens (maintained incrementally by Usage).
+    // NEW — cumulative thinking tokens (accumulated in the pre-match step for all events with tokens).
     thinking_total: u64,
     // NEW — pending assistant-turn accumulator (mirrors conversation_for_branch
     // locals). ModelDelta/ToolCall accumulate here; tier-2 events flush.
@@ -1580,6 +1580,7 @@ impl ProjectionCache {
             EventKind::ModelDelta { text } => {
                 self.pending_text.get_or_insert_with(String::new).push_str(text);
                 self.pending_turn_ts.get_or_insert(ev.ts);
+                self.churn_dirty = true;
                 self.events_len = Some(self.events_len.unwrap_or(0) + 1);
                 bump_len()
             }
@@ -1590,6 +1591,7 @@ impl ProjectionCache {
                     name: name.clone(),
                     args: args.clone(),
                 });
+                self.churn_dirty = true;
                 self.events_len = Some(self.events_len.unwrap_or(0) + 1);
                 bump_len()
             }
@@ -1645,7 +1647,6 @@ impl ProjectionCache {
                     ts: ev.ts,
                 });
                 self.window_dirty = true;
-                self.churn_dirty = true;
                 self.events_len = Some(self.events_len.unwrap_or(0) + 1);
                 ProjectionImpact::MsgsAppended
             }
@@ -1736,7 +1737,6 @@ impl ProjectionCache {
                     ok: *ok,
                 });
                 self.window_dirty = true;
-                self.churn_dirty = true;
                 self.events_len = Some(self.events_len.unwrap_or(0) + 1);
                 ProjectionImpact::MsgsAppended
             }
@@ -8324,6 +8324,24 @@ mod tests {
         assert_eq!(cache.last_output_tokens, Some(50));
         assert!(cache.churn_dirty);
         assert!(cache.msgs.is_empty());
+    }
+
+    #[test]
+    fn apply_event_tool_call_sets_churn_dirty() {
+        use zoid_core::event::{Event, EventKind};
+        let mut cache = ProjectionCache::default();
+        // Seed with a user message so the projection has a turn context.
+        let u = Event::new(Ulid::new(), None, 0, EventKind::UserMessage { text: "hi".into() });
+        cache.apply_event(&u);
+        cache.refresh(&zoid::eventlog::EventLog::from_vec(vec![u]));
+        assert!(!cache.churn_dirty, "clean after refresh");
+        // Apply a ToolCall — should set churn_dirty (churn_timeline tracks paths).
+        let tc = Event::new(Ulid::new(), None, 1, EventKind::ToolCall {
+            id: "t1".into(), name: "read".into(), args: r#"{"path":"f.rs"}"#.into(),
+        });
+        let impact = cache.apply_event(&tc);
+        assert!(cache.churn_dirty, "ToolCall must set churn_dirty");
+        assert!(matches!(impact, ProjectionImpact::MsgsMutated { .. }));
     }
 
     #[test]
