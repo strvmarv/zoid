@@ -10,6 +10,14 @@
 
 # Release Notes
 
+## 0.7.1
+
+### Fixes
+
+- **Windows keyboard navigation** — fixed a bug where arrow keys in the command palette (and all overlays) moved the selection by two rows per keypress, making some menu items unreachable. On Windows, each keypress now registers once instead of twice.
+
+> **Beta note:** builds are for evaluation and expire ~30 days after release — run `zoid update` periodically to stay current.
+
 ## 0.7.0
 
 Subagents now run in parallel, the companion browser view is wired up, and the TUI is smoother under load. The peek popup has been removed in favor of a leaner conversation view.

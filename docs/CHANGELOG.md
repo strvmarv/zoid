@@ -6,6 +6,21 @@
 > notes (what ships to the public releases repo) live in the root
 > `RELEASES.md`.
 
+## 0.7.1
+
+Windows keyboard double-fire fix.
+- On Windows, crossterm emits both `KeyEventKind::Press` and
+  `KeyEventKind::Release` for every keypress (Unix only emits `Press`
+  unless keyboard-enhancement flags are enabled). `route_key`
+  (`crates/zoid-tui/src/route.rs`) matched on `key.code` alone, never
+  checking `key.kind`, so every key event was processed twice — arrow
+  keys moved the palette/overlay selection 2 rows, Enter double-fired,
+  Esc closed immediately, typed characters doubled. Added a
+  `key.kind != KeyEventKind::Press → Action::Noop` guard at the top of
+  `route_key` (the single chokepoint for all TUI key routing) and in
+  the startup session picker (`crates/zoid/src/main.rs`), which handles
+  keys directly. No-op on Unix.
+
 ## 0.7.0
 
 Concurrent subagent execution, companion browser view, peek popup removal,
