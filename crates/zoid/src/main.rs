@@ -1516,11 +1516,21 @@ impl ProjectionCache {
     /// flush in `conversation_for_branch` (projection.rs:344–356): if
     /// `pending_thinking` is set with no pending text/calls, emit a
     /// standalone `ChatMsg::Assistant { text: "", thinking: Some(...) }`.
+    ///
+    /// `flush_pending_assistant` consumes `pending_thinking` unconditionally
+    /// (matching the reference fold's by-value `thinking` parameter) and drops
+    /// it on a no-op flush. To preserve trailing standalone-thinking, we save
+    /// `pending_thinking` first and restore it when the flush is a no-op, so
+    /// the standalone branch below can see it.
     fn finalize_pending(&mut self) -> ProjectionImpact {
+        let saved_thinking = self.pending_thinking.take();
         let flushed = self.flush_pending_assistant();
         if flushed {
             return ProjectionImpact::MsgsAppended;
         }
+        // No pending text/calls — restore the saved thinking for the
+        // standalone check below (flush dropped it on the no-op path).
+        self.pending_thinking = saved_thinking;
         // Trailing standalone-thinking: no text/calls, but thinking is set.
         if let Some(thinking) = self.pending_thinking.take() {
             self.msgs.push(zoid_core::projection::ChatMsg::Assistant {
@@ -8297,6 +8307,316 @@ mod tests {
         // Parity: window + churn (rebuilt from dirty flags)
         assert_eq!(incr.window, full.window, "context window");
         assert_eq!(incr.churn, full.churn, "churn timeline");
+    }
+
+    #[test]
+    fn apply_event_usage_returns_economy_and_accumulates() {
+        use zoid_core::event::{Event, EventKind, TokenStat};
+        let mut cache = ProjectionCache::default();
+        let mut ev = Event::new(Ulid::new(), None, 0, EventKind::Usage);
+        ev.tokens = Some(TokenStat { input: 100, output: 50, cached: 20, thinking: 5 });
+        let impact = cache.apply_event(&ev);
+        assert_eq!(impact, ProjectionImpact::Economy);
+        assert_eq!(cache.ledger_total, 150);
+        assert_eq!(cache.cached_total, 20);
+        assert_eq!(cache.thinking_total, 5);
+        assert_eq!(cache.last_input_tokens, Some(100));
+        assert_eq!(cache.last_output_tokens, Some(50));
+        assert!(cache.churn_dirty);
+        assert!(cache.msgs.is_empty());
+    }
+
+    #[test]
+    fn apply_event_model_delta_returns_msgs_mutated_none() {
+        use zoid_core::event::{Event, EventKind};
+        let mut cache = ProjectionCache::default();
+        // Seed an assistant message to append to.
+        cache.msgs.push(zoid_core::projection::ChatMsg::Assistant {
+            text: "hello".into(), tool_calls: vec![], ts: 0, thinking: None,
+        });
+        let ev = Event::new(Ulid::new(), None, 0, EventKind::ModelDelta { text: " world".into() });
+        let impact = cache.apply_event(&ev);
+        assert_eq!(impact, ProjectionImpact::MsgsMutated { mutated_index: None });
+        // Not MsgsAppended — caller must NOT invalidate body_cache.
+    }
+
+    #[test]
+    fn apply_event_model_thinking_flushes_when_pending() {
+        use zoid_core::event::{Event, EventKind};
+        let mut cache = ProjectionCache::default();
+        // Accumulate a pending delta.
+        let ev1 = Event::new(Ulid::new(), None, 0, EventKind::ModelDelta { text: "partial".into() });
+        cache.apply_event(&ev1);
+        // ModelThinking should flush the pending turn.
+        let ev2 = Event::new(Ulid::new(), None, 1, EventKind::ModelThinking { text: "hmm".into() });
+        let impact = cache.apply_event(&ev2);
+        assert_eq!(impact, ProjectionImpact::MsgsMutated { mutated_index: None });
+        assert_eq!(cache.msgs.len(), 1, "pending assistant turn was flushed");
+        // The thinking should be stashed (not on the flushed message — it goes
+        // to the NEXT assistant message).
+        match &cache.msgs[0] {
+            zoid_core::projection::ChatMsg::Assistant { thinking, text, .. } => {
+                assert_eq!(text, "partial");
+                assert!(thinking.is_none(), "thinking goes to next message, not the flushed one");
+            }
+            _ => panic!("expected Assistant"),
+        }
+        assert!(cache.pending_thinking.is_some(), "thinking stashed for next message");
+    }
+
+    #[test]
+    fn apply_event_model_thinking_no_op_when_no_pending() {
+        use zoid_core::event::{Event, EventKind};
+        let mut cache = ProjectionCache::default();
+        let ev = Event::new(Ulid::new(), None, 0, EventKind::ModelThinking { text: "hmm".into() });
+        let impact = cache.apply_event(&ev);
+        assert_eq!(impact, ProjectionImpact::Economy);
+        assert!(cache.msgs.is_empty(), "no message pushed");
+        assert!(cache.pending_thinking.is_some());
+    }
+
+    #[test]
+    fn finalize_pending_emits_standalone_thinking() {
+        use zoid_core::event::{Event, EventKind};
+        let mut cache = ProjectionCache::default();
+        let ev = Event::new(Ulid::new(), None, 0, EventKind::ModelThinking { text: "deep thoughts".into() });
+        cache.apply_event(&ev);
+        assert!(cache.msgs.is_empty());
+        let impact = cache.finalize_pending();
+        assert_eq!(impact, ProjectionImpact::MsgsAppended);
+        assert_eq!(cache.msgs.len(), 1);
+        match &cache.msgs[0] {
+            zoid_core::projection::ChatMsg::Assistant { text, thinking, .. } => {
+                assert!(text.is_empty());
+                assert_eq!(thinking.as_deref(), Some("deep thoughts"));
+            }
+            _ => panic!("expected standalone thinking Assistant"),
+        }
+    }
+
+    #[test]
+    fn apply_event_tool_result_suppressed_for_non_approval_question() {
+        use zoid_core::event::{Event, EventKind};
+        let mut cache = ProjectionCache::default();
+        let q = Event::new(Ulid::new(), None, 0, EventKind::QuestionAsked {
+            id: "q1".into(), kind: zoid_core::event::QuestionKind::Ask,
+            question: "which?".into(), choices: vec!["a".into()],
+        });
+        cache.apply_event(&q);
+        assert_eq!(cache.msgs.len(), 1, "question card pushed");
+        let tr = Event::new(Ulid::new(), None, 1, EventKind::ToolResult {
+            id: "q1".into(), name: "ask_user".into(), output: "answer".into(), is_error: false,
+        });
+        let impact = cache.apply_event(&tr);
+        assert_eq!(cache.msgs.len(), 1, "ToolResult suppressed — no new msg");
+        assert!(matches!(impact, ProjectionImpact::MsgsMutated { .. }));
+    }
+
+    #[test]
+    fn apply_event_tool_result_not_suppressed_for_approval_question() {
+        use zoid_core::event::{Event, EventKind};
+        let mut cache = ProjectionCache::default();
+        let q = Event::new(Ulid::new(), None, 0, EventKind::QuestionAsked {
+            id: "q2".into(), kind: zoid_core::event::QuestionKind::Approval,
+            question: "approve?".into(), choices: vec!["yes".into(), "no".into()],
+        });
+        cache.apply_event(&q);
+        let tr = Event::new(Ulid::new(), None, 1, EventKind::ToolResult {
+            id: "q2".into(), name: "shell".into(), output: "done".into(), is_error: false,
+        });
+        let impact = cache.apply_event(&tr);
+        assert_eq!(cache.msgs.len(), 2, "ToolResult NOT suppressed for Approval");
+        assert_eq!(impact, ProjectionImpact::MsgsAppended);
+    }
+
+    #[test]
+    fn apply_event_tool_result_compacted_non_last_mutates_index() {
+        use zoid_core::event::{Event, EventKind};
+        let mut cache = ProjectionCache::default();
+        // Push a ToolResult, then an AssistantMessage, then compact the result.
+        let tr = Event::new(Ulid::new(), None, 0, EventKind::ToolResult {
+            id: "t1".into(), name: "read".into(), output: "full output".into(), is_error: false,
+        });
+        cache.apply_event(&tr);
+        let am = Event::new(Ulid::new(), None, 1, EventKind::AssistantMessage { text: "ok".into() });
+        cache.apply_event(&am);
+        assert_eq!(cache.msgs.len(), 2);
+        let comp = Event::new(Ulid::new(), None, 2, EventKind::ToolResultCompacted {
+            id: "t1".into(), summary: "summary".into(), original_tokens: 100,
+        });
+        let impact = cache.apply_event(&comp);
+        assert_eq!(impact, ProjectionImpact::MsgsMutated { mutated_index: Some(0) });
+        // Caller sees index 0 != msgs.len()-1 (which is 1) → invalidates body_cache.
+        match &cache.msgs[0] {
+            zoid_core::projection::ChatMsg::ToolResult { output, compacted, .. } => {
+                assert_eq!(output, "summary");
+                assert!(*compacted);
+            }
+            _ => panic!("expected ToolResult at index 0"),
+        }
+    }
+
+    #[test]
+    fn apply_event_question_answered_miss_returns_economy() {
+        use zoid_core::event::{Event, EventKind};
+        let mut cache = ProjectionCache::default();
+        let ev = Event::new(Ulid::new(), None, 0, EventKind::QuestionAnswered {
+            id: "nonexistent".into(), answer: "x".into(),
+        });
+        let impact = cache.apply_event(&ev);
+        assert_eq!(impact, ProjectionImpact::Economy);
+        assert!(cache.msgs.is_empty());
+    }
+
+    #[test]
+    fn apply_event_tasks_replaces_vec() {
+        use zoid_core::event::{Event, EventKind};
+        use zoid_core::tasks::TaskItem;
+        let mut cache = ProjectionCache::default();
+        let t1 = TaskItem { text: "a".into(), status: zoid_core::tasks::TaskStatus::Done };
+        let ev1 = Event::new(Ulid::new(), None, 0, EventKind::Tasks { items: vec![t1.clone()] });
+        cache.apply_event(&ev1);
+        assert_eq!(cache.tasks.len(), 1);
+        let t2 = TaskItem { text: "b".into(), status: zoid_core::tasks::TaskStatus::Active };
+        let ev2 = Event::new(Ulid::new(), None, 1, EventKind::Tasks { items: vec![t2.clone()] });
+        let impact = cache.apply_event(&ev2);
+        assert_eq!(impact, ProjectionImpact::Economy);
+        assert_eq!(cache.tasks.len(), 1, "last-write-wins");
+        assert_eq!(cache.tasks[0].text, "b");
+    }
+
+    #[test]
+    fn apply_event_wake_scheduled_is_noop() {
+        use zoid_core::event::{Event, EventKind};
+        let mut cache = ProjectionCache::default();
+        let ev = Event::new(Ulid::new(), None, 0, EventKind::WakeScheduled {
+            wake_id: "w1".into(), fire_at_ms: 99999, note: "reminder".into(),
+        });
+        let impact = cache.apply_event(&ev);
+        assert_eq!(impact, ProjectionImpact::Economy);
+        assert!(cache.msgs.is_empty());
+        assert!(!cache.window_dirty);
+        assert!(!cache.churn_dirty);
+    }
+
+    #[test]
+    fn apply_event_pending_turn_flush_on_tool_result() {
+        use zoid_core::event::{Event, EventKind};
+        let mut cache = ProjectionCache::default();
+        // ModelDelta accumulates in pending, ToolResult flushes it.
+        let d = Event::new(Ulid::new(), None, 0, EventKind::ModelDelta { text: "partial".into() });
+        cache.apply_event(&d);
+        assert!(cache.msgs.is_empty(), "delta accumulates in pending, not msgs");
+        let tc = Event::new(Ulid::new(), None, 1, EventKind::ToolCall { id: "t1".into(), name: "read".into(), args: "{}".into() });
+        cache.apply_event(&tc);
+        assert!(cache.msgs.is_empty(), "tool call accumulates in pending");
+        let tr = Event::new(Ulid::new(), None, 2, EventKind::ToolResult { id: "t1".into(), name: "read".into(), output: "ok".into(), is_error: false });
+        let impact = cache.apply_event(&tr);
+        assert_eq!(impact, ProjectionImpact::MsgsAppended);
+        assert_eq!(cache.msgs.len(), 2, "flushed Assistant + ToolResult");
+        // First msg is the flushed assistant turn with delta text + tool call.
+        match &cache.msgs[0] {
+            zoid_core::projection::ChatMsg::Assistant { text, tool_calls, .. } => {
+                assert_eq!(text, "partial");
+                assert_eq!(tool_calls.len(), 1);
+            }
+            _ => panic!("expected Assistant"),
+        }
+    }
+
+    #[test]
+    fn apply_event_tool_result_compacted_in_place() {
+        use zoid_core::event::{Event, EventKind};
+        let mut cache = ProjectionCache::default();
+        let tr = Event::new(Ulid::new(), None, 0, EventKind::ToolResult {
+            id: "t1".into(), name: "read".into(), output: "full output".into(), is_error: false,
+        });
+        cache.apply_event(&tr);
+        assert_eq!(cache.msgs.len(), 1);
+        let comp = Event::new(Ulid::new(), None, 1, EventKind::ToolResultCompacted {
+            id: "t1".into(), summary: "summary".into(), original_tokens: 100,
+        });
+        let impact = cache.apply_event(&comp);
+        assert!(matches!(impact, ProjectionImpact::MsgsMutated { mutated_index: Some(0) }));
+        assert_eq!(cache.msgs.len(), 1, "no new msg — in-place mutation");
+        match &cache.msgs[0] {
+            zoid_core::projection::ChatMsg::ToolResult { output, compacted, .. } => {
+                assert_eq!(output, "summary");
+                assert!(*compacted);
+            }
+            _ => panic!("expected ToolResult"),
+        }
+    }
+
+    #[test]
+    fn apply_event_question_answered_in_place() {
+        use zoid_core::event::{Event, EventKind};
+        let mut cache = ProjectionCache::default();
+        let q = Event::new(Ulid::new(), None, 0, EventKind::QuestionAsked {
+            id: "q1".into(), kind: zoid_core::event::QuestionKind::Ask,
+            question: "which?".into(), choices: vec!["a".into(), "b".into()],
+        });
+        cache.apply_event(&q);
+        assert_eq!(cache.msgs.len(), 1);
+        let a = Event::new(Ulid::new(), None, 1, EventKind::QuestionAnswered {
+            id: "q1".into(), answer: "a".into(),
+        });
+        let impact = cache.apply_event(&a);
+        assert!(matches!(impact, ProjectionImpact::MsgsMutated { mutated_index: Some(0) }));
+        assert_eq!(cache.msgs.len(), 1, "no new msg — in-place mutation");
+        match &cache.msgs[0] {
+            zoid_core::projection::ChatMsg::Question { state, .. } => {
+                assert!(matches!(state, zoid_core::projection::QuestionCardState::Answered { .. }));
+            }
+            _ => panic!("expected Question"),
+        }
+    }
+
+    #[test]
+    fn full_invalidation_rebuilds_all_and_clears_dirty() {
+        use zoid_core::event::{Event, EventKind};
+        let mut cache = ProjectionCache::default();
+        // Seed with some events applied incrementally.
+        let ev = Event::new(Ulid::new(), None, 0, EventKind::UserMessage { text: "hi".into() });
+        cache.apply_event(&ev);
+        let mut usage = Event::new(Ulid::new(), None, 1, EventKind::Usage);
+        usage.tokens = Some(zoid_core::event::TokenStat { input: 10, output: 5, cached: 0, thinking: 0 });
+        cache.apply_event(&usage);
+        assert!(cache.churn_dirty);
+        // Force full invalidation.
+        cache.events_len = None;
+        let log = zoid::eventlog::EventLog::from_vec(vec![ev, usage]);
+        assert!(cache.refresh(&log));
+        assert!(!cache.window_dirty, "window_dirty cleared");
+        assert!(!cache.churn_dirty, "churn_dirty cleared");
+        assert!(cache.events_len.is_some(), "events_len set");
+        assert!(!cache.msgs.is_empty(), "msgs rebuilt");
+    }
+
+    #[test]
+    fn refresh_dirty_flags_rebuild_only_dirty() {
+        use zoid_core::event::{Event, EventKind};
+        let mut cache = ProjectionCache::default();
+        let log = zoid::eventlog::EventLog::from_vec(vec![
+            Event::new(Ulid::new(), None, 0, EventKind::UserMessage { text: "hi".into() }),
+        ]);
+        // Full refresh to seed.
+        cache.refresh(&log);
+        let window_before = cache.window.clone();
+        // Set only churn_dirty (via a Usage event).
+        let mut ev = Event::new(Ulid::new(), None, 1, EventKind::Usage);
+        ev.tokens = Some(zoid_core::event::TokenStat { input: 10, output: 5, cached: 0, thinking: 0 });
+        cache.apply_event(&ev);
+        cache.events_len = Some(cache.events_len.unwrap_or(0)); // don't trigger full refresh
+        // Push the event to the log so refresh sees the right length.
+        let log2 = zoid::eventlog::EventLog::from_vec(vec![
+            Event::new(Ulid::new(), None, 0, EventKind::UserMessage { text: "hi".into() }),
+            ev,
+        ]);
+        cache.refresh(&log2);
+        // window should NOT have been rebuilt (window_dirty was not set by Usage).
+        assert_eq!(cache.window, window_before, "window not rebuilt — only churn was dirty");
+        assert!(!cache.churn_dirty, "churn_dirty cleared");
     }
 
     /// The `PluginScan` main-loop path (`apply_plugin_scan`) for the bundled
