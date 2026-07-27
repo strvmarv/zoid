@@ -1015,45 +1015,6 @@ fn handle_conversation_click(app: &mut App, layout: &zoid_tui::layout::ShellLayo
         let unit = if n == 1 { "line" } else { "lines" };
         app.shell.status_hint = Some(format!("copied {n} {unit}"));
     }
-
-    // Peek hits — clicking a tool-call line or delegated chip opens a popup.
-    // Use the cached hits from the last painted frame to avoid line-index
-    // desync during streaming (app.events may have grown since the frame).
-    let peeks = &app.peek_cache.hits;
-    if let Some(hit) = peeks.iter().find(|h| h.line == clicked_line) {
-        use zoid_tui::state::{PeekContent, PeekState};
-        use zoid_tui::chat::PeekKind;
-        use zoid_core::projection::ChatMsg;
-        let content = match &hit.kind {
-            PeekKind::ToolCall { id, name, args } => {
-                let result = msgs.iter().find_map(|m| {
-                    if let ChatMsg::ToolResult { id: rid, output, is_error, compacted, .. } = m {
-                        if rid == id { Some((output.clone(), *is_error, *compacted)) } else { None }
-                    } else { None }
-                });
-                match result {
-                    Some((output, is_error, compacted)) => PeekContent::ToolCall {
-                        name: name.clone(),
-                        args: args.clone(),
-                        output: Some(output),
-                        is_error,
-                        compacted,
-                    },
-                    None => PeekContent::ToolCall {
-                        name: name.clone(),
-                        args: args.clone(),
-                        output: None,
-                        is_error: false,
-                        compacted: false,
-                    },
-                }
-            }
-            PeekKind::Delegated { summary, ok } => {
-                PeekContent::Delegated { summary: summary.clone(), ok: *ok }
-            }
-        };
-        app.shell.peek = Some(PeekState { content, scroll: 0 });
-    }
 }
 
 /// The base URL to hand a provider: an explicit non-blank config override wins,
@@ -1583,13 +1544,6 @@ struct BodyCache {
     msg_count: usize,
 }
 
-/// Cached peek hits from the last painted frame. Used for click hit-testing
-/// to avoid a line-index desync during streaming — `handle_conversation_click`
-/// reads these instead of recomputing from the live, mutating `app.events`.
-struct PeekCache {
-    hits: Vec<zoid_tui::chat::PeekHit>,
-}
-
 impl BodyCache {
     /// Rebuild the body iff `key` changed; cheap no-op otherwise. Returns
     /// `true` when the cache was reused (a full-frame "hit": nothing to
@@ -1771,9 +1725,6 @@ struct App {
     proj: ProjectionCache,
     /// Cached rendered conversation body; reused across scroll/typing frames.
     body_cache: BodyCache,
-    /// Cached peek hits from the last painted frame. Avoids line-index desync
-    /// during streaming: clicks use these instead of recomputing from live events.
-    peek_cache: PeekCache,
     /// The Overview dashboard body, rebuilt per-frame while at `Zoom::Overview`
     /// (only while the user is viewing it). Empty at every other altitude.
     overview_body: Vec<ratatui::text::Line<'static>>,
@@ -2331,7 +2282,6 @@ async fn main() -> Result<()> {
         started: std::time::Instant::now(),
         proj: ProjectionCache::default(),
         body_cache: BodyCache::default(),
-        peek_cache: PeekCache { hits: Vec::new() },
         overview_body: Vec::new(),
         zoom_changed_at: None,
         last_conv_max_scroll: 0,
@@ -2744,26 +2694,6 @@ where
             Some(kind == RefreshKind::Hit)
         };
 
-        // Cache peek hits for click hit-testing — only when the body was
-        // rebuilt (not a cache hit). peek_hits calls build_conversation (O(n))
-        // so recomputing on every frame is expensive for large conversations.
-        // On a cache hit, the existing peek_cache is still valid (same msgs,
-        // same line indices). Only recompute when streaming (the last message
-        // is growing, shifting line indices) or when the body was rebuilt.
-        let body_rebuilt = !matches!(cache_hit, Some(true));
-        if body_rebuilt || app.streaming {
-            app.peek_cache = PeekCache {
-                hits: zoid_tui::chat::peek_hits(
-                    &app.proj.msgs,
-                    app.streaming,
-                    true,
-                    app.tz_offset_secs,
-                    body_w,
-                    None,
-                ),
-            };
-        }
-
         // Tail-follow: when engaged, pin the viewport to the latest line before
         // drawing — this is what makes the view show the latest output on startup
         // and follow new events (including live streaming) as they append. Applied
@@ -2981,13 +2911,6 @@ where
                             // the conversation rect + wrap width from `layout`.
                             zoid_tui::route::Action::ConversationClick(row) => {
                                 handle_conversation_click(app, &layout, row);
-                            }
-                            zoid_tui::route::Action::PeekClick(row, col) => {
-                                if let Some(p) = layout.peek {
-                                    if !zoid_tui::layout::in_rect(p, col, row) {
-                                        app.shell.peek = None;
-                                    }
-                                }
                             }
                             action => {
                                 if handle_action(app, action).await? {
@@ -5044,21 +4967,6 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             if let Some(cat) = app.shell.plugin_catalog.as_mut() {
                 cat.toggle_target();
             }
-        }
-        Action::DismissPeek => {
-            app.shell.peek = None;
-        }
-        Action::ScrollPeek(delta) => {
-            if let Some(ps) = &mut app.shell.peek {
-                if delta > 0 {
-                    ps.scroll = ps.scroll.saturating_add(delta as usize);
-                } else {
-                    ps.scroll = ps.scroll.saturating_sub((-delta) as usize);
-                }
-            }
-        }
-        Action::PeekClick(_, _) => {
-            // Resolved in the mouse event handler (needs layout rect).
         }
         Action::Noop => {}
     }
@@ -7808,7 +7716,6 @@ mod tests {
             started: std::time::Instant::now(),
             proj: ProjectionCache::default(),
             body_cache: BodyCache::default(),
-        peek_cache: PeekCache { hits: Vec::new() },
             overview_body: Vec::new(),
             zoom_changed_at: None,
             last_conv_max_scroll: 0,
@@ -10036,89 +9943,6 @@ mod tests {
         assert_eq!(r.lines.len(), 3);
         assert!(matches!(r.lines[1].kind, zoid_tui::state::RenderDiffKind::Add));
         assert!(matches!(r.lines[2].kind, zoid_tui::state::RenderDiffKind::Del));
-    }
-
-    #[tokio::test]
-    async fn conversation_click_on_tool_call_opens_peek() {
-        use zoid_core::event::{Event, EventKind};
-        use zoid_core::projection::conversation;
-        use zoid_tui::state::PeekContent;
-
-        let mut app = test_app().await;
-        let now = 1000i64;
-        app.events.push(Event::new(
-            ulid::Ulid::new(),
-            None,
-            now,
-            EventKind::ToolCall {
-                id: "tc1".into(),
-                name: "shell".into(),
-                args: r#"{"command":"ls -la"}"#.into(),
-            },
-        ));
-        app.events.push(Event::new(
-            ulid::Ulid::new(),
-            None,
-            now + 1,
-            EventKind::ToolResult {
-                id: "tc1".into(),
-                name: "shell".into(),
-                output: "file1\nfile2\nfile3".into(),
-                is_error: false,
-            },
-        ));
-
-        let area = ratatui::layout::Rect {
-            x: 0, y: 0, width: 200, height: 50,
-        };
-        let layout = zoid_tui::layout::compute(area, &app.shell);
-        let width = zoid_tui::layout::conv_text_width(layout.conversation.width) as usize;
-        let msgs = conversation(app.events.iter());
-        let peeks = zoid_tui::chat::peek_hits(&msgs, false, true, 0, width, None);
-        assert!(!peeks.is_empty(), "should have at least one peek hit");
-
-        // Populate the peek cache (normally done during frame render).
-        app.peek_cache = PeekCache {
-            hits: peeks,
-        };
-
-        let clicked_line = app.peek_cache.hits[0].line;
-        let row = layout.conversation.y + clicked_line as u16;
-        handle_conversation_click(&mut app, &layout, row);
-
-        assert!(app.shell.peek.is_some());
-        let ps = app.shell.peek.as_ref().unwrap();
-        assert!(matches!(&ps.content, PeekContent::ToolCall { name, .. } if name == "shell"));
-    }
-
-    #[tokio::test]
-    async fn dismiss_peek_clears_state() {
-        use zoid_tui::state::{PeekContent, PeekState};
-        use zoid_tui::route::Action;
-
-        let mut app = test_app().await;
-        app.shell.peek = Some(PeekState {
-            content: PeekContent::Delegated { summary: "done".into(), ok: true },
-            scroll: 0,
-        });
-        handle_action(&mut app, Action::DismissPeek).await.unwrap();
-        assert!(app.shell.peek.is_none());
-    }
-
-    #[tokio::test]
-    async fn scroll_peek_adjusts_scroll() {
-        use zoid_tui::state::{PeekContent, PeekState};
-        use zoid_tui::route::Action;
-
-        let mut app = test_app().await;
-        app.shell.peek = Some(PeekState {
-            content: PeekContent::Delegated { summary: "line1\nline2\nline3".into(), ok: true },
-            scroll: 0,
-        });
-        handle_action(&mut app, Action::ScrollPeek(2)).await.unwrap();
-        assert_eq!(app.shell.peek.as_ref().unwrap().scroll, 2);
-        handle_action(&mut app, Action::ScrollPeek(-5)).await.unwrap();
-        assert_eq!(app.shell.peek.as_ref().unwrap().scroll, 0);
     }
 }
 
