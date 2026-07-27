@@ -59,28 +59,34 @@ floor. This causes the model to lose large parts of its conversation history
 mid-session — likely the root cause of the state confusion, duplicate
 dispatches, and fragmented responses observed during long sessions.
 
-Likely related to commits `09fc3f8` (hard-ceiling compaction pass) and
-`e410be2` (use live-fetched context window in hard-ceiling compaction).
-The `e410be2` commit changed the hard-ceiling pass to use
-`config.context_window` (from `app.shell.ctx_ceiling`) instead of the
-static `model_info` table. If `ctx_ceiling` is set to a small value
-(e.g. via `ModelInfoFetched` reporting a smaller window, or a model
-string not matching the table), the `effective_target` gets clamped down
-and eviction becomes much more aggressive.
+**Root cause identified:** When `ModelInfoFetched` arrives (main.rs:3386),
+`app.shell.ctx_ceiling` is set to the live-fetched `info.context_window`.
+If the ollama-cloud API reports a smaller context window than the static
+`MODEL_CAPS` table (e.g. 32K instead of 1M), the eviction band collapses:
 
-Investigate:
-1. What value `app.shell.ctx_ceiling` resolves to for the active model
-   (should be 1M for glm-5.2, but may be smaller if live-fetched info
-   overrides the static table).
-2. Whether the `ModelInfoFetched` path (main.rs:3386) sets a different
-   context window than the static table.
-3. Whether the hard-ceiling compaction at agent.rs:3002 is triggering
-   when it shouldn't (with 1M ceiling, 300k context should never trip
-   `est > model_context_window`).
-4. Whether the calibration ratio is off, causing `est` to be overestimated
-   and triggering premature eviction.
-5. Whether `recent_n: 4` is too aggressive — only 4 recent turns are
-   protected, so if those turns are short, post-eviction context is tiny.
+- `EvictionPolicy.capacity` = 32K (from `ctx_ceiling`)
+- `derive_band`: `effective_target` = min(300K, 32K - 8K) = 24K
+- `low_water` = 24K - 4.8K = 19K
+- Eviction fires at 24K, evicts down to 19K — only `recent_n: 4` turns
+  protected.
+
+The `context_target` config (300K) stays unchanged because it's `Some`
+(line 3393 `unwrap_or_else` is skipped), but `capacity` overrides it in
+`derive_band`.
+
+Introduced by `e410be2` (Jul 25): changed the hard-ceiling pass to use
+`config.context_window` (live-fetched) instead of the static table. The
+eviction policy's `capacity` was always `ctx_ceiling`, but the live fetch
+now overrides the 1M static value with whatever the API reports.
+
+**Fix options:**
+1. Use `max(ctx_ceiling, model_info(&model).context_window)` as the
+   eviction `capacity` — the static table is the floor, the live fetch can
+   only raise it.
+2. When `ModelInfoFetched` sets `ctx_ceiling` below the static table's
+   value, keep the static table's value instead (don't downgrade).
+3. Clamp `context_target` down to `ctx_ceiling` when it arrives, so the
+   band matches the actual capacity.
 
 ## Tool call rendering truncated too short in the UI (DONE)
 
