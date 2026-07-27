@@ -6,6 +6,81 @@
 > notes (what ships to the public releases repo) live in the root
 > `RELEASES.md`.
 
+## 0.7.0
+
+Concurrent subagent execution, companion browser view, peek popup removal,
+incremental projection, TUI perf/stability fixes, and picker UX. ~55
+commits since v0.6.0.
+
+Concurrent subagent pool (spec:
+2026-07-25-concurrent-subagent-execution-design.md).
+- `zoid/src/agent.rs`: subagents now run in a configurable pool
+  (`subagent.max_concurrent`, default 3) with queue overflow. Each
+  subagent gets its own SQLite store. `dispatch_subagent` tool
+  description documents the new concurrent-execution semantics.
+- `zoid-core/src/config.rs`: `max_concurrent` config field + layered
+  merge. `SubagentQueued` variant for overflow feedback.
+- `zoid-tools/src/subagent_dispatch.rs`: updated tool description.
+- Per-result delegation wake — dropped the `is_empty` gate that was
+  dropping wakeups when other results were still in-flight
+  (`b9d5bc3`). `try_send` used at the 7-field send site.
+- Session takeover kills in-flight subagents (`4b41105`).
+- Test coverage: edge-case + cancellation tests for the pool
+  (`fbbaf54`, `cfff74a`).
+
+Companion server (spec:
+2026-07-25-palette-cleanup-companion-default-design.md).
+- `zoid-core/src/config.rs`: `companion.enabled` field (default false)
+  + `ZOID_COMPANION_ENABLED` env var. `zoid-tui/src/config_view.rs`:
+  settings overlay row + live toggle.
+- `zoid/src/main.rs`: boot OR for companion, settings row wiring.
+
+Peek popup removal + incremental projection (spec:
+2026-07-26-peek-removal-and-incremental-projection-design.md).
+- Removed `PeekState`/`PeekContent` from `ShellState` (`a6d78cb`),
+  `PeekHit`/`PeekKind` types + `peek_hits` fn from `zoid-tui::chat`
+  (`b38d3ac`), peek action variants + routing (`dc1a3e1`), peek rect
+  from `ShellLayout` (`59aba76`), and peek overlay/cache/handlers/click
+  logic (`ec14236`).
+- `zoid/src/main.rs`: `apply_streaming` replaced with tiered
+  `apply_event` + dirty-flag economy refresh (`65c502d`). Each
+  streaming event is applied incrementally with a churn-dirty flag
+  instead of reprocessing the full transcript per frame. Economy
+  refresh is triggered only when the dirty flag is set.
+- `churn_dirty` flag correction in `apply_event` (`49fb618`).
+- Test coverage: tier classification, edge cases, dirty-flag refresh
+  (`ec38c6b`).
+
+TUI perf & stability.
+- `zoid/src/main.rs`: biased `select!` so `ui_rx` is never starved by
+  the motion tick (`974b5cc`). Split motion tick — 30fps for streaming,
+  5fps for subagent-only (`a90b95b`). Peek cache recompute skipped on
+  body cache hit (`5659dfc`).
+- `zoid-tui/src/palette.rs`: removed `delegate` and `drawer` from
+  `:stage1` palette (`74d07b9`). Animated subagent glyph in subagents
+  drawer (`580111b`).
+- Removed unused `PeekCache` width/scroll fields (`35993e9`).
+- Diagnostic tracing added and removed during investigation
+  (`ef7f691`, `c104b4c`, `ec490ed`).
+
+Picker UX (spec:
+2026-07-26-picker-create-new-at-top-design.md).
+- "Create new" moved to the top of the startup picker
+  (`fca4db2`). Scroll handling so the row stays visible (`295ea25`).
+- `pick_choice` boundary flipped (`8d6e376`). Stale scroll-offset tests
+  + doc comments updated (`452f469`).
+
+Bug fixes.
+- Esc cancellation (`ba5f76a`).
+- Default idle/hard timeouts bumped to 900s/1800s (`c784a41`).
+
+Not yet shipped.
+- ProjectionCache::refresh parallelization — spec/plan revised for
+  `std::thread::scope` (`2decd35`); not yet implemented. TODO:
+  lazy-load body cache.
+- Aggressive context eviction investigation (TODO docs: `b2c9ee7`,
+  `b3b65e3`).
+
 ## 0.6.0
 
 Local model support, agent profiles, peek popups, session delete,

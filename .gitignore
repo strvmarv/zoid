@@ -19,3 +19,6 @@ spikes/dotnet-spike/out-aot
 # project ./.zoid/config.toml IS committable (the shared repo override, §7.1).
 /.zoid/*
 !/.zoid/config.toml
+
+# macOS
+.DS_Store

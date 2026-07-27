@@ -10,6 +10,35 @@
 
 # Release Notes
 
+## 0.7.0
+
+Subagents now run in parallel, the companion browser view is wired up, and the TUI is smoother under load. The peek popup has been removed in favor of a leaner conversation view.
+
+### New
+
+- **Parallel subagents** — delegated tasks now run concurrently (up to 3 at once by default) instead of one at a time. Extra dispatches queue automatically and start as slots free up. Each subagent runs in its own isolated workspace with its own data store, so parallel work doesn't collide. Configure the pool size with `subagent.max_concurrent` in your config file.
+- **Companion browser view** — an optional companion panel that renders visual cards (mockups, diagrams, tables) alongside your terminal session. Toggle it live in settings or set `companion.enabled` in your config. Off by default.
+- **Animated subagent indicator** — the subagents drawer now shows a live animated glyph when tasks are running, so you can see activity at a glance.
+
+### Improved
+
+- **Smoother UI under load** — the render loop no longer starves UI events when subagents are active, and streaming content renders at a higher frame rate while subagent-only updates are throttled to save CPU.
+- **Faster streaming rendering** — the conversation view now updates incrementally as tokens arrive instead of reprocessing the full transcript each frame.
+- **"Create new" at the top** — the startup session picker now shows "Create new" first, so starting a fresh session is one keypress away instead of scrolling past existing sessions.
+
+### Removed
+
+- **Peek popups** — the click-to-peek popup for tool output and delegation summaries (introduced in 0.6.0) has been removed. The conversation view is now leaner without the peek overlay machinery.
+
+### Fixes
+
+- **Esc cancellation** — pressing Esc to stop the current turn is more reliable.
+- **Subagents stop on session switch** — when you resume or take over another session, any running subagents from the previous session are cleaned up instead of lingering.
+- **Delegation wake-ups** — fixed a race where a completed subagent's result could fail to wake the main session, leaving it idle.
+- **Longer default timeouts** — idle and hard timeout defaults are now 15 and 30 minutes, giving long-running subagent tasks more room.
+
+> **Beta note:** builds are for evaluation and expire ~30 days after release — run `zoid update` periodically to stay current.
+
 ## 0.6.0
 
 Local models, agents as a first-class entity, peek popups, session management, and active context management that keeps small-context models productive.

@@ -5,7 +5,7 @@ expression: "format!(\"{:#?}\", terminal.backend().buffer())"
 Buffer {
     area: Rect { x: 0, y: 0, width: 160, height: 40 },
     content: [
-        "v0.6.0                                                                        zoid                                        Esc interrupt · : command · ^P palette",
+        "v0.7.0                                                                        zoid                                        Esc interrupt · : command · ^P palette",
         "  00:00 › what's causing the 500?                                                                                 █ ╭ ▾ repo ─────────────────────────────────╮ ",
         "                                                                                                                  █ │📦 repo   ⎇ main                         │ ", // hidden by multi-width symbols: [(118, " ")]
         "  00:00 zoid an unwrapped lookup in the handler.                                                                  █ │🔧 worktree (none)                       │ ", // hidden by multi-width symbols: [(118, " ")]
