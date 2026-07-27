@@ -85,6 +85,6 @@ cargo nextest run --workspace --features zoid/local-embed --no-fail-fast
 git commit -m "perf(proj): parallelize ProjectionCache::refresh with rayon::join
 
 5 independent O(n) passes (conversation, context_window, churn_timeline,
-tasks, token_ledger) now run in parallel via nested rayon::join (2+2).
-Wall-clock from sum(passes) to max(2 slowest)."
+tasks, token_ledger) now run in parallel via nested rayon::join (3+2
+grouping). Wall-clock from sum(passes) to max(A,max(B,C)) + max(D,E)."
 ```

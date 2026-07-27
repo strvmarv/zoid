@@ -49,17 +49,39 @@ Add `rayon = "1"` to `crates/zoid/Cargo.toml`.
 
 ## 4. Expected impact
 
-Wall-clock: ~sum(5 passes) → ~max(2 slowest passes). The `conversation` pass
-is likely the most expensive (builds `Vec<ChatMsg>` from all events), so the
-speedup is roughly 2-3x, not 5x (Amdahl's law).
+The 5 passes are grouped as nested `rayon::join`:
+```
+join( A, join(B, C) )   // 3-way: A ‖ (B ‖ C)
+join( D, E )            // 2-way: D ‖ E (runs AFTER the first join returns)
+```
 
-## 5. Testing
+Wall-clock: `max(A, max(B,C)) + max(D, E)` — two sequential maxes, not
+`max(all 5)`. Still a significant speedup from the sequential sum. The
+`conversation` pass is likely the most expensive (builds `Vec<ChatMsg>`
+from all events), so it dominates the first group.
+
+To get full 5-way parallelism, use `rayon::scope` to spawn all 5 and join.
+That's more complex and not worth it for 5 passes — the 3+2 grouping
+captures most of the win.
+
+## 5. panic = "abort" interaction
+
+The release profile uses `panic = "abort"`. Rayon relies on unwinding to
+isolate panics in worker threads. Under `panic = "abort"`, a panic in any
+closure aborts the process. This is NOT a regression — the sequential code
+also aborts on panic. The only caveat is test determinism: under the dev
+profile (unwinding), rayon's panic isolation could mask or reorder test
+failures. The existing tests don't panic in the projection passes, so this
+is a theoretical concern. No action needed.
+
+## 6. Testing
 
 No new tests needed — the existing tests verify projection correctness.
 The parallelization doesn't change results, only computation order.
 
-## 6. Out of scope
+## 7. Out of scope
 
 - Lazy-loading the body cache (separate spec)
 - Peeking removal/rework (separate discussion)
 - Parallelizing the 2 reverse scans (not worth it — early-exit)
+- `rayon::scope` for full 5-way parallelism (3+2 grouping captures most of the win)
