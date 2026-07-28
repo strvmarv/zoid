@@ -40,7 +40,10 @@ pub const SYSTEM_PROMPT: &str =
      Brief single-line narration alongside tool calls is good. But when a task \
      is done, do NOT reframe or re-explain the whole effort in long paragraphs: \
      close with a short recap — a few lines or a tight list of what changed and \
-     any next step. Don't restate what the tool calls and diffs already showed.";
+     any next step. Don't restate what the tool calls and diffs already showed. \
+     Subagents are fire-and-forget: dispatch, then end your turn and await the \
+     DelegationResult event — never poll for status or call list_subagents to \
+     check on a subagent you dispatched.";
 
 /// Wrap the system prompt as a standing, tail-injected reminder. The pre/post
 /// framing is the only added text; `system` is verbatim (zero drift). The
@@ -3132,6 +3135,20 @@ mod tests {
     use super::*;
     use zoid_core::event::BranchId;
     use zoid_provider::MsgRole;
+
+    #[test]
+    fn system_prompt_reinforces_no_poll() {
+        assert!(
+            SYSTEM_PROMPT.contains("fire-and-forget"),
+            "SYSTEM_PROMPT must contain 'fire-and-forget' so wrap_reassertion \
+             periodically reinforces the no-poll rule: {SYSTEM_PROMPT}"
+        );
+        assert!(
+            SYSTEM_PROMPT.contains("never poll"),
+            "SYSTEM_PROMPT must contain 'never poll' so the periodic re-assertion \
+             carries the no-poll discipline: {SYSTEM_PROMPT}"
+        );
+    }
 
     #[test]
     fn submit_feedback_parse_validates_kind_title_body() {
