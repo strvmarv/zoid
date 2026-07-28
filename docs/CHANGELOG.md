@@ -6,6 +6,30 @@
 > notes (what ships to the public releases repo) live in the root
 > `RELEASES.md`.
 
+## 0.7.3
+
+Wake scheduling discipline: prompt hardening + runtime per-note deduplication.
+3 commits since v0.7.2.
+
+Wake scheduling prompt hardening (spec:
+2026-07-28-wake-scheduling-discipline-design.md).
+- `zoid-tools/src/wake.rs`: tool description restructured to include
+  "Schedule exactly ONE wake per event" and "Duplicate wakes for the same
+  note are rejected." Guard assertions verify both substrings.
+- `zoid/src/agent.rs`: `SYSTEM_PROMPT` gains wake discipline sentence so
+  `wrap_reassertion` reinforces it. `system_prompt_reinforces_no_poll` test
+  extended with wake assertions.
+- `zoid/src/agent.rs`: `schedule_wake` tool result now includes nudge
+  ("do not schedule additional wakes for the same event... cancel it with
+  cancel_wake if you no longer need it").
+
+Runtime per-note deduplication.
+- `zoid/src/main.rs`: `handle_schedule_wake` now rejects a new wake if a
+  pending wake with the same `note` already exists. Returns an error
+  message that tells the model what to do instead ("cancel it first" /
+  "wait for it to fire"). `handle_schedule_wake_rejects_duplicate_note`
+  test added. The global `WAKE_MAX_PENDING` (16) cap remains as backstop.
+
 ## 0.7.2
 
 Projection parallelization + subagent no-poll prompt hardening. 9 commits

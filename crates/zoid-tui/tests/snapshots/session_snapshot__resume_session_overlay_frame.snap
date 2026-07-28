@@ -2,7 +2,7 @@
 source: crates/zoid-tui/tests/session_snapshot.rs
 expression: "draw(&s, &[], 160, 40)"
 ---
-"v0.7.2                                                                        zoid                                        Esc interrupt · : command · ^P palette"
+"v0.7.3                                                                        zoid                                        Esc interrupt · : command · ^P palette"
 "    (no messages yet)                                                                                             █ ╭ ▾ repo ─────────────────────────────────╮ "
 "                                                                                                                  █ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(118, " ")]
 "                                                                                                                  █ │🔧 worktree (none)                       │ " Hidden by multi-width symbols: [(118, " ")]
