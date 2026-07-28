@@ -96,7 +96,7 @@ git commit -m "feat(subagent): lead dispatch_subagent description with fire-and-
 
 - [ ] **Step 1: Write the failing test**
 
-In `crates/zoid/src/agent.rs`, in the test module (after the `subagent_handle_is_constructible_and_clonable` test or anywhere in the `#[cfg(test)] mod tests` block), add:
+In `crates/zoid/src/agent.rs`, in the `#[cfg(test)] mod tests` block (line 3131 — this module has `use super::*;` so `SYSTEM_PROMPT` is in scope; do NOT use `guardrail_types_tests` whose explicit import list lacks it), add:
 
 ```rust
     #[test]
@@ -297,7 +297,7 @@ Expected: FAIL — `cannot find function format_subagent_list` (it doesn't exist
 
 - [ ] **Step 3: Add the `format_subagent_list` helper function**
 
-In `crates/zoid/src/agent.rs`, add this function immediately before the `list_subagents` agent-loop arm (before line 2010, after the `cancel_subagent` arm's closing). Place it at module level (not inside the `select!` loop):
+In `crates/zoid/src/agent.rs`, add this function at module level — immediately after `fire_subagent_kill` (around line 141), which is the existing module-level helper this one parallels. Do NOT place it inside `run_agent_turn_cancellable` (line 2010 is a match arm inside that function's body; a module-level `fn` cannot go there):
 
 ```rust
 /// Format the `list_subagents` tool output from the in-flight registry. Pure
