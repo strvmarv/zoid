@@ -43,7 +43,9 @@ pub const SYSTEM_PROMPT: &str =
      any next step. Don't restate what the tool calls and diffs already showed. \
      Subagents are fire-and-forget: dispatch, then end your turn and await the \
      DelegationResult event — never poll for status or call list_subagents to \
-     check on a subagent you dispatched.";
+     check on a subagent you dispatched. When waiting on something, schedule \
+     exactly one wake — never schedule duplicate wakes for the same event, and \
+     cancel a pending wake before scheduling a replacement.";
 
 /// Wrap the system prompt as a standing, tail-injected reminder. The pre/post
 /// framing is the only added text; `system` is verbatim (zero drift). The
@@ -1946,7 +1948,12 @@ async fn run_turn_inner(
                         })
                         .await;
                     let (output, is_error) = match rx.await {
-                        Ok(Ok(id)) => (format!("scheduled (id {id})"), false),
+                        Ok(Ok(id)) => (format!(
+                            "scheduled (id {id}) — do not schedule additional \
+                             wakes for the same event. This wake will re-invoke \
+                             you; cancel it with cancel_wake if you no longer \
+                             need it."
+                        ), false),
                         Ok(Err(e)) => (e, true),
                         Err(_) => ("schedule_wake failed (no reply)".to_string(), true),
                     };
@@ -3166,6 +3173,14 @@ mod tests {
             SYSTEM_PROMPT.contains("never poll"),
             "SYSTEM_PROMPT must contain 'never poll' so the periodic re-assertion \
              carries the no-poll discipline: {SYSTEM_PROMPT}"
+        );
+        assert!(
+            SYSTEM_PROMPT.contains("exactly one wake"),
+            "SYSTEM_PROMPT must contain 'exactly one wake' for wake discipline: {SYSTEM_PROMPT}"
+        );
+        assert!(
+            SYSTEM_PROMPT.contains("duplicate wakes"),
+            "SYSTEM_PROMPT must warn against duplicate wakes: {SYSTEM_PROMPT}"
         );
     }
 
