@@ -1740,7 +1740,12 @@ async fn run_turn_inner(
                         EventKind::ToolResult {
                             id: tc.id,
                             name: tc.name,
-                            output: format!("{{\"subagent_id\": \"{sub_id}\"}}"),
+                            output: format!(
+                                "{{\"subagent_id\": \"{sub_id}\"}} — Subagent {sub_id} is \
+                                 running in isolation. You will be re-invoked automatically \
+                                 with its result; do NOT call list_subagents or otherwise \
+                                 check on it. End your turn now and await the result."
+                            ),
                             is_error: false,
                         },
                         session_id,
@@ -4878,6 +4883,14 @@ mod tests {
                 assert!(
                     output.contains("sub-"),
                     "result must contain subagent ID: got {output}"
+                );
+                assert!(
+                    output.contains("do NOT call list_subagents"),
+                    "result must carry the no-poll directive: got {output}"
+                );
+                assert!(
+                    output.contains("End your turn now"),
+                    "result must give the positive action (end turn): got {output}"
                 );
             }
             _ => panic!(),
