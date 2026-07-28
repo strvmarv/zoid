@@ -12,14 +12,17 @@ impl Tool for DispatchSubagent {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "dispatch_subagent".into(),
-            description: "Dispatch a subagent to execute a task in isolation. Returns the subagent's \
-                          ID immediately; the result arrives later as a DelegationResult event. Up to \
-                          max_concurrent subagents (default 3) may run simultaneously — additional \
-                          dispatches are queued and start when a slot frees. Do NOT poll for completion \
-                          or edit files in the main worktree while a subagent is running (they share \
-                          the working directory unless worktree: true). Wait for the DelegationResult \
-                          event. Use worktree: true for file isolation when subagents might edit the \
-                          same files."
+            description: "Fire-and-forget: dispatch a subagent to execute a task in \
+                          isolation, then STOP. The result arrives later as a \
+                          DelegationResult event that re-invokes you automatically — \
+                          never poll for status, never call list_subagents to check \
+                          progress, and do not edit files in the main worktree while a \
+                          subagent runs (they share the working directory unless \
+                          worktree: true). Returns the subagent ID immediately. Up to \
+                          max_concurrent subagents (default 3) may run simultaneously — \
+                          additional dispatches are queued and start when a slot frees. \
+                          Use worktree: true for file isolation when subagents might \
+                          edit the same files."
                 .into(),
             parameters: json!({
                 "type": "object",
@@ -61,6 +64,16 @@ mod tests {
         assert!(
             params["properties"].get("model").is_none(),
             "model must not be in the dispatch_subagent spec — subagents inherit the session model"
+        );
+        let desc = DispatchSubagent.spec().description;
+        assert!(
+            desc.starts_with("Fire-and-forget"),
+            "description must lead with 'Fire-and-forget' so the no-poll rule is \
+             the first thing the model reads, not buried mid-paragraph: {desc}"
+        );
+        assert!(
+            desc.contains("never call list_subagents"),
+            "description must explicitly name list_subagents as a do-not-call: {desc}"
         );
     }
 }
