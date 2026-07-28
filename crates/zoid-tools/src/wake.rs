@@ -13,9 +13,13 @@ impl Tool for ScheduleWake {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "schedule_wake".into(),
-            description: "Schedule a one-shot reminder to resume THIS conversation after \
-                          delay_secs seconds. On fire you are re-invoked with `note` as a \
-                          message. Minimum 30s. Use when waiting on something to check later."
+            description: "Schedule a one-shot reminder to resume THIS conversation \
+                          after delay_secs seconds. On fire you are re-invoked with \
+                          `note` as a message. Minimum 30s. Use when waiting on \
+                          something to check later. Schedule exactly ONE wake per \
+                          event — do not schedule multiple wakes for the same thing. \
+                          If a wake is already pending, cancel it before scheduling a \
+                          new one. Duplicate wakes for the same note are rejected."
                 .into(),
             parameters: json!({
                 "type": "object",
@@ -86,6 +90,15 @@ mod tests {
         let required = spec.parameters["required"].as_array().unwrap();
         assert!(required.iter().any(|r| r.as_str() == Some("delay_secs")));
         assert!(required.iter().any(|r| r.as_str() == Some("note")));
+        let desc = ScheduleWake.spec().description;
+        assert!(
+            desc.contains("exactly ONE wake per event"),
+            "description must say 'exactly ONE wake per event': {desc}"
+        );
+        assert!(
+            desc.contains("Duplicate wakes for the same note are rejected"),
+            "description must mention that duplicates are rejected: {desc}"
+        );
     }
 
     #[test]
