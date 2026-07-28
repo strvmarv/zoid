@@ -51,7 +51,7 @@ std::thread::scope(|s| {
     let b = s.spawn(|| zoid_core::context::context_window(iter.clone()));
     let c = s.spawn(|| zoid_core::economy::churn_timeline(iter.clone()));
     let d = s.spawn(|| zoid_core::tasks::tasks(iter.clone()));
-    let e = s.spawn(|| zoid_core::economy::token_ledger(iter));
+    let e = s.spawn(|| zoid_core::economy::token_ledger(iter.clone()));
     self.msgs = a.join().unwrap();
     self.window = b.join().unwrap();
     self.churn = c.join().unwrap();
