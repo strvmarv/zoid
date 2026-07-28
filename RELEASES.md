@@ -10,6 +10,15 @@
 
 # Release Notes
 
+## 0.7.2
+
+### Improved
+
+- **Smoother rendering under load** — the conversation view's internal processing now parallelizes across threads instead of running sequentially, reducing frame time when the transcript or context window is large.
+- **Better subagent discipline** — the assistant now receives clear, consistent "fire-and-forget" guidance at every touchpoint when dispatching subagents, reducing the tendency to poll for status or micro-manage delegated tasks. Results arrive automatically — no checking needed.
+
+> **Beta note:** builds are for evaluation and expire ~30 days after release — run `zoid update` periodically to stay current.
+
 ## 0.7.1
 
 ### Fixes

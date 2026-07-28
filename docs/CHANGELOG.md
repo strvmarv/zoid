@@ -6,6 +6,38 @@
 > notes (what ships to the public releases repo) live in the root
 > `RELEASES.md`.
 
+## 0.7.2
+
+Projection parallelization + subagent no-poll prompt hardening. 9 commits
+since v0.7.1.
+
+Projection cache parallelization (`eaa311c`).
+- `zoid/src/main.rs`: `ProjectionCache::refresh` now runs its 5 independent
+  O(n) passes (conversation, context_window, churn_timeline, tasks,
+  token_ledger) concurrently as scoped threads via `std::thread::scope`.
+  Wall-clock from sum(passes) to max(passes). Zero new dependencies
+  (std::thread::scope, stable since Rust 1.63).
+
+Subagent no-poll prompt hardening (spec:
+2026-07-27-subagent-no-poll-prompt-hardening-design.md).
+- `zoid-tools/src/subagent_dispatch.rs`: tool description restructured to
+  lead with "Fire-and-forget" framing; rule first, mechanism after.
+  Regression-guard assertions verify the description starts with
+  "Fire-and-forget" and names `list_subagents` as do-not-call.
+- `zoid/src/agent.rs`: `SYSTEM_PROMPT` gains a fire-and-forget sentence so
+  `wrap_reassertion` periodically reinforces the no-poll rule.
+  `system_prompt_reinforces_no_poll` unit test added.
+- `zoid/src/agent.rs`: `dispatch_subagent` tool result changed from bare
+  JSON `{"subagent_id": "..."}` to JSON + em-dash + positive directive
+  ("do NOT call list_subagents... End your turn now"). Test extended with
+  two new assertions.
+- `zoid/src/agent.rs`: `format_subagent_list` helper extracted to module
+  level (after `fire_subagent_kill`). Agent-loop `list_subagents` arm
+  rewired to call it. Soft no-poll reminder appended when subagents are
+  running (data + reminder, not a refusal). Test rewritten to call the
+  helper directly — exercises real code instead of a duplicated
+  reconstruction. Reminder present non-empty / absent empty assertions.
+
 ## 0.7.1
 
 Windows keyboard double-fire fix.

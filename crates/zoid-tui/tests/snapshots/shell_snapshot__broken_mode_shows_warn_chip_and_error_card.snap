@@ -2,7 +2,7 @@
 source: crates/zoid-tui/tests/shell_snapshot.rs
 expression: "draw(&s, &seeded(), 160, 40)"
 ---
-"v0.7.0                                                                        zoid                                        Esc interrupt · : command · ^P palette"
+"v0.7.2                                                                        zoid                                        Esc interrupt · : command · ^P palette"
 "┌ mode error ─────────────────────────────────────────────────────────────────────────────────────────────────────┐ ╭ ▾ repo ─────────────────────────────────╮ "
 "│⚠ mode 'Superpowers' failed to load                                                                              │ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(118, " ")]
 "│Fix its mode.md, then run  :mode reload                                                                          │ │🔧 worktree (none)                       │ " Hidden by multi-width symbols: [(118, " ")]
