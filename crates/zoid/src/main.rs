@@ -1446,18 +1446,31 @@ impl ProjectionCache {
             }
             return rebuilt;
         }
-        // Full invalidation — rebuild everything from scratch.
-        self.msgs = conversation(events.iter());
-        self.window = zoid_core::context::context_window(events.iter());
-        self.churn = zoid_core::economy::churn_timeline(events.iter());
-        self.tasks = zoid_core::tasks::tasks(events.iter());
-        let ledger = zoid_core::economy::token_ledger(events.iter());
-        self.ledger_total = ledger.total;
-        self.cached_total = ledger.cached;
-        self.thinking_total = ledger.thinking;
+        // Full invalidation — rebuild everything from scratch. The 5
+        // independent O(n) passes run concurrently as scoped threads; wall-clock
+        // drops from sum(passes) to max(passes). std::thread::scope (stable
+        // since Rust 1.63) borrows `iter` by shared reference — each spawn
+        // clones the iterator so the passes are independent.
+        let iter = events.iter();
+        std::thread::scope(|s| {
+            let a = s.spawn(|| conversation(iter.clone()));
+            let b = s.spawn(|| zoid_core::context::context_window(iter.clone()));
+            let c = s.spawn(|| zoid_core::economy::churn_timeline(iter.clone()));
+            let d = s.spawn(|| zoid_core::tasks::tasks(iter.clone()));
+            let e = s.spawn(|| zoid_core::economy::token_ledger(iter.clone()));
+            self.msgs = a.join().unwrap();
+            self.window = b.join().unwrap();
+            self.churn = c.join().unwrap();
+            self.tasks = d.join().unwrap();
+            let ledger = e.join().unwrap();
+            self.ledger_total = ledger.total;
+            self.cached_total = ledger.cached;
+            self.thinking_total = ledger.thinking;
+        });
         // Find the last Usage event's real input token count — the provider's
         // actual prompt size, far more accurate than the chars/4 estimate.
         // `EventLog::iter()` is double-ended, so `.rev()` works directly.
+        // These 2 reverse scans early-exit and are cheap — kept sequential.
         self.last_input_tokens = events
             .iter()
             .rev()
