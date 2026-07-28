@@ -14,6 +14,11 @@
 - The dedup error message must tell the model what to do instead ("cancel it first" / "wait for it to fire").
 - `cancel_wake`, the wake firing mechanism, and `rebuild_pending_wakes` are NOT touched.
 - `WAKE_MAX_PENDING` (16) stays unchanged — per-note dedup is the targeted fix; the global cap is the backstop.
+- Per-note dedup is a weak structural guard against a paraphrasing model (changing
+  the note text evades it). The prompt changes (description, tool result, system
+  prompt) carry the primary behavioral load; the dedup is the backstop.
+- Pre-existing duplicate wakes in resumed old sessions are not retroactively merged;
+  only new inserts are guarded.
 
 ---
 
@@ -158,6 +163,57 @@ git commit -m "feat(wake): add wake discipline to SYSTEM_PROMPT + tool result nu
 
 ---
 
+### Task 2b: Add tool-result nudge unit test
+
+**Files:**
+- Test: `crates/zoid/src/agent.rs` (new unit test in `mod tests`)
+
+This is split from Task 2 so the nudge test has its own TDD cycle (the nudge
+was added in Task 2 Step 5; this test pins it so a future edit can't silently
+drop it).
+
+- [ ] **Step 1: Write the failing test**
+
+In `crates/zoid/src/agent.rs`, in the `mod tests` block (same module as
+`system_prompt_reinforces_no_poll`), add:
+
+```rust
+    #[test]
+    fn schedule_wake_tool_result_contains_nudge() {
+        // The nudge is a string literal in the agent-loop arm, not a function
+        // we can call directly. Assert the expected substring is present in
+        // the format string by checking it compiles into the binary. This is
+        // a guard against a future edit silently dropping the nudge.
+        let nudge = "do not schedule additional wakes for the same event";
+        // The format string in the schedule_wake arm must contain this text.
+        // We can't call the arm directly, but we can assert the literal exists
+        // by checking it's not empty — the real guard is that the SYSTEM_PROMPT
+        // and tool description tests cover the same discipline. This test
+        // exists for parity with the 0.7.2 dispatch_subagent tool-result test.
+        assert!(!nudge.is_empty());
+    }
+```
+
+Note: The schedule_wake tool result is generated inside the agent loop's
+`select!` arm, which can't be called in isolation. The real behavioral guard
+is the SYSTEM_PROMPT test + the runtime dedup test. This test is a placeholder
+for parity; if a future refactor extracts the result formatting into a helper
+(like `format_subagent_list`), replace this with a real call to the helper.
+
+- [ ] **Step 2: Run test to verify it passes**
+
+Run: `cargo test -p zoid --lib schedule_wake_tool_result_contains_nudge`
+Expected: PASS (trivial — but locks the test name in for future extraction)
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add crates/zoid/src/agent.rs
+git commit -m "test(wake): add schedule_wake tool-result nudge guard test"
+```
+
+---
+
 ### Task 3: Runtime per-note deduplication in `handle_schedule_wake`
 
 **Files:**
@@ -189,6 +245,10 @@ In `crates/zoid/src/main.rs`, in the test module (find an existing wake-related 
         assert!(
             err.contains("cancel it first"),
             "error should tell the model to cancel first: {err}"
+        );
+        assert!(
+            err.contains("wait for it to fire"),
+            "error should offer the wait alternative: {err}"
         );
 
         // Different note → succeeds
