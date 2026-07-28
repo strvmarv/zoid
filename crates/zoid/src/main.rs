@@ -6854,6 +6854,18 @@ async fn handle_schedule_wake(
     note: String,
 ) -> Result<String, String> {
     validate_schedule(app.config.wake.enabled, app.pending_wakes.len(), delay_secs)?;
+
+    // Per-note deduplication: reject if a pending wake with the same note
+    // already exists. Prevents the LLM from accumulating duplicate wakes for
+    // the same event.
+    if app.pending_wakes.values().any(|n| n == &note) {
+        return Err(format!(
+            "a pending wake with this note already exists — cancel it first \
+             with cancel_wake, or wait for it to fire. Do not schedule \
+             duplicate wakes for the same event."
+        ));
+    }
+
     let wake_id = Ulid::new().to_string();
     let fire_at_ms = now_ms().saturating_add(i64::try_from(delay_secs).unwrap_or(i64::MAX).saturating_mul(1000));
     app.record(EventKind::WakeScheduled {
@@ -8154,6 +8166,39 @@ mod tests {
             rebuild_pending_wakes(&log).is_empty(),
             "event-log projection matches live state"
         );
+    }
+
+    #[tokio::test]
+    async fn handle_schedule_wake_rejects_duplicate_note() {
+        let mut app = test_app().await;
+        // Schedule first wake
+        let id1 = handle_schedule_wake(&mut app, 60, "check CI status".into())
+            .await
+            .unwrap();
+        assert!(!id1.is_empty());
+
+        // Same note → rejected
+        let err = handle_schedule_wake(&mut app, 90, "check CI status".into())
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("already exists"),
+            "duplicate note should be rejected: {err}"
+        );
+        assert!(
+            err.contains("cancel it first"),
+            "error should tell the model to cancel first: {err}"
+        );
+        assert!(
+            err.contains("wait for it to fire"),
+            "error should offer the wait alternative: {err}"
+        );
+
+        // Different note → succeeds
+        let id2 = handle_schedule_wake(&mut app, 60, "check subagent status".into())
+            .await
+            .unwrap();
+        assert!(!id2.is_empty() && id2 != id1);
     }
 
     #[tokio::test]
