@@ -143,6 +143,29 @@ pub fn fire_subagent_kill(
     fired
 }
 
+/// Format the `list_subagents` tool output from the in-flight registry. Pure
+/// function shared by the agent-loop arm and the unit test so the test
+/// exercises the real formatting (including the no-poll reminder) rather than
+/// a duplicated reconstruction. Empty registry → a plain "no subagents" line
+/// with no reminder; non-empty → one line per subagent + a fire-and-forget
+/// reminder appended to weaken the poll-reward loop.
+fn format_subagent_list(map: &std::collections::HashMap<String, SubagentHandle>) -> String {
+    if map.is_empty() {
+        return "No subagents currently running.".to_string();
+    }
+    let mut lines = format!("Running subagents ({}):\n", map.len());
+    for (id, handle) in map.iter() {
+        let agent = if handle.agent.is_empty() { "delegate" } else { &handle.agent };
+        lines.push_str(&format!("- {id} [{agent}]: {}\n", handle.task));
+    }
+    lines.push_str(
+        "\nReminder: subagents are fire-and-forget. You will be re-invoked with \
+         each result automatically — do not poll or call this tool repeatedly \
+         to check progress. End your turn and await the DelegationResult.",
+    );
+    lines.trim_end().to_string()
+}
+
 /// How one agent turn is run: its system prompt, working directory, and the
 /// event branch its output is recorded on. Chat uses the main branch + process
 /// cwd; a subagent uses its own branch + (optionally) a worktree.
@@ -2018,16 +2041,7 @@ async fn run_turn_inner(
                 Some(zoid_tools::ToolKind::Emitting) if tc.name == "list_subagents" => {
                     let output = if let Some(reg) = &config.in_flight {
                         let map = reg.lock().unwrap();
-                        if map.is_empty() {
-                            "No subagents currently running.".to_string()
-                        } else {
-                            let mut lines = format!("Running subagents ({}):\n", map.len());
-                            for (id, handle) in map.iter() {
-                                let agent = if handle.agent.is_empty() { "delegate" } else { &handle.agent };
-                                lines.push_str(&format!("- {id} [{agent}]: {}\n", handle.task));
-                            }
-                            lines.trim_end().to_string()
-                        }
+                        format_subagent_list(&map)
                     } else {
                         "No subagents currently running.".to_string()
                     };
@@ -5437,7 +5451,7 @@ mod tool_call_id_threading_tests {
 
 #[cfg(test)]
 mod guardrail_types_tests {
-    use super::{AbortReason, SubagentHandle};
+    use super::{AbortReason, SubagentHandle, format_subagent_list};
     use std::sync::atomic::AtomicI64;
     use std::sync::{Arc, Mutex};
     use tokio_util::sync::CancellationToken;
@@ -5545,25 +5559,27 @@ mod guardrail_types_tests {
             agent: "reviewer".into(),
         });
 
-        // Format the output the same way the agent loop arm does.
-        let mut lines = format!("Running subagents ({}):\n", map.len());
-        for (id, handle) in map.iter() {
-            let agent = if handle.agent.is_empty() { "delegate" } else { &handle.agent };
-            lines.push_str(&format!("- {id} [{agent}]: {}\n", handle.task));
-        }
-        let output = lines.trim_end().to_string();
-
+        // Non-empty: data + reminder
+        let output = format_subagent_list(&map);
         assert!(output.contains("Running subagents (2)"));
         assert!(output.contains("sub-001 [delegate]: implement the resolver"));
         assert!(output.contains("sub-002 [reviewer]: review the spec"));
+        assert!(
+            output.contains("fire-and-forget"),
+            "non-empty output must carry the no-poll reminder: {output}"
+        );
+        assert!(
+            output.contains("do not poll"),
+            "non-empty output must tell the model not to poll: {output}"
+        );
 
-        // Empty map → "No subagents currently running."
+        // Empty: no reminder
         let empty: HashMap<String, SubagentHandle> = HashMap::new();
-        let output = if empty.is_empty() {
-            "No subagents currently running.".to_string()
-        } else {
-            format!("Running subagents ({}):", empty.len())
-        };
+        let output = format_subagent_list(&empty);
         assert_eq!(output, "No subagents currently running.");
+        assert!(
+            !output.contains("fire-and-forget"),
+            "empty output must not carry the reminder: {output}"
+        );
     }
 }
