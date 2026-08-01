@@ -190,7 +190,41 @@ Expected: PASS (all 4 new tests)
 Run: `cargo test -p zoid-core --lib`
 Expected: PASS (all existing tests including `eviction_defaults_to_none`, `eviction_section_parses_and_merges`, etc.)
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 10: Fix all `Provenance` literal construction sites that now fail to compile**
+
+Adding `eviction_enabled` to `Provenance` breaks every struct literal that doesn't
+list it. The `merge` initializer (Step 6) and the two `config_view.rs` test
+literals (handled in Task 2 Step 1) are already covered. The remaining **7** sites
+must each get `eviction_enabled: Source::Default,` inserted after
+`companion_enabled: Source::Default,`:
+
+1. `crates/zoid-tui/tests/shell_snapshot.rs:923` (`config_overlay_frame`)
+2. `crates/zoid-tui/tests/shell_snapshot.rs:965` (`config_key_prompt_masks_entry`)
+3. `crates/zoid-tui/tests/shell_snapshot.rs:1012` (`config_overlay_provider_picker`)
+4. `crates/zoid-tui/tests/shell_snapshot.rs:1071` (`config_overlay_provider_picker_selection_styles`)
+5. `crates/zoid-tui/tests/shell_snapshot.rs:1149` (`config_overlay_narrow_degrades`)
+6. `crates/zoid-tui/tests/shell_snapshot.rs:1197` (`config_overlay_narrow_degrades_respects_focus`)
+7. `crates/zoid/src/main.rs:8076` (`mod tests` `App` fixture, after `companion_enabled: Source::Default,` at line 8097)
+
+In each, add the line:
+```rust
+                    companion_enabled: Source::Default,
+                    eviction_enabled: Source::Default,
+```
+
+**No `.snap` snapshot files change** — all six snapshot tests use `config_section = 0` (Provider & Model), so the Economy section's new eviction row is never rendered. Only the `Provenance` literals fail to compile.
+
+- [ ] **Step 11: Run full test suite (lib + integration) to verify all Provenance literals compile**
+
+Run: `cargo test -p zoid-core --lib && cargo test -p zoid-tui --lib`
+Expected: PASS (zoid-core lib tests pass; zoid-tui lib tests pass — integration tests in `tests/` are not compiled by `--lib`)
+
+- [ ] **Step 12: Compile integration tests to verify the 7 Provenance literal fixes**
+
+Run: `cargo test -p zoid-tui --no-run && cargo test -p zoid --no-run`
+Expected: Compiles without errors (all `Provenance` literals now include `eviction_enabled`)
+
+- [ ] **Step 13: Commit**
 
 ```bash
 git add crates/zoid-core/src/config.rs
@@ -236,7 +270,7 @@ And add `eviction_enabled: Source::Default,` to the `Provenance` literal in `pro
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cargo test -p zoid-tui --lib config_view::tests::builds_four_sections_with_env_shadow`
-Expected: FAIL — `Provenance` literal missing `eviction_enabled` field (compile error), and the eviction row assertion fails (row doesn't exist yet).
+Expected: FAIL — the eviction row assertion fails (`economy.rows[0].label == "eviction"` panics, since the row doesn't exist yet). The `Provenance` literal now compiles because Step 1 added the `eviction_enabled` field.
 
 - [ ] **Step 3: Add the eviction `FieldRow` to the Economy section**
 
@@ -278,9 +312,13 @@ In `crates/zoid/src/main.rs`, after the `ZOID_COMPANION_ENABLED` block (line 210
     }
 ```
 
-- [ ] **Step 7: Add `current_toml_value` read-back arm**
+- [ ] **Step 7: Add `current_write` arm (save-to-repo path)**
 
-In `crates/zoid/src/main.rs`, in the `current_toml_value` function (~line 3949), add a new arm to the `match label` block. Add it before the `"auto-evict cold"` arm:
+In `crates/zoid/src/main.rs`, the `current_write` function (~line 3934) builds a
+`Some(match label { ... })` that `Action::ConfigSaveToRepo` uses to persist the
+live value into `.zoid/config.toml`. Without a matching arm, saving the
+eviction row falls through to `_ => None` and silently does nothing. Add a new
+arm before the `"auto-evict cold"` arm:
 
 ```rust
         "eviction" => (
@@ -327,6 +365,13 @@ In the `config_field_target_and_value_mapping` test (~line 7779), add after the 
         assert!(field_target("eviction", &FieldKind::Bool).is_none());
 ```
 
+Note: the `current_write` and `ConfigToggle` arms are hardcoded `match label`
+blocks verified by the Task 3 grep and by manual verification. Unit-level
+testing of these arms requires an `App` fixture (the existing
+`config_field_target_and_value_mapping` test only calls free functions without
+an `App`). This is a pre-existing test gap — no Bool row's `current_write` or
+`ConfigToggle` arm is unit-tested today. The new row follows the same pattern.
+
 - [ ] **Step 11: Run full test suite**
 
 Run: `cargo test -p zoid-tui --lib && cargo test -p zoid-core --lib`
@@ -363,5 +408,5 @@ Expected: PASS (all crates, all tests)
 
 - [ ] **Step 3: Verify no `compact_threshold_pct > 0` eviction derivation remains**
 
-Run: `grep -rn 'compact_threshold_pct.*>.*0' crates/ --include='*.rs' | grep -v test | grep -v 'compact_threshold'`
-Expected: No results — the only `compact_threshold_pct > 0` references should be in `policy_from_config` (compaction, not eviction) and tests. The old `enabled: app.economy.compact_threshold_pct > 0` line must be gone.
+Run: `grep -rn 'compact_threshold_pct > 0' crates/ --include='*.rs'`
+Expected: No results — the old `enabled: app.economy.compact_threshold_pct > 0` line must be gone. (The only `compact_threshold_pct` references remaining should be in `policy_from_config` for compaction, which uses `== 0`, not `> 0`.)
