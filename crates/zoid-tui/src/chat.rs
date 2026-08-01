@@ -5,7 +5,7 @@ use crate::text::truncate;
 use crate::tokens::{color, glyph};
 use ratatui::{
     layout::{Constraint, Layout},
-    style::Style,
+    style::{Style, Stylize},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
     Frame,
@@ -337,16 +337,33 @@ fn build_conversation(
                 if let Some(d) = diff {
                     if inline_ids.contains(id.as_str()) {
                         for dl in &d.lines {
-                            let (sign, col) = match dl.kind {
-                                crate::state::RenderDiffKind::Add => ("+", color::ADDED),
-                                crate::state::RenderDiffKind::Del => ("−", color::REMOVED),
-                                crate::state::RenderDiffKind::Ctx => (" ", color::DIM),
+                            // Add/del lines get a background tint; context lines get
+                            // NO background (the conversation pane is not filled with
+                            // CHAT_BG — it renders on the terminal default — so
+                            // setting any bg on context lines would paint a visible
+                            // band that contradicts "no highlight on context").
+                            let (sign, fg, bg) = match dl.kind {
+                                crate::state::RenderDiffKind::Add => ("+", color::ADDED,   Some(color::ADDED_BG)),
+                                crate::state::RenderDiffKind::Del => ("−", color::REMOVED, Some(color::REMOVED_BG)),
+                                crate::state::RenderDiffKind::Ctx => (" ", color::DIM,     None),
                             };
                             let no = dl.new_no.or(dl.old_no).unwrap_or(0);
-                            lines.push(Line::from(vec![
-                                Span::styled(format!("      {no:>5} "), Style::new().fg(color::DIM)),
-                                Span::styled(format!("{sign} {}", dl.text), Style::new().fg(col)),
-                            ]));
+                            let content = format!("{sign} {}", dl.text);
+                            // Pad to full terminal width so the highlight band
+                            // extends to the right edge. Currently ctx.width ==
+                            // the renderer's inset clip width (text.width) by
+                            // construction (render.rs passes text.width); this
+                            // comment future-proofs against a refactor that
+                            // decouples them.
+                            let pad = ctx.width.saturating_sub(GUTTER_W + display_width(&content));
+                            let pad_str = " ".repeat(pad);
+                            let gutter = Span::styled(format!("      {no:>5} "), Style::new().fg(color::DIM));
+                            let content_span = Span::styled(format!("{content}{pad_str}"), Style::new().fg(fg));
+                            let (gutter, content_span) = match bg {
+                                Some(bg) => (gutter.bg(bg), content_span.bg(bg)),
+                                None => (gutter, content_span),
+                            };
+                            lines.push(Line::from(vec![gutter, content_span]));
                         }
                         if d.truncated_by > 0 {
                             lines.push(Line::from(vec![Span::styled(
@@ -1175,6 +1192,13 @@ pub fn render_chat(frame: &mut Frame, msgs: &[ChatMsg], input: &TextArea<'_>, st
     frame.render_widget(Paragraph::new(status), chunks[3]);
 }
 
+/// Width of the diff-snippet line-number gutter: 6 leading spaces + a 5-char
+/// right-aligned line number + 1 trailing space. Used to pad the highlight
+/// band to the full terminal width. Named (not inlined) because the literal
+/// `"      {no:>5} "` is 12 chars, not the obvious 11 — a magic number here
+/// invites a silent off-by-one in the pad math.
+const GUTTER_W: usize = 12;
+
 /// Display width of a string (column count, handling wide glyphs).
 /// Used to compute the fixed overhead of a tool-call/result line so the
 /// args/preview budget can be derived from the available text width.
@@ -1609,6 +1633,63 @@ mod tests {
         assert!(text.contains("-1") || text.contains("−1"), "shows removed count");
         assert!(text.contains("B"), "shows the added line inline");
         assert!(text.contains('b'), "shows the removed line inline");
+    }
+
+    #[test]
+    fn diff_snippet_lines_have_background_highlight() {
+        use crate::state::{RenderDiff, RenderDiffKind, RenderDiffLine};
+        use zoid_core::projection::ChatMsg;
+
+        let msgs = vec![ChatMsg::ToolResult {
+            id: "tc1".into(),
+            name: "edit".into(),
+            output: "edited f.rs (1 change)".into(),
+            is_error: false,
+            compacted: false,
+            ts: 0,
+        }];
+        // Include a context line alongside the add/del lines.
+        let diff = RenderDiff {
+            path: "f.rs".into(),
+            added: 1,
+            removed: 1,
+            truncated_by: 0,
+            lines: vec![
+                RenderDiffLine { old_no: Some(2), new_no: Some(2), kind: RenderDiffKind::Ctx, text: "ctx-line".into() },
+                RenderDiffLine { old_no: Some(1), new_no: None, kind: RenderDiffKind::Del, text: "del-line".into() },
+                RenderDiffLine { old_no: None, new_no: Some(1), kind: RenderDiffKind::Add, text: "add-line".into() },
+            ],
+        };
+        let cache = vec![("tc1".to_string(), diff)];
+        let lines = conversation_lines_with_diffs(&msgs, false, false, 0, 80, None, &cache, 5);
+
+        // Structural selection: find diff lines by their gutter pattern (2 spans,
+        // first starts with 6 leading spaces) rather than substring-probing content.
+        let diff_lines: Vec<_> = lines.iter()
+            .filter(|l| l.spans.len() == 2)
+            .filter(|l| l.spans[0].content.starts_with("      "))
+            .collect();
+
+        // Context line: no background on either span, DIM foreground.
+        let ctx_line = diff_lines.iter().find(|l| l.spans[1].content.contains("ctx-line"))
+            .expect("ctx line present");
+        assert_eq!(ctx_line.spans[0].style.bg, None, "gutter has no bg on context");
+        assert_eq!(ctx_line.spans[1].style.bg, None, "content has no bg on context");
+        assert_eq!(ctx_line.spans[1].style.fg, Some(color::DIM), "content has DIM fg on context");
+
+        // Del line: both spans have REMOVED_BG, content has REMOVED fg.
+        let del_line = diff_lines.iter().find(|l| l.spans[1].content.contains("del-line"))
+            .expect("del line present");
+        assert_eq!(del_line.spans[0].style.bg, Some(color::REMOVED_BG), "gutter has del bg");
+        assert_eq!(del_line.spans[1].style.bg, Some(color::REMOVED_BG), "content has del bg");
+        assert_eq!(del_line.spans[1].style.fg, Some(color::REMOVED), "content has REMOVED fg on del");
+
+        // Add line: both spans have ADDED_BG, content has ADDED fg.
+        let add_line = diff_lines.iter().find(|l| l.spans[1].content.contains("add-line"))
+            .expect("add line present");
+        assert_eq!(add_line.spans[0].style.bg, Some(color::ADDED_BG), "gutter has add bg");
+        assert_eq!(add_line.spans[1].style.bg, Some(color::ADDED_BG), "content has add bg");
+        assert_eq!(add_line.spans[1].style.fg, Some(color::ADDED), "content has ADDED fg on add");
     }
 
     #[test]
