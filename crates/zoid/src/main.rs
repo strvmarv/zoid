@@ -208,6 +208,9 @@ fn load_config() -> (
     if let Ok(v) = std::env::var("ZOID_COMPANION_ENABLED") {
         envp.companion.enabled = Some(matches!(v.trim(), "1" | "true" | "yes"));
     }
+    if let Ok(v) = std::env::var("ZOID_EVICTION_ENABLED") {
+        envp.eviction.enabled = Some(matches!(v.trim(), "1" | "true" | "yes"));
+    }
     layers.push((Source::Env, envp));
     let (cfg, prov) = merge(&layers);
     (cfg, prov, warnings)
@@ -3958,6 +3961,10 @@ fn current_write(
                 .unwrap_or(TomlValue::Unset),
         ),
         "context target" => ("economy.context_target", opt_u64(econ.context_target)),
+        "eviction" => (
+            "eviction.enabled",
+            TomlValue::Bool(app.config.eviction.enabled),
+        ),
         "auto-evict cold" => (
             "economy.auto_evict_cold",
             TomlValue::Bool(econ.auto_evict_cold),
@@ -4841,6 +4848,10 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             use zoid_core::config::TomlValue;
             if let Some((label, _kind, _)) = current_config_field(app) {
                 let write = match label {
+                    "eviction" => Some((
+                        "eviction.enabled",
+                        !app.config.eviction.enabled,
+                    )),
                     "auto-evict cold" => Some((
                         "economy.auto_evict_cold",
                         !app.config.economy.auto_evict_cold,
@@ -7164,7 +7175,7 @@ fn spawn_turn(app: &mut App) {
     turn_config.embedder = app.embedder.clone();
     turn_config.policy = policy_from_config(&app.economy, app.context_target);
     turn_config.eviction = zoid_core::eviction::EvictionPolicy {
-        enabled: app.economy.compact_threshold_pct > 0, // master switch (back-compat)
+        enabled: app.config.eviction.enabled,
         capacity: app.shell.ctx_ceiling,                // capacity = model window
         context_target: app.context_target,             // resolved soft setpoint
         band_headroom_pct: app.economy.band_headroom_pct,
@@ -7778,6 +7789,7 @@ mod tests {
         // Bools persist via toggle, not the edit buffer → no text target.
         assert!(field_target("reduced motion", &FieldKind::Bool).is_none());
         assert!(field_target("auto-evict cold", &FieldKind::Bool).is_none());
+        assert!(field_target("eviction", &FieldKind::Bool).is_none());
 
         // Value coercion: empty / "(none)" ceiling ⇒ Unset; a number ⇒ Int.
         assert_eq!(

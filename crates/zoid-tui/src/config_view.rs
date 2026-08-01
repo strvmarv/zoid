@@ -186,6 +186,14 @@ pub fn build_sections(
         title: "Economy".into(),
         rows: vec![
             FieldRow {
+                label: "eviction",
+                value: onoff(cfg.eviction.enabled),
+                kind: FieldKind::Bool,
+                source: prov.eviction_enabled,
+                env_shadowed: prov.eviction_enabled == Source::Env,
+                secret_key: None,
+            },
+            FieldRow {
                 label: "context target",
                 value: opt(&cfg.economy.context_target),
                 kind: FieldKind::Uint,
@@ -329,6 +337,10 @@ mod tests {
             .find(|r| r.label == "auto-evict cold")
             .unwrap();
         assert!(auto_evict_row.env_shadowed);
+        let eviction_row = &economy.rows[0];
+        assert_eq!(eviction_row.label, "eviction");
+        assert!(matches!(eviction_row.kind, FieldKind::Bool));
+        assert_eq!(eviction_row.value, "on"); // default true
         let sec = sections.iter().find(|s| s.title == "Secrets").unwrap();
         assert!(sec.rows[0].env_shadowed); // OLLAMA set from env
         assert_eq!(sec.rows[1].value, "not set");
