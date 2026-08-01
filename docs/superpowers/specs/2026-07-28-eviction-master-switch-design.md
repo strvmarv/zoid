@@ -227,7 +227,7 @@ Economy
 No conditional visibility — all rows stay visible and editable regardless of
 the eviction switch state.
 
-### TOML value read-back — `main.rs` (~line 3949, `current_toml_value`)
+### TOML value read-back — `main.rs` (~line 3949, `current_write`)
 
 Add a new arm to the `label` match so the row's value re-renders after an
 edit:
@@ -360,20 +360,20 @@ for the new row:
 assert!(field_target("eviction", &FieldKind::Bool).is_none());
 ```
 
-The `current_toml_value` read-back arm should also be asserted. This is
+The `current_write` read-back arm should also be asserted. This is
 the path that re-renders the row's value after a toggle — without it, the
 row shows a stale value. The existing test pattern (label → expected
 `("key", TomlValue)`) applies:
 
 ```rust
 assert_eq!(
-    current_toml_value(app, "eviction", &FieldKind::Bool),
+    current_write(app, "eviction", &FieldKind::Bool),
     Some(("eviction.enabled", TomlValue::Bool(app.config.eviction.enabled)))
 );
 ```
 
 These tests are important: the `ConfigToggle` dispatch and the
-`current_toml_value` read-back are both hardcoded `match label` blocks with
+`current_write` read-back are both hardcoded `match label` blocks with
 `_ => None` fallthroughs. Without matching arms in both, the toggle is a
 no-op and the value display is stale.
 
@@ -386,7 +386,7 @@ This is a config-pipeline + single-wiring change. Files touched:
 - `crates/zoid-tui/src/config_view.rs` — one new `FieldRow` in the Economy
   section, updated `Provenance` literals in existing tests
 - `crates/zoid/src/main.rs` — one line change (`enabled:` source), one new
-  `ConfigToggle` arm (write path), one new `current_toml_value` arm (read-back),
+  `ConfigToggle` arm (write path), one new `current_write` arm (read-back),
   one new env-var parse for `ZOID_EVICTION_ENABLED`
 - Tests in `config.rs` and `config_view.rs`
 
