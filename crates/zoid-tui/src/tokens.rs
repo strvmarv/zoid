@@ -109,6 +109,12 @@ pub mod color {
     pub const ADDED: Color = OK; // +added lines
     pub const REMOVED: Color = ERROR; // -removed lines
 
+    // Diff line background tints — subtle green/red bands behind add/del rows.
+    // Distinct from CHAT_BG (0x0d,0x2a,0x4d): the conversation pane is NOT filled
+    // with CHAT_BG, so these are standalone tints, not pane-background aliases.
+    pub const ADDED_BG: Color = Color::Rgb(0x1a, 0x2e, 0x1f); // faint green
+    pub const REMOVED_BG: Color = Color::Rgb(0x2e, 0x1a, 0x1b); // faint red
+
     // Ⓡ3 tree-sitter syntax palette (spec §16 / docs/ux/README.md, verbatim).
     pub const SYN_KEYWORD: Color = Color::Rgb(0xff, 0x7b, 0x72);
     pub const SYN_FUNC: Color = Color::Rgb(0xd2, 0xa8, 0xff);
@@ -233,6 +239,16 @@ mod tests {
     fn repo_changes_colors_reuse_status_palette() {
         assert_eq!(color::ADDED, color::OK);
         assert_eq!(color::REMOVED, color::ERROR);
+    }
+
+    #[test]
+    fn diff_background_tints_are_distinct_from_foreground() {
+        use ratatui::style::Color;
+        assert_eq!(color::ADDED_BG, Color::Rgb(0x1a, 0x2e, 0x1f));
+        assert_eq!(color::REMOVED_BG, Color::Rgb(0x2e, 0x1a, 0x1b));
+        // Background tints are not equal to the foreground colors.
+        assert_ne!(color::ADDED_BG, color::ADDED);
+        assert_ne!(color::REMOVED_BG, color::REMOVED);
     }
 
     #[test]
