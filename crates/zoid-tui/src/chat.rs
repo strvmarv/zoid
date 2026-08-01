@@ -1693,6 +1693,90 @@ mod tests {
     }
 
     #[test]
+    fn gutter_width_matches_format_string() {
+        // The gutter literal "      {no:>5} " is 12 chars; GUTTER_W must match.
+        let sample = format!("      {:>5} ", 42);
+        assert_eq!(GUTTER_W, sample.len(), "GUTTER_W must match the gutter format string");
+    }
+
+    #[test]
+    fn diff_highlight_band_fills_to_width() {
+        use crate::state::{RenderDiff, RenderDiffKind, RenderDiffLine};
+        use zoid_core::projection::ChatMsg;
+
+        let width = 80usize;
+        let msgs = vec![ChatMsg::ToolResult {
+            id: "tc1".into(),
+            name: "edit".into(),
+            output: "edited f.rs (1 change)".into(),
+            is_error: false,
+            compacted: false,
+            ts: 0,
+        }];
+        let diff = RenderDiff {
+            path: "f.rs".into(),
+            added: 1,
+            removed: 0,
+            truncated_by: 0,
+            lines: vec![
+                RenderDiffLine { old_no: None, new_no: Some(1), kind: RenderDiffKind::Add, text: "short".into() },
+            ],
+        };
+        let cache = vec![("tc1".to_string(), diff)];
+        let lines = conversation_lines_with_diffs(&msgs, false, false, 0, width, None, &cache, 5);
+
+        // Find the add line (2 spans, first starts with 6 leading spaces, content
+        // starts with "+").
+        let add_line = lines.iter()
+            .find(|l| l.spans.len() == 2 && l.spans[0].content.starts_with("      ") && l.spans[1].content.starts_with('+'))
+            .expect("add line present");
+
+        // Total visual width = gutter span width + content span width.
+        // The gutter is always GUTTER_W (12) chars. The content span includes
+        // the padded spaces, so its width should be width - GUTTER_W.
+        let gutter_w = display_width(add_line.spans[0].content.as_ref());
+        let content_w = display_width(add_line.spans[1].content.as_ref());
+        assert_eq!(gutter_w, GUTTER_W, "gutter width matches GUTTER_W");
+        assert_eq!(gutter_w + content_w, width, "total band width fills to ctx.width");
+    }
+
+    #[test]
+    fn diff_highlight_clamps_when_too_wide() {
+        use crate::state::{RenderDiff, RenderDiffKind, RenderDiffLine};
+        use zoid_core::projection::ChatMsg;
+
+        // Width smaller than GUTTER_W + content — pad must saturate to 0, no panic.
+        let width = 10usize;
+        let msgs = vec![ChatMsg::ToolResult {
+            id: "tc1".into(),
+            name: "edit".into(),
+            output: "edited f.rs".into(),
+            is_error: false,
+            compacted: false,
+            ts: 0,
+        }];
+        let diff = RenderDiff {
+            path: "f.rs".into(),
+            added: 1,
+            removed: 0,
+            truncated_by: 0,
+            lines: vec![
+                RenderDiffLine { old_no: None, new_no: Some(1), kind: RenderDiffKind::Add, text: "a very long line that exceeds the narrow width".into() },
+            ],
+        };
+        let cache = vec![("tc1".to_string(), diff)];
+        // Must not panic — saturating_sub clamps pad to 0.
+        let lines = conversation_lines_with_diffs(&msgs, false, false, 0, width, None, &cache, 5);
+
+        // The add line should still render with the correct background.
+        let add_line = lines.iter()
+            .find(|l| l.spans.len() == 2 && l.spans[0].content.starts_with("      ") && l.spans[1].content.starts_with('+'))
+            .expect("add line present");
+        assert_eq!(add_line.spans[0].style.bg, Some(color::ADDED_BG), "gutter has add bg even when clamped");
+        assert_eq!(add_line.spans[1].style.bg, Some(color::ADDED_BG), "content has add bg even when clamped");
+    }
+
+    #[test]
     fn cached_edit_beyond_k_shows_counts_only_no_snippet() {
         use crate::state::{RenderDiff, RenderDiffKind, RenderDiffLine};
         use zoid_core::projection::ChatMsg;
