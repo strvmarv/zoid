@@ -6,7 +6,7 @@
 
 **Architecture:** Two new color constants (`ADDED_BG`, `REMOVED_BG`) in `tokens.rs`; one rendering change in `chat.rs` that adds `.bg()` to add/del diff-line spans (but not context lines), pads changed lines to `ctx.width` with spaces so the tint reaches the terminal's right edge, and uses a named `GUTTER_W` constant for the pad math. No changes to diff computation, types, persistence, or model context.
 
-**Tech Stack:** Rust, ratatui 0.29 (`Span`, `Style`, `Stylize` trait — `Span::bg()` is available via `Styled` impl), `unicode-width` (already a dependency via `display_width`).
+**Tech Stack:** Rust, ratatui 0.30 (`Span`, `Style`, `Stylize` trait — `Span::bg()` is available via `Styled` impl), `unicode-width` (already a dependency via `display_width`).
 
 ## Global Constraints
 
@@ -139,30 +139,33 @@ fn diff_snippet_lines_have_background_highlight() {
         .filter(|l| l.spans[0].content.starts_with("      "))
         .collect();
 
-    // Context line: no background on either span.
+    // Context line: no background on either span, DIM foreground.
     let ctx_line = diff_lines.iter().find(|l| l.spans[1].content.contains("ctx-line"))
         .expect("ctx line present");
     assert_eq!(ctx_line.spans[0].style.bg, None, "gutter has no bg on context");
     assert_eq!(ctx_line.spans[1].style.bg, None, "content has no bg on context");
+    assert_eq!(ctx_line.spans[1].style.fg, Some(color::DIM), "content has DIM fg on context");
 
-    // Del line: both spans have REMOVED_BG.
+    // Del line: both spans have REMOVED_BG, content has REMOVED fg.
     let del_line = diff_lines.iter().find(|l| l.spans[1].content.contains("del-line"))
         .expect("del line present");
     assert_eq!(del_line.spans[0].style.bg, Some(color::REMOVED_BG), "gutter has del bg");
     assert_eq!(del_line.spans[1].style.bg, Some(color::REMOVED_BG), "content has del bg");
+    assert_eq!(del_line.spans[1].style.fg, Some(color::REMOVED), "content has REMOVED fg on del");
 
-    // Add line: both spans have ADDED_BG.
+    // Add line: both spans have ADDED_BG, content has ADDED fg.
     let add_line = diff_lines.iter().find(|l| l.spans[1].content.contains("add-line"))
         .expect("add line present");
     assert_eq!(add_line.spans[0].style.bg, Some(color::ADDED_BG), "gutter has add bg");
     assert_eq!(add_line.spans[1].style.bg, Some(color::ADDED_BG), "content has add bg");
+    assert_eq!(add_line.spans[1].style.fg, Some(color::ADDED), "content has ADDED fg on add");
 }
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p zoid-tui --lib diff_snippet_lines_have_background_highlight`
-Expected: FAIL — context-line assertions will fail because today all diff lines have `style.bg == None`. The add/del assertions will also fail (no `.bg()` set today).
+Expected: FAIL — the del/add assertions fail (today all diff lines have `style.bg == None`, not `Some(REMOVED_BG)`/`Some(ADDED_BG)`). The context-line assertions *pass* both before and after the change (today `bg == None`, which is the desired state) — that's the point: context lines are unchanged.
 
 - [ ] **Step 3: Add the `GUTTER_W` constant**
 
@@ -179,40 +182,38 @@ const GUTTER_W: usize = 12;
 
 - [ ] **Step 4: Replace the diff-line rendering loop**
 
-Replace the block at `chat.rs` lines 339–350 (the `for dl in &d.lines` loop inside the `ToolResult` arm) with:
+Replace the block at `chat.rs` lines 339–350 (the `for dl in &d.lines` loop inside the `ToolResult` arm) with the following. **The `for` keyword sits at exactly 24 columns** (the loop is nested inside `if let Some(d) = diff { if inline_ids.contains(...) { ... } }` within the `ToolResult` arm). Inner statements are at 28; the `match bg` body at 32. Match this exactly — `cargo fmt` will rewrite every line if you get it wrong:
 
 ```rust
-                    for dl in &d.lines {
-                        // Add/del lines get a background tint; context lines get
-                        // NO background (the conversation pane is not filled with
-                        // CHAT_BG — it renders on the terminal default — so
-                        // setting any bg on context lines would paint a visible
-                        // band that contradicts "no highlight on context").
-                        let (sign, fg, bg) = match dl.kind {
-                            crate::state::RenderDiffKind::Add => ("+", color::ADDED,   Some(color::ADDED_BG)),
-                            crate::state::RenderDiffKind::Del => ("−", color::REMOVED, Some(color::REMOVED_BG)),
-                            crate::state::RenderDiffKind::Ctx => (" ", color::DIM,     None),
-                        };
-                        let no = dl.new_no.or(dl.old_no).unwrap_or(0);
-                        let content = format!("{sign} {}", dl.text);
-                        // Pad to full terminal width so the highlight band
-                        // extends to the right edge. Invariant: this assumes
-                        // ctx.width == the renderer's inset clip width
-                        // (text.width); if they ever decouple, the band and
-                        // the clip will desync silently.
-                        let pad = ctx.width.saturating_sub(GUTTER_W + display_width(&content));
-                        let pad_str = " ".repeat(pad);
-                        let gutter = Span::styled(format!("      {no:>5} "), Style::new().fg(color::DIM));
-                        let content_span = Span::styled(format!("{content}{pad_str}"), Style::new().fg(fg));
-                        let (gutter, content_span) = match bg {
-                            Some(bg) => (gutter.bg(bg), content_span.bg(bg)),
-                            None => (gutter, content_span),
-                        };
-                        lines.push(Line::from(vec![gutter, content_span]));
-                    }
-```
-
-Note: the indentation matches the surrounding code (the loop is nested inside `if let Some(d) = diff { if inline_ids.contains(...) { ... } }` within the `ToolResult` arm — 20 spaces of indent for the `for` keyword, matching the existing code). Verify the indent matches the replaced block before committing.
+                        for dl in &d.lines {
+                            // Add/del lines get a background tint; context lines get
+                            // NO background (the conversation pane is not filled with
+                            // CHAT_BG — it renders on the terminal default — so
+                            // setting any bg on context lines would paint a visible
+                            // band that contradicts "no highlight on context").
+                            let (sign, fg, bg) = match dl.kind {
+                                crate::state::RenderDiffKind::Add => ("+", color::ADDED,   Some(color::ADDED_BG)),
+                                crate::state::RenderDiffKind::Del => ("−", color::REMOVED, Some(color::REMOVED_BG)),
+                                crate::state::RenderDiffKind::Ctx => (" ", color::DIM,     None),
+                            };
+                            let no = dl.new_no.or(dl.old_no).unwrap_or(0);
+                            let content = format!("{sign} {}", dl.text);
+                            // Pad to full terminal width so the highlight band
+                            // extends to the right edge. Currently ctx.width ==
+                            // the renderer's inset clip width (text.width) by
+                            // construction (render.rs passes text.width); this
+                            // comment future-proofs against a refactor that
+                            // decouples them.
+                            let pad = ctx.width.saturating_sub(GUTTER_W + display_width(&content));
+                            let pad_str = " ".repeat(pad);
+                            let gutter = Span::styled(format!("      {no:>5} "), Style::new().fg(color::DIM));
+                            let content_span = Span::styled(format!("{content}{pad_str}"), Style::new().fg(fg));
+                            let (gutter, content_span) = match bg {
+                                Some(bg) => (gutter.bg(bg), content_span.bg(bg)),
+                                None => (gutter, content_span),
+                            };
+                            lines.push(Line::from(vec![gutter, content_span]));
+                        }
 
 - [ ] **Step 5: Run the test to verify it passes**
 
