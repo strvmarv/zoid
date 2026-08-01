@@ -1,7 +1,7 @@
 # Eviction Master Switch — Design
 
 **Date:** 2026-07-28
-**Status:** Design (approved)
+**Status:** Design (approved; reviewed by Gilfoyle — ConfigToggle arm added, env var added, Default snippet fixed, back-compat documented, tests expanded)
 
 ## Goal
 
@@ -36,7 +36,7 @@ the config screen as "auto-evict cold" but does not control the master
 | Config UI section | Economy | All economy/eviction knobs appear in the Economy section. |
 | Compaction coupling | Decoupled | Disabling eviction does not affect compaction. `compact_threshold_pct` controls compaction only. |
 | `auto_evict_cold` when eviction off | Stays visible and editable | Takes effect when eviction is re-enabled. No conditional visibility. |
-| `compact_threshold_pct` relationship | No longer controls eviction | Sole authority is the new `eviction.enabled` field. The `> 0` derivation is removed. |
+| `compact_threshold_pct` relationship | No longer controls eviction | Sole authority is the new `eviction.enabled` field. The `> 0` derivation is removed. `compact_threshold_pct = 0` still disables compaction; eviction is unaffected. |
 
 ## Config types
 
@@ -45,8 +45,21 @@ the config screen as "auto-evict cold" but does not control the master
 `crates/zoid-core/src/config.rs` — add `enabled: bool` to `EvictionConfig`
 (currently only has `rescue_weight: Option<f32>`):
 
+**Current** (note the `Default` in the derive list):
+
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct EvictionConfig {
+    pub rescue_weight: Option<f32>,
+}
+```
+
+**New** — `#[derive(Default)]` is **removed** (bool's derived default is
+`false`, which would silently disable eviction for all users); a manual `Default`
+impl sets `enabled: true`:
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EvictionConfig {
     /// Master switch for the eviction controller. `false` = total bypass
     /// (byte-identical to pre-ACM behavior). Default `true`.
@@ -54,13 +67,7 @@ pub struct EvictionConfig {
     /// Rescue weight in turn-index units. None ⇒ DEFAULT_RESCUE_WEIGHT.
     pub rescue_weight: Option<f32>,
 }
-```
 
-`Default` (via `#[derive(Default)]`): `enabled` defaults to `true` — **but
-`bool`'s derived default is `false`**, so `EvictionConfig` must implement
-`Default` manually:
-
-```rust
 impl Default for EvictionConfig {
     fn default() -> Self {
         Self {
@@ -71,7 +78,9 @@ impl Default for EvictionConfig {
 }
 ```
 
-The `#[derive(Default)]` is removed and replaced with this manual impl.
+The `#[derive(Default)]` **must be removed** from the derive list — leaving
+it in while also adding a manual `impl Default` is a compile error (duplicate
+`Default` impls).
 
 ### `PartialEviction` — new `enabled: Option<bool>`
 
@@ -116,6 +125,25 @@ construction at the top of `merge`.
 enabled = false       # master switch (default true)
 rescue_weight = 16.0   # existing
 ```
+
+### Env-var override — `ZOID_EVICTION_ENABLED`
+
+Every other Bool master switch has a `ZOID_*` env override (`ZOID_THINKING`,
+`ZOID_REDUCED_MOTION`, `ZOID_COMPANION_ENABLED`). The eviction switch follows
+the same pattern. In `main.rs` (the env-parsing block, ~line 208, after
+`ZOID_COMPANION_ENABLED`), add:
+
+```rust
+if let Ok(v) = std::env::var("ZOID_EVICTION_ENABLED") {
+    envp.eviction.enabled = Some(matches!(v.trim(), "1" | "true" | "yes"));
+}
+```
+
+This populates `PartialEviction.enabled` from the environment, which the
+`merge` function picks up and records as `Source::Env` in
+`prov.eviction_enabled`. The config UI row's `env_shadowed` field then renders
+the `[env]` marker, matching the pattern of `companion`, `thinking`, and
+`reduced motion`.
 
 ## Runtime wiring
 
@@ -199,9 +227,10 @@ Economy
 No conditional visibility — all rows stay visible and editable regardless of
 the eviction switch state.
 
-### TOML write-back — `main.rs` (~line 3949)
+### TOML value read-back — `main.rs` (~line 3949, `current_toml_value`)
 
-Add a new arm to the `label` match in the `current_toml_value` function:
+Add a new arm to the `label` match so the row's value re-renders after an
+edit:
 
 ```rust
 "eviction" => (
@@ -212,6 +241,23 @@ Add a new arm to the `label` match in the `current_toml_value` function:
 
 This follows the exact pattern of "auto-evict cold" → `economy.auto_evict_cold`.
 
+### Toggle write path — `main.rs` (~line 4843, `Action::ConfigToggle`)
+
+The `ConfigToggle` action is a **hardcoded `match label`** with no generic
+fallback — only "auto-evict cold", "reduced motion", "thinking", and
+"companion" have arms. A new Bool row without a matching arm falls through
+to `_ => None` and **does nothing when toggled**. Add a new arm:
+
+```rust
+"eviction" => Some((
+    "eviction.enabled",
+    !app.config.eviction.enabled,
+)),
+```
+
+This is the actual write path that flips the bool and persists it. Without
+this arm, the toggle is dead on arrival.
+
 ## What does NOT change
 
 | Component | File | Change |
@@ -221,6 +267,7 @@ This follows the exact pattern of "auto-evict cold" → `economy.auto_evict_cold
 | `auto_evict_cold` | `EconomyConfig`, config UI | None — still shown, still editable |
 | Eviction scoring/rescue/breadcrumb | `eviction.rs` | None |
 | `EvictionPolicy::disabled()` | `eviction.rs` | None — still used by tests |
+| `rescue_weight` provenance | `config.rs` | None — `rescue_weight` has no `Provenance` field by design; it's not surfaced in the UI. The new `eviction_enabled` provenance field is for the new `enabled` switch only. |
 | Persistence / model context | — | None — purely a config + wiring change |
 
 ## Edge cases
@@ -234,6 +281,12 @@ This follows the exact pattern of "auto-evict cold" → `economy.auto_evict_cold
   eviction enabled (the new default `true`). This is a deliberate behavior
   change: the user asked for an explicit switch, and the default is "on."
   Users who want eviction off must set `[eviction] enabled = false`.
+  **Backward-compatibility note:** users who set `compact_threshold_pct = 0`
+  *intending* to disable eviction will get eviction silently re-enabled on
+  upgrade with no notification. This is a known trade-off of the explicit
+  switch — the alternative (defaulting `enabled` to `false`) would disable
+  eviction for all *new* users, contradicting the "on by default" decision.
+  This should be called out in the CHANGELOG/release notes when shipped.
 - **`auto_evict_cold` when eviction is off.** The toggle stays visible and
   editable. It has no runtime effect while eviction is disabled, but its value
   is preserved and takes effect immediately when eviction is re-enabled. No
@@ -298,11 +351,31 @@ assert_eq!(eviction_row.value, "on"); // default true
 ### `main.rs` tests
 
 The existing `policy_from_config` tests at line 7719+ cover compaction and are
-unaffected. No new `main.rs` test is strictly needed — the wiring is a single
-line reading `app.config.eviction.enabled`, and the `EvictionPolicy` struct
-already exists. If a test is desired, it would assert that the `EvictionPolicy`
-built in the turn path has `enabled` matching `app.config.eviction.enabled` —
-but this is a one-line field assignment, not complex logic.
+unaffected. The existing `config_field_target_and_value_mapping` test at
+line 7739 already asserts label→key→type for other fields — add an assertion
+for the new row:
+
+```rust
+// Bools persist via toggle, not the edit buffer → no text target.
+assert!(field_target("eviction", &FieldKind::Bool).is_none());
+```
+
+The `current_toml_value` read-back arm should also be asserted. This is
+the path that re-renders the row's value after a toggle — without it, the
+row shows a stale value. The existing test pattern (label → expected
+`("key", TomlValue)`) applies:
+
+```rust
+assert_eq!(
+    current_toml_value(app, "eviction", &FieldKind::Bool),
+    Some(("eviction.enabled", TomlValue::Bool(app.config.eviction.enabled)))
+);
+```
+
+These tests are important: the `ConfigToggle` dispatch and the
+`current_toml_value` read-back are both hardcoded `match label` blocks with
+`_ => None` fallthroughs. Without matching arms in both, the toggle is a
+no-op and the value display is stale.
 
 ## Scope
 
@@ -312,8 +385,9 @@ This is a config-pipeline + single-wiring change. Files touched:
   `PartialEviction`, `Provenance`, `merge` function
 - `crates/zoid-tui/src/config_view.rs` — one new `FieldRow` in the Economy
   section, updated `Provenance` literals in existing tests
-- `crates/zoid/src/main.rs` — one line change (`enabled:` source), one new TOML
-  write-back arm
+- `crates/zoid/src/main.rs` — one line change (`enabled:` source), one new
+  `ConfigToggle` arm (write path), one new `current_toml_value` arm (read-back),
+  one new env-var parse for `ZOID_EVICTION_ENABLED`
 - Tests in `config.rs` and `config_view.rs`
 
 No new dependencies, no eviction logic changes, no persistence changes, no
