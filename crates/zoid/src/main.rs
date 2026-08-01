@@ -8095,6 +8095,7 @@ mod tests {
                     ui_edit_diff_inline: Source::Default,
                     wake_enabled: Source::Default,
                     companion_enabled: Source::Default,
+                    eviction_enabled: Source::Default,
                 }
             },
             secrets: None,

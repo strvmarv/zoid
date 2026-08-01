@@ -135,13 +135,25 @@ impl Default for EmbedConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EvictionConfig {
+    /// Master switch for the eviction controller. `false` = total bypass
+    /// (byte-identical to pre-ACM behavior). Default `true`.
+    pub enabled: bool,
     /// Rescue weight in turn-index units ("maximal relevance is worth this
     /// many turns of newness"). None ⇒ DEFAULT_RESCUE_WEIGHT const.
     /// Range: ~4–32; see 4b design §5. 0 disables rescue (= pure recency).
     /// Negative, NaN, and +∞ are clamped at the read site (§3.1).
     pub rescue_weight: Option<f32>,
+}
+
+impl Default for EvictionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            rescue_weight: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -352,6 +364,37 @@ mod tests {
     }
 
     #[test]
+    fn eviction_enabled_defaults_true() {
+        let (cfg, prov) = merge(&[]);
+        assert!(cfg.eviction.enabled, "eviction.enabled defaults to true");
+        assert_eq!(prov.eviction_enabled, Source::Default);
+    }
+
+    #[test]
+    fn eviction_enabled_parses_and_merges() {
+        let (p, _warn) = parse_toml("[eviction]\nenabled = false").unwrap();
+        assert_eq!(p.eviction.enabled, Some(false));
+        let (cfg, prov) = merge(&[(Source::UserGlobal, p)]);
+        assert!(!cfg.eviction.enabled);
+        assert_eq!(prov.eviction_enabled, Source::UserGlobal);
+    }
+
+    #[test]
+    fn eviction_enabled_overrides_across_layers() {
+        let (user, _) = parse_toml("[eviction]\nenabled = false").unwrap();
+        let (proj, _) = parse_toml("[eviction]\nenabled = true").unwrap();
+        let (cfg, _) = merge(&[(Source::UserGlobal, user), (Source::Project, proj)]);
+        assert!(cfg.eviction.enabled, "project layer wins");
+    }
+
+    #[test]
+    fn eviction_enabled_absent_section() {
+        let (p, _) = parse_toml("model = \"a\"").unwrap();
+        let (cfg, _) = merge(&[(Source::UserGlobal, p)]);
+        assert!(cfg.eviction.enabled, "absent [eviction] → default true");
+    }
+
+    #[test]
     fn eviction_inf_parses_without_error() {
         // TOML deserializes 1e308 into f32::INFINITY — not a parse error.
         // Clamping happens at the read site (resolve_rescue_weight), not here.
@@ -415,6 +458,7 @@ pub struct Provenance {
     pub subagent_max_concurrent: Source,
     pub wake_enabled: Source,
     pub companion_enabled: Source,
+    pub eviction_enabled: Source,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -473,6 +517,7 @@ pub struct PartialEmbed {
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default)]
 pub struct PartialEviction {
+    pub enabled: Option<bool>,
     pub rescue_weight: Option<f32>,
 }
 
@@ -564,6 +609,7 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         subagent_max_concurrent: Source::Default,
         wake_enabled: Source::Default,
         companion_enabled: Source::Default,
+        eviction_enabled: Source::Default,
     };
     for (src, p) in layers {
         if let Some(v) = &p.provider {
@@ -702,6 +748,10 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         }
         if let Some(v) = p.eviction.rescue_weight {
             cfg.eviction.rescue_weight = Some(v);
+        }
+        if let Some(v) = p.eviction.enabled {
+            cfg.eviction.enabled = v;
+            prov.eviction_enabled = *src;
         }
     }
     (cfg, prov)

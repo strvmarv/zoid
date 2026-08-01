@@ -311,6 +311,7 @@ mod tests {
             ui_edit_diff_inline: Source::Default,
             wake_enabled: Source::Default,
             companion_enabled: Source::Default,
+            eviction_enabled: Source::Default,
         };
         let ks = [
             ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
@@ -396,6 +397,7 @@ mod tests {
             ui_edit_diff_inline: Source::Default,
             wake_enabled: Source::Default,
             companion_enabled: Source::Default,
+            eviction_enabled: Source::Default,
         };
         let sections = build_sections(&cfg, &prov, &[]);
         let pm = &sections[0];
