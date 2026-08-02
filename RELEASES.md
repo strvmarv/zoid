@@ -10,6 +10,16 @@
 
 # Release Notes
 
+## 0.8.0
+
+### New
+
+- **Eviction master switch** — you can now turn context eviction on and off directly, with a new `enabled` toggle under the `[eviction]` section of your config (shown as a Bool row in the Economy section of the settings screen). Previously eviction was implicitly tied to your compaction threshold; it is now a standalone control with its own setting and a matching `ZOID_EVICTION_ENABLED` environment variable. It defaults to `on`, so existing behavior is unchanged unless you turn it off.
+  > **Note for users who set `compact_threshold_pct = 0`:** eviction was previously disabled by that zero threshold. With the new standalone switch (defaulting on), eviction is now re-enabled on upgrade — set `enabled = false` under `[eviction]` to restore the old behavior.
+- **Highlighted diff lines** — inline edit and write diffs now show added and removed lines with a subtle full-width green or red background tint, spanning the gutter to the edge of the pane. The coloring is easier to scan at a glance and makes changed lines stand out from surrounding context.
+
+> **Beta note:** builds are for evaluation and expire ~30 days after release — run `zoid update` periodically to stay current.
+
 ## 0.7.3
 
 ### Improved

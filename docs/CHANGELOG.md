@@ -6,6 +6,47 @@
 > notes (what ships to the public releases repo) live in the root
 > `RELEASES.md`.
 
+## 0.8.0
+
+Eviction master switch + diff line background highlighting. 14 commits
+since v0.7.3.
+
+Eviction master switch (spec:
+2026-07-28-eviction-master-switch-design.md; plan:
+2026-07-28-eviction-master-switch.md).
+- `zoid-core/src/config.rs`: new `EvictionConfig.enabled: bool` (default
+  true via manual `Default` impl), flowing through `PartialEviction`,
+  `Provenance` (new `eviction_enabled` field), and `merge`. Same pattern
+  as `wake.enabled`, `companion.enabled`, `thinking.enabled`.
+- `crates/zoid-tui/src/config_view.rs`: new Bool row at top of Economy
+  section for the `eviction` toggle.
+- `zoid/src/main.rs`: new `ConfigToggle` arm (write) and `current_write`
+  arm (read-back); `ZOID_EVICTION_ENABLED` env var mirrors
+  `ZOID_COMPANION_ENABLED`; `EvictionPolicy.enabled` now reads
+  `app.config.eviction.enabled`, replacing the implicit
+  `compact_threshold_pct > 0` derivation. Eviction is decoupled from
+  compaction.
+- `crates/zoid-tui/tests/shell_snapshot.rs` + `main.rs` test fixture:
+  all `Provenance` struct literal sites updated for the new field.
+- Back-compat blast radius: users who set `compact_threshold_pct = 0`
+  had eviction implicitly off; with the new switch defaulting on,
+  eviction is silently re-enabled on upgrade. Call out in
+  `RELEASES.md`. `compact_threshold_pct = 0` still disables compaction.
+
+Diff line background highlighting (spec:
+2026-07-28-diff-background-highlighting-design.md; plan:
+2026-07-28-diff-background-highlighting.md).
+- `crates/zoid-tui/src/tokens.rs`: new `ADDED_BG`/`REMOVED_BG` color
+  constants (distinct from `CHAT_BG`).
+- `crates/zoid-tui/src/chat.rs`: add/del diff lines get a full-row
+  background band across the gutter, padded to terminal width via
+  `saturating_sub`; context lines keep `bg = None` (no visible band).
+  New named `GUTTER_W = 12` const.
+- Tests: `gutter_width_matches_format_string` (locks `GUTTER_W` to the
+  literal), `diff_highlight_band_fills_to_width`, `diff_highlight_clamps_
+  when_too_wide`, plus context-line bg and foreground-color assertions.
+  Structural span selection (no fragile substring probing).
+
 ## 0.7.3
 
 Wake scheduling discipline: prompt hardening + runtime per-note deduplication.
