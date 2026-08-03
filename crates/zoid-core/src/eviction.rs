@@ -58,7 +58,7 @@ mod tests {
             context_target: 384_000,
             band_headroom_pct: 20,
             min_protected_turns: 4,
-            protection_pct: 0,
+            protection_pct: 15,
             max_output: None,
             rescue_weight: None,
         };
@@ -535,11 +535,6 @@ fn event_tokens(kind: &EventKind) -> u64 {
 ///
 /// `budget` and `capacity_limit` are in *scaled* units (raw × scale).
 /// `token_estimate` per turn is raw chars/3; `scale` converts it to match.
-//
-// `dead_code`: not yet wired into `group_turns`/`plan_evictions` — Task 2 does
-// that. Until then only the `protection_tests` (cfg(test)) reference it, so the
-// non-test lib build flags it; the allow is removed once Task 2 calls it.
-#[allow(dead_code)]
 fn compute_protection(
     turns: &[TurnView],
     min_count: usize,
@@ -587,7 +582,14 @@ fn compute_protection(
 /// Group the main-branch, non-inert log into positional turns. A turn begins at
 /// each `UserMessage` (spec §3.1 / M6: grouping is over the non-inert projection,
 /// so an interleaved inert event can't fragment a tool_use/tool_result pair).
-fn group_turns(events: &[&Event], evicted: &HashSet<Ulid>, recent_n: usize) -> Vec<TurnView> {
+fn group_turns(
+    events: &[&Event],
+    evicted: &HashSet<Ulid>,
+    min_protected_turns: usize,
+    budget: u64,
+    capacity_limit: u64,
+    scale: f64,
+) -> Vec<TurnView> {
     let mut turns: Vec<TurnView> = Vec::new();
     // A compacted ToolResult's ranking weight must match what the request
     // actually carries — the summary — not the raw (possibly since-cleared,
@@ -605,7 +607,8 @@ fn group_turns(events: &[&Event], evicted: &HashSet<Ulid>, recent_n: usize) -> V
     // re-admitted id, `readmit_mark` records how many turns had started when its
     // `TurnsReadmitted` event fired (the marker is inert, so we capture it before
     // the inert-skip below, on the main branch only). It is protected while fewer
-    // than `recent_n` turns have started since, then becomes evictable again.
+    // than `min_protected_turns` turns have started since, then becomes evictable
+    // again.
     let mut readmit_mark: HashMap<Ulid, usize> = HashMap::new();
     for e in events {
         if e.branch != crate::event::BranchId::default() {
@@ -647,17 +650,27 @@ fn group_turns(events: &[&Event], evicted: &HashSet<Ulid>, recent_n: usize) -> V
         t.token_estimate += tokens;
     }
     let n = turns.len();
+    // Three-layer protection (spec §3): hard floor, min count, budget ceiling,
+    // capacity backstop. Computed in a backward pass over scaled token estimates.
+    let protection = compute_protection(
+        &turns,
+        min_protected_turns,
+        budget,
+        capacity_limit,
+        scale,
+    );
     for (i, t) in turns.iter_mut().enumerate() {
-        let is_recent = i + recent_n >= n;
+        let is_protected = protection[i];
         let is_evicted = t.ids.iter().any(|id| evicted.contains(id));
-        // Within the re-admit cooldown: protected only for `recent_n` turns after
-        // the re-admission, so recall→evict→recall can't oscillate but recalled
-        // content can never form a permanent unevictable floor (final-review M10).
+        // Within the re-admit cooldown: protected only for `min_protected_turns`
+        // turns after the re-admission, so recall→evict→recall can't oscillate
+        // but recalled content can never form a permanent unevictable floor
+        // (final-review M10).
         let in_readmit_cooldown = t
             .ids
             .iter()
-            .any(|id| readmit_mark.get(id).is_some_and(|mark| n - mark < recent_n));
-        t.protected = is_recent || is_evicted || in_readmit_cooldown;
+            .any(|id| readmit_mark.get(id).is_some_and(|mark| n - mark < min_protected_turns));
+        t.protected = is_protected || is_evicted || in_readmit_cooldown;
     }
     turns
 }
@@ -690,7 +703,27 @@ pub fn plan_evictions<'a>(
     }
     let events: Vec<&Event> = events.into_iter().collect();
     let evicted = evicted_ids(events.iter().copied());
-    let turns = group_turns(&events, &evicted, policy.min_protected_turns);
+    // Budget for protection extension beyond min_count: protection_pct of
+    // low_water. Must be < band_headroom_pct (default 20) so the extension
+    // never eats the wave's drop distance (spec §5.1). Clamp at runtime as a
+    // defensive guard — a misconfigured protection_pct ≥ band_headroom_pct
+    // would make the protected floor equal low_water and stall every wave.
+    let pct = (policy.protection_pct as u64).min(policy.band_headroom_pct as u64);
+    let budget = band.low_water.saturating_mul(pct) / 100;
+    // capacity_limit = capacity − CAPACITY_SAFETY_MARGIN. The safety margin
+    // (8192) also covers the typical ~7k system-prompt + tool-spec overhead;
+    // the caller does not add system overhead separately (spec §3.2).
+    let capacity_limit = policy.capacity.saturating_sub(
+        crate::band::CAPACITY_SAFETY_MARGIN,
+    );
+    let turns = group_turns(
+        &events,
+        &evicted,
+        policy.min_protected_turns,
+        budget,
+        capacity_limit,
+        scale,
+    );
 
     let candidates: Vec<&TurnView> = turns
         .iter()
@@ -794,14 +827,14 @@ mod plan_tests {
         )
     }
 
-    fn policy(target: u64, recent_n: usize) -> EvictionPolicy {
+    fn policy(target: u64, min_protected_turns: usize) -> EvictionPolicy {
         EvictionPolicy {
             enabled: true,
             capacity: 1_000_000,
             context_target: target,
             band_headroom_pct: 20,
-            min_protected_turns: recent_n,
-            protection_pct: 0,
+            min_protected_turns,
+            protection_pct: 15,
             max_output: None,
             rescue_weight: None,
         }
@@ -1034,7 +1067,7 @@ mod plan_tests {
         );
 
         let events: Vec<&Event> = vec![&tr, &comp];
-        let turns = group_turns(&events, &HashSet::new(), 0);
+        let turns = group_turns(&events, &HashSet::new(), 0, 0, u64::MAX, 1.0);
 
         assert_eq!(turns.len(), 1);
         // Weighed by the summary the request carries — not 0 (cleared body) and not
