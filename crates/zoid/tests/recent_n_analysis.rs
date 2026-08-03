@@ -109,7 +109,8 @@ async fn recent_n_protected_floor_analysis() {
                 capacity,
                 context_target: target,
                 band_headroom_pct: headroom,
-                recent_n,
+                min_protected_turns: recent_n,
+                protection_pct: 15,
                 max_output: None,
                 rescue_weight: None,
             };

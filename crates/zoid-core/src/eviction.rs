@@ -1376,7 +1376,7 @@ mod steady_state_tests {
             context_target: 20_000,
             band_headroom_pct: 20,
             min_protected_turns: 4,
-            protection_pct: 0,
+            protection_pct: 15,
             max_output: None,
             rescue_weight: None,
         };

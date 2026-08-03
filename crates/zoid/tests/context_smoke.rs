@@ -134,7 +134,8 @@ async fn smoke_context_compaction_and_eviction_trace() {
         capacity,
         context_target,
         band_headroom_pct: headroom_pct,
-        recent_n: 4,
+        min_protected_turns: 4,
+        protection_pct: 15,
         max_output: None,
         rescue_weight: None, // no embedder → recency only
     };
@@ -303,7 +304,7 @@ async fn smoke_compaction_path_trace() {
     let mut cfg = chat_turn_config();
     cfg.eviction = zoid_core::eviction::EvictionPolicy {
         enabled: true, capacity, context_target, band_headroom_pct: headroom_pct,
-        recent_n: 2, max_output: None, rescue_weight: None,
+        min_protected_turns: 2, protection_pct: 15, max_output: None, rescue_weight: None,
     };
     cfg.context_window = capacity;
 
@@ -412,7 +413,8 @@ async fn smoke_over_eviction_calibration_mismatch() {
         capacity,
         context_target,
         band_headroom_pct: headroom_pct,
-        recent_n: 4,
+        min_protected_turns: 4,
+        protection_pct: 15,
         max_output: None,
         rescue_weight: None,
     };

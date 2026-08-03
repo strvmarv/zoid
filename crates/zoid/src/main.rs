@@ -10943,7 +10943,7 @@ mod worktree_switch_tests {
             .unwrap();
         // Exit — the worktree is clean (no uncommitted changes), but the
         // branch has an unmerged commit.
-        let (root, warn) = compute_worktree_switch(
+        let (_root, warn) = compute_worktree_switch(
             &mut active,
             WorktreeAction::Exit,
             false,
