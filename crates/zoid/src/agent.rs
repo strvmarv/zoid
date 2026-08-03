@@ -3489,7 +3489,8 @@ mod tests {
             capacity: 1_000_000,
             context_target: 3_000,
             band_headroom_pct: 20,
-            recent_n: 2,
+            min_protected_turns: 2,
+            protection_pct: 15,
             max_output: None,
             rescue_weight: None,
         };
@@ -3618,7 +3619,8 @@ mod tests {
             capacity: 1_000_000,
             context_target: 9_910,
             band_headroom_pct: 20,
-            recent_n: 2,
+            min_protected_turns: 2,
+            protection_pct: 15,
             max_output: None,
             rescue_weight: None,
         };
@@ -3699,7 +3701,8 @@ mod tests {
             capacity: 1_000_000,
             context_target: 9_910,
             band_headroom_pct: 20,
-            recent_n: 2,
+            min_protected_turns: 2,
+            protection_pct: 15,
             max_output: None,
             rescue_weight: Some(0.0), // weight 0 ⇒ pure recency, no rescue
         };
@@ -3756,7 +3759,8 @@ mod tests {
             capacity: 1_000_000,
             context_target: 5_000,
             band_headroom_pct: 20,
-            recent_n: 2,
+            min_protected_turns: 2,
+            protection_pct: 15,
             max_output: None,
             rescue_weight: None,
         };
@@ -3978,7 +3982,8 @@ mod tests {
             capacity: 1_000_000,
             context_target: 8_000, // small: exceeded within a handful of turns
             band_headroom_pct: 20,
-            recent_n: 4,
+            min_protected_turns: 4,
+            protection_pct: 15,
             max_output: None,
             rescue_weight: None,
         };
@@ -4247,7 +4252,8 @@ mod tests {
             capacity: 1_000_000,
             context_target: 900_000,
             band_headroom_pct: 20,
-            recent_n: 4,
+            min_protected_turns: 4,
+            protection_pct: 15,
             max_output: None,
             rescue_weight: None,
         };
@@ -4311,7 +4317,8 @@ mod tests {
             capacity: 1_000_000,
             context_target: 900_000,
             band_headroom_pct: 20,
-            recent_n: 4,
+            min_protected_turns: 4,
+            protection_pct: 15,
             max_output: None,
             rescue_weight: None,
         };
@@ -4777,7 +4784,8 @@ mod tests {
             capacity: 1_000_000,
             context_target: 3_000,
             band_headroom_pct: 20,
-            recent_n: 2,
+            min_protected_turns: 2,
+            protection_pct: 15,
             max_output: None,
             rescue_weight: None,
         };
