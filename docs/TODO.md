@@ -90,3 +90,21 @@ now overrides the 1M static value with whatever the API reports.
 
 Fixed — tool-call lines and result previews now use more of the available
 column width before truncating, with peek for the full content.
+
+## Agent `model` field not seamed (runtime honors it)
+
+The agents-as-entity design (`docs/superpowers/specs/2026-07-23-agents-as-entity-design.md`
+§"Seamed Fields") specifies that `model` is parsed and stored on the
+`AgentProfile` but **not honored** at runtime — the subagent should always
+inherit the orchestrator's model. The runtime diverged: `subagent.rs:133`
+does `let model = profile.model.clone().unwrap_or(default_model);`, which
+uses the profile's `model` string as a literal model name sent to the
+provider. An agent file with `model: inherit` 404s at the provider
+(`model 'inherit' not found`).
+
+**Fix:** either honor the spec (make `model` truly seamed — always use
+`default_model`, ignore `profile.model`) or update the spec to say the
+field is honored and document the contract. The seamed behavior is safer
+(an agent file can't accidentally 400 the session by naming a nonexistent
+model); honoring it is more flexible (per-agent model overrides) but
+needs validation against the live model list.
