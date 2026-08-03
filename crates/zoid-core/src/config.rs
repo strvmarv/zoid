@@ -90,8 +90,11 @@ pub struct EconomyConfig {
     pub compact_threshold_pct: u8,
     /// Eviction band headroom, percent of effective target (default 20).
     pub band_headroom_pct: u8,
-    /// Most-recent turns never evictable (default 4).
-    pub recent_n: usize,
+    /// Minimum turns always protected regardless of size (default 3).
+    pub min_protected_turns: usize,
+    /// % of low_water for protection budget extension beyond minimum (default 15).
+    /// Must be < band_headroom_pct (default 20).
+    pub protection_pct: u8,
     /// Re-assert the system prompt at the live edge every N estimated-appended
     /// tokens of novel content. 0 disables. Default 100_000. Units: estimate_tokens (chars/3).
     pub reassert_interval_tokens: u64,
@@ -108,7 +111,8 @@ impl Default for EconomyConfig {
             auto_evict_cold: true,
             compact_threshold_pct: 80,
             band_headroom_pct: 20,
-            recent_n: 4,
+            min_protected_turns: 3,
+            protection_pct: 15,
             reassert_interval_tokens: 100_000,
             num_ctx: None,
         }
@@ -240,7 +244,8 @@ mod tests {
         assert_eq!(c.economy.compact_threshold_pct, 80);
         assert_eq!(c.economy.context_target, Some(300_000));
         assert_eq!(c.economy.band_headroom_pct, 20);
-        assert_eq!(c.economy.recent_n, 4);
+        assert_eq!(c.economy.min_protected_turns, 3);
+        assert_eq!(c.economy.protection_pct, 15);
         assert!(c.agents.source_dirs.is_empty());
     }
 
@@ -421,8 +426,35 @@ mod tests {
     fn ui_defaults_when_section_absent() {
         let (p, _) = parse_toml("[economy]\nrecent_n = 3").unwrap();
         let (cfg, _) = merge(&[(Source::Project, p)]);
+        assert_eq!(cfg.economy.min_protected_turns, 3, "recent_n=3 aliases to min_protected_turns");
         assert!(cfg.ui.edit_diff, "absent [ui] → default on");
         assert_eq!(cfg.ui.edit_diff_inline, 5);
+    }
+
+    #[test]
+    fn recent_n_alias_maps_to_min_protected_turns() {
+        // [economy] recent_n = 7 is read as min_protected_turns = 7,
+        // protection_pct at default 15.
+        let (p, _) = parse_toml("[economy]\nrecent_n = 7").unwrap();
+        let (cfg, _) = merge(&[(Source::Project, p)]);
+        assert_eq!(cfg.economy.min_protected_turns, 7);
+        assert_eq!(cfg.economy.protection_pct, 15);
+    }
+
+    #[test]
+    fn min_protected_turns_and_protection_pct_direct() {
+        let (p, _) = parse_toml("[economy]\nmin_protected_turns = 5\nprotection_pct = 12").unwrap();
+        let (cfg, _) = merge(&[(Source::Project, p)]);
+        assert_eq!(cfg.economy.min_protected_turns, 5);
+        assert_eq!(cfg.economy.protection_pct, 12);
+    }
+
+    #[test]
+    fn min_protected_turns_wins_over_recent_n() {
+        // Both present → min_protected_turns wins, recent_n ignored.
+        let (p, _) = parse_toml("[economy]\nrecent_n = 7\nmin_protected_turns = 5").unwrap();
+        let (cfg, _) = merge(&[(Source::Project, p)]);
+        assert_eq!(cfg.economy.min_protected_turns, 5);
     }
 }
 
@@ -444,7 +476,8 @@ pub struct Provenance {
     pub auto_evict_cold: Source,
     pub compact_threshold_pct: Source,
     pub band_headroom_pct: Source,
-    pub recent_n: Source,
+    pub min_protected_turns: Source,
+    pub protection_pct: Source,
     pub reassert_interval_tokens: Source,
     pub num_ctx: Source,
     pub reduced_motion: Source,
@@ -469,6 +502,8 @@ pub struct PartialEconomy {
     pub compact_threshold_pct: Option<u8>,
     pub band_headroom_pct: Option<u8>,
     pub recent_n: Option<usize>,
+    pub min_protected_turns: Option<usize>,
+    pub protection_pct: Option<u8>,
     pub reassert_interval_tokens: Option<u64>,
     pub num_ctx: Option<u32>,
 }
@@ -595,7 +630,8 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
         auto_evict_cold: Source::Default,
         compact_threshold_pct: Source::Default,
         band_headroom_pct: Source::Default,
-        recent_n: Source::Default,
+        min_protected_turns: Source::Default,
+        protection_pct: Source::Default,
         reassert_interval_tokens: Source::Default,
         num_ctx: Source::Default,
         reduced_motion: Source::Default,
@@ -644,9 +680,20 @@ pub fn merge(layers: &[(Source, PartialConfig)]) -> (Config, Provenance) {
             cfg.economy.band_headroom_pct = v;
             prov.band_headroom_pct = *src;
         }
+        // Back-compat: recent_n maps to min_protected_turns (protection_pct stays
+        // at default 15). If both recent_n and min_protected_turns are present,
+        // min_protected_turns wins (applied second).
         if let Some(v) = p.economy.recent_n {
-            cfg.economy.recent_n = v;
-            prov.recent_n = *src;
+            cfg.economy.min_protected_turns = v;
+            prov.min_protected_turns = *src;
+        }
+        if let Some(v) = p.economy.min_protected_turns {
+            cfg.economy.min_protected_turns = v;
+            prov.min_protected_turns = *src;
+        }
+        if let Some(v) = p.economy.protection_pct {
+            cfg.economy.protection_pct = v;
+            prov.protection_pct = *src;
         }
         if let Some(v) = p.economy.reassert_interval_tokens {
             cfg.economy.reassert_interval_tokens = v;
