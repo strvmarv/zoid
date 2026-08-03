@@ -12,7 +12,8 @@ pub struct EvictionPolicy {
     pub capacity: u64,
     pub context_target: u64,
     pub band_headroom_pct: u8,
-    pub recent_n: usize,
+    pub min_protected_turns: usize,
+    pub protection_pct: u8,
     pub max_output: Option<u64>,
     pub rescue_weight: Option<f32>,
 }
@@ -24,7 +25,8 @@ impl EvictionPolicy {
             capacity: 0,
             context_target: 0,
             band_headroom_pct: 0,
-            recent_n: 0,
+            min_protected_turns: 0,
+            protection_pct: 0,
             max_output: None,
             rescue_weight: None,
         }
@@ -55,7 +57,8 @@ mod tests {
             capacity: 1_000_000,
             context_target: 384_000,
             band_headroom_pct: 20,
-            recent_n: 4,
+            min_protected_turns: 4,
+            protection_pct: 0,
             max_output: None,
             rescue_weight: None,
         };
@@ -525,6 +528,62 @@ fn event_tokens(kind: &EventKind) -> u64 {
     }
 }
 
+/// Three-layer turn protection (spec §2.1/§3). Walks backward from the newest
+/// turn, protecting until: (a) min_count met AND cumulative scaled tokens
+/// reach the budget, OR (b) cumulative tokens approach capacity − SAFETY_MARGIN
+/// (shrink min_count toward 1). Always protects at least the newest turn.
+///
+/// `budget` and `capacity_limit` are in *scaled* units (raw × scale).
+/// `token_estimate` per turn is raw chars/3; `scale` converts it to match.
+//
+// `dead_code`: not yet wired into `group_turns`/`plan_evictions` — Task 2 does
+// that. Until then only the `protection_tests` (cfg(test)) reference it, so the
+// non-test lib build flags it; the allow is removed once Task 2 calls it.
+#[allow(dead_code)]
+fn compute_protection(
+    turns: &[TurnView],
+    min_count: usize,
+    budget: u64,
+    capacity_limit: u64,
+    scale: f64,
+) -> Vec<bool> {
+    let n = turns.len();
+    let mut protected = vec![false; n];
+    if n == 0 {
+        return protected;
+    }
+    let s = if scale > 0.0 { scale } else { 1.0 };
+
+    // Hard floor: always protect the newest turn.
+    protected[n - 1] = true;
+
+    let mut count = 1; // newest already protected
+    let mut cumulative = (turns[n - 1].token_estimate as f64 * s) as u64;
+
+    for i in (0..n.saturating_sub(1)).rev() {
+        let turn_tokens = (turns[i].token_estimate as f64 * s) as u64;
+
+        // Capacity backstop: stop if adding this turn would overflow capacity.
+        // Overflowing capacity is worse than protecting fewer turns. The hard
+        // floor of 1 is already protected and never revoked.
+        if cumulative.saturating_add(turn_tokens) > capacity_limit {
+            break;
+        }
+
+        // Minimum count: protect regardless of budget until min_count is met.
+        // Budget ceiling: after min_count, protect only while under budget.
+        if count < min_count || cumulative.saturating_add(turn_tokens) <= budget {
+            protected[i] = true;
+            count += 1;
+            cumulative = cumulative.saturating_add(turn_tokens);
+        } else {
+            break;
+        }
+    }
+
+    protected
+}
+
 /// Group the main-branch, non-inert log into positional turns. A turn begins at
 /// each `UserMessage` (spec §3.1 / M6: grouping is over the non-inert projection,
 /// so an interleaved inert event can't fragment a tool_use/tool_result pair).
@@ -631,7 +690,7 @@ pub fn plan_evictions<'a>(
     }
     let events: Vec<&Event> = events.into_iter().collect();
     let evicted = evicted_ids(events.iter().copied());
-    let turns = group_turns(&events, &evicted, policy.recent_n);
+    let turns = group_turns(&events, &evicted, policy.min_protected_turns);
 
     let candidates: Vec<&TurnView> = turns
         .iter()
@@ -741,7 +800,8 @@ mod plan_tests {
             capacity: 1_000_000,
             context_target: target,
             band_headroom_pct: 20,
-            recent_n,
+            min_protected_turns: recent_n,
+            protection_pct: 0,
             max_output: None,
             rescue_weight: None,
         }
@@ -1159,6 +1219,96 @@ mod plan_tests {
     }
 }
 
+// ── protection_tests: compute_protection (Task 1) ──────────────────────────
+// These tests pin the three-layer turn-protection algorithm (hard floor,
+// min count, budget ceiling, capacity backstop) in isolation, before it is
+// wired into group_turns (Task 2). TurnViews are built directly.
+#[cfg(test)]
+mod protection_tests {
+    use super::*;
+
+    fn tv(tokens: u64) -> TurnView {
+        TurnView {
+            ids: vec![],
+            index: 0,
+            token_estimate: tokens,
+            topic_hint: String::new(),
+            protected: false,
+        }
+    }
+
+    /// Hard floor: the newest turn (index n-1) is always protected, even when
+    /// it alone exceeds capacity.
+    #[test]
+    fn hard_floor_protects_current_turn() {
+        let turns = vec![tv(100_000)];
+        let p = compute_protection(&turns, 3, 1_000, 500, 1.0);
+        assert!(p[0], "newest (only) turn always protected");
+    }
+
+    /// Minimum count: turns larger than the budget are still protected up to
+    /// min_count. The budget does not restrict the minimum.
+    #[test]
+    fn protects_min_count_regardless_of_size() {
+        // 5 turns, each 10k tokens. min_count=3, budget=1 (tiny).
+        // All 3 newest must be protected despite budget=1.
+        let turns: Vec<TurnView> = (0..5).map(|_| tv(10_000)).collect();
+        let p = compute_protection(&turns, 3, 1, 1_000_000, 1.0);
+        // turns 2,3,4 protected (newest 3). 0,1 not.
+        assert!(p[2] && p[3] && p[4], "min_count turns protected");
+        assert!(!p[0] && !p[1], "beyond min_count not protected");
+    }
+
+    /// Budget ceiling: small turns beyond min_count protected up to budget.
+    #[test]
+    fn budget_extends_protection_for_small_turns() {
+        // 10 turns, each 100 tokens. min_count=3, budget=500.
+        // 3 min (cumulative 300) + 2 bonus (cumulative 400, 500 ≤ budget) = 5
+        // protected; 6th would make cumulative 600 > 500 → stop.
+        let turns: Vec<TurnView> = (0..10).map(|_| tv(100)).collect();
+        let p = compute_protection(&turns, 3, 500, 1_000_000, 1.0);
+        let count = p.iter().filter(|&&x| x).count();
+        assert_eq!(count, 5, "3 min + 2 bonus = 5");
+        // turn 4 (6th from end) is the first beyond budget → not protected
+        assert!(!p[0] && !p[4], "turn 4 (6th from end) beyond budget not protected");
+    }
+
+    /// Capacity backstop: when the protected floor exceeds capacity, shrink
+    /// min_count toward 1. Never revoke the hard floor of 1.
+    #[test]
+    fn capacity_backstop_shrinks_min_count() {
+        // 3 turns, each 74k tokens. min_count=3, capacity_limit=120k.
+        // turn 2 (newest): 74k < 120k → protected.
+        // turn 1: 74k + 74k = 148k > 120k → stop. min_count not met but 1 protected.
+        let turns: Vec<TurnView> = (0..3).map(|_| tv(74_000)).collect();
+        let p = compute_protection(&turns, 3, 1_000_000, 120_000, 1.0);
+        assert!(p[2], "hard floor protected");
+        assert!(!p[0] && !p[1], "capacity backstop shrank min_count to 1");
+    }
+
+    /// Scale: the backward pass scales token_estimate by the scale factor,
+    /// matching the band's units.
+    #[test]
+    fn protection_uses_scale() {
+        // 10 turns, each 100 raw tokens. scale=2.0 → 200 scaled per turn.
+        // min_count=3, budget=800 scaled. 3 min (cumulative 600) + 1 bonus
+        // (cumulative 800 ≤ budget 800) = 4; 5th would make cumulative 1000
+        // > 800 → stop.
+        let turns: Vec<TurnView> = (0..10).map(|_| tv(100)).collect();
+        let p = compute_protection(&turns, 3, 800, 1_000_000, 2.0);
+        let count = p.iter().filter(|&&x| x).count();
+        assert_eq!(count, 4, "scale=2.0: 3 min + 1 bonus (cumulative 800 ≤ budget 800) = 4");
+    }
+
+    /// Empty turns → empty protection vector (no panic).
+    #[test]
+    fn empty_turns_no_panic() {
+        let turns: Vec<TurnView> = vec![];
+        let p = compute_protection(&turns, 3, 1_000, 500, 1.0);
+        assert!(p.is_empty());
+    }
+}
+
 #[cfg(test)]
 mod steady_state_tests {
     use super::*;
@@ -1192,7 +1342,8 @@ mod steady_state_tests {
             capacity: 1_000_000,
             context_target: 20_000,
             band_headroom_pct: 20,
-            recent_n: 4,
+            min_protected_turns: 4,
+            protection_pct: 0,
             max_output: None,
             rescue_weight: None,
         };
