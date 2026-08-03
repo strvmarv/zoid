@@ -26,31 +26,29 @@ Fixed — concurrent subagent pool, per-result delegation wake, DelegationResult
 delivery, cancellation paths, and animated drawer spinner all working.
 See `docs/superpowers/specs/2026-07-25-concurrent-subagent-execution-design.md`.
 
-## Session startup: parallelize projection passes and lazy-load body cache
+## Session startup: parallelize projection passes (DONE)
 
-On resume of a long session, the initial frame render takes 10-16s. The
-cost is 5 independent O(n) projection passes over the full event log
-(`conversation`, `context_window`, `churn_timeline`, `tasks`,
-`token_ledger`) plus the body cache's `conversation_view` (text wrap +
-syntax highlight for every message).
+The 5 independent O(n) projection passes (`conversation`, `context_window`,
+`churn_timeline`, `tasks`, `token_ledger`) are now parallelized via
+`std::thread::scope` in `ProjectionCache::refresh`
+(`crates/zoid/src/main.rs:1458`). Wall-clock cost dropped from
+sum(passes) to max(passes).
 
-Two optimizations to investigate:
+See `docs/superpowers/specs/2026-07-26-parallelize-projections-design.md`.
+Commit `eaa311c`.
 
-1. **Parallelize the 5 projection passes.** They're independent — a
-   `rayon::scope` or `tokio::join!` would cut the wall-clock cost to
-   ~max(individual pass) instead of sum(all passes). The passes live in
-   `ProjectionCache::refresh` (`crates/zoid/src/main.rs:1434`).
+## Session startup: lazy-load the body cache (DEFERRED)
 
-2. **Lazy-load the body cache.** `conversation_view` wraps + syntax-
-   highlights every message, but only the visible viewport is painted.
-   Render only the visible window's messages on the first frame, and
-   build the rest on demand when scrolling. The body cache already
-   supports incremental rebuilds — extend it to build only a window of
-   lines instead of the full transcript.
+`conversation_view` wraps + syntax-highlights every message, but only the
+visible viewport is painted. The remaining optimization is to render only
+the visible window's messages on the first frame and build the rest on
+demand when scrolling. The body cache already supports incremental
+rebuilds — extend it to build only a window of lines instead of the full
+transcript.
 
 Windowing the event log itself is NOT needed — `Arc<Event>` means bodies
 are shared, not copied, and the eviction policy already compacts old
-events. The cost is the projection passes, not storage.
+events. The cost is the body cache build, not storage.
 
 ## Investigate aggressive context eviction (25-50k floor instead of 200-300k)
 
