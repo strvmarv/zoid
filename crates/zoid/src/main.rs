@@ -3840,7 +3840,7 @@ enum TomlTy {
     U64Unset,
     /// Percent clamped to 0..=100; unparseable is a no-op (compact at %, band headroom %).
     U8Pct,
-    /// Non-negative integer, always written verbatim; unparseable is a no-op (recent turns).
+    /// Non-negative integer, always written verbatim; unparseable is a no-op (protected turns).
     UintPlain,
 }
 
@@ -3887,9 +3887,13 @@ fn field_target(label: &str, kind: &zoid_tui::config_view::FieldKind) -> Option<
             key: "economy.band_headroom_pct",
             ty: TomlTy::U8Pct,
         },
-        "recent turns" => FieldTarget::Toml {
-            key: "economy.recent_n",
+        "protected turns" => FieldTarget::Toml {
+            key: "economy.min_protected_turns",
             ty: TomlTy::UintPlain,
+        },
+        "protection pct" => FieldTarget::Toml {
+            key: "economy.protection_pct",
+            ty: TomlTy::U8Pct,
         },
         // Bools (auto-evict cold / reduced motion) persist via toggle, not edit.
         _ => return None,
@@ -3977,7 +3981,8 @@ fn current_write(
             "economy.band_headroom_pct",
             TomlValue::Int(econ.band_headroom_pct as i64),
         ),
-        "recent turns" => ("economy.recent_n", TomlValue::Int(econ.recent_n as i64)),
+        "protected turns" => ("economy.min_protected_turns", TomlValue::Int(econ.min_protected_turns as i64)),
+        "protection pct" => ("economy.protection_pct", TomlValue::Int(econ.protection_pct as i64)),
         "reduced motion" => ("reduced_motion", TomlValue::Bool(app.config.reduced_motion)),
         "thinking" => (
             "thinking.enabled",
@@ -7179,7 +7184,8 @@ fn spawn_turn(app: &mut App) {
         capacity: app.shell.ctx_ceiling,                // capacity = model window
         context_target: app.context_target,             // resolved soft setpoint
         band_headroom_pct: app.economy.band_headroom_pct,
-        recent_n: app.economy.recent_n,
+        min_protected_turns: app.economy.min_protected_turns,
+        protection_pct: app.economy.protection_pct,
         max_output: None, // Slice-4 catalog supplies this; None → derived reserve
         rescue_weight: app.config.eviction.rescue_weight,
     };
@@ -7730,7 +7736,8 @@ mod tests {
             auto_evict_cold: false,
             compact_threshold_pct: 80,
             band_headroom_pct: 20,
-            recent_n: 4,
+            min_protected_turns: 3,
+            protection_pct: 15,
             reassert_interval_tokens: 100_000,
             num_ctx: None,
         };
@@ -7827,7 +7834,7 @@ mod tests {
             Some(TomlValue::Int(80))
         );
         assert_eq!(value_from_buffer(&TomlTy::U8Pct, "xx"), None);
-        // recent turns: plain non-negative integer; unparseable/negative is a no-op.
+        // protected turns: plain non-negative integer; unparseable/negative is a no-op.
         assert_eq!(
             value_from_buffer(&TomlTy::UintPlain, "4"),
             Some(TomlValue::Int(4))
@@ -8093,7 +8100,8 @@ mod tests {
                     auto_evict_cold: Source::Default,
                     compact_threshold_pct: Source::Default,
                     band_headroom_pct: Source::Default,
-                    recent_n: Source::Default,
+                    min_protected_turns: Source::Default,
+                    protection_pct: Source::Default,
                     reduced_motion: Source::Default,
                     thinking_enabled: Source::Default,
                     thinking_effort: Source::Default,
