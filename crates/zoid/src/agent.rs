@@ -951,17 +951,26 @@ async fn run_turn_inner(
                     {
                         context_retries += 1;
                         // The estimate under-read reality: force a wave toward low_water and retry.
-                        let est = zoid_core::context::context_window_with(
+                        // Use the same scaled estimate as preflight_gate (raw ×
+                        // calibration_ratio × OVERCOUNT_BIAS) and pass the scale so
+                        // plan_evictions' reclaimed accumulator matches.
+                        let raw = zoid_core::context::context_window_with(
                             events.iter(),
                             overhead.clone(),
                         )
                         .total_tokens;
+                        let scale = match *calibration_ratio {
+                            Some(r) if r > 0.0 => r * OVERCOUNT_BIAS,
+                            _ => OVERCOUNT_BIAS,
+                        };
+                        let est = (raw as f64 * scale) as u64;
                         let plan = zoid_core::eviction::plan_evictions(
                             events.iter(),
                             &config.eviction,
                             est,
                             &zoid_core::eviction::RecencyScorer,
                             &zoid_core::eviction::GoalContext::default(),
+                            scale,
                         );
                         emit_eviction(&session, &mut events, ui, config, session_id, now, plan)
                             .await?;
@@ -2890,6 +2899,14 @@ async fn preflight_gate(
         (scaled as f64 * OVERCOUNT_BIAS) as u64
     };
 
+    // The scale factor converting raw per-turn token estimates (chars/3) into
+    // the same units as `est` (raw × calibration_ratio × OVERCOUNT_BIAS). Passed
+    // to plan_evictions so its reclaimed accumulator matches current_tokens.
+    let scale = match calibration_ratio {
+        Some(r) if *r > 0.0 => r * OVERCOUNT_BIAS,
+        _ => OVERCOUNT_BIAS,
+    };
+
     // Compute the estimate once and refresh it only after a step actually mutates
     // `events` (each `estimate` re-walks the whole log). Behavior is identical to
     // recomputing on every check — every check still sees the current state.
@@ -3001,6 +3018,7 @@ async fn preflight_gate(
             est,
             &zoid_core::eviction::RecencyScorer,
             &goal_ctx,
+            scale,
         );
         emit_eviction(session, events, ui, config, session_id, now, plan).await?;
         est = estimate(events);
@@ -3018,6 +3036,7 @@ async fn preflight_gate(
             est,
             &zoid_core::eviction::RecencyScorer,
             &goal_ctx,
+            scale,
         );
         emit_eviction(session, events, ui, config, session_id, now, plan).await?;
     }

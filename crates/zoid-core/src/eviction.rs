@@ -606,12 +606,21 @@ fn group_turns(events: &[&Event], evicted: &HashSet<Ulid>, recent_n: usize) -> V
 /// Plan an eviction wave (spec §3.1). Empty unless `current_tokens >= high_water`.
 /// Ranks evictable turns by `scorer` (lowest first), evicting until
 /// `current_tokens - reclaimed <= low_water`, never touching protected turns.
+///
+/// **Scale:** `current_tokens` and the band thresholds are in the same token
+/// units (real/scaled), but each turn's `token_estimate` is raw chars/3. The
+/// `scale` factor (calibration_ratio × OVERCOUNT_BIAS from the preflight gate)
+/// converts per-turn raw estimates into the same units as `current_tokens`
+/// before accumulating into `reclaimed`. Without this, the planner would evict
+/// `scale`× too many turns, dropping real context far below `low_water`.
+/// `scale <= 0.0` is treated as 1.0 (raw, no scaling — the safe default).
 pub fn plan_evictions<'a>(
     events: impl IntoIterator<Item = &'a Event>,
     policy: &EvictionPolicy,
     current_tokens: u64,
     scorer: &dyn EvictionScorer,
     ctx: &GoalContext,
+    scale: f64,
 ) -> EvictionPlan {
     if !policy.enabled {
         return EvictionPlan::default();
@@ -649,15 +658,17 @@ pub fn plan_evictions<'a>(
 
     let mut reclaimed = 0u64;
     let mut plan = EvictionPlan::default();
+    let s = if scale > 0.0 { scale } else { 1.0 };
     for &i in &idx {
         if current_tokens.saturating_sub(reclaimed) <= band.low_water {
             break;
         }
         let t = candidates[i];
-        reclaimed += t.token_estimate;
+        let scaled_estimate = (t.token_estimate as f64 * s) as u64;
+        reclaimed += scaled_estimate;
         plan.turns.push(EvictedTurn {
             ids: t.ids.clone(),
-            token_estimate: t.token_estimate,
+            token_estimate: scaled_estimate,
             topic_hint: t.topic_hint.clone(),
         });
     }
@@ -739,7 +750,7 @@ mod plan_tests {
     #[test]
     fn no_plan_below_high_water() {
         let events = vec![user(1, "a"), asst(2, "b")];
-        let plan = plan_evictions(&events, &policy(384_000, 4), 100, &RecencyScorer, &GoalContext::default());
+        let plan = plan_evictions(&events, &policy(384_000, 4), 100, &RecencyScorer, &GoalContext::default(), 1.0);
         assert!(plan.turns.is_empty());
     }
 
@@ -753,7 +764,7 @@ mod plan_tests {
             events.push(asst(i * 2 + 2, "ok"));
         }
         // current well over high_water forces a wave; low_water = target - 20%.
-        let plan = plan_evictions(&events, &policy(3_000, 2), 6_000, &RecencyScorer, &GoalContext::default());
+        let plan = plan_evictions(&events, &policy(3_000, 2), 6_000, &RecencyScorer, &GoalContext::default(), 1.0);
         assert!(!plan.turns.is_empty());
         // never evicts the protected (newest) turns
         let evicted_ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
@@ -785,7 +796,7 @@ mod plan_tests {
             },
         ));
         // turn 1 already evicted → not re-selected
-        let plan = plan_evictions(&events, &policy(1_000, 2), 5_000, &RecencyScorer, &GoalContext::default());
+        let plan = plan_evictions(&events, &policy(1_000, 2), 5_000, &RecencyScorer, &GoalContext::default(), 1.0);
         let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
         assert!(!ids.contains(&Ulid::from(1u128)));
     }
@@ -795,8 +806,60 @@ mod plan_tests {
         // all turns are recent (recent_n huge) → empty plan even over high_water
         let big = "x".repeat(3000);
         let events = vec![user(1, &big), asst(2, "ok")];
-        let plan = plan_evictions(&events, &policy(100, 10), 100_000, &RecencyScorer, &GoalContext::default());
+        let plan = plan_evictions(&events, &policy(100, 10), 100_000, &RecencyScorer, &GoalContext::default(), 1.0);
         assert!(plan.turns.is_empty());
+    }
+
+    /// Regression: when `current_tokens` is in SCALED units (raw × scale, as
+    /// `preflight_gate` passes: raw × calibration_ratio × OVERCOUNT_BIAS) but
+    /// per-turn `token_estimate` is in RAW chars/3 units, the planner must
+    /// scale `reclaimed` to match. Without scaling, the planner evicts
+    /// `scale`× too many turns, dropping real context far below low_water.
+    ///
+    /// Setup: 10 turns, each ~1000 raw tokens. recent_n=2 protects the last 2,
+    /// leaving 8 evictable candidates (turns 0-7). high_water=3000, low_water=2400.
+    /// current_tokens = 5000 (scaled). To reach low_water=2400 from 5000, the
+    /// planner needs to reclaim 2600 *scaled* tokens. At scale=1.6, that's
+    /// 2600/1.6 = 1625 *raw* tokens ≈ 2 turns. Without the scale, it would
+    /// evict 2600 raw tokens ≈ 3 turns — overshooting.
+    #[test]
+    fn scaled_current_tokens_does_not_over_evict() {
+        let big = "x".repeat(3000); // ~1000 raw tokens per message
+        let mut events = Vec::new();
+        for i in 0..10u128 {
+            events.push(user(i * 2 + 1, &big));
+            events.push(asst(i * 2 + 2, "ok"));
+        }
+        // Each turn ≈ 1000 raw tokens (user msg ~1000 + assistant "ok" ~1).
+        // 10 turns = ~10k raw. recent_n=2 → turns 8,9 protected.
+        // Band: high_water=3000, low_water=2400 (20% headroom).
+        let p = policy(3_000, 2);
+        let scale = 1.6_f64;
+        // current_tokens in scaled units: pretend real tokens = raw × 1.6.
+        let current_scaled = 5_000_u64;
+        // Without scale: planner evicts until current_scaled - reclaimed <= 2400.
+        // reclaimed (raw, unscaled) needs 2600 → 3 turns evicted (3000 raw).
+        // Real context after: 10k - 3000 = 7000 raw. But scaled "after" = 5000-3000=2000.
+        // With scale: reclaimed is scaled. 5000 - (3000×1.6) = 5000-4800=200 ≤ 2400.
+        //   → only 3 turns needed... wait, let me recalc.
+        //   Turn 0: reclaimed += 1000×1.6=1600. 5000-1600=3400 > 2400 → continue.
+        //   Turn 1: reclaimed += 1600. 5000-3200=1800 ≤ 2400 → stop. 2 turns.
+        // So with scale=1.6: 2 turns evicted. Without scale: 3 turns.
+        let plan = plan_evictions(
+            &events, &p, current_scaled,
+            &RecencyScorer, &GoalContext::default(),
+            scale,
+        );
+        let n_evicted = plan.turns.len();
+        // With scale applied, only 2 turns should be evicted (not 3).
+        assert_eq!(
+            n_evicted, 2,
+            "scale=1.6: 5000-(2×1000×1.6)=1800 ≤ 2400 → 2 turns, got {n_evicted}"
+        );
+        // The oldest turns (0, 1) should be the victims.
+        let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
+        assert!(ids.contains(&Ulid::from(1u128)), "oldest turn evicted");
+        assert!(ids.contains(&Ulid::from(3u128)), "second-oldest turn evicted");
     }
 
     #[test]
@@ -832,7 +895,7 @@ mod plan_tests {
                 ids: vec![Ulid::from(1u128), Ulid::from(2u128)],
             },
         ));
-        let plan = plan_evictions(&events, &policy(1_000, 2), 5_000, &RecencyScorer, &GoalContext::default());
+        let plan = plan_evictions(&events, &policy(1_000, 2), 5_000, &RecencyScorer, &GoalContext::default(), 1.0);
         let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
         assert!(
             !ids.contains(&Ulid::from(1u128)),
@@ -872,7 +935,7 @@ mod plan_tests {
             events.push(user(i * 2 + 1, &big));
             events.push(asst(i * 2 + 2, "ok"));
         }
-        let plan = plan_evictions(&events, &policy(3_000, 2), 6_000, &RecencyScorer, &GoalContext::default());
+        let plan = plan_evictions(&events, &policy(3_000, 2), 6_000, &RecencyScorer, &GoalContext::default(), 1.0);
         let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
         assert!(
             ids.contains(&Ulid::from(1u128)),
@@ -944,6 +1007,7 @@ mod plan_tests {
             8_000,
             &RecencyScorer,
             &GoalContext::default(),
+            1.0,
         );
         let b = plan_evictions(
             &events,
@@ -951,6 +1015,7 @@ mod plan_tests {
             8_000,
             &RecencyScorer,
             &GoalContext::default(),
+            1.0,
         );
         assert_eq!(a, b, "deterministic");
         assert!(
@@ -970,6 +1035,7 @@ mod plan_tests {
         let events = turns8();
         let plan = plan_evictions(
             &events, &policy(5_000, 2), 8_000, &RecencyScorer, &GoalContext::default(),
+            1.0,
         );
         assert!(plan.rescue.is_none(), "empty goal ⇒ no rescue rationale");
     }
@@ -984,6 +1050,7 @@ mod plan_tests {
             8_000,
             &RecencyScorer,
             &GoalContext::default(),
+            1.0,
         );
         assert!(evicted_ids_of(&base).contains(&Ulid::from(1u128)));
 
@@ -999,7 +1066,7 @@ mod plan_tests {
             weight: DEFAULT_RESCUE_WEIGHT,
             goal_text: String::new(),
         };
-        let rescued = plan_evictions(&events, &policy(5_000, 2), 8_000, &RecencyScorer, &ctx);
+        let rescued = plan_evictions(&events, &policy(5_000, 2), 8_000, &RecencyScorer, &ctx, 1.0);
         assert!(
             !evicted_ids_of(&rescued).contains(&Ulid::from(1u128)),
             "on-goal old turn rescued"
@@ -1035,6 +1102,7 @@ mod plan_tests {
             8_000,
             &RecencyScorer,
             &GoalContext::default(),
+            1.0,
         );
         let mut vecs = std::collections::HashMap::new();
         //                      cos vs [1,0]:  1.0   0.8        0.6        0.0       0.6      0.8
@@ -1055,7 +1123,7 @@ mod plan_tests {
             weight: DEFAULT_RESCUE_WEIGHT,
             goal_text: String::new(),
         };
-        let rescued = plan_evictions(&events, &policy(5_000, 2), 8_000, &RecencyScorer, &ctx);
+        let rescued = plan_evictions(&events, &policy(5_000, 2), 8_000, &RecencyScorer, &ctx, 1.0);
         // no-starve: rescue reorders WHICH turns go, never how MANY (same reclaim quota).
         assert_eq!(rescued.turns.len(), base.turns.len());
         assert!(!rescued.turns.is_empty(), "wave still fired");
@@ -1074,13 +1142,14 @@ mod plan_tests {
             weight: 0.0,
             goal_text: String::new(),
         };
-        let plan = plan_evictions(&events, &policy(5_000, 2), 8_000, &RecencyScorer, &ctx);
+        let plan = plan_evictions(&events, &policy(5_000, 2), 8_000, &RecencyScorer, &ctx, 1.0);
         let base = plan_evictions(
             &events,
             &policy(5_000, 2),
             8_000,
             &RecencyScorer,
             &GoalContext::default(),
+            1.0,
         );
         assert_eq!(plan, base, "weight 0 ⇒ reach 0 ⇒ pure recency");
         assert!(
@@ -1145,7 +1214,7 @@ mod steady_state_tests {
                 EventKind::AssistantMessage { text: "ok".into() },
             ));
             let live = context_window_with(&events, overhead.clone()).total_tokens;
-            let plan = plan_evictions(&events, &policy, live, &RecencyScorer, &GoalContext::default());
+            let plan = plan_evictions(&events, &policy, live, &RecencyScorer, &GoalContext::default(), 1.0);
             apply(&mut events, &plan, &mut seq);
             let after = context_window_with(&events, overhead.clone()).total_tokens;
             // HARD: never exceeds capacity.
