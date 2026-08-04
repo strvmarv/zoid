@@ -537,6 +537,7 @@ impl Provider for OllamaProvider {
             .await?;
         let body = resp.text().await?;
         let window = parse_ollama_context_window(&body);
+        let thinking = parse_ollama_thinking(&body);
         Ok(window.map(|w| crate::model::ModelInfo {
             // A local daemon silently truncates past its actual context window.
             // If we requested `num_ctx`, clamp the reported window to that value
@@ -549,7 +550,7 @@ impl Provider for OllamaProvider {
             max_output: 0,
             tools: true,
             prompt_cache: true,
-            thinking: crate::model::ThinkingSupport::None,
+            thinking,
             thinking_wire: crate::model::ThinkingWireShape::None,
         }))
     }
@@ -1367,5 +1368,22 @@ mod tests {
                 output_tokens: 20
             })
         ));
+    }
+
+    #[test]
+    fn fetch_model_info_thinking_reflects_capabilities() {
+        // A /api/show body with the thinking capability yields Toggle.
+        let body = r#"{"capabilities":["completion","tools","thinking"],"model_info":{"qwen35.context_length":1048576.0}}"#;
+        let window = parse_ollama_context_window(body);
+        let thinking = parse_ollama_thinking(body);
+        assert!(window.is_some(), "context window must parse");
+        assert_eq!(thinking, crate::model::ThinkingSupport::Toggle);
+    }
+
+    #[test]
+    fn fetch_model_info_thinking_none_without_capability() {
+        let body = r#"{"capabilities":["completion","tools"],"model_info":{"qwen35.context_length":32768.0}}"#;
+        let thinking = parse_ollama_thinking(body);
+        assert_eq!(thinking, crate::model::ThinkingSupport::None);
     }
 }
