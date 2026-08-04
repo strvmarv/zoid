@@ -91,6 +91,89 @@ now overrides the 1M static value with whatever the API reports.
 Fixed — tool-call lines and result previews now use more of the available
 column width before truncating, with peek for the full content.
 
+## Add new providers
+
+Add first-class providers for additional hosted LLM backends. Group by
+implementation route — most are OpenAI-compat and can share work.
+
+### OpenAI-compat (reuse `openai_compat.rs` — base-url + API-key config)
+
+These speak the OpenAI Chat Completions shape and likely need only a config
+preset pointing `openai_compat.rs` at the right base URL, not a new module:
+
+- **OpenRouter** — aggregator exposing many models through one OpenAI-compat
+  endpoint.
+- **Together AI** — OpenAI-compat endpoint for hosted open models.
+- **Perplexity** — OpenAI-compat endpoint; returns citations in the response,
+  which could feed the web-search feature.
+- **Fireworks AI** — OpenAI-compat, hosted open models including fine-tunes.
+- **Hyperbolic** — OpenAI-compat, GPU-efficient open-model inference.
+- **Novita AI** — OpenAI-compat, cheap hosted open models.
+- **Lepton AI** — OpenAI-compat, fast open-model inference.
+- **Predibase / LoRAX** — OpenAI-compat, fine-tuned open models.
+- **DeepSeek** — OpenAI-compat endpoint; `reasoning_content` parsing already
+  referenced in `lib.rs` comments.
+- **Mistral (La Plateforme)** — OpenAI-compat endpoint for Mistral models.
+- **Cerebras** — OpenAI-compat, fast inference.
+- **Qwen (Alibaba / DashScope)** — Qwen models via DashScope's OpenAI-compat
+  endpoint.
+- **Kimi (Moonshot)** — Moonshot's OpenAI-compat endpoint. Note: `zai.rs`
+  already targets Z.AI (GLM/Kimi's parent) via its own shim; confirm whether
+  Kimi/Moonshot is already reachable through `zai` before adding a separate
+  provider.
+- **Cloudflare Workers AI** — OpenAI-compat, edge-hosted aggregator.
+
+### Self-hosted / local (reuse `openai_compat.rs` — base-url only, no API key)
+
+These run on the user's own hardware and expose an OpenAI-compat server.
+Zero new code — just documented config presets — and high-value since users
+already on the `ollama-local` path may run these instead:
+
+- **vLLM** — OpenAI-compat server; popular for self-hosted GPU inference.
+- **LM Studio** — desktop app exposing an OpenAI-compat local server.
+- **llama.cpp server** — OpenAI-compat server mode.
+- **llamafile** — single-file OpenAI-compat server.
+- **Ollama local** — already supported via `ollama.rs` (`ollama-local` branch),
+  but worth a config preset under the OpenAI-compat path too for parity.
+
+### OpenAI-native (wire `openai_responses.rs`)
+
+- **ChatGPT (OpenAI direct)** — the Responses API via `openai_responses.rs`,
+  or `openai_compat.rs` for Chat Completions as a fallback.
+
+### Native / separate module (evaluate case-by-case)
+
+Decide per-provider whether a dedicated module is warranted or the
+OpenAI-compat config preset suffices. DeepSeek and Qwen both also expose
+native APIs with features (reasoning, long context) the compat shim may not
+surface — flag here if the compat route turns out to lose capability.
+
+- **Cohere** — Command R+ via Cohere's own (non-OpenAI) API; strong
+  retrieval/tool-use would need a dedicated module. Also offers an
+  OpenAI-compat endpoint now — evaluate whether the compat route loses the
+  retrieval capability before deciding.
+
+### Cloud-provider gateways (evaluate separately)
+
+These are not model hosts — they're gateways/proxies fronting many models
+(Anthropic, Meta, Mistral, etc.) behind a provider-specific auth and request
+shape. Worth considering for enterprise users but a different problem from
+the providers above: each has its own SDK/auth and request format, so a
+dedicated adapter per gateway is likely required.
+
+- **AWS Bedrock** — proxies Anthropic, Meta, Mistral, etc. Prefers IAM/SigV4
+  auth, but supports API-key (access key + secret, or bearer tokens for some
+  models) — the API-key route is closer to the other providers than a full
+  SigV4 integration, though not AWS's preferred path. Uses its own
+  request/response shape (not OpenAI-compat), so a dedicated adapter is still
+  needed; also surface cross-provider model selection.
+- **Azure AI Foundry (Azure OpenAI)** — OpenAI-compat with Azure auth
+  (`api-version` query param, Entra ID key). Likely a thin `openai_compat`
+  variant with Azure-specific auth.
+- **Google Vertex AI** — proxies Gemini, Anthropic, and open models behind
+  Google auth. Own request shape; dedicated adapter.
+- **Vertex AI Model Garden** — hosts many open models behind Google auth.
+
 ## Agent `model` field not seamed (runtime honors it)
 
 The agents-as-entity design (`docs/superpowers/specs/2026-07-23-agents-as-entity-design.md`
