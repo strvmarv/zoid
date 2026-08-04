@@ -194,20 +194,26 @@ pub fn parse_line(
         let output = v.get("eval_count").and_then(|n| n.as_u64());
         if input.is_some() || output.is_some() {
             let curr = input.unwrap_or(0);
-            // Approximate the prompt-cache hit: Ollama's `keep_alive` holds the
-            // model's KV cache warm for 30m, so the overlap between this prompt
-            // and the previous sub-turn's prompt is served from the warm cache.
-            // The native `/api/chat` `done` frame reports the whole prompt as
-            // `prompt_eval_count` with no cache-read breakdown, so we derive it:
-            // `cached = min(curr, prev)`. The first sub-turn (prev=0) yields
-            // cached=0 — correct, nothing was warm yet. Store curr for next time.
+            // prompt_eval_count reports only the tokens *evaluated* (the uncached
+            // tail), not the full prompt — the warm KV-cache prefix is not counted.
+            // On a cache-hit turn (curr < prev), reconstruct the full prompt from
+            // the previous sub-turn's known size. On a cache-miss turn (curr >=
+            // prev), curr is the full prompt.
             use std::sync::atomic::Ordering;
             let prev = last_prompt_eval.swap(curr, Ordering::Relaxed);
-            let cached_approx = curr.min(prev);
+            let (input_tokens, cached) = if prev > 0 && curr < prev {
+                // Cache hit: prev was the full prompt, curr is the uncached tail.
+                // The real prompt is ~prev (it grew by the new turn's tokens, but
+                // prev is far closer than curr). cached = the warm prefix.
+                (prev, prev - curr)
+            } else {
+                // Cache miss or first turn: curr is the full prompt.
+                (curr, 0)
+            };
             out.push(ProviderEvent::Usage(Usage {
-                input_tokens: curr,
+                input_tokens,
                 output_tokens: output.unwrap_or(0),
-                cached: cached_approx,
+                cached,
                 thinking_tokens: 0,
             }));
         }
