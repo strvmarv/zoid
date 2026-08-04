@@ -5536,7 +5536,10 @@ fn handle_onboarding_select(app: &mut App) -> Result<bool> {
             // onboarding stays None — DONE
         }
         OnboardingStep::ApiKey => {
-            // Shouldn't happen — OnboardingSelect is only routed in steps 1 and 3.
+            // Unreachable: route_onboarding_key only emits OnboardingSelect in
+            // Provider|Model. The debug_assert catches a future routing change
+            // that violates this invariant; restore-on-noop is the safe fallback.
+            debug_assert!(false, "OnboardingSelect unreachable in ApiKey step");
             app.shell.onboarding = Some(onb); // restore
         }
     }

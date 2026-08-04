@@ -1681,8 +1681,6 @@ pub fn render_onboarding(frame: &mut Frame, state: &ShellState, area: Rect) {
 /// columns. `render_onboarding` paints these into the card body; the snapshot
 /// tests join them to a string.
 fn onboarding_lines(state: &ShellState, width: usize) -> Vec<Line<'static>> {
-    use crate::state::OnboardingStep;
-
     let onb = match &state.onboarding {
         Some(o) => o,
         None => return Vec::new(),
@@ -1760,6 +1758,16 @@ fn onboarding_lines(state: &ShellState, width: usize) -> Vec<Line<'static>> {
 
 /// Render a step header line: glyph + step number + label. Active = `glyph::EDIT`
 /// accent, done = `glyph::PASS` ok-green, pending = `glyph::PENDING` dim.
+/// Capitalize the first ASCII letter of `s` for display ("anthropic" → "Anthropic").
+/// Leaves the rest unchanged; non-ASCII first chars pass through as-is.
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
 fn render_step_header(
     lines: &mut Vec<Line<'static>>,
     num: u8,
@@ -1833,14 +1841,15 @@ fn render_api_key_input(
     width: usize,
 ) {
     use crate::text::truncate;
-    // "Enter your {Provider} API key"
-    let provider_display = crate::config_view::provider_options("")
-        .iter()
-        .find(|o| o.id == onb.chosen_provider)
-        .map(|o| o.label.clone())
-        .unwrap_or_else(|| onb.chosen_provider.clone());
+    // "Enter your {Provider} API key" — friendly name from the registry family
+    // (capitalized), not the picker label ("anthropic · api key") which would
+    // render "Enter your anthropic · api key API key".
+    let provider_display = zoid_model::entry(&onb.chosen_provider)
+        .map(|e| e.family)
+        .unwrap_or(&onb.chosen_provider);
+    let friendly = capitalize_first(provider_display);
     lines.push(Line::from(Span::styled(
-        format!("{indent}  Enter your {provider_display} API key"),
+        format!("{indent}  Enter your {friendly} API key"),
         Style::new().fg(color::TXT),
     )));
 
