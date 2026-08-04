@@ -1,11 +1,11 @@
 ---
-source: crates/zoid-tui/tests/shell_snapshot.rs
-expression: "draw(&s, &seeded(), 160, 40)"
+source: crates/zoid-tui/tests/tasks_snapshot.rs
+expression: "draw_at(&s, &many_tasks(10), 160, 40)"
 ---
 "v0.8.0                                                                        zoid                                        Esc interrupt · : command · ^P palette"
-"  00:00 › what's causing the 500?                                                                                 █ ╭ ▾ repo ─────────────────────────────────╮ "
+"    (no messages yet)                                                                                             █ ╭ ▾ repo ─────────────────────────────────╮ "
 "                                                                                                                  █ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(118, " ")]
-"  00:00 zoid an unwrapped lookup in the handler.                                                                  █ │🔧 worktree (none)                       │ " Hidden by multi-width symbols: [(118, " ")]
+"                                                                                                                  █ │🔧 worktree (none)                       │ " Hidden by multi-width symbols: [(118, " ")]
 "                                                                                                                  █ │📝 changes +0 -0 · 0 files               │ " Hidden by multi-width symbols: [(118, " ")]
 "                                                                                                                  █ ╰─────────────────────────────────────────╯ "
 "                                                                                                                  █                                             "
@@ -32,13 +32,13 @@ expression: "draw(&s, &seeded(), 160, 40)"
 "                                                                                                                  █ ╰─────────────────────────────────────────╯ "
 "                                                                                                                  █                                             "
 "                                                                                                                  █ ╭ ▾ tasks ────────────────────────────────╮ "
-"                                                                                                                  █ │none                                     │ "
+"                                                                                                                  █ │✓ task 0                                 │ "
+"                                                                                                                  █ │◐ task 1                                 │ "
+"                                                                                                                  █ │☐ task 2                                 │ "
+"                                                                                                                  █ │✓ task 3                                 │ "
+"                                                                                                                  █ │◐ task 4                                 │ "
 "                                                                                                                  █ ╰─────────────────────────────────────────╯ "
-"                                                                                                                  █                                             "
-"                                                                                                                  █                                             "
-"                                                                                                                  █                                             "
-"                                                                                                                  █                                             "
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│                                                                                                                                                              │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" SUPERPOWERS   SELECT                                         ⊟ compact     ● idle      ◐ tool                                                      zoom normal "
+" CHAT   SELECT                                                ⊟ compact     ● idle      ◐ tool                                                      zoom normal "

@@ -108,6 +108,14 @@ fn tasks_drawer_grows_to_fit_eight_tasks_at_baseline() {
     insta::assert_snapshot!(draw_at(&s, &many_tasks(8), 160, 40));
 }
 
+/// 10 tasks at 160×40: the Tasks drawer grows past its old 5-row cap to show
+/// all 10 items — verifying the no-cap growth behavior.
+#[test]
+fn tasks_drawer_grows_to_fit_ten_tasks() {
+    let s = ShellState::new();
+    insta::assert_snapshot!(draw_at(&s, &many_tasks(10), 160, 40));
+}
+
 /// Squeezed rail (100×19 ⇒ ~14 inner rows, below the 16-row four-drawer
 /// minimum): the two lowest-priority drawers (Repo, then Context) collapse to
 /// header-only boxes so Session (its dense facts) and the Tasks list keep their

@@ -281,8 +281,8 @@ mod tests {
             DrawerId::Repo,
             DrawerId::Session,
             DrawerId::Context,
-            DrawerId::Tasks,
             DrawerId::Subagents,
+            DrawerId::Tasks,
         ]
         .iter()
         .map(|&id| Drawer {
@@ -296,8 +296,8 @@ mod tests {
     const REPO: usize = 0;
     const SESSION: usize = 1;
     const CONTEXT: usize = 2;
-    const TASKS: usize = 3;
-    const SUBAGENTS: usize = 4;
+    const SUBAGENTS: usize = 3;
+    const TASKS: usize = 4;
 
     #[test]
     fn alloc_open_drawers_get_full_body_at_baseline() {

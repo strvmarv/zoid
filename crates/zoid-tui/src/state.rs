@@ -610,7 +610,7 @@ pub struct ShellState {
 
 impl ShellState {
     /// The calm default: Chat mode, focus on the input, the Chat rail set
-    /// (repo/session/context/tasks/subagents all open, matching
+    /// (repo/session/context/subagents/tasks all open, matching
     /// `docs/ux/chat-mode.html`).
     pub fn new() -> Self {
         let drawers = vec![
@@ -630,13 +630,13 @@ impl ShellState {
                 open: true,
             },
             Drawer {
-                id: DrawerId::Tasks,
-                title: "tasks".into(),
+                id: DrawerId::Subagents,
+                title: "subagents".into(),
                 open: true,
             },
             Drawer {
-                id: DrawerId::Subagents,
-                title: "subagents".into(),
+                id: DrawerId::Tasks,
+                title: "tasks".into(),
                 open: true,
             },
         ];
@@ -890,8 +890,8 @@ mod tests {
                 DrawerId::Repo,
                 DrawerId::Session,
                 DrawerId::Context,
-                DrawerId::Tasks,
-                DrawerId::Subagents
+                DrawerId::Subagents,
+                DrawerId::Tasks
             ]
         );
         // All four expanded (mockup shows repo/session/context all `on`; tasks joins them).
@@ -913,8 +913,8 @@ mod tests {
             vec![
                 DrawerId::Session,
                 DrawerId::Context,
-                DrawerId::Tasks,
-                DrawerId::Subagents
+                DrawerId::Subagents,
+                DrawerId::Tasks
             ]
         );
         assert!(s.drawer(DrawerId::Repo).is_none());
@@ -924,10 +924,10 @@ mod tests {
     }
 
     #[test]
-    fn subagents_drawer_is_last_and_open() {
+    fn tasks_drawer_is_last_and_open() {
         let s = ShellState::new();
         let last = s.drawers.last().unwrap();
-        assert_eq!(last.id, DrawerId::Subagents);
+        assert_eq!(last.id, DrawerId::Tasks);
         assert!(last.open);
     }
 
