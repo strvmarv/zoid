@@ -1039,12 +1039,43 @@ fn effective_base_url(config: &zoid_core::config::Config) -> String {
         .unwrap_or_default()
 }
 
-/// Whether a provider id needs an API key to be usable. Local Ollama (localhost)
-/// does not; all remote HTTP flavors do. Hardcoded shortcut: `ollama-local` is
-/// the only keyless `Available` provider today. Revisit against the registry if
-/// an ambient-auth provider (no API key) ever becomes selectable.
+/// True when the onboarding wizard should be shown at startup. Pure; no IO.
+///
+/// - `first_time_user`: from `sessions.is_empty()` at boot.
+/// - `config`: the resolved Config.
+/// - `has_key`: the third return of `select_provider` — whether a credential
+///   was found for the active provider (true for keyless `ollama-local`).
+/// - `secrets_available`: whether the encrypted secret store opened successfully.
+///   If false, the wizard cannot function (step 2 writes to it) and must not
+///   fire — the user is directed to `:config` via the normal empty state.
+#[allow(dead_code)] // wired into the boot gate by a follow-on onboarding task
+fn wizard_needed(
+    first_time_user: bool,
+    config: &zoid_core::config::Config,
+    has_key: bool,
+    secrets_available: bool,
+) -> bool {
+    if !first_time_user || !secrets_available {
+        return false;
+    }
+    let canon = zoid_provider::model::canonical_id(&config.provider);
+    if canon == "ollama-local" {
+        return false; // keyless local — assumed correct, never probed
+    }
+    if config.provider.trim().is_empty() {
+        return true; // sentinel: no provider chosen
+    }
+    // provider is set + requires a key + key not found → misconfigured
+    !has_key
+}
+
+/// Whether a provider id needs an API key to be usable. Derived from the
+/// registry's `key_url` field: `None` = keyless, `Some` = key required.
+/// Unknown provider ids default to key-required (safe).
 fn entry_requires_key(id: &str) -> bool {
-    id != "ollama-local"
+    zoid_provider::model::entry(id)
+        .map(|e| e.key_url.is_some())
+        .unwrap_or(true)
 }
 
 /// The secret env name a provider id needs, or `None` if it needs no key.
@@ -11027,5 +11058,107 @@ mod mcp_install_tests {
     fn project_target_is_cwd_dot_mcp_json() {
         let p = mcp_target_path(McpTarget::Project, std::path::Path::new("/cfg"), std::path::Path::new("/repo"));
         assert_eq!(p, std::path::Path::new("/repo/.mcp.json"));
+    }
+}
+
+#[cfg(test)]
+mod onboarding_tests {
+    use super::*;
+    use zoid_core::config::Config;
+
+    fn cfg_with_provider(provider: &str) -> Config {
+        let mut c = Config::default();
+        c.provider = provider.to_string();
+        c
+    }
+
+    #[test]
+    fn gate_fires_for_first_time_empty_provider() {
+        let c = cfg_with_provider("");
+        assert!(wizard_needed(true, &c, false, true));
+    }
+
+    #[test]
+    fn gate_fires_for_first_time_key_required_no_key() {
+        let c = cfg_with_provider("anthropic-api");
+        assert!(wizard_needed(true, &c, false, true));
+    }
+
+    #[test]
+    fn gate_skips_ollama_local() {
+        let c = cfg_with_provider("ollama-local");
+        assert!(!wizard_needed(true, &c, false, true));
+    }
+
+    #[test]
+    fn gate_skips_when_key_present() {
+        let c = cfg_with_provider("anthropic-api");
+        assert!(!wizard_needed(true, &c, true, true));
+    }
+
+    #[test]
+    fn gate_skips_returning_user() {
+        let c = cfg_with_provider("");
+        assert!(!wizard_needed(false, &c, false, true));
+    }
+
+    #[test]
+    fn gate_skips_when_secrets_unavailable() {
+        let c = cfg_with_provider("");
+        assert!(!wizard_needed(true, &c, false, false));
+    }
+
+    #[test]
+    fn gate_ignores_ambient_key_for_empty_provider() {
+        // A first-time user with empty provider but an ambient OLLAMA_API_KEY
+        // still gets the wizard (empty-provider check precedes !has_key).
+        let c = cfg_with_provider("");
+        assert!(wizard_needed(true, &c, true, true));
+    }
+
+    #[test]
+    fn key_url_and_key_env_for_are_in_lockstep() {
+        // Every key-requiring provider (key_url: Some) must have a key_env_for arm
+        // returning Some. A keyless provider (key_url: None) must return None.
+        for e in zoid_provider::model::PROVIDERS.iter() {
+            let key_env = key_env_for(e.id);
+            if e.key_url.is_some() {
+                assert!(
+                    key_env.is_some(),
+                    "{} has key_url: Some but key_env_for returned None — \
+                     a key-requiring provider must have a key env mapping",
+                    e.id
+                );
+                assert!(
+                    entry_requires_key(e.id),
+                    "{} has key_url: Some but entry_requires_key returned false",
+                    e.id
+                );
+            } else {
+                assert!(
+                    key_env.is_none(),
+                    "{} has key_url: None but key_env_for returned Some({:?}) — \
+                     a keyless provider must not have a key env mapping",
+                    e.id,
+                    key_env
+                );
+                assert!(
+                    !entry_requires_key(e.id),
+                    "{} has key_url: None but entry_requires_key returned true",
+                    e.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn canonical_id_empty_is_not_ollama_local() {
+        // The gate's ollama-local exemption precedes the empty-provider check.
+        // Its correctness depends on canonical_id("") != "ollama-local".
+        assert_ne!(
+            zoid_provider::model::canonical_id(""),
+            "ollama-local"
+        );
+        assert_eq!(zoid_provider::model::canonical_id(""), "");
     }
 }
