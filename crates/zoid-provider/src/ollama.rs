@@ -1178,8 +1178,9 @@ mod tests {
 
     #[test]
     fn implicit_cache_approx_second_subturn_credits_overlap() {
-        // Two sub-turns: 12k then 13k tokens. The second credits min(13k,12k)=12k
-        // as cached (the warm prefix overlap), input stays the full 13k.
+        // Two sub-turns: 12k then 13k tokens. The second has curr=13000 >= prev=12000,
+        // so it's a cache miss (full eval): input=13000 (the full prompt), cached=0.
+        // The old min(curr, prev) synthetic cached no longer applies.
         let out = parse_seq(&[
             r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":12000,"eval_count":40}"#,
             r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":13000,"eval_count":10}"#,
@@ -1194,11 +1195,11 @@ mod tests {
                 output_tokens: 40
             })
         ));
-        // Second sub-turn: cached 12000 (min(13000, 12000)), input 13000.
+        // Second sub-turn: cache miss (curr >= prev), input=13000, cached=0.
         assert!(matches!(
             out[1][0],
             ProviderEvent::Usage(Usage {
-                cached: 12000,
+                cached: 0,
                 thinking_tokens: 0,
                 input_tokens: 13000,
                 output_tokens: 10
@@ -1209,7 +1210,9 @@ mod tests {
     #[test]
     fn implicit_cache_approx_shrinking_prompt_credits_smaller_overlap() {
         // A turn whose prompt is SMALLER than the previous (e.g. after eviction)
-        // credits min(curr, prev) = curr (all of it warm).
+        // triggers the cache-hit reconstruction: input=prev (50000), cached=prev-curr
+        // (20000). This is a false positive after eviction (the real prompt is
+        // 30000), but it's bounded and self-corrects on the next cache-miss turn.
         let out = parse_seq(&[
             r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":50000,"eval_count":40}"#,
             r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":30000,"eval_count":10}"#,
@@ -1217,9 +1220,9 @@ mod tests {
         assert!(matches!(
             out[1][0],
             ProviderEvent::Usage(Usage {
-                cached: 30000,
+                cached: 20000,
                 thinking_tokens: 0,
-                input_tokens: 30000,
+                input_tokens: 50000,
                 output_tokens: 10
             })
         ));
