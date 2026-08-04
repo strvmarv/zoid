@@ -6811,34 +6811,51 @@ fn spawn_heartbeat(app: &App) {
     });
 }
 
-/// Resolve the final `ThinkingMode` from config + model capability.
-/// Pure — takes explicit args so it's unit-testable. If the model's
-/// `ThinkingSupport` is `None`, thinking is forced off even if config
-/// says enabled (safety guard).
+/// Resolve the final `ThinkingMode` from config + provenance + provider + model
+/// capability. Pure — takes explicit args so it's unit-testable. No IO, no
+/// global state.
+///
+/// **Provider-aware default:** when `thinking_enabled_src == Source::Default`
+/// (the user set no `[thinking].enabled` key in any config layer) and the
+/// provider is `ollama-local`, `enabled` is treated as `true`. This makes
+/// thinking available by default for local models that support it; the
+/// capability gate below still returns `Off` if the model doesn't support
+/// thinking. An explicit `enabled = false` (any `Source != Default`) always
+/// wins — that's the user override. `ZOID_THINKING` sets `Source::Env`, which
+/// is `!= Default`, so env wins too.
 fn resolve_thinking(
     config_thinking: &zoid_core::config::ThinkingConfig,
+    thinking_enabled_src: zoid_core::config::Source,
+    provider: &str,
     model_support: zoid_provider::model::ThinkingSupport,
 ) -> zoid_provider::ThinkingMode {
     use zoid_provider::ThinkingMode;
+    // Effective enabled flag: the user's value, or true for ollama-local when
+    // the user set no [thinking].enabled key (provenance Default). An explicit
+    // enabled = false (provenance != Default) always wins.
+    let enabled = if thinking_enabled_src == zoid_core::config::Source::Default
+        && zoid_provider::model::canonical_id(provider) == "ollama-local"
+    {
+        true
+    } else {
+        config_thinking.enabled
+    };
     match model_support {
         zoid_provider::model::ThinkingSupport::None => ThinkingMode::Off,
+        _ if !enabled => ThinkingMode::Off,
         _ => {
-            if !config_thinking.enabled {
-                ThinkingMode::Off
-            } else {
-                match &config_thinking.effort {
-                    None => ThinkingMode::Auto,
-                    Some(e) => {
-                        use zoid_provider::EffortLevel;
-                        let level = match e.as_str() {
-                            "low" => EffortLevel::Low,
-                            "medium" => EffortLevel::Medium,
-                            "high" => EffortLevel::High,
-                            "max" => EffortLevel::Max,
-                            _ => EffortLevel::High,
-                        };
-                        ThinkingMode::Effort(level)
-                    }
+            match &config_thinking.effort {
+                None => ThinkingMode::Auto,
+                Some(e) => {
+                    use zoid_provider::EffortLevel;
+                    let level = match e.as_str() {
+                        "low" => EffortLevel::Low,
+                        "medium" => EffortLevel::Medium,
+                        "high" => EffortLevel::High,
+                        "max" => EffortLevel::Max,
+                        _ => EffortLevel::High,
+                    };
+                    ThinkingMode::Effort(level)
                 }
             }
         }
@@ -7336,7 +7353,7 @@ fn spawn_queued_subagent(app: &mut App, qs: QueuedSubagent) {
                 .fetched_model_info
                 .map(|info| info.thinking)
                 .unwrap_or_else(|| zoid_provider::model::model_info(&app.model).thinking);
-            resolve_thinking(&app.config.thinking, model_support)
+            resolve_thinking(&app.config.thinking, app.prov.thinking_enabled, &app.config.provider, model_support)
         },
         app.session.clone(),
         app.session_id,
@@ -7434,7 +7451,7 @@ fn spawn_turn(app: &mut App) {
         .fetched_model_info
         .map(|info| info.thinking)
         .unwrap_or_else(|| zoid_provider::model::model_info(&app.model).thinking);
-    turn_config.thinking = resolve_thinking(&app.config.thinking, model_support);
+    turn_config.thinking = resolve_thinking(&app.config.thinking, app.prov.thinking_enabled, &app.config.provider, model_support);
     turn_config.approval = app.config.approval.clone();
     turn_config.kill = kill.clone();
     turn_config.in_flight = Some(app.in_flight.clone());
@@ -7492,59 +7509,81 @@ mod thinking_tests {
 
     #[test]
     fn resolve_thinking_forces_off_when_unsupported() {
-        let cfg = zoid_core::config::ThinkingConfig {
-            enabled: true,
-            effort: Some("high".into()),
-        };
-        let mode = resolve_thinking(&cfg, zoid_provider::model::ThinkingSupport::None);
+        let cfg = zoid_core::config::ThinkingConfig { enabled: true, effort: Some("high".into()) };
+        let mode = resolve_thinking(&cfg, zoid_core::config::Source::Default, "anthropic-api", zoid_provider::model::ThinkingSupport::None);
         assert_eq!(mode, zoid_provider::ThinkingMode::Off);
     }
 
     #[test]
     fn resolve_thinking_off_when_config_disabled() {
-        let cfg = zoid_core::config::ThinkingConfig {
-            enabled: false,
-            effort: None,
-        };
-        let mode = resolve_thinking(&cfg, zoid_provider::model::ThinkingSupport::Budget);
+        let cfg = zoid_core::config::ThinkingConfig { enabled: false, effort: None };
+        // Explicit enabled=false → Source::UserGlobal → user override wins.
+        let mode = resolve_thinking(&cfg, zoid_core::config::Source::UserGlobal, "ollama-local", zoid_provider::model::ThinkingSupport::Toggle);
         assert_eq!(mode, zoid_provider::ThinkingMode::Off);
     }
 
     #[test]
     fn resolve_thinking_auto_when_enabled_no_effort() {
-        let cfg = zoid_core::config::ThinkingConfig {
-            enabled: true,
-            effort: None,
-        };
-        let mode = resolve_thinking(&cfg, zoid_provider::model::ThinkingSupport::Budget);
+        let cfg = zoid_core::config::ThinkingConfig { enabled: true, effort: None };
+        let mode = resolve_thinking(&cfg, zoid_core::config::Source::UserGlobal, "anthropic-api", zoid_provider::model::ThinkingSupport::Budget);
         assert_eq!(mode, zoid_provider::ThinkingMode::Auto);
     }
 
     #[test]
     fn resolve_thinking_effort_when_enabled_with_effort() {
-        let cfg = zoid_core::config::ThinkingConfig {
-            enabled: true,
-            effort: Some("max".into()),
-        };
-        let mode = resolve_thinking(&cfg, zoid_provider::model::ThinkingSupport::Adaptive);
-        assert_eq!(
-            mode,
-            zoid_provider::ThinkingMode::Effort(zoid_provider::EffortLevel::Max)
-        );
+        let cfg = zoid_core::config::ThinkingConfig { enabled: true, effort: Some("max".into()) };
+        let mode = resolve_thinking(&cfg, zoid_core::config::Source::UserGlobal, "anthropic-api", zoid_provider::model::ThinkingSupport::Adaptive);
+        assert_eq!(mode, zoid_provider::ThinkingMode::Effort(zoid_provider::EffortLevel::Max));
     }
 
     #[test]
-    fn model_switch_from_thinking_to_non_thinking_forces_off() {
-        let cfg = zoid_core::config::ThinkingConfig {
-            enabled: true,
-            effort: Some("high".into()),
-        };
-        let mode = resolve_thinking(&cfg, zoid_provider::model::ThinkingSupport::Budget);
-        assert_eq!(
-            mode,
-            zoid_provider::ThinkingMode::Effort(zoid_provider::EffortLevel::High)
-        );
-        let mode = resolve_thinking(&cfg, zoid_provider::model::ThinkingSupport::None);
+    fn resolve_thinking_provider_default_flips_on_for_ollama_local() {
+        // Source::Default (user set no [thinking].enabled) + ollama-local + capable → Auto.
+        let cfg = zoid_core::config::ThinkingConfig { enabled: false, effort: None };
+        let mode = resolve_thinking(&cfg, zoid_core::config::Source::Default, "ollama-local", zoid_provider::model::ThinkingSupport::Toggle);
+        assert_eq!(mode, zoid_provider::ThinkingMode::Auto);
+    }
+
+    #[test]
+    fn resolve_thinking_provider_default_off_for_cloud() {
+        // Same Default provenance, but a cloud provider → stays Off (false default).
+        let cfg = zoid_core::config::ThinkingConfig { enabled: false, effort: None };
+        let mode = resolve_thinking(&cfg, zoid_core::config::Source::Default, "ollama-cloud", zoid_provider::model::ThinkingSupport::Toggle);
+        assert_eq!(mode, zoid_provider::ThinkingMode::Off);
+    }
+
+    #[test]
+    fn resolve_thinking_provider_default_off_when_capability_none() {
+        // Provider default flips on, but the model doesn't support thinking → Off.
+        let cfg = zoid_core::config::ThinkingConfig { enabled: false, effort: None };
+        let mode = resolve_thinking(&cfg, zoid_core::config::Source::Default, "ollama-local", zoid_provider::model::ThinkingSupport::None);
+        assert_eq!(mode, zoid_provider::ThinkingMode::Off);
+    }
+
+    #[test]
+    fn resolve_thinking_env_override_wins_over_provider_default() {
+        // ZOID_THINKING=off → Source::Env → user override wins, even for ollama-local.
+        let cfg = zoid_core::config::ThinkingConfig { enabled: false, effort: None };
+        let mode = resolve_thinking(&cfg, zoid_core::config::Source::Env, "ollama-local", zoid_provider::model::ThinkingSupport::Toggle);
+        assert_eq!(mode, zoid_provider::ThinkingMode::Off);
+    }
+
+    #[test]
+    fn resolve_thinking_effort_only_section_flows_through() {
+        // User wrote [thinking] effort="high" with no enabled key. thinking_enabled
+        // is Source::Default (the enabled key was absent), so the provider default
+        // flips enabled to true, and effort flows through. The result is Effort(High).
+        let cfg = zoid_core::config::ThinkingConfig { enabled: false, effort: Some("high".into()) };
+        let mode = resolve_thinking(&cfg, zoid_core::config::Source::Default, "ollama-local", zoid_provider::model::ThinkingSupport::Toggle);
+        assert_eq!(mode, zoid_provider::ThinkingMode::Effort(zoid_provider::EffortLevel::High));
+    }
+
+    #[test]
+    fn resolve_thinking_canonical_id_matches_legacy_ollama_spelling() {
+        // "ollama" canonicalizes to "ollama-cloud", so the local default does NOT
+        // apply to the legacy spelling. Only "ollama-local" matches.
+        let cfg = zoid_core::config::ThinkingConfig { enabled: false, effort: None };
+        let mode = resolve_thinking(&cfg, zoid_core::config::Source::Default, "ollama", zoid_provider::model::ThinkingSupport::Toggle);
         assert_eq!(mode, zoid_provider::ThinkingMode::Off);
     }
 
