@@ -203,9 +203,12 @@ The fix is in one function, tested at the provider layer:
   input=30000, cached=30000.)
 - **New test**: cache-hit sequence where `curr` is much smaller than `prev`
   (e.g. prev=200000, curr=5000) → input=200000, cached=195000.
-- **New test**: cache-miss after eviction where `curr < prev` but `curr` is the
-  real full prompt → still reports input=prev (the known false positive).
-  Documents the edge case explicitly.
+- **New test**: 3-turn self-correction sequence after eviction. Turn 1: full
+  prompt 50000 (cache miss, prev=0). Turn 2: eviction shrinks prompt, reports
+  30000 (cache miss, `curr < prev` → false positive: input=50000, overcount).
+  Turn 3: cache miss at the new smaller size, reports 35000 (`curr >= prev`
+  → input=35000, cached=0 — self-corrects). Verifies the mitigation is real:
+  the overcount from turn 2 is corrected on turn 3, not perpetuated.
 
 No core, agent, or TUI test changes needed — `input_tokens` now always
 represents (approximately) the full prompt, so all consumers work as-is.
@@ -216,8 +219,8 @@ represents (approximately) the full prompt, so all consumers work as-is.
 1. Ollama provider reconstructs `input_tokens = prev` on cache-hit turns
    (`curr < prev`), `cached = prev - curr`.
 2. Correct three wrong code comments about `prompt_eval_count` semantics.
-3. Update three existing Ollama tests for the new behavior.
-4. Add two new tests (deep cache hit, post-eviction false positive).
+3. Update two existing Ollama tests for the new behavior.
+4. Add two new tests (deep cache hit, 3-turn self-correction after eviction).
 
 **Out of scope (YAGNI):**
 - No new field on `TokenStat` or `provider::Usage`.
