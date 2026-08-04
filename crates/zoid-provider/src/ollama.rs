@@ -79,15 +79,14 @@ pub fn request_body(req: &CompletionRequest, num_ctx: Option<u32>) -> Value {
     if let Some(text) = &req.reassert {
         messages.push(json!({ "role": "system", "content": text }));
     }
-    // Only emit `think` for models that support thinking. The capability gate
-    // in resolve_thinking should have caught unsupported models, but this is
-    // defensive — never send `think: true` to a model that might not handle it.
-    let info = crate::model::model_info(&req.model);
+    // The `think` field trusts the upstream `resolve_thinking` gate, which already
+    // checked the model's thinking capability (fetched from /api/show for local
+    // models, or from the static MODEL_CAPS table for cloud models). `Off` means
+    // either the model doesn't support thinking or the user disabled it; `Auto`
+    // or `Effort(_)` means the capability gate passed.
     let think = match req.thinking {
         crate::ThinkingMode::Off => false,
-        crate::ThinkingMode::Auto | crate::ThinkingMode::Effort(_) => {
-            info.thinking != crate::model::ThinkingSupport::None
-        }
+        crate::ThinkingMode::Auto | crate::ThinkingMode::Effort(_) => true,
     };
     let mut body = json!({
         "model": req.model,
@@ -787,28 +786,31 @@ mod tests {
 
 
     #[test]
-    fn body_emits_think_false_when_thinking_auto_for_unknown_model() {
-        // "m" is an unknown model → ThinkingSupport::None → think=false (defensive)
+    fn body_emits_think_true_when_thinking_auto() {
+        // resolve_thinking already gated on capability; if it returned Auto,
+        // the model supports thinking. request_body trusts that gate.
         let req = CompletionRequest {
-            model: "m".into(),
+            model: "qwythos:latest".into(),
             system: None,
-            messages: vec![Message::user("x")],
-            max_tokens: 8,
+            messages: vec![Message::user("hi")],
+            max_tokens: 16,
             tools: vec![],
             thinking: crate::ThinkingMode::Auto,
             reassert: None,
         };
         let body = request_body(&req, None);
-        assert_eq!(body["think"], json!(false), "unknown model with ThinkingSupport::None must get think=false");
+        assert_eq!(body["think"], json!(true));
     }
 
     #[test]
     fn body_emits_think_false_when_thinking_off() {
+        // A non-thinking model gets ThinkingMode::Off from resolve_thinking (the
+        // capability gate forces it). request_body emits think: false for Off.
         let req = CompletionRequest {
-            model: "m".into(),
+            model: "glm-5.2:cloud".into(),
             system: None,
-            messages: vec![Message::user("x")],
-            max_tokens: 8,
+            messages: vec![Message::user("hi")],
+            max_tokens: 16,
             tools: vec![],
             thinking: crate::ThinkingMode::Off,
             reassert: None,
@@ -818,19 +820,21 @@ mod tests {
     }
 
     #[test]
-    fn body_emits_think_false_for_non_thinking_model_even_when_auto() {
-        // glm-5.2:cloud has ThinkingSupport::None — think must be false
+    fn body_emits_think_true_for_fetched_capable_local_model() {
+        // The full chain: resolve_thinking returns Auto for a model whose fetched
+        // capability is Toggle. request_body must emit think: true — not re-derive
+        // from the static table (which returns None for unknown local models).
         let req = CompletionRequest {
-            model: "glm-5.2:cloud".into(),
+            model: "qwythos:latest".into(),
             system: None,
-            messages: vec![Message::user("x")],
-            max_tokens: 8,
+            messages: vec![Message::user("hi")],
+            max_tokens: 16,
             tools: vec![],
             thinking: crate::ThinkingMode::Auto,
             reassert: None,
         };
         let body = request_body(&req, None);
-        assert_eq!(body["think"], json!(false), "non-thinking model must get think=false even when ThinkingMode::Auto");
+        assert_eq!(body["think"], json!(true), "fetched-capable local model with ThinkingMode::Auto must get think: true");
     }
 
     #[test]
