@@ -88,6 +88,13 @@ pub fn request_body(req: &CompletionRequest, num_ctx: Option<u32>) -> Value {
         crate::ThinkingMode::Off => false,
         crate::ThinkingMode::Auto | crate::ThinkingMode::Effort(_) => true,
     };
+    tracing::info!(
+        kind = "provider",
+        model = %req.model,
+        thinking_mode = ?req.thinking,
+        think_field = think,
+        "request_body think field computed"
+    );
     let mut body = json!({
         "model": req.model,
         "stream": true,
