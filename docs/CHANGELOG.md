@@ -6,6 +6,74 @@
 > notes (what ships to the public releases repo) live in the root
 > `RELEASES.md`.
 
+## 0.9.0
+
+First-run onboarding wizard, token-budgeted turn protection, Ollama context
+tracking fix, worktree unmerged-commits fix, TUI drawer polish. 40 commits
+since v0.8.0.
+
+First-run LLM connection wizard (spec:
+2026-07-10-onboarding-llm-connection-wizard-design.md; plan:
+2026-07-10-onboarding-llm-connection-wizard.md).
+- `zoid-core/src/config.rs`: compiled default for `provider` becomes empty
+  string (was `"ollama"`) — the "unconfigured" sentinel.
+- `zoid-model/src/registry.rs`: new `key_url: Option<&'static str>` field on
+  `ProviderEntry` (the key-acquisition URL shown in the API-key step).
+- `zoid-tui/src/render.rs`: new `Overlay::Onboarding` variant + full-screen
+  `render_onboarding` wizard view (2–3 step linear flow: Provider → API key →
+  Model; step 3 only if provider has >1 registry model).
+- `zoid-tui/src/route.rs`: onboarding key routing, Action variants, paste
+  target for API-key entry.
+- `zoid/src/main.rs`: `wizard_needed` gate predicate
+  (`first_time_user && (provider empty || (provider requires key && no key
+  found))`, `ollama-local` exempt); boot-time overlay open + state seed; config
+  write-back through existing `set_in_toml` + `SecretStore::set` +
+  `select_provider` re-selection (no new write paths).
+- `fix(onboarding)`: friendly provider name in step-2 prompt; literal glyphs
+  replaced with token constants in render.
+
+Token-budgeted turn protection (spec:
+2026-07-27-token-budgeted-turn-protection-design.md; plan:
+2026-07-27-token-budgeted-turn-protection.md).
+- `zoid-core/src/eviction.rs`: `compute_protection` replaces the fixed
+  `recent_n` count with a three-layer policy — (1) hard floor of 1 (current
+  turn always protected), (2) `min_protected_turns` (default 3) minimum count
+  (quality backstop; soft band never overrides), (3) `protection_pct` of
+  `low_water` (default 15%) budget ceiling extending protection to additional
+  recent turns when cheap. Capacity backstop shrinks `min_protected_turns`
+  toward 1 if the protected floor would exceed
+  `capacity − CAPACITY_SAFETY_MARGIN`.
+- `zoid-core/src/config.rs`: `min_protected_turns` + `protection_pct` fields
+  with layered merge. `recent_n` kept as deprecated back-compat alias for
+  `min_protected_turns`.
+- `zoid/src/main.rs`: wires `min_protected_turns` + `protection_pct` into
+  runtime `EvictionPolicy`.
+- `crates/zoid-tui/src/config_view.rs`: protected turns + protection % rows
+  in the Economy section.
+- `fix(eviction)`: per-turn token estimates scaled to match band units
+  (calibration mismatch fix).
+
+Ollama context tracking fix (spec:
+2026-08-03-ollama-context-tracking-design.md; plan:
+2026-08-03-ollama-context-tracking.md).
+- `zoid-provider/src/ollama.rs`: on cache-hit turns, Ollama's `done` frame
+  reports `prompt_eval_count` as only the uncached tail (tokens actually
+  *evaluated*, not tokens served from warm KV cache), so `input_tokens` was a
+  tiny fraction of the real prompt. Provider-side reconstruction now
+  reconstructs the full prompt size on cache-hit turns (`n3` reconstruction)
+  so `ctx_used` / the status bar reflects reality. Cache-miss turns unchanged.
+- Tests: deep cache-hit + eviction self-correction tests added.
+
+Worktree unmerged-commits fix.
+- `zoid/src/main.rs`: `branch_has_unmerged_commits` resolves main's HEAD (not
+  the worktree's HEAD) when checking for unmerged commits on exit, so commits
+  on the worktree branch that haven't merged to main are correctly detected
+  and the branch ref is retained.
+
+TUI drawer polish.
+- `zoid-tui/src/render.rs`: subagents drawer auto-collapses when empty; tasks
+  list grows without cap; tasks and subagents drawers swapped in the rail.
+
 ## 0.8.0
 
 Eviction master switch + diff line background highlighting. 14 commits

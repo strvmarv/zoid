@@ -10,6 +10,48 @@
 
 # Release Notes
 
+## 0.9.0
+
+A guided first-run setup wizard, smarter context retention, and a fix for
+inaccurate context-usage display with Ollama Cloud.
+
+### New
+
+- **First-run setup wizard** — when you launch zoid for the first time with no
+  provider configured, a full-screen wizard now guides you through choosing a
+  provider, entering your API key, and (where applicable) selecting a model. Once
+  complete, you land in the chat ready to go. You can skip it with Esc; it re-fires
+  on the next launch if you still have no connection. The wizard only appears for
+  genuinely first-time users with no working setup.
+- **Smarter context protection** — zoid now protects your most recent conversation
+  turns from eviction based on a token budget instead of a fixed turn count. Two
+  new settings under `[eviction]` give you control: `min_protected_turns`
+  (default 3) sets a hard floor of recent turns always kept, and
+  `protection_pct` (default 15) extends protection to additional recent turns when
+  they're cheap to keep. This means better recall of recent context on large
+  models and fewer provider errors on small models. The old `recent_n` setting
+  still works as a back-compat alias for `min_protected_turns`.
+
+### Fixed
+
+- **Accurate context-usage display with Ollama Cloud** — the token count shown in
+  the status bar was incorrect on cache-hit turns when using Ollama Cloud, often
+  showing a few thousand tokens when the real context was around 200k. The
+  display now reconstructs the true prompt size regardless of cache state, so
+  the context indicator and eviction band reflect reality.
+- **Worktree unmerged-commits detection** — when exiting a git worktree, the
+  check for unmerged commits could resolve the wrong HEAD, causing it to miss
+  commits that hadn't been merged to main. This is now fixed.
+
+### Improved
+
+- **Subagents drawer polish** — the subagents drawer now auto-collapses when
+  empty (no more lingering empty drawer), the tasks list grows without a cap,
+  and the tasks and subagents drawers have swapped positions in the rail for a
+  more natural ordering.
+
+> **Beta note:** builds are for evaluation and expire ~30 days after release — run `zoid update` periodically to stay current.
+
 ## 0.8.0
 
 ### New
