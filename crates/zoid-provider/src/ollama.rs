@@ -194,20 +194,26 @@ pub fn parse_line(
         let output = v.get("eval_count").and_then(|n| n.as_u64());
         if input.is_some() || output.is_some() {
             let curr = input.unwrap_or(0);
-            // Approximate the prompt-cache hit: Ollama's `keep_alive` holds the
-            // model's KV cache warm for 30m, so the overlap between this prompt
-            // and the previous sub-turn's prompt is served from the warm cache.
-            // The native `/api/chat` `done` frame reports the whole prompt as
-            // `prompt_eval_count` with no cache-read breakdown, so we derive it:
-            // `cached = min(curr, prev)`. The first sub-turn (prev=0) yields
-            // cached=0 — correct, nothing was warm yet. Store curr for next time.
+            // prompt_eval_count reports only the tokens *evaluated* (the uncached
+            // tail), not the full prompt — the warm KV-cache prefix is not counted.
+            // On a cache-hit turn (curr < prev), reconstruct the full prompt from
+            // the previous sub-turn's known size. On a cache-miss turn (curr >=
+            // prev), curr is the full prompt.
             use std::sync::atomic::Ordering;
             let prev = last_prompt_eval.swap(curr, Ordering::Relaxed);
-            let cached_approx = curr.min(prev);
+            let (input_tokens, cached) = if prev > 0 && curr < prev {
+                // Cache hit: prev was the full prompt, curr is the uncached tail.
+                // The real prompt is ~prev (it grew by the new turn's tokens, but
+                // prev is far closer than curr). cached = the warm prefix.
+                (prev, prev - curr)
+            } else {
+                // Cache miss or first turn: curr is the full prompt.
+                (curr, 0)
+            };
             out.push(ProviderEvent::Usage(Usage {
-                input_tokens: curr,
+                input_tokens,
                 output_tokens: output.unwrap_or(0),
-                cached: cached_approx,
+                cached,
                 thinking_tokens: 0,
             }));
         }
@@ -297,13 +303,13 @@ pub struct OllamaProvider {
     /// Idle deadline for the initial response and between streamed chunks; see
     /// `crate::stream_idle_timeout`.
     idle_timeout: Duration,
-    /// The previous sub-turn's `prompt_eval_count` (full prompt size). Ollama's
-    /// `keep_alive` holds the model's KV cache warm for 30m, so the bulk of each
-    /// new prompt is a re-evaluation of a warm prefix — but the native `/api/chat`
-    /// `done` frame reports it all as `prompt_eval_count` with no cache-read
-    /// breakdown. We approximate: the overlap with the previous prompt is
-    /// "cached" (warm in KV). Cross-stream state so `parse_line`'s `done` frame
-    /// can read it. Ollama implicit-cache approximation.
+    /// The previous sub-turn's `prompt_eval_count` (uncached tail on cache-hit
+    /// turns, full prompt on cache-miss turns). Ollama's `keep_alive` holds the
+    /// model's KV cache warm for 30m, so on a cache-hit turn only the new
+    /// (uncached) tail is evaluated — `prompt_eval_count` is that tail, not the
+    /// full prompt. On a cache-miss turn it's the full prompt. We use it to
+    /// reconstruct the full prompt size on cache-hit turns (see the `done` frame
+    /// handler). Cross-stream state so `parse_line`'s `done` frame can read it.
     last_prompt_eval: std::sync::atomic::AtomicU64,
     /// Explicit context window for `options.num_ctx`. `Some` only for
     /// `ollama-local`; `None` for Ollama Cloud, which sizes context
@@ -604,14 +610,14 @@ mod tests {
     }
 
     /// Call `parse_line` with a fresh (zero) `last_prompt_eval`. Used by tests
-    /// that don't exercise the implicit-cache approximation (the first sub-turn:
-    /// prev=0, so cached=0, matching the old behavior).
+    /// that don't exercise the cache-hit reconstruction (the first sub-turn:
+    /// prev=0, so the else branch fires: input=curr, cached=0).
     fn parse_first(line: &str) -> Vec<ProviderEvent> {
         parse_line(line, &AtomicU64::new(0))
     }
 
     /// Call `parse_line` with a shared `last_prompt_eval` across multiple
-    /// sub-turns, so the implicit-cache approximation sees a growing prefix.
+    /// sub-turns, so the cache-hit reconstruction sees the previous prompt size.
     fn parse_seq(lines: &[&str]) -> Vec<Vec<ProviderEvent>> {
         let le = AtomicU64::new(0);
         lines.iter().map(|l| parse_line(l, &le)).collect()
@@ -1178,8 +1184,9 @@ mod tests {
 
     #[test]
     fn implicit_cache_approx_second_subturn_credits_overlap() {
-        // Two sub-turns: 12k then 13k tokens. The second credits min(13k,12k)=12k
-        // as cached (the warm prefix overlap), input stays the full 13k.
+        // Two sub-turns: 12k then 13k tokens. The second has curr=13000 >= prev=12000,
+        // so it's a cache miss (full eval): input=13000 (the full prompt), cached=0.
+        // The old min(curr, prev) synthetic cached no longer applies.
         let out = parse_seq(&[
             r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":12000,"eval_count":40}"#,
             r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":13000,"eval_count":10}"#,
@@ -1194,11 +1201,11 @@ mod tests {
                 output_tokens: 40
             })
         ));
-        // Second sub-turn: cached 12000 (min(13000, 12000)), input 13000.
+        // Second sub-turn: cache miss (curr >= prev), input=13000, cached=0.
         assert!(matches!(
             out[1][0],
             ProviderEvent::Usage(Usage {
-                cached: 12000,
+                cached: 0,
                 thinking_tokens: 0,
                 input_tokens: 13000,
                 output_tokens: 10
@@ -1209,7 +1216,9 @@ mod tests {
     #[test]
     fn implicit_cache_approx_shrinking_prompt_credits_smaller_overlap() {
         // A turn whose prompt is SMALLER than the previous (e.g. after eviction)
-        // credits min(curr, prev) = curr (all of it warm).
+        // triggers the cache-hit reconstruction: input=prev (50000), cached=prev-curr
+        // (20000). This is a false positive after eviction (the real prompt is
+        // 30000), but it's bounded and self-corrects on the next cache-miss turn.
         let out = parse_seq(&[
             r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":50000,"eval_count":40}"#,
             r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":30000,"eval_count":10}"#,
@@ -1217,10 +1226,89 @@ mod tests {
         assert!(matches!(
             out[1][0],
             ProviderEvent::Usage(Usage {
-                cached: 30000,
+                cached: 20000,
                 thinking_tokens: 0,
-                input_tokens: 30000,
+                input_tokens: 50000,
                 output_tokens: 10
+            })
+        ));
+    }
+
+    #[test]
+    fn implicit_cache_approx_deep_cache_hit_reconstructs_full_prompt() {
+        // A deep cache hit: the prompt is ~200k but only 5k was evaluated (the
+        // new tail). input_tokens must reconstruct to prev (200000), not the
+        // raw prompt_eval_count (5000). cached = 195000 (the warm prefix).
+        let out = parse_seq(&[
+            r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":200000,"eval_count":40}"#,
+            r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":5000,"eval_count":10}"#,
+        ]);
+        // First sub-turn: cache miss (prev=0), input=200000, cached=0.
+        assert!(matches!(
+            out[0][0],
+            ProviderEvent::Usage(Usage {
+                input_tokens: 200000,
+                cached: 0,
+                thinking_tokens: 0,
+                output_tokens: 40
+            })
+        ));
+        // Second sub-turn: deep cache hit (curr=5000 < prev=200000).
+        // input=200000 (prev), cached=195000 (prev - curr).
+        assert!(matches!(
+            out[1][0],
+            ProviderEvent::Usage(Usage {
+                input_tokens: 200000,
+                cached: 195000,
+                thinking_tokens: 0,
+                output_tokens: 10
+            })
+        ));
+    }
+
+    #[test]
+    fn implicit_cache_approx_eviction_self_corrects_on_next_cache_miss() {
+        // 3-turn sequence verifying the eviction false-positive self-corrects:
+        //   Turn 1: full prompt 50000 (cache miss, prev=0 → input=50000, cached=0).
+        //   Turn 2: eviction shrinks prompt to 30000 (curr < prev → false positive:
+        //     input=50000, cached=20000 — overcounts, the real prompt is 30000).
+        //   Turn 3: cache miss at new smaller size, reports 35000 (curr >= prev
+        //     → input=35000, cached=0 — self-corrects, no longer overcounting).
+        let out = parse_seq(&[
+            r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":50000,"eval_count":40}"#,
+            r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":30000,"eval_count":10}"#,
+            r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":35000,"eval_count":20}"#,
+        ]);
+        // Turn 1: cache miss (prev=0), input=50000, cached=0.
+        assert!(matches!(
+            out[0][0],
+            ProviderEvent::Usage(Usage {
+                input_tokens: 50000,
+                cached: 0,
+                thinking_tokens: 0,
+                output_tokens: 40
+            })
+        ));
+        // Turn 2: false positive (curr=30000 < prev=50000).
+        // input=50000 (prev), cached=20000 (prev - curr). Overcounts.
+        assert!(matches!(
+            out[1][0],
+            ProviderEvent::Usage(Usage {
+                input_tokens: 50000,
+                cached: 20000,
+                thinking_tokens: 0,
+                output_tokens: 10
+            })
+        ));
+        // Turn 3: self-correction (curr=35000 >= prev=30000, the last swap).
+        // input=35000 (curr = full prompt), cached=0. No longer overcounting.
+        assert!(matches!(
+            out[2][0],
+            ProviderEvent::Usage(Usage {
+                input_tokens: 35000,
+                cached: 0,
+                thinking_tokens: 0,
+                output_tokens: 20
             })
         ));
     }
