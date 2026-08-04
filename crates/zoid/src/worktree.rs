@@ -120,9 +120,16 @@ pub fn remove_worktree(repo_root: &Path, name: &str, delete_branch: bool) -> Res
     Ok(())
 }
 
-/// Whether the worktree branch has commits not reachable from the repo's
-/// HEAD (i.e., unmerged work). Returns `false` if the branch doesn't exist
-/// or git operations fail (conservative — don't block cleanup on errors).
+/// Whether the worktree branch has commits not reachable from the main
+/// checkout's HEAD (i.e., unmerged work). Returns `false` if the branch doesn't
+/// exist or git operations fail (conservative — don't block cleanup on errors).
+///
+/// **Important:** `repo_root` may be the *worktree* path (the process cwd is
+/// inside the worktree at `exit_worktree` time). A naive `repo.head()` on the
+/// worktree repo returns the worktree's own HEAD — the branch being exited —
+/// so `graph_descendant_of(branch, branch)` is false and unmerged work is
+/// silently orphaned. To compare against the *main* checkout's HEAD, we open
+/// the common git dir (`repo.commondir()`) and read HEAD from there.
 pub fn branch_has_unmerged_commits(repo_root: &Path, name: &str) -> bool {
     let Ok(repo) = Repository::open(repo_root) else {
         return false;
@@ -133,14 +140,32 @@ pub fn branch_has_unmerged_commits(repo_root: &Path, name: &str) -> bool {
     let Some(branch_oid) = branch.get().target() else {
         return false;
     };
-    let Ok(head_oid) = repo.head() else {
-        return false;
-    };
-    let Some(head_oid) = head_oid.target() else {
-        return false;
+    // Resolve the main checkout's HEAD, not the worktree's. When `repo_root`
+    // is the main checkout, `commondir() == repo.path()` and this is a no-op
+    // (same repo). When `repo_root` is a worktree, `commondir()` points at the
+    // common git dir; opening it yields a repo whose `head()` is the main
+    // checkout's HEAD, not the worktree's.
+    let head_oid = match main_head_oid(&repo) {
+        Some(oid) => oid,
+        None => return false,
     };
     // If the branch tip is a descendant of HEAD, it has commits not in HEAD
     // — i.e., unmerged work. graph_descendant_of(branch, head) = true means
     // branch is ahead of HEAD.
     repo.graph_descendant_of(branch_oid, head_oid).unwrap_or(false)
+}
+
+/// Resolve the main checkout's HEAD OID from a repo opened on either the main
+/// checkout or a linked worktree. Opens the common git dir (shared by all
+/// worktrees of a repo) so `head()` returns the main checkout's HEAD, not the
+/// worktree's. Returns `None` if the common dir can't be opened or has no HEAD.
+fn main_head_oid(repo: &Repository) -> Option<git2::Oid> {
+    // On the main checkout, `commondir()` equals `repo.path()` — opening it
+    // again is harmless (same repo, same HEAD). On a linked worktree,
+    // `commondir()` is the shared `<repo>/.git`, whose HEAD is the main
+    // checkout's.
+    let common = repo.commondir();
+    let common_repo = Repository::open(common).ok()?;
+    let head = common_repo.head().ok()?;
+    head.target()
 }

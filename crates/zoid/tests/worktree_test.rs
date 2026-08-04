@@ -173,6 +173,53 @@ fn enter_exit_round_trip_restores_cwd_and_cleans_up() {
     );
 }
 
+/// Regression: `branch_has_unmerged_commits` must detect unmerged commits even
+/// when called from inside the worktree (where `repo.head()` would otherwise
+/// return the worktree's own HEAD — the branch being exited — making
+/// `graph_descendant_of(branch, branch)` falsely return false). The process cwd
+/// is inside the worktree at `exit_worktree` time, so `repo_root` resolves to the
+/// worktree dir. The fix resolves the main checkout's HEAD via the common git dir.
+#[test]
+fn branch_has_unmerged_commits_detects_from_inside_worktree() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo(tmp.path());
+
+    let wt = create_worktree(tmp.path(), "unmerged-from-wt").unwrap();
+    let wt_path = wt.path().to_path_buf();
+
+    // Commit on the worktree branch so it's ahead of main's HEAD.
+    std::fs::write(wt_path.join("new.txt"), "data").unwrap();
+    let _ = std::process::Command::new("git")
+        .args(["-C"])
+        .arg(&wt_path)
+        .args(["add", "-A"])
+        .status();
+    let _ = std::process::Command::new("git")
+        .args(["-C"])
+        .arg(&wt_path)
+        .args(["commit", "-q", "-m", "unmerged work"])
+        .status();
+
+    let (_kept_path, name) = wt.into_kept();
+
+    // Call with repo_root = the WORKTREE path (simulating process cwd inside it).
+    // The branch has an unmerged commit — must return true.
+    assert!(
+        zoid::worktree::branch_has_unmerged_commits(&wt_path, &name),
+        "branch_has_unmerged_commits must detect unmerged commits even when \
+         called from inside the worktree (repo.head() would otherwise return \
+         the worktree's own HEAD, not main's)"
+    );
+
+    // Sanity: calling from the main checkout (the original, working path) also
+    // returns true.
+    assert!(
+        zoid::worktree::branch_has_unmerged_commits(tmp.path(), &name),
+        "branch_has_unmerged_commits must detect unmerged commits from the \
+         main checkout too"
+    );
+}
+
 #[test]
 fn name_collision_enters_existing_worktree() {
     let tmp = tempfile::tempdir().unwrap();
