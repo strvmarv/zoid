@@ -1,0 +1,17 @@
+---
+source: crates/zoid-tui/src/render.rs
+expression: lines
+---
+  Welcome to zoid — let's connect your first LLM.
+
+  ✓ 1 — Choose your provider
+
+  ● 2 — API key
+    Enter your Anthropic API key
+    ┌────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │ •••••••••••••• │
+    └────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    Get one at https://console.anthropic.com/settings/keys
+    No key? Press Esc to choose a different provider.
+
+  ☐ 3 — Model  (locked)

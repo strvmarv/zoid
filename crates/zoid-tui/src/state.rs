@@ -58,6 +58,37 @@ pub enum ConfigCol {
     Picker,
 }
 
+/// Which step of the onboarding wizard is active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OnboardingStep {
+    #[default]
+    Provider,
+    ApiKey,
+    Model,
+}
+
+/// The onboarding wizard's mutable state. Set at boot by the gate
+/// (`wizard_needed` in the bin); cleared on completion or abort.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OnboardingState {
+    pub step: OnboardingStep,
+    /// The provider id chosen in step 1 (empty until committed).
+    pub chosen_provider: String,
+    /// Masked key entry buffer for step 2. Cleared immediately after the key
+    /// is written to the secret store.
+    pub key_buffer: String,
+    /// Highlighted row in the current step's pick-list (steps 1 and 3).
+    pub list_sel: usize,
+    /// The pick-list options for the current step (providers in step 1, models
+    /// in step 3). Rebuilt on step transition.
+    pub options: Vec<crate::config_view::PickOption>,
+    /// When `Some(value)`, step 1 renders an env-shadow warning:
+    /// "ZOID_PROVIDER is set to "{value}" — ...". Set at boot from
+    /// `Provenance.provider == Source::Env` (spec §5). `None` when no env
+    /// var shadows the provider.
+    pub env_shadow: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Overlay {
     None,
@@ -71,6 +102,7 @@ pub enum Overlay {
     Feedback,
     Help,
     PluginCatalog,
+    Onboarding,
 }
 
 /// Read-only snapshot row for one MCP server, refreshed by the bin each tick
@@ -573,6 +605,10 @@ pub struct ShellState {
     /// "welcome back" hint. Defaults `false` so tests and examples that don't
     /// set it get the returning-user state (no onboarding copy in snapshots).
     pub first_time_user: bool,
+    /// The onboarding wizard state, or `None` when the wizard isn't open. Set at
+    /// boot by the gate; cleared on completion or abort. Defaults `None` so tests
+    /// and examples that don't set it get no wizard.
+    pub onboarding: Option<OnboardingState>,
     /// Whether automated compaction is currently running. Set by the bin from
     /// `AgentUpdate::CompactionStarted`; cleared by the per-frame debounce check
     /// after `CompactionComplete` + the 3s minimum display duration. Pure
@@ -703,6 +739,7 @@ impl ShellState {
             question: None,
             feedback: None,
             first_time_user: false,
+            onboarding: None,
             compacting: false,
             compaction_started_at: None,
             switch_provider_sel: 0,
@@ -766,6 +803,7 @@ impl ShellState {
         self.session_selected = 0;
         self.help_scroll = 0;
         self.plugin_catalog = None;
+        self.onboarding = None; // defensive reset (B4)
     }
 
     /// Increase detail (Overview → Summary → Normal → Detail), saturating. A
@@ -1355,6 +1393,32 @@ mod tests {
     fn session_confirm_defaults_to_none() {
         let s = ShellState::new();
         assert!(s.session_confirm.is_none());
+    }
+
+    #[test]
+    fn onboarding_state_defaults_to_none() {
+        let s = ShellState::new();
+        assert!(s.onboarding.is_none(), "onboarding must default to None");
+    }
+
+    #[test]
+    fn overlay_has_onboarding_variant() {
+        // The variant must exist and be distinct from None.
+        let o = Overlay::Onboarding;
+        assert_ne!(o, Overlay::None);
+    }
+
+    #[test]
+    fn close_overlay_clears_onboarding() {
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Onboarding;
+        s.onboarding = Some(OnboardingState {
+            step: OnboardingStep::Provider,
+            ..Default::default()
+        });
+        s.close_overlay();
+        assert_eq!(s.overlay, Overlay::None);
+        assert!(s.onboarding.is_none(), "close_overlay must clear onboarding");
     }
 
 }

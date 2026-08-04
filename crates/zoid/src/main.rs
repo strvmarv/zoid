@@ -1039,12 +1039,42 @@ fn effective_base_url(config: &zoid_core::config::Config) -> String {
         .unwrap_or_default()
 }
 
-/// Whether a provider id needs an API key to be usable. Local Ollama (localhost)
-/// does not; all remote HTTP flavors do. Hardcoded shortcut: `ollama-local` is
-/// the only keyless `Available` provider today. Revisit against the registry if
-/// an ambient-auth provider (no API key) ever becomes selectable.
+/// True when the onboarding wizard should be shown at startup. Pure; no IO.
+///
+/// - `first_time_user`: from `sessions.is_empty()` at boot.
+/// - `config`: the resolved Config.
+/// - `has_key`: the third return of `select_provider` — whether a credential
+///   was found for the active provider (true for keyless `ollama-local`).
+/// - `secrets_available`: whether the encrypted secret store opened successfully.
+///   If false, the wizard cannot function (step 2 writes to it) and must not
+///   fire — the user is directed to `:config` via the normal empty state.
+fn wizard_needed(
+    first_time_user: bool,
+    config: &zoid_core::config::Config,
+    has_key: bool,
+    secrets_available: bool,
+) -> bool {
+    if !first_time_user || !secrets_available {
+        return false;
+    }
+    let canon = zoid_provider::model::canonical_id(&config.provider);
+    if canon == "ollama-local" {
+        return false; // keyless local — assumed correct, never probed
+    }
+    if config.provider.trim().is_empty() {
+        return true; // sentinel: no provider chosen
+    }
+    // provider is set + requires a key + key not found → misconfigured
+    !has_key
+}
+
+/// Whether a provider id needs an API key to be usable. Derived from the
+/// registry's `key_url` field: `None` = keyless, `Some` = key required.
+/// Unknown provider ids default to key-required (safe).
 fn entry_requires_key(id: &str) -> bool {
-    id != "ollama-local"
+    zoid_provider::model::entry(id)
+        .map(|e| e.key_url.is_some())
+        .unwrap_or(true)
 }
 
 /// The secret env name a provider id needs, or `None` if it needs no key.
@@ -2467,6 +2497,9 @@ async fn main() -> Result<()> {
     shell.provider = provider_label(provider_name, has_key);
     shell.cache_supported = zoid_provider::has_prompt_cache(&model);
     shell.cwd = root.clone();
+    // Frozen at boot — the onboarding wizard + post-wizard empty-state copy
+    // depend on first_time_user not being recomputed mid-session (a session
+    // is created at boot, so sessions.is_empty() would be false if recomputed).
     shell.first_time_user = first_time_user;
 
     let (ui_tx, mut ui_rx) = mpsc::channel::<AgentUpdate>(256);
@@ -2679,6 +2712,28 @@ async fn main() -> Result<()> {
         embedder,
         installing_plugin: false,
     };
+
+    // First-run onboarding wizard: open the overlay if the gate fires.
+    // The gate is the persistence — no "wizard seen" flag; it re-evaluates
+    // from scratch on every launch.
+    if wizard_needed(first_time_user, &app.config, has_key, app.secrets.is_some()) {
+        app.shell.overlay = zoid_tui::Overlay::Onboarding;
+        // env_shadow: set when a ZOID_PROVIDER env var shadows the TOML provider
+        // (spec §5). The step-1 screen renders a warning so the user knows their
+        // wizard choice won't take effect until they unset it.
+        let env_shadow = if app.prov.provider == zoid_core::config::Source::Env {
+            Some(app.config.provider.clone())
+        } else {
+            None
+        };
+        app.shell.onboarding = Some(zoid_tui::state::OnboardingState {
+            step: zoid_tui::state::OnboardingStep::Provider,
+            chosen_provider: String::new(),
+            options: zoid_tui::config_view::provider_options(""),
+            env_shadow,
+            ..Default::default()
+        });
+    }
 
     // Restore the resumed session's persisted active mode (a no-op if that mode
     // no longer exists ⇒ stays Chat) and mirror it onto the shell so the
@@ -3320,6 +3375,11 @@ where
                             PasteTarget::FeedbackBody => {
                                 if let Some(fs) = app.shell.feedback.as_mut() {
                                     fs.body.push_str(&text);
+                                }
+                            }
+                            PasteTarget::OnboardingKey => {
+                                if let Some(o) = app.shell.onboarding.as_mut() {
+                                    o.key_buffer.push_str(&text);
                                 }
                             }
                             PasteTarget::None => {}
@@ -5362,7 +5422,186 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 cat.toggle_target();
             }
         }
+        Action::OnboardingMove(d) => {
+            let onb = match app.shell.onboarding.as_mut() {
+                Some(o) => o,
+                None => return Ok(false),
+            };
+            let opts = &onb.options;
+            if !opts.is_empty() {
+                let n = opts.len() as i16;
+                let mut i = onb.list_sel as i16;
+                for _ in 0..n {
+                    i = (i + d).rem_euclid(n);
+                    if opts[i as usize].selectable {
+                        break;
+                    }
+                }
+                onb.list_sel = i as usize;
+            }
+        }
+        Action::OnboardingSelect => {
+            handle_onboarding_select(app)?;
+        }
+        Action::OnboardingSubmitKey => {
+            handle_onboarding_submit_key(app)?;
+        }
+        Action::OnboardingKeyChar(c) => {
+            if let Some(o) = app.shell.onboarding.as_mut() {
+                o.key_buffer.push(c);
+            }
+        }
+        Action::OnboardingKeyBackspace => {
+            if let Some(o) = app.shell.onboarding.as_mut() {
+                o.key_buffer.pop();
+            }
+        }
+        Action::OnboardingBack => {
+            // Step 2 → step 1: retreat (not abort). Rebuild the provider list
+            // and reset list_sel to the previously-chosen provider.
+            if let Some(o) = app.shell.onboarding.as_mut() {
+                let prev = o.chosen_provider.clone();
+                o.step = zoid_tui::state::OnboardingStep::Provider;
+                o.options = zoid_tui::config_view::provider_options("");
+                o.list_sel = o
+                    .options
+                    .iter()
+                    .position(|opt| opt.id == prev)
+                    .unwrap_or(0);
+                o.key_buffer.clear();
+            }
+        }
+        Action::OnboardingAbort => {
+            app.shell.overlay = zoid_tui::Overlay::None;
+            app.shell.onboarding = None;
+        }
         Action::Noop => {}
+    }
+    Ok(false)
+}
+
+/// OnboardingSelect: Enter in step 1 (provider) or step 3 (model).
+/// Step 1: write provider + base_url + clear model, then advance to step 2
+/// (if key required) or DONE (if keyless). Step 3: write model, then DONE.
+fn handle_onboarding_select(app: &mut App) -> Result<bool> {
+    use zoid_core::config::TomlValue;
+    use zoid_tui::state::OnboardingState;
+    use zoid_tui::state::OnboardingStep;
+    // take() — extract by value so we don't hold a &mut borrow of app
+    // across the apply_config_write calls (which need &mut app).
+    let onb = match app.shell.onboarding.take() {
+        Some(o) => o,
+        None => return Ok(false),
+    };
+    let sel = onb.list_sel;
+    let chosen = onb
+        .options
+        .get(sel)
+        .filter(|o| o.selectable)
+        .map(|o| o.id.clone());
+    let Some(chosen_id) = chosen else {
+        app.shell.onboarding = Some(onb); // restore; non-selectable no-op
+        return Ok(false);
+    };
+    match onb.step {
+        OnboardingStep::Provider => {
+            // Write provider + base_url + clear model (mirror ConfigPickerSelect).
+            // onb is moved-out-by-value, so app is free to borrow here.
+            apply_config_write(app, "provider", TomlValue::Str(chosen_id.clone()), false);
+            apply_config_write(app, "base_url", base_url_write_for(&chosen_id), false);
+            apply_config_write(app, "model", TomlValue::Unset, false);
+            if entry_requires_key(&chosen_id) {
+                // Key required → advance to step 2.
+                app.shell.onboarding = Some(OnboardingState {
+                    step: OnboardingStep::ApiKey,
+                    chosen_provider: chosen_id,
+                    options: onb.options, // reuse the provider list (unused in step 2)
+                    ..Default::default()
+                });
+            } else {
+                // Keyless → DONE.
+                app.shell.overlay = zoid_tui::Overlay::None;
+                // onboarding stays None (not restored)
+            }
+        }
+        OnboardingStep::Model => {
+            // Index 0 = "use default" → empty model. Else the selected model id.
+            let model = if sel == 0 {
+                String::new()
+            } else {
+                chosen_id
+            };
+            apply_config_write(app, "model", TomlValue::Str(model), false);
+            app.shell.overlay = zoid_tui::Overlay::None;
+            // onboarding stays None — DONE
+        }
+        OnboardingStep::ApiKey => {
+            // Unreachable: route_onboarding_key only emits OnboardingSelect in
+            // Provider|Model. The debug_assert catches a future routing change
+            // that violates this invariant; restore-on-noop is the safe fallback.
+            debug_assert!(false, "OnboardingSelect unreachable in ApiKey step");
+            app.shell.onboarding = Some(onb); // restore
+        }
+    }
+    Ok(false)
+}
+
+/// OnboardingSubmitKey: Enter in step 2 (API key). Non-empty only — empty is a
+/// no-op. Writes the key to the secret store, clears the buffer, advances to
+/// step 3 (if >1 model) or DONE (with a final reload to pick up the key).
+fn handle_onboarding_submit_key(app: &mut App) -> Result<bool> {
+    use zoid_core::config::TomlValue;
+    use zoid_core::secret::SecretStore;
+    use zoid_tui::state::OnboardingState;
+    use zoid_tui::state::OnboardingStep;
+    let onb = match app.shell.onboarding.take() {
+        Some(o) => o,
+        None => return Ok(false),
+    };
+    if onb.key_buffer.is_empty() {
+        app.shell.onboarding = Some(onb); // restore; empty no-op
+        return Ok(false);
+    }
+    let provider_id = onb.chosen_provider.clone();
+    let key_env = key_env_for(&provider_id).expect(
+        "wizard only reaches step 2 for key-requiring providers; \
+         the lockstep test (Task 4 Step 6) guarantees a key_env_for arm \
+         for every registered provider with key_url: Some",
+    );
+    let key_val = onb.key_buffer.clone();
+    // SecretStore::set takes &self, so this doesn't conflict with app — but we
+    // already took onb, so app is free regardless.
+    app.secrets
+        .as_ref()
+        .expect("wizard gate guarantees secrets available")
+        .set(key_env, &key_val)?;
+
+    // Advance to step 3 (if >1 model) or DONE.
+    let model_count = zoid_provider::model::models_for(&provider_id).len();
+    if model_count > 1 {
+        let mut options = zoid_tui::config_view::model_options(&provider_id, "");
+        // Prepend the "use default" synthetic row at index 0.
+        options.insert(
+            0,
+            zoid_tui::config_view::PickOption {
+                id: String::new(),
+                label: "use default".into(),
+                detail: String::new(),
+                selectable: true,
+                is_current: false,
+            },
+        );
+        app.shell.onboarding = Some(OnboardingState {
+            step: OnboardingStep::Model,
+            chosen_provider: provider_id,
+            options,
+            ..Default::default() // key_buffer cleared, list_sel 0, env_shadow None
+        });
+    } else {
+        // Step 3 skipped — final no-op reload to pick up the key, then DONE.
+        apply_config_write(app, "model", TomlValue::Unset, false);
+        app.shell.overlay = zoid_tui::Overlay::None;
+        // onboarding stays None — DONE
     }
     Ok(false)
 }
@@ -8957,6 +9196,7 @@ mod tests {
     #[tokio::test]
     async fn apply_models_fetched_replaces_open_model_picker() {
         let mut app = test_app().await;
+        app.config.provider = "ollama".into(); // pin a configured provider so the model picker is non-empty
         refresh_config_sections(&mut app);
         // Find the "model" row and park the cursor on it, then open its
         // picker exactly as `Action::ConfigDrillOpen` would.
@@ -9073,6 +9313,7 @@ mod tests {
     #[tokio::test]
     async fn stale_provider_fetch_is_dropped() {
         let mut app = test_app().await;
+        app.config.provider = "ollama".into(); // pin a configured provider so the model picker is non-empty
         refresh_config_sections(&mut app);
         let (section, field) = app
             .shell
@@ -10340,7 +10581,8 @@ mod tests {
     fn effective_base_url_prefers_override_then_registry() {
         use zoid_core::config::Config;
         // No override → registry default for the canonical id.
-        let mut c = Config::default(); // provider = "ollama" (legacy) → ollama-cloud, base_url = None
+        let mut c = Config::default(); // provider pinned to "ollama" (legacy) → ollama-cloud, base_url = None
+        c.provider = "ollama".into();
         assert_eq!(effective_base_url(&c), "https://ollama.com");
 
         // Explicit local id, no override → local endpoint.
@@ -11024,5 +11266,107 @@ mod mcp_install_tests {
     fn project_target_is_cwd_dot_mcp_json() {
         let p = mcp_target_path(McpTarget::Project, std::path::Path::new("/cfg"), std::path::Path::new("/repo"));
         assert_eq!(p, std::path::Path::new("/repo/.mcp.json"));
+    }
+}
+
+#[cfg(test)]
+mod onboarding_tests {
+    use super::*;
+    use zoid_core::config::Config;
+
+    fn cfg_with_provider(provider: &str) -> Config {
+        let mut c = Config::default();
+        c.provider = provider.to_string();
+        c
+    }
+
+    #[test]
+    fn gate_fires_for_first_time_empty_provider() {
+        let c = cfg_with_provider("");
+        assert!(wizard_needed(true, &c, false, true));
+    }
+
+    #[test]
+    fn gate_fires_for_first_time_key_required_no_key() {
+        let c = cfg_with_provider("anthropic-api");
+        assert!(wizard_needed(true, &c, false, true));
+    }
+
+    #[test]
+    fn gate_skips_ollama_local() {
+        let c = cfg_with_provider("ollama-local");
+        assert!(!wizard_needed(true, &c, false, true));
+    }
+
+    #[test]
+    fn gate_skips_when_key_present() {
+        let c = cfg_with_provider("anthropic-api");
+        assert!(!wizard_needed(true, &c, true, true));
+    }
+
+    #[test]
+    fn gate_skips_returning_user() {
+        let c = cfg_with_provider("");
+        assert!(!wizard_needed(false, &c, false, true));
+    }
+
+    #[test]
+    fn gate_skips_when_secrets_unavailable() {
+        let c = cfg_with_provider("");
+        assert!(!wizard_needed(true, &c, false, false));
+    }
+
+    #[test]
+    fn gate_ignores_ambient_key_for_empty_provider() {
+        // A first-time user with empty provider but an ambient OLLAMA_API_KEY
+        // still gets the wizard (empty-provider check precedes !has_key).
+        let c = cfg_with_provider("");
+        assert!(wizard_needed(true, &c, true, true));
+    }
+
+    #[test]
+    fn key_url_and_key_env_for_are_in_lockstep() {
+        // Every key-requiring provider (key_url: Some) must have a key_env_for arm
+        // returning Some. A keyless provider (key_url: None) must return None.
+        for e in zoid_provider::model::PROVIDERS.iter() {
+            let key_env = key_env_for(e.id);
+            if e.key_url.is_some() {
+                assert!(
+                    key_env.is_some(),
+                    "{} has key_url: Some but key_env_for returned None — \
+                     a key-requiring provider must have a key env mapping",
+                    e.id
+                );
+                assert!(
+                    entry_requires_key(e.id),
+                    "{} has key_url: Some but entry_requires_key returned false",
+                    e.id
+                );
+            } else {
+                assert!(
+                    key_env.is_none(),
+                    "{} has key_url: None but key_env_for returned Some({:?}) — \
+                     a keyless provider must not have a key env mapping",
+                    e.id,
+                    key_env
+                );
+                assert!(
+                    !entry_requires_key(e.id),
+                    "{} has key_url: None but entry_requires_key returned true",
+                    e.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn canonical_id_empty_is_not_ollama_local() {
+        // The gate's ollama-local exemption precedes the empty-provider check.
+        // Its correctness depends on canonical_id("") != "ollama-local".
+        assert_ne!(
+            zoid_provider::model::canonical_id(""),
+            "ollama-local"
+        );
+        assert_eq!(zoid_provider::model::canonical_id(""), "");
     }
 }

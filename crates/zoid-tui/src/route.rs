@@ -8,7 +8,7 @@ use crate::command::Command;
 use crate::config_view::FieldKind;
 use crate::layout::{in_rect, ShellLayout};
 use crate::palette::{all_items, nav, selectable_matches};
-use crate::state::{ConfigCol, DrawerId, Focus, Overlay, ShellState};
+use crate::state::{ConfigCol, DrawerId, Focus, OnboardingStep, Overlay, ShellState};
 use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -128,6 +128,20 @@ pub enum Action {
     CatalogConfirmNo,
     /// `:plugin catalog` overlay, mcp Confirm mode: `u`/`p` — toggle the write target.
     CatalogTargetToggle,
+    /// Onboarding wizard: up(-1)/down(1) move in pick-list steps.
+    OnboardingMove(i16),
+    /// Onboarding wizard: Enter in step 1 (provider) or step 3 (model).
+    OnboardingSelect,
+    /// Onboarding wizard: Enter in step 2 (API key, non-empty only).
+    OnboardingSubmitKey,
+    /// Onboarding wizard: typed char in step 2 (API key entry).
+    OnboardingKeyChar(char),
+    /// Onboarding wizard: Backspace in step 2.
+    OnboardingKeyBackspace,
+    /// Onboarding wizard: Esc in step 2 — retreat to step 1 (not abort).
+    OnboardingBack,
+    /// Onboarding wizard: Esc in step 1/3 — skip the wizard.
+    OnboardingAbort,
     Noop,
 }
 
@@ -158,6 +172,7 @@ pub enum PasteTarget {
     Question,
     FeedbackTitle,
     FeedbackBody,
+    OnboardingKey,
     None,
 }
 
@@ -189,6 +204,12 @@ pub fn route_paste(state: &ShellState) -> PasteTarget {
                 Some(crate::state::FeedbackField::Body) => PasteTarget::FeedbackBody,
                 // Kind is a selection field with no text buffer.
                 _ => PasteTarget::None,
+            };
+        }
+        Overlay::Onboarding => {
+            return match &state.onboarding {
+                Some(o) if o.step == OnboardingStep::ApiKey => PasteTarget::OnboardingKey,
+                _ => PasteTarget::None, // steps 1, 3 are pick-lists — paste drops
             };
         }
         // Selection-only overlays have nowhere to put pasted text.
@@ -256,6 +277,7 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
             return Action::Noop;
         }
         Overlay::None => {}
+        Overlay::Onboarding => return route_onboarding_key(state, key),
     }
 
     // 2. Global combos.
@@ -576,6 +598,36 @@ fn route_verbs_key(key: KeyEvent) -> Action {
         KeyCode::Up => Action::VerbMove(-1),
         KeyCode::Down => Action::VerbMove(1),
         _ => Action::Noop,
+    }
+}
+
+/// Map a keypress to an `Action` while the onboarding wizard overlay is open.
+/// Step-dependent: step 2 (ApiKey) routes Esc to `OnboardingBack` (retreat to
+/// step 1), not `OnboardingAbort` (skip). Steps 1 and 3 route Esc to abort.
+pub fn route_onboarding_key(state: &ShellState, key: KeyEvent) -> Action {
+    let onb = match &state.onboarding {
+        Some(o) => o,
+        None => return Action::Noop,
+    };
+    match onb.step {
+        OnboardingStep::Provider | OnboardingStep::Model => match key.code {
+            KeyCode::Up => Action::OnboardingMove(-1),
+            KeyCode::Down => Action::OnboardingMove(1),
+            KeyCode::Enter => Action::OnboardingSelect,
+            // Step 1: Esc skips the whole wizard. Step 3: Esc skips the wizard
+            // (provider + key already written; default model used).
+            KeyCode::Esc => Action::OnboardingAbort,
+            _ => Action::Noop,
+        },
+        OnboardingStep::ApiKey => match key.code {
+            KeyCode::Enter => Action::OnboardingSubmitKey,
+            KeyCode::Backspace => Action::OnboardingKeyBackspace,
+            // Step 2: Esc RETREATS to step 1 (not abort) — the escape hatch
+            // for a keyless user who picked a key-requiring provider.
+            KeyCode::Esc => Action::OnboardingBack,
+            KeyCode::Char(c) => Action::OnboardingKeyChar(c),
+            _ => Action::Noop,
+        },
     }
 }
 
@@ -1814,5 +1866,96 @@ mod tests {
             route_key(&s, key(KeyCode::Up, KeyModifiers::NONE)),
             Action::Noop
         );
+    }
+
+    // ---- route_onboarding_key: step-dependent key routing for the wizard ----
+
+    #[test]
+    fn onboarding_provider_step_routes_arrows_and_enter() {
+        use crate::state::{OnboardingState, OnboardingStep, Overlay};
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Onboarding;
+        s.onboarding = Some(OnboardingState {
+            step: OnboardingStep::Provider,
+            ..Default::default()
+        });
+        assert_eq!(
+            route_onboarding_key(&s, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            Action::OnboardingMove(1)
+        );
+        assert_eq!(
+            route_onboarding_key(&s, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Action::OnboardingSelect
+        );
+        assert_eq!(
+            route_onboarding_key(&s, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            Action::OnboardingAbort
+        );
+    }
+
+    #[test]
+    fn onboarding_apikey_step_esc_routes_to_back_not_abort() {
+        use crate::state::{OnboardingState, OnboardingStep, Overlay};
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Onboarding;
+        s.onboarding = Some(OnboardingState {
+            step: OnboardingStep::ApiKey,
+            chosen_provider: "anthropic-api".into(),
+            ..Default::default()
+        });
+        // Esc in step 2 → OnboardingBack (retreat to step 1), NOT OnboardingAbort.
+        assert_eq!(
+            route_onboarding_key(&s, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            Action::OnboardingBack
+        );
+        // Enter in step 2 → OnboardingSubmitKey.
+        assert_eq!(
+            route_onboarding_key(&s, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Action::OnboardingSubmitKey
+        );
+        // Char in step 2 → OnboardingKeyChar.
+        assert_eq!(
+            route_onboarding_key(&s, KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+            Action::OnboardingKeyChar('x')
+        );
+    }
+
+    #[test]
+    fn onboarding_no_state_returns_noop() {
+        let s = ShellState::new();
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        assert_eq!(
+            route_onboarding_key(&s, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Action::Noop
+        );
+    }
+
+    // ---- route_paste: onboarding paste routing ----
+
+    #[test]
+    fn route_paste_onboarding_apikey_targets_key_buffer() {
+        use crate::state::{OnboardingState, OnboardingStep, Overlay};
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Onboarding;
+        s.onboarding = Some(OnboardingState {
+            step: OnboardingStep::ApiKey,
+            chosen_provider: "anthropic-api".into(),
+            ..Default::default()
+        });
+        assert_eq!(route_paste(&s), PasteTarget::OnboardingKey);
+    }
+
+    #[test]
+    fn route_paste_onboarding_provider_step_drops() {
+        use crate::state::{OnboardingState, OnboardingStep, Overlay};
+        let mut s = ShellState::new();
+        s.overlay = Overlay::Onboarding;
+        s.onboarding = Some(OnboardingState {
+            step: OnboardingStep::Provider,
+            ..Default::default()
+        });
+        assert_eq!(route_paste(&s), PasteTarget::None);
     }
 }

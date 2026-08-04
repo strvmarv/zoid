@@ -1,0 +1,25 @@
+---
+source: crates/zoid-tui/src/render.rs
+expression: lines
+---
+  Welcome to zoid — let's connect your first LLM.
+
+  ● 1 — Choose your provider
+    ⚠ ZOID_PROVIDER is set to "ollama-cloud" — your choice
+      here writes to TOML but won't take effect until you unset it.
+    › ollama · local
+        http http://localhost:11434
+      ollama · cloud
+        http https://ollama.com
+      opencode · go
+        http https://opencode.ai/zen/go
+      anthropic · api key
+        http https://api.anthropic.com
+      zai · coding plan
+        http https://api.z.ai/api/coding/paas/v4
+      opencode · zen
+        http https://opencode.ai/zen
+
+  ☐ 2 — API key  (locked)
+
+  ☐ 3 — Model  (locked)
