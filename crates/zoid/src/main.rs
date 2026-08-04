@@ -1048,7 +1048,6 @@ fn effective_base_url(config: &zoid_core::config::Config) -> String {
 /// - `secrets_available`: whether the encrypted secret store opened successfully.
 ///   If false, the wizard cannot function (step 2 writes to it) and must not
 ///   fire — the user is directed to `:config` via the normal empty state.
-#[allow(dead_code)] // wired into the boot gate by a follow-on onboarding task
 fn wizard_needed(
     first_time_user: bool,
     config: &zoid_core::config::Config,
@@ -2498,6 +2497,9 @@ async fn main() -> Result<()> {
     shell.provider = provider_label(provider_name, has_key);
     shell.cache_supported = zoid_provider::has_prompt_cache(&model);
     shell.cwd = root.clone();
+    // Frozen at boot — the onboarding wizard + post-wizard empty-state copy
+    // depend on first_time_user not being recomputed mid-session (a session
+    // is created at boot, so sessions.is_empty() would be false if recomputed).
     shell.first_time_user = first_time_user;
 
     let (ui_tx, mut ui_rx) = mpsc::channel::<AgentUpdate>(256);
@@ -2710,6 +2712,28 @@ async fn main() -> Result<()> {
         embedder,
         installing_plugin: false,
     };
+
+    // First-run onboarding wizard: open the overlay if the gate fires.
+    // The gate is the persistence — no "wizard seen" flag; it re-evaluates
+    // from scratch on every launch.
+    if wizard_needed(first_time_user, &app.config, has_key, app.secrets.is_some()) {
+        app.shell.overlay = zoid_tui::Overlay::Onboarding;
+        // env_shadow: set when a ZOID_PROVIDER env var shadows the TOML provider
+        // (spec §5). The step-1 screen renders a warning so the user knows their
+        // wizard choice won't take effect until they unset it.
+        let env_shadow = if app.prov.provider == zoid_core::config::Source::Env {
+            Some(app.config.provider.clone())
+        } else {
+            None
+        };
+        app.shell.onboarding = Some(zoid_tui::state::OnboardingState {
+            step: zoid_tui::state::OnboardingStep::Provider,
+            chosen_provider: String::new(),
+            options: zoid_tui::config_view::provider_options(""),
+            env_shadow,
+            ..Default::default()
+        });
+    }
 
     // Restore the resumed session's persisted active mode (a no-op if that mode
     // no longer exists ⇒ stays Chat) and mirror it onto the shell so the
@@ -3351,6 +3375,11 @@ where
                             PasteTarget::FeedbackBody => {
                                 if let Some(fs) = app.shell.feedback.as_mut() {
                                     fs.body.push_str(&text);
+                                }
+                            }
+                            PasteTarget::OnboardingKey => {
+                                if let Some(o) = app.shell.onboarding.as_mut() {
+                                    o.key_buffer.push_str(&text);
                                 }
                             }
                             PasteTarget::None => {}
@@ -5393,7 +5422,183 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 cat.toggle_target();
             }
         }
+        Action::OnboardingMove(d) => {
+            let onb = match app.shell.onboarding.as_mut() {
+                Some(o) => o,
+                None => return Ok(false),
+            };
+            let opts = &onb.options;
+            if !opts.is_empty() {
+                let n = opts.len() as i16;
+                let mut i = onb.list_sel as i16;
+                for _ in 0..n {
+                    i = (i + d).rem_euclid(n);
+                    if opts[i as usize].selectable {
+                        break;
+                    }
+                }
+                onb.list_sel = i as usize;
+            }
+        }
+        Action::OnboardingSelect => {
+            handle_onboarding_select(app)?;
+        }
+        Action::OnboardingSubmitKey => {
+            handle_onboarding_submit_key(app)?;
+        }
+        Action::OnboardingKeyChar(c) => {
+            if let Some(o) = app.shell.onboarding.as_mut() {
+                o.key_buffer.push(c);
+            }
+        }
+        Action::OnboardingKeyBackspace => {
+            if let Some(o) = app.shell.onboarding.as_mut() {
+                o.key_buffer.pop();
+            }
+        }
+        Action::OnboardingBack => {
+            // Step 2 → step 1: retreat (not abort). Rebuild the provider list
+            // and reset list_sel to the previously-chosen provider.
+            if let Some(o) = app.shell.onboarding.as_mut() {
+                let prev = o.chosen_provider.clone();
+                o.step = zoid_tui::state::OnboardingStep::Provider;
+                o.options = zoid_tui::config_view::provider_options("");
+                o.list_sel = o
+                    .options
+                    .iter()
+                    .position(|opt| opt.id == prev)
+                    .unwrap_or(0);
+                o.key_buffer.clear();
+            }
+        }
+        Action::OnboardingAbort => {
+            app.shell.overlay = zoid_tui::Overlay::None;
+            app.shell.onboarding = None;
+        }
         Action::Noop => {}
+    }
+    Ok(false)
+}
+
+/// OnboardingSelect: Enter in step 1 (provider) or step 3 (model).
+/// Step 1: write provider + base_url + clear model, then advance to step 2
+/// (if key required) or DONE (if keyless). Step 3: write model, then DONE.
+fn handle_onboarding_select(app: &mut App) -> Result<bool> {
+    use zoid_core::config::TomlValue;
+    use zoid_tui::state::OnboardingState;
+    use zoid_tui::state::OnboardingStep;
+    // take() — extract by value so we don't hold a &mut borrow of app
+    // across the apply_config_write calls (which need &mut app).
+    let onb = match app.shell.onboarding.take() {
+        Some(o) => o,
+        None => return Ok(false),
+    };
+    let sel = onb.list_sel;
+    let chosen = onb
+        .options
+        .get(sel)
+        .filter(|o| o.selectable)
+        .map(|o| o.id.clone());
+    let Some(chosen_id) = chosen else {
+        app.shell.onboarding = Some(onb); // restore; non-selectable no-op
+        return Ok(false);
+    };
+    match onb.step {
+        OnboardingStep::Provider => {
+            // Write provider + base_url + clear model (mirror ConfigPickerSelect).
+            // onb is moved-out-by-value, so app is free to borrow here.
+            apply_config_write(app, "provider", TomlValue::Str(chosen_id.clone()), false);
+            apply_config_write(app, "base_url", base_url_write_for(&chosen_id), false);
+            apply_config_write(app, "model", TomlValue::Unset, false);
+            if entry_requires_key(&chosen_id) {
+                // Key required → advance to step 2.
+                app.shell.onboarding = Some(OnboardingState {
+                    step: OnboardingStep::ApiKey,
+                    chosen_provider: chosen_id,
+                    options: onb.options, // reuse the provider list (unused in step 2)
+                    ..Default::default()
+                });
+            } else {
+                // Keyless → DONE.
+                app.shell.overlay = zoid_tui::Overlay::None;
+                // onboarding stays None (not restored)
+            }
+        }
+        OnboardingStep::Model => {
+            // Index 0 = "use default" → empty model. Else the selected model id.
+            let model = if sel == 0 {
+                String::new()
+            } else {
+                chosen_id
+            };
+            apply_config_write(app, "model", TomlValue::Str(model), false);
+            app.shell.overlay = zoid_tui::Overlay::None;
+            // onboarding stays None — DONE
+        }
+        OnboardingStep::ApiKey => {
+            // Shouldn't happen — OnboardingSelect is only routed in steps 1 and 3.
+            app.shell.onboarding = Some(onb); // restore
+        }
+    }
+    Ok(false)
+}
+
+/// OnboardingSubmitKey: Enter in step 2 (API key). Non-empty only — empty is a
+/// no-op. Writes the key to the secret store, clears the buffer, advances to
+/// step 3 (if >1 model) or DONE (with a final reload to pick up the key).
+fn handle_onboarding_submit_key(app: &mut App) -> Result<bool> {
+    use zoid_core::config::TomlValue;
+    use zoid_core::secret::SecretStore;
+    use zoid_tui::state::OnboardingState;
+    use zoid_tui::state::OnboardingStep;
+    let onb = match app.shell.onboarding.take() {
+        Some(o) => o,
+        None => return Ok(false),
+    };
+    if onb.key_buffer.is_empty() {
+        app.shell.onboarding = Some(onb); // restore; empty no-op
+        return Ok(false);
+    }
+    let provider_id = onb.chosen_provider.clone();
+    let key_env = key_env_for(&provider_id).expect(
+        "wizard only reaches step 2 for key-requiring providers; \
+         the lockstep test (Task 4 Step 6) guarantees a key_env_for arm \
+         for every registered provider with key_url: Some",
+    );
+    let key_val = onb.key_buffer.clone();
+    // SecretStore::set takes &self, so this doesn't conflict with app — but we
+    // already took onb, so app is free regardless.
+    app.secrets
+        .as_ref()
+        .expect("wizard gate guarantees secrets available")
+        .set(key_env, &key_val)?;
+
+    // Advance to step 3 (if >1 model) or DONE.
+    let model_count = zoid_provider::model::models_for(&provider_id).len();
+    if model_count > 1 {
+        let mut options = zoid_tui::config_view::model_options(&provider_id, "");
+        // Prepend the "use default" synthetic row at index 0.
+        options.insert(
+            0,
+            zoid_tui::config_view::PickOption {
+                id: String::new(),
+                label: "use default".into(),
+                detail: String::new(),
+                selectable: true,
+                is_current: false,
+            },
+        );
+        app.shell.onboarding = Some(OnboardingState {
+            step: OnboardingStep::Model,
+            chosen_provider: provider_id,
+            options,
+            ..Default::default() // key_buffer cleared, list_sel 0, env_shadow None
+        });
+    } else {
+        // Step 3 skipped — final no-op reload to pick up the key, then DONE.
+        apply_config_write(app, "model", TomlValue::Unset, false);
+        app.shell.overlay = zoid_tui::Overlay::None;
+        // onboarding stays None — DONE
     }
     Ok(false)
 }
