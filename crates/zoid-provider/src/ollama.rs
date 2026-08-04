@@ -1233,4 +1233,83 @@ mod tests {
             })
         ));
     }
+
+    #[test]
+    fn implicit_cache_approx_deep_cache_hit_reconstructs_full_prompt() {
+        // A deep cache hit: the prompt is ~200k but only 5k was evaluated (the
+        // new tail). input_tokens must reconstruct to prev (200000), not the
+        // raw prompt_eval_count (5000). cached = 195000 (the warm prefix).
+        let out = parse_seq(&[
+            r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":200000,"eval_count":40}"#,
+            r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":5000,"eval_count":10}"#,
+        ]);
+        // First sub-turn: cache miss (prev=0), input=200000, cached=0.
+        assert!(matches!(
+            out[0][0],
+            ProviderEvent::Usage(Usage {
+                input_tokens: 200000,
+                cached: 0,
+                thinking_tokens: 0,
+                output_tokens: 40
+            })
+        ));
+        // Second sub-turn: deep cache hit (curr=5000 < prev=200000).
+        // input=200000 (prev), cached=195000 (prev - curr).
+        assert!(matches!(
+            out[1][0],
+            ProviderEvent::Usage(Usage {
+                input_tokens: 200000,
+                cached: 195000,
+                thinking_tokens: 0,
+                output_tokens: 10
+            })
+        ));
+    }
+
+    #[test]
+    fn implicit_cache_approx_eviction_self_corrects_on_next_cache_miss() {
+        // 3-turn sequence verifying the eviction false-positive self-corrects:
+        //   Turn 1: full prompt 50000 (cache miss, prev=0 → input=50000, cached=0).
+        //   Turn 2: eviction shrinks prompt to 30000 (curr < prev → false positive:
+        //     input=50000, cached=20000 — overcounts, the real prompt is 30000).
+        //   Turn 3: cache miss at new smaller size, reports 35000 (curr >= prev
+        //     → input=35000, cached=0 — self-corrects, no longer overcounting).
+        let out = parse_seq(&[
+            r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":50000,"eval_count":40}"#,
+            r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":30000,"eval_count":10}"#,
+            r#"{"message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":35000,"eval_count":20}"#,
+        ]);
+        // Turn 1: cache miss (prev=0), input=50000, cached=0.
+        assert!(matches!(
+            out[0][0],
+            ProviderEvent::Usage(Usage {
+                input_tokens: 50000,
+                cached: 0,
+                thinking_tokens: 0,
+                output_tokens: 40
+            })
+        ));
+        // Turn 2: false positive (curr=30000 < prev=50000).
+        // input=50000 (prev), cached=20000 (prev - curr). Overcounts.
+        assert!(matches!(
+            out[1][0],
+            ProviderEvent::Usage(Usage {
+                input_tokens: 50000,
+                cached: 20000,
+                thinking_tokens: 0,
+                output_tokens: 10
+            })
+        ));
+        // Turn 3: self-correction (curr=35000 >= prev=30000, the last swap).
+        // input=35000 (curr = full prompt), cached=0. No longer overcounting.
+        assert!(matches!(
+            out[2][0],
+            ProviderEvent::Usage(Usage {
+                input_tokens: 35000,
+                cached: 0,
+                thinking_tokens: 0,
+                output_tokens: 20
+            })
+        ));
+    }
 }
