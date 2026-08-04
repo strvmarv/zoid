@@ -8957,6 +8957,7 @@ mod tests {
     #[tokio::test]
     async fn apply_models_fetched_replaces_open_model_picker() {
         let mut app = test_app().await;
+        app.config.provider = "ollama".into(); // pin a configured provider so the model picker is non-empty
         refresh_config_sections(&mut app);
         // Find the "model" row and park the cursor on it, then open its
         // picker exactly as `Action::ConfigDrillOpen` would.
@@ -9073,6 +9074,7 @@ mod tests {
     #[tokio::test]
     async fn stale_provider_fetch_is_dropped() {
         let mut app = test_app().await;
+        app.config.provider = "ollama".into(); // pin a configured provider so the model picker is non-empty
         refresh_config_sections(&mut app);
         let (section, field) = app
             .shell
@@ -10340,7 +10342,8 @@ mod tests {
     fn effective_base_url_prefers_override_then_registry() {
         use zoid_core::config::Config;
         // No override → registry default for the canonical id.
-        let mut c = Config::default(); // provider = "ollama" (legacy) → ollama-cloud, base_url = None
+        let mut c = Config::default(); // provider pinned to "ollama" (legacy) → ollama-cloud, base_url = None
+        c.provider = "ollama".into();
         assert_eq!(effective_base_url(&c), "https://ollama.com");
 
         // Explicit local id, no override → local endpoint.

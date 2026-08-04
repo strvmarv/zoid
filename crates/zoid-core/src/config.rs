@@ -195,7 +195,7 @@ impl Default for WakeConfig {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            provider: "ollama".to_string(),
+            provider: String::new(), // empty = unconfigured (see onboarding wizard gate)
             base_url: None,
             model: String::new(), // empty → binary falls back to provider default_model()
             economy: EconomyConfig::default(),
@@ -237,9 +237,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn default_provider_is_empty_unconfigured_sentinel() {
+        let c = Config::default();
+        assert!(
+            c.provider.is_empty(),
+            "default provider must be empty (unconfigured sentinel), got {:?}",
+            c.provider
+        );
+        assert!(c.model.is_empty(), "default model must be empty");
+    }
+
+    #[test]
     fn defaults_are_sane() {
         let c = Config::default();
-        assert_eq!(c.provider, "ollama");
         assert!(c.economy.auto_evict_cold);
         assert_eq!(c.economy.compact_threshold_pct, 80);
         assert_eq!(c.economy.context_target, Some(300_000));
