@@ -81,6 +81,9 @@ pub struct ProviderEntry {
     pub transport: Transport,
     pub models: &'static [&'static str],
     pub status: Status,
+    /// URL the onboarding wizard's API-key step links to for acquiring a key.
+    /// `None` for keyless providers (ollama-local).
+    pub key_url: Option<&'static str>,
 }
 
 /// The provider registry. Order is the picker display order.
@@ -94,6 +97,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         },
         models: &[], // local tags are arbitrary; free-text entry
         status: Status::Available,
+        key_url: None, // keyless local provider
     },
     ProviderEntry {
         id: "ollama-cloud",
@@ -104,6 +108,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         },
         models: &["glm-5.2:cloud"],
         status: Status::Available,
+        key_url: Some("https://ollama.com"),
     },
     ProviderEntry {
         id: "opencode-go",
@@ -128,6 +133,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
             "qwen3.7-plus",
         ],
         status: Status::Available,
+        key_url: Some("https://opencode.ai"),
     },
     ProviderEntry {
         id: "anthropic-api",
@@ -138,6 +144,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         },
         models: &["claude-sonnet-4-6", "claude-opus-4-8"],
         status: Status::Available,
+        key_url: Some("https://console.anthropic.com/settings/keys"),
     },
     ProviderEntry {
         id: "zai-coding-plan",
@@ -148,6 +155,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         },
         models: &["glm-5.2", "glm-5-turbo", "glm-4.7"],
         status: Status::Available,
+        key_url: Some("https://z.ai"),
     },
     ProviderEntry {
         id: "opencode-zen",
@@ -158,6 +166,7 @@ pub const PROVIDERS: &[ProviderEntry] = &[
         },
         models: ZEN_MODEL_IDS,
         status: Status::Available,
+        key_url: Some("https://opencode.ai"),
     },
 ];
 
@@ -796,6 +805,26 @@ mod tests {
         assert!(model_info("claude-opus-4-8").tools);
         assert!(model_info("claude-sonnet-4-6").prompt_cache);
         assert!(model_info("claude-opus-4-8").prompt_cache);
+    }
+
+    #[test]
+    fn key_url_field_present_on_all_providers() {
+        // Every provider entry must have the key_url field populated.
+        // ollama-local is keyless (None); all others have a Some URL.
+        for e in PROVIDERS.iter() {
+            match e.id {
+                "ollama-local" => assert!(
+                    e.key_url.is_none(),
+                    "ollama-local must be keyless (key_url: None), got {:?}",
+                    e.key_url
+                ),
+                _ => assert!(
+                    e.key_url.is_some(),
+                    "{} must have a key_url (key-requiring provider), got None",
+                    e.id
+                ),
+            }
+        }
     }
 }
 
