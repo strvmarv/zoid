@@ -1713,7 +1713,8 @@ fn onboarding_lines(state: &ShellState, width: usize) -> Vec<Line<'static>> {
         // until they unset it. `env_shadow` is Some(value) set at boot.
         if let Some(val) = &onb.env_shadow {
             let warn1 = format!(
-                "{indent}  ⚠ ZOID_PROVIDER is set to \"{val}\" — your choice"
+                "{indent}  {warning} ZOID_PROVIDER is set to \"{val}\" — your choice",
+                warning = glyph::WARNING
             );
             let warn2 = format!(
                 "{indent}    here writes to TOML but won't take effect until you unset it."
@@ -1757,8 +1758,8 @@ fn onboarding_lines(state: &ShellState, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
-/// Render a step header line: glyph + step number + label. Active = `●` accent,
-/// done = `✓` ok-green, pending = `☐` dim.
+/// Render a step header line: glyph + step number + label. Active = `glyph::EDIT`
+/// accent, done = `glyph::PASS` ok-green, pending = `glyph::PENDING` dim.
 fn render_step_header(
     lines: &mut Vec<Line<'static>>,
     num: u8,
@@ -1767,14 +1768,14 @@ fn render_step_header(
     done: bool,
     indent: &str,
 ) {
-    let (glyph_str, style) = if active {
-        ("●", Style::new().fg(color::CHAT_ACCENT))
+    let (glyph_ch, style) = if active {
+        (glyph::EDIT, Style::new().fg(color::CHAT_ACCENT))
     } else if done {
-        ("✓", Style::new().fg(color::OK))
+        (glyph::PASS, Style::new().fg(color::OK))
     } else {
-        ("☐", Style::new().fg(color::DIM))
+        (glyph::PENDING, Style::new().fg(color::DIM))
     };
-    let text = format!("{indent}{glyph_str} {num} — {label}");
+    let text = format!("{indent}{glyph_ch} {num} — {label}");
     if active || done {
         lines.push(Line::from(Span::styled(text, style)));
     } else {
@@ -1844,20 +1845,36 @@ fn render_api_key_input(
     )));
 
     // Masked input box.
-    let mask: String = onb.key_buffer.chars().map(|_| '•').collect();
+    let mask: String = onb.key_buffer.chars().map(|_| glyph::MASK).collect();
     let box_inner_w = width.saturating_sub(6); // indent + box borders
     let masked = truncate(&mask, box_inner_w);
     lines.push(Line::from(Span::styled(
-        format!("{indent}  ┌{}┐", "─".repeat(box_inner_w)),
+        format!(
+            "{indent}  {tl}{h}{tr}",
+            tl = glyph::TABLE_TL,
+            h = std::iter::repeat(glyph::TABLE_H).take(box_inner_w).collect::<String>(),
+            tr = glyph::TABLE_TR
+        ),
         Style::new().fg(color::DIM),
     )));
     lines.push(Line::from(vec![
-        Span::styled(format!("{indent}  │ "), Style::new().fg(color::DIM)),
+        Span::styled(
+            format!("{indent}  {v} ", v = glyph::TABLE_V),
+            Style::new().fg(color::DIM)
+        ),
         Span::styled(masked, Style::new().fg(color::TXT)),
-        Span::styled(" │", Style::new().fg(color::DIM)),
+        Span::styled(
+            format!(" {v}", v = glyph::TABLE_V),
+            Style::new().fg(color::DIM)
+        ),
     ]));
     lines.push(Line::from(Span::styled(
-        format!("{indent}  └{}┘", "─".repeat(box_inner_w)),
+        format!(
+            "{indent}  {bl}{h}{br}",
+            bl = glyph::TABLE_BL,
+            h = std::iter::repeat(glyph::TABLE_H).take(box_inner_w).collect::<String>(),
+            br = glyph::TABLE_BR
+        ),
         Style::new().fg(color::DIM),
     )));
 
