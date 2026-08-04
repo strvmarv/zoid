@@ -1,0 +1,14 @@
+---
+source: crates/zoid-tui/src/render.rs
+expression: lines
+---
+  Welcome to zoid — let's connect your first LLM.
+
+  ✓ 1 — Choose your provider
+
+  ✓ 2 — API key
+
+  ● 3 — Model
+    › use default
+      claude-opus-4-8
+      claude-sonnet-4-6
