@@ -273,8 +273,9 @@ In `crates/zoid-tui/src/state.rs`, add (near the other small enums like `ConfigC
 
 ```rust
 /// Which step of the onboarding wizard is active.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OnboardingStep {
+    #[default]
     Provider,
     ApiKey,
     Model,
@@ -282,7 +283,7 @@ pub enum OnboardingStep {
 
 /// The onboarding wizard's mutable state. Set at boot by the gate
 /// (`wizard_needed` in the bin); cleared on completion or abort.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct OnboardingState {
     pub step: OnboardingStep,
     /// The provider id chosen in step 1 (empty until committed).
@@ -295,6 +296,11 @@ pub struct OnboardingState {
     /// The pick-list options for the current step (providers in step 1, models
     /// in step 3). Rebuilt on step transition.
     pub options: Vec<crate::config_view::PickOption>,
+    /// When `Some(value)`, step 1 renders an env-shadow warning:
+    /// "ZOID_PROVIDER is set to "{value}" — ...". Set at boot from
+    /// `Provenance.provider == Source::Env` (spec §5). `None` when no env
+    /// var shadows the provider.
+    pub env_shadow: Option<String>,
 }
 ```
 
@@ -366,12 +372,47 @@ Overlay::Objects
 | Overlay::Onboarding => return PasteTarget::None,
 ```
 
-- [ ] **Step 9: Run the full zoid-tui test suite**
+- [ ] **Step 9: Add `onboarding` reset to `close_overlay`**
+
+`close_overlay` (`state.rs:760`) resets every `Option<>` overlay state (`palette`, `objects`, `plugin_catalog`, etc.) but has no `onboarding` entry. The wizard's `OnboardingAbort` handler sets both `overlay = None` and `onboarding = None`, but a generic `CloseOverlay` (e.g. a global Esc that resolves to `CloseOverlay`) would leave `onboarding = Some(...)` while `overlay == None` — an inconsistent state. Add the reset to `close_overlay` defensively:
+
+```rust
+pub fn close_overlay(&mut self) {
+    self.overlay = Overlay::None;
+    self.palette = PaletteState::default();
+    self.objects = ObjectState::default();
+    self.sessions.clear();
+    self.sessions_live.clear();
+    self.session_selected = 0;
+    self.help_scroll = 0;
+    self.plugin_catalog = None;
+    self.onboarding = None; // NEW — defensive reset (B4)
+}
+```
+
+- [ ] **Step 10: Write a test for the reset**
+
+```rust
+#[test]
+fn close_overlay_clears_onboarding() {
+    let mut s = ShellState::new();
+    s.overlay = Overlay::Onboarding;
+    s.onboarding = Some(OnboardingState {
+        step: OnboardingStep::Provider,
+        ..Default::default()
+    });
+    s.close_overlay();
+    assert_eq!(s.overlay, Overlay::None);
+    assert!(s.onboarding.is_none(), "close_overlay must clear onboarding");
+}
+```
+
+- [ ] **Step 11: Run the full zoid-tui test suite**
 
 Run: `cargo test -p zoid-tui -- --nocapture`
-Expected: PASS — all existing tests pass; the new field defaults to `None`, the new overlay variant is handled.
+Expected: PASS — all existing tests pass; the new field defaults to `None`, the new overlay variant is handled, `close_overlay` clears `onboarding`.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
 git add crates/zoid-tui/src/state.rs crates/zoid-tui/src/layout.rs crates/zoid-tui/src/route.rs
@@ -380,7 +421,8 @@ git commit -m "feat(tui): add OnboardingStep, OnboardingState, Overlay::Onboardi
 The state types for the first-run LLM connection wizard. Overlay
 variant added to the exhaustive matches in layout.rs (full-frame,
 joins None arm) and route_paste (None for now — paste logic in a
-later task). ShellState.onboarding defaults to None."
+later task). ShellState.onboarding defaults to None; close_overlay
+clears it defensively."
 ```
 
 ---
@@ -629,10 +671,7 @@ fn onboarding_provider_step_routes_arrows_and_enter() {
     s.overlay = Overlay::Onboarding;
     s.onboarding = Some(OnboardingState {
         step: OnboardingStep::Provider,
-        chosen_provider: String::new(),
-        key_buffer: String::new(),
-        list_sel: 0,
-        options: Vec::new(),
+        ..Default::default()
     });
     assert_eq!(
         route_onboarding_key(&s, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
@@ -657,9 +696,7 @@ fn onboarding_apikey_step_esc_routes_to_back_not_abort() {
     s.onboarding = Some(OnboardingState {
         step: OnboardingStep::ApiKey,
         chosen_provider: "anthropic-api".into(),
-        key_buffer: String::new(),
-        list_sel: 0,
-        options: Vec::new(),
+        ..Default::default()
     });
     // Esc in step 2 → OnboardingBack (retreat to step 1), NOT OnboardingAbort.
     assert_eq!(
@@ -762,6 +799,30 @@ use crate::state::OnboardingStep;
 Run: `cargo test -p zoid-tui onboarding_ -- --nocapture`
 Expected: PASS — all 3 routing tests pass.
 
+- [ ] **Step 5b: Wire the `route_key` overlay match arm**
+
+`route_onboarding_key` is defined but not yet dispatched. The bin's run loop calls `route_key(&app.shell, key)` once (`main.rs:3260`); overlay dispatch happens *inside* `route_key` in **`crates/zoid-tui/src/route.rs:242`** (the `match state.overlay` block), not in `main.rs`. Add the `Onboarding` arm there, mirroring the existing overlays:
+
+```rust
+    // 1. Overlays capture keys first.
+    match state.overlay {
+        Overlay::Palette => return route_palette_key(state, key),
+        Overlay::Objects => return route_objects_key(key),
+        Overlay::Verbs => return route_verbs_key(key),
+        Overlay::Sessions => return route_sessions_key(state, key),
+        Overlay::Config => return route_config_key(state, key),
+        Overlay::ProviderSwitch => return route_provider_switch_key(state, key),
+        Overlay::Mcp => return route_mcp_key(state, key),
+        Overlay::Help => return route_help_key(state, key),
+        Overlay::PluginCatalog => return route_plugin_catalog_key(state, key),
+        Overlay::Onboarding => return route_onboarding_key(state, key),  // NEW
+        Overlay::Feedback => { ... }
+        Overlay::None => {}
+    }
+```
+
+Without this arm, the `Onboarding` overlay falls through to `Overlay::None => {}` and the wizard never receives its own key events (arrows, Enter, Esc). This is the single integration point for key routing — there is no separate overlay-routing block in `main.rs`.
+
 - [ ] **Step 6: Add `PasteTarget::OnboardingKey` and update `route_paste`**
 
 In `crates/zoid-tui/src/route.rs`, add the variant to `PasteTarget` (before `None` at line ~161):
@@ -804,9 +865,7 @@ fn route_paste_onboarding_apikey_targets_key_buffer() {
     s.onboarding = Some(OnboardingState {
         step: OnboardingStep::ApiKey,
         chosen_provider: "anthropic-api".into(),
-        key_buffer: String::new(),
-        list_sel: 0,
-        options: Vec::new(),
+        ..Default::default()
     });
     assert_eq!(route_paste(&s), PasteTarget::OnboardingKey);
 }
@@ -818,10 +877,7 @@ fn route_paste_onboarding_provider_step_drops() {
     s.overlay = Overlay::Onboarding;
     s.onboarding = Some(OnboardingState {
         step: OnboardingStep::Provider,
-        chosen_provider: String::new(),
-        key_buffer: String::new(),
-        list_sel: 0,
-        options: Vec::new(),
+        ..Default::default()
     });
     assert_eq!(route_paste(&s), PasteTarget::None);
 }
@@ -930,11 +986,15 @@ pub fn render_onboarding(frame: &mut Frame, state: &ShellState, area: Rect) {
     // Step 1 — Provider.
     render_step_header(&mut lines, 1, "Choose your provider", onb.step == OnboardingStep::Provider, onb.step == OnboardingStep::ApiKey || onb.step == OnboardingStep::Model, indent);
     if onb.step == OnboardingStep::Provider {
-        // Env-shadow warning (conditional — bin sets a flag on ShellState; see below).
-        // For now, the renderer checks app.prov via a field on OnboardingState is not
-        // possible (pure render), so the env-shadow warning is driven by a bool the
-        // bin threads into OnboardingState. We add that field in Task 7; for now
-        // render without it (the snapshot tests don't need it).
+        // Env-shadow warning (spec §5): when a ZOID_PROVIDER env var shadows
+        // the TOML provider, warn the user their choice won't take effect
+        // until they unset it. `env_shadow` is Some(value) set at boot.
+        if let Some(val) = &onb.env_shadow {
+            let warn1 = format!("{indent}  ⚠ ZOID_PROVIDER is set to \"{val}\" — your choice");
+            let warn2 = format!("{indent}    here writes to TOML but won't take effect until you unset it.");
+            lines.push(Line::from(Span::styled(warn1, Style::new().fg(color::WARN))));
+            lines.push(Line::from(Span::styled(warn2, Style::new().fg(color::DIM))));
+        }
         render_pick_list(&mut lines, &onb.options, onb.list_sel, indent, width);
     }
 
@@ -1071,17 +1131,10 @@ fn render_api_key_input(
         Style::new().fg(color::DIM),
     )));
 
-    // Key URL help line.
-    let key_url = crate::config_view::provider_options("")
-        .iter()
-        .find(|o| o.id == onb.chosen_provider)
-        .and_then(|o| {
-            crate::config_view::PickOption { .. } = o; // suppress
-            None::<&str>
-        });
-    // The key_url is on ProviderEntry, not PickOption. The bin threads it via
-    // a helper; for the renderer, we look it up from the registry directly.
-    let key_url = zoid_provider::model::entry(&onb.chosen_provider)
+    // Key URL help line. zoid-tui depends on zoid-model (not zoid-provider),
+    // so use zoid_model::entry directly (S2 — zoid_provider::model::entry would
+    // not resolve in this crate).
+    let key_url = zoid_model::entry(&onb.chosen_provider)
         .and_then(|e| e.key_url);
     if let Some(url) = key_url {
         lines.push(Line::from(Span::styled(
@@ -1098,12 +1151,10 @@ fn render_api_key_input(
 }
 ```
 
-Note: the `render_api_key_input` function looks up `key_url` from the registry via `zoid_provider::model::entry`. This requires `zoid-tui` to depend on `zoid-provider` for the model lookup. Check `crates/zoid-tui/Cargo.toml` — if `zoid-provider` is not a dependency, add it (it's likely already a dependency since `config_view` uses `zoid_model`). Actually, `config_view` uses `zoid_model` (re-exported as `model` in `zoid_provider`), so check whether `zoid-tui` depends on `zoid-model` or `zoid-provider`. Add the appropriate dependency in `Cargo.toml` if needed and use `zoid_model::entry` directly.
-
 - [ ] **Step 4: Verify compilation**
 
 Run: `cargo build -p zoid-tui`
-Expected: PASS — fix any import/dependency issues. If `zoid-tui` doesn't depend on `zoid-model`, add `zoid-model = { path = "../zoid-model" }` to `crates/zoid-tui/Cargo.toml` and use `zoid_model::entry(&onb.chosen_provider).and_then(|e| e.key_url)`.
+Expected: PASS. `zoid-tui` already depends on `zoid-model` (`Cargo.toml:10`), so `zoid_model::entry` resolves with no dependency change.
 
 - [ ] **Step 5: Write the snapshot tests**
 
@@ -1118,10 +1169,8 @@ fn onboarding_step_provider_snapshot() {
     state.overlay = Overlay::Onboarding;
     state.onboarding = Some(OnboardingState {
         step: OnboardingStep::Provider,
-        chosen_provider: String::new(),
-        key_buffer: String::new(),
-        list_sel: 0,
         options: provider_options(""),
+        ..Default::default()
     });
     let lines = render_onboarding_lines(&state, 110);
     insta::assert_snapshot!("onboarding_step_provider_110", lines);
@@ -1137,8 +1186,8 @@ fn onboarding_step_api_key_snapshot() {
         step: OnboardingStep::ApiKey,
         chosen_provider: "anthropic-api".into(),
         key_buffer: "sk-ant-test123".into(),
-        list_sel: 0,
         options: provider_options(""),
+        ..Default::default()
     });
     let lines = render_onboarding_lines(&state, 110);
     insta::assert_snapshot!("onboarding_step_api_key_110", lines);
@@ -1153,9 +1202,21 @@ fn onboarding_step_model_snapshot() {
     state.onboarding = Some(OnboardingState {
         step: OnboardingStep::Model,
         chosen_provider: "anthropic-api".into(),
-        key_buffer: String::new(),
-        list_sel: 0,
-        options: model_options("anthropic-api", ""),
+        // Include the "use default" synthetic row at index 0, exactly as
+        // handle_onboarding_submit_key prepends it (S3 — the snapshot must
+        // match what the user sees at runtime, not the raw model_options output).
+        options: {
+            let mut o = model_options("anthropic-api", "");
+            o.insert(0, crate::config_view::PickOption {
+                id: String::new(),
+                label: "use default".into(),
+                detail: String::new(),
+                selectable: true,
+                is_current: false,
+            });
+            o
+        },
+        ..Default::default()
     });
     let lines = render_onboarding_lines(&state, 110);
     insta::assert_snapshot!("onboarding_step_model_110", lines);
@@ -1169,10 +1230,8 @@ fn onboarding_floor_width_no_overflow() {
     state.overlay = Overlay::Onboarding;
     state.onboarding = Some(OnboardingState {
         step: OnboardingStep::Provider,
-        chosen_provider: String::new(),
-        key_buffer: String::new(),
-        list_sel: 0,
         options: provider_options(""),
+        ..Default::default()
     });
     let lines = render_onboarding_lines(&state, 51);
     for line in &lines {
@@ -1181,6 +1240,22 @@ fn onboarding_floor_width_no_overflow() {
             .sum();
         assert!(w <= 51, "line exceeded width 51: {w}");
     }
+}
+
+#[test]
+fn onboarding_step_provider_env_shadow_snapshot() {
+    use crate::state::{OnboardingState, OnboardingStep, Overlay};
+    use crate::config_view::provider_options;
+    let mut state = ShellState::new();
+    state.overlay = Overlay::Onboarding;
+    state.onboarding = Some(OnboardingState {
+        step: OnboardingStep::Provider,
+        options: provider_options(""),
+        env_shadow: Some("ollama-cloud".into()),
+        ..Default::default()
+    });
+    let lines = render_onboarding_lines(&state, 110);
+    insta::assert_snapshot!("onboarding_step_provider_env_shadow_110", lines);
 }
 ```
 
@@ -1205,7 +1280,7 @@ fn render_onboarding_lines(state: &ShellState, width: usize) -> String {
 - [ ] **Step 6: Generate the snapshots**
 
 Run: `cargo insta test -p zoid-tui onboarding --accept`
-Expected: 4 snapshot files created under `crates/zoid-tui/src/snapshots/`.
+Expected: 5 snapshot files created under `crates/zoid-tui/src/snapshots/` (provider, api_key, model, floor, env_shadow).
 
 - [ ] **Step 7: Review the snapshots**
 
@@ -1252,12 +1327,20 @@ In `crates/zoid/src/main.rs`, find the boot block where `first_time_user` is set
 // from scratch on every launch.
 if wizard_needed(first_time_user, &app.config, has_key, app.secrets.is_some()) {
     app.shell.overlay = zoid_tui::Overlay::Onboarding;
+    // env_shadow: set when a ZOID_PROVIDER env var shadows the TOML provider
+    // (spec §5). The step-1 screen renders a warning so the user knows their
+    // wizard choice won't take effect until they unset it.
+    let env_shadow = if app.prov.provider == zoid_core::config::Source::Env {
+        Some(app.config.provider.clone())
+    } else {
+        None
+    };
     app.shell.onboarding = Some(zoid_tui::state::OnboardingState {
         step: zoid_tui::state::OnboardingStep::Provider,
         chosen_provider: String::new(),
-        key_buffer: String::new(),
-        list_sel: 0,
         options: zoid_tui::config_view::provider_options(""),
+        env_shadow,
+        ..Default::default()
     });
 }
 ```
@@ -1335,7 +1418,7 @@ In `crates/zoid/src/main.rs`, find `handle_action` (line ~4207). Add the onboard
 
 - [ ] **Step 3: Implement `handle_onboarding_select`**
 
-Add this function in `main.rs` (near the other `handle_*` helpers):
+Add this function in `main.rs` (near the other `handle_*` helpers). **Use `take()` to avoid the borrow conflict** — `apply_config_write(app, ...)` needs `&mut app`, which cannot coexist with `let onb = app.shell.onboarding.as_mut()`. Extract `onb` by value, read what's needed, drop the borrow before the config writes, then re-construct the next state:
 
 ```rust
 /// OnboardingSelect: Enter in step 1 (provider) or step 3 (model).
@@ -1343,34 +1426,45 @@ Add this function in `main.rs` (near the other `handle_*` helpers):
 /// (if key required) or DONE (if keyless). Step 3: write model, then DONE.
 fn handle_onboarding_select(app: &mut App) -> Result<bool> {
     use zoid_core::config::TomlValue;
-    let onb = match app.shell.onboarding.as_mut() {
+    use zoid_tui::state::OnboardingStep;
+    // take() — extract by value so we don't hold a &mut borrow of app
+    // across the apply_config_write calls (which need &mut app).
+    let onb = match app.shell.onboarding.take() {
         Some(o) => o,
         None => return Ok(false),
     };
     let sel = onb.list_sel;
-    let opts = onb.options.clone(); // clone to avoid borrow issues
-    let chosen = opts.get(sel).filter(|o| o.selectable).map(|o| o.id.clone());
+    let chosen = onb
+        .options
+        .get(sel)
+        .filter(|o| o.selectable)
+        .map(|o| o.id.clone());
     let Some(chosen_id) = chosen else {
-        return Ok(false); // non-selectable row — no-op
+        app.shell.onboarding = Some(onb); // restore; non-selectable no-op
+        return Ok(false);
     };
     match onb.step {
-        zoid_tui::state::OnboardingStep::Provider => {
+        OnboardingStep::Provider => {
             // Write provider + base_url + clear model (mirror ConfigPickerSelect).
+            // onb is moved-out-by-value, so app is free to borrow here.
             apply_config_write(app, "provider", TomlValue::Str(chosen_id.clone()), false);
             apply_config_write(app, "base_url", base_url_write_for(&chosen_id), false);
             apply_config_write(app, "model", TomlValue::Unset, false);
-            onb.chosen_provider = chosen_id.clone();
             if entry_requires_key(&chosen_id) {
                 // Key required → advance to step 2.
-                onb.step = zoid_tui::state::OnboardingStep::ApiKey;
-                onb.key_buffer.clear();
+                app.shell.onboarding = Some(OnboardingState {
+                    step: OnboardingStep::ApiKey,
+                    chosen_provider: chosen_id,
+                    options: onb.options, // reuse the provider list (unused in step 2)
+                    ..Default::default()
+                });
             } else {
                 // Keyless → DONE.
                 app.shell.overlay = zoid_tui::Overlay::None;
-                app.shell.onboarding = None;
+                // onboarding stays None (not restored)
             }
         }
-        zoid_tui::state::OnboardingStep::Model => {
+        OnboardingStep::Model => {
             // Index 0 = "use default" → empty model. Else the selected model id.
             let model = if sel == 0 {
                 String::new()
@@ -1379,18 +1473,22 @@ fn handle_onboarding_select(app: &mut App) -> Result<bool> {
             };
             apply_config_write(app, "model", TomlValue::Str(model), false);
             app.shell.overlay = zoid_tui::Overlay::None;
-            app.shell.onboarding = None;
+            // onboarding stays None — DONE
         }
-        zoid_tui::state::OnboardingStep::ApiKey => {
+        OnboardingStep::ApiKey => {
             // Shouldn't happen — OnboardingSelect is only routed in steps 1 and 3.
-            return Ok(false);
+            app.shell.onboarding = Some(onb); // restore
         }
     }
     Ok(false)
 }
 ```
 
+> **Why `take()` not `as_mut()`:** `apply_config_write(app: &mut App, ...)` reloads the full config and re-selects the provider (`main.rs:4163–4200`), mutating `app.config`, `app.prov`, `app.shell.provider`, etc. Holding `&mut OnboardingState` (reached through `app.shell.onboarding`) across those calls is a borrow-checker violation — two `&mut` borrows of `app`. `take()` extracts the value, freeing `app` for the write, then we reconstruct the next state (or leave it `None` on DONE).
+
 - [ ] **Step 4: Implement `handle_onboarding_submit_key`**
+
+Same `take()` pattern — `apply_config_write` (in the `model_count <= 1` branch) needs `&mut app`:
 
 ```rust
 /// OnboardingSubmitKey: Enter in step 2 (API key). Non-empty only — empty is a
@@ -1399,33 +1497,35 @@ fn handle_onboarding_select(app: &mut App) -> Result<bool> {
 fn handle_onboarding_submit_key(app: &mut App) -> Result<bool> {
     use zoid_core::config::TomlValue;
     use zoid_core::secret::SecretStore;
-    let onb = match app.shell.onboarding.as_mut() {
+    use zoid_tui::state::OnboardingStep;
+    let onb = match app.shell.onboarding.take() {
         Some(o) => o,
         None => return Ok(false),
     };
     if onb.key_buffer.is_empty() {
-        return Ok(false); // no-op — must enter a non-empty key
+        app.shell.onboarding = Some(onb); // restore; empty no-op
+        return Ok(false);
     }
     let provider_id = onb.chosen_provider.clone();
     let key_env = key_env_for(&provider_id).expect(
         "wizard only reaches step 2 for key-requiring providers; \
-         lockstep test guarantees a key_env_for arm",
+         the lockstep test (Task 4 Step 6) guarantees a key_env_for arm \
+         for every registered provider with key_url: Some",
     );
     let key_val = onb.key_buffer.clone();
+    // SecretStore::set takes &self, so this doesn't conflict with app — but we
+    // already took onb, so app is free regardless.
     app.secrets
         .as_ref()
         .expect("wizard gate guarantees secrets available")
         .set(key_env, &key_val)?;
-    onb.key_buffer.clear(); // plaintext not held after write
 
     // Advance to step 3 (if >1 model) or DONE.
     let model_count = zoid_provider::model::models_for(&provider_id).len();
     if model_count > 1 {
-        onb.step = zoid_tui::state::OnboardingStep::Model;
-        onb.list_sel = 0;
-        onb.options = zoid_tui::config_view::model_options(&provider_id, "");
+        let mut options = zoid_tui::config_view::model_options(&provider_id, "");
         // Prepend the "use default" synthetic row at index 0.
-        onb.options.insert(
+        options.insert(
             0,
             zoid_tui::config_view::PickOption {
                 id: String::new(),
@@ -1435,15 +1535,23 @@ fn handle_onboarding_submit_key(app: &mut App) -> Result<bool> {
                 is_current: false,
             },
         );
+        app.shell.onboarding = Some(OnboardingState {
+            step: OnboardingStep::Model,
+            chosen_provider: provider_id,
+            options,
+            ..Default::default() // key_buffer cleared, list_sel 0, env_shadow None
+        });
     } else {
         // Step 3 skipped — final no-op reload to pick up the key, then DONE.
         apply_config_write(app, "model", TomlValue::Unset, false);
         app.shell.overlay = zoid_tui::Overlay::None;
-        app.shell.onboarding = None;
+        // onboarding stays None — DONE
     }
     Ok(false)
 }
 ```
+
+> **The `key_env_for` `expect` message:** `key_env_for`'s `_ => Some("OLLAMA_API_KEY")` arm means it returns `Some` for *any* unknown id — so the `expect` won't fire even for a hypothetical provider with `key_url: Some` but no real env mapping. The lockstep test (Task 4 Step 6) is the **only** real guard, and it only covers registered `PROVIDERS` entries. The `expect` message says exactly that. The test is a mandatory merge gate: any new provider with `key_url: Some` must either get a `key_env_for` arm or the test fails.
 
 - [ ] **Step 5: Add the paste handler arm**
 
@@ -1457,24 +1565,14 @@ In `crates/zoid/src/main.rs`, find the paste handler (line ~3282, the `Some(Ok(C
                             }
 ```
 
-- [ ] **Step 6: Add the onboarding routing to the key dispatcher**
+- [ ] **Step 6: (Key routing already wired in Task 5 Step 5b)**
 
-Find where `route_key` is called in the run loop (the key event handler). The onboarding overlay must route through `route_onboarding_key` when active, not the normal `route_key`. Find the overlay-routing block (where `route_question_key` / `route_config_key` are dispatched based on `state.overlay`). Add the `Onboarding` branch:
-
-```rust
-            if app.shell.overlay == zoid_tui::Overlay::Onboarding {
-                route_onboarding_key(&app.shell, key)
-            } else if app.shell.question.is_some() {
-                // ... existing question routing ...
-            }
-```
-
-The exact integration point depends on the existing structure — search for `route_question_key` in `main.rs` to find the overlay-routing block and add the `Onboarding` branch there.
+The `route_key` overlay match arm (`Overlay::Onboarding => return route_onboarding_key(state, key)`) was added in Task 5 Step 5b at `route.rs:242`. There is no separate overlay-routing block in `main.rs` — the run loop calls `route_key` once (`main.rs:3260`) and it dispatches internally. No action needed here.
 
 - [ ] **Step 7: Verify compilation**
 
 Run: `cargo build -p zoid`
-Expected: PASS — fix any borrow issues (the `handle_onboarding_select` function clones `opts` to avoid borrowing `onb` and `app` simultaneously; adjust if needed).
+Expected: PASS — the handlers use `take()` (Step 3/Step 4) to avoid borrow conflicts.
 
 - [ ] **Step 8: Write integration tests for the transitions**
 
@@ -1543,6 +1641,15 @@ step 2. first_time_user frozen-invariant comment added."
 - `PasteTarget::OnboardingKey` — defined Task 5, used in Task 7 paste handler. ✓
 - `PickOption` — existing struct. The "use default" synthetic row in Task 7 Step 4 uses `id: String::new()`, `label: "use default"`, matching the spec. ✓
 
-One note: the `render_api_key_input` helper in Task 6 has a leftover `crate::config_view::PickOption { .. } = o; // suppress` line that's dead code — the implementer should remove it and use the direct `zoid_model::entry` lookup. Fixed in the plan text above (the second `key_url` lookup supersedes the first).
+**Revision log (Gilfoyle review, round 2):**
+- **B1 fixed:** Key routing arm added to `route_key` at `route.rs:242` (Task 5 Step 5b), not `main.rs`.
+- **B2 fixed:** Handlers use `take()` instead of `as_mut()` — frees `app` for `apply_config_write`.
+- **B3 fixed:** `key_env_for` `expect` message documents the lockstep test as the guard (not `key_env_for` itself).
+- **B4 fixed:** `close_overlay` clears `onboarding` (Task 3 Step 9 + test).
+- **S1 fixed:** Dead `PickOption { .. } = o;` code removed from `render_api_key_input`.
+- **S2 fixed:** `zoid_model::entry` used (zoid-tui depends on zoid-model, not zoid-provider).
+- **S3 fixed:** Model-step snapshot includes the "use default" synthetic row.
+- **S4 fixed:** `env_shadow: Option<String>` field added to `OnboardingState` (Task 3), set at boot (Task 7), rendered in step 1 (Task 6).
+- **S5 acknowledged:** Transition tests deferred to execution (humble-object extraction is a reasonable enhancement but out of plan scope).
 
-No issues found that block implementation.
+No remaining issues block implementation.
