@@ -735,10 +735,11 @@ pub async fn run_agent_turn_cancellable(
 ) -> Result<crate::eventlog::EventLog> {
     // Calibration ratio: real_input_tokens / context_window.total_tokens from
     // the last non-cached sub-turn. The chars/4 estimate undercounts 5-7x for
-    // code/tool output, so when the provider reports 0 (Ollama cached prompt)
-    // we scale the current estimate by this ratio to approximate the real
-    // context size. Updated on every sub-turn where the provider reports a
-    // non-zero input. Mutable, lives for the turn (across sub-turns).
+    // code/tool output, so on cache-hit turns (where the Ollama provider
+    // reconstructs input from the previous sub-turn's size) we scale the
+    // current estimate by this ratio to approximate the real context size.
+    // Updated on every sub-turn where the provider reports a non-zero input.
+    // Mutable, lives for the turn (across sub-turns).
     let mut calibration_ratio: Option<f64> = None;
 
     // Compute the context overhead (system prompt + tool specs) once for the

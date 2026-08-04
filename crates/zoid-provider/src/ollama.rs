@@ -303,13 +303,13 @@ pub struct OllamaProvider {
     /// Idle deadline for the initial response and between streamed chunks; see
     /// `crate::stream_idle_timeout`.
     idle_timeout: Duration,
-    /// The previous sub-turn's `prompt_eval_count` (full prompt size). Ollama's
-    /// `keep_alive` holds the model's KV cache warm for 30m, so the bulk of each
-    /// new prompt is a re-evaluation of a warm prefix — but the native `/api/chat`
-    /// `done` frame reports it all as `prompt_eval_count` with no cache-read
-    /// breakdown. We approximate: the overlap with the previous prompt is
-    /// "cached" (warm in KV). Cross-stream state so `parse_line`'s `done` frame
-    /// can read it. Ollama implicit-cache approximation.
+    /// The previous sub-turn's `prompt_eval_count` (uncached tail on cache-hit
+    /// turns, full prompt on cache-miss turns). Ollama's `keep_alive` holds the
+    /// model's KV cache warm for 30m, so on a cache-hit turn only the new
+    /// (uncached) tail is evaluated — `prompt_eval_count` is that tail, not the
+    /// full prompt. On a cache-miss turn it's the full prompt. We use it to
+    /// reconstruct the full prompt size on cache-hit turns (see the `done` frame
+    /// handler). Cross-stream state so `parse_line`'s `done` frame can read it.
     last_prompt_eval: std::sync::atomic::AtomicU64,
     /// Explicit context window for `options.num_ctx`. `Some` only for
     /// `ollama-local`; `None` for Ollama Cloud, which sizes context
@@ -610,14 +610,14 @@ mod tests {
     }
 
     /// Call `parse_line` with a fresh (zero) `last_prompt_eval`. Used by tests
-    /// that don't exercise the implicit-cache approximation (the first sub-turn:
-    /// prev=0, so cached=0, matching the old behavior).
+    /// that don't exercise the cache-hit reconstruction (the first sub-turn:
+    /// prev=0, so the else branch fires: input=curr, cached=0).
     fn parse_first(line: &str) -> Vec<ProviderEvent> {
         parse_line(line, &AtomicU64::new(0))
     }
 
     /// Call `parse_line` with a shared `last_prompt_eval` across multiple
-    /// sub-turns, so the implicit-cache approximation sees a growing prefix.
+    /// sub-turns, so the cache-hit reconstruction sees the previous prompt size.
     fn parse_seq(lines: &[&str]) -> Vec<Vec<ProviderEvent>> {
         let le = AtomicU64::new(0);
         lines.iter().map(|l| parse_line(l, &le)).collect()
