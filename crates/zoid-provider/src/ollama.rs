@@ -295,6 +295,28 @@ pub fn parse_ollama_context_window(body: &str) -> Option<u64> {
     None
 }
 
+/// Parse the Ollama `/api/show` `capabilities` array for thinking support.
+/// Returns `ThinkingSupport::Toggle` when the array contains `"thinking"`,
+/// `None` otherwise (including absent, non-array, null, or malformed). Lenient:
+/// mirrors `parse_ollama_context_window` — unknown/!json → `None`, never panics.
+/// The caller (`fetch_model_info`) falls back to "no thinking" on any parse
+/// failure.
+pub fn parse_ollama_thinking(body: &str) -> crate::model::ThinkingSupport {
+    let v: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return crate::model::ThinkingSupport::None,
+    };
+    let caps = match v.get("capabilities").and_then(|c| c.as_array()) {
+        Some(c) => c,
+        None => return crate::model::ThinkingSupport::None,
+    };
+    if caps.iter().any(|c| c.as_str() == Some("thinking")) {
+        crate::model::ThinkingSupport::Toggle
+    } else {
+        crate::model::ThinkingSupport::None
+    }
+}
+
 /// Streaming Ollama Cloud provider (native Chat API).
 pub struct OllamaProvider {
     api_key: String,
@@ -1048,6 +1070,40 @@ mod tests {
         assert_eq!(parse_ollama_context_window(r#"{"model_info":{}}"#), None);
         assert_eq!(parse_ollama_context_window("{}"), None);
         assert_eq!(parse_ollama_context_window("not json"), None);
+    }
+
+    #[test]
+    fn parse_thinking_toggle_when_capabilities_include_thinking() {
+        let body = r#"{"capabilities":["completion","tools","thinking","vision"]}"#;
+        assert_eq!(
+            parse_ollama_thinking(body),
+            crate::model::ThinkingSupport::Toggle
+        );
+    }
+
+    #[test]
+    fn parse_thinking_none_when_capabilities_omit_thinking() {
+        let body = r#"{"capabilities":["completion","tools"]}"#;
+        assert_eq!(
+            parse_ollama_thinking(body),
+            crate::model::ThinkingSupport::None
+        );
+    }
+
+    #[test]
+    fn parse_thinking_none_when_capabilities_absent() {
+        assert_eq!(parse_ollama_thinking(r#"{"model_info":{}}"#), crate::model::ThinkingSupport::None);
+    }
+
+    #[test]
+    fn parse_thinking_none_when_capabilities_null() {
+        assert_eq!(parse_ollama_thinking(r#"{"capabilities":null}"#), crate::model::ThinkingSupport::None);
+    }
+
+    #[test]
+    fn parse_thinking_none_when_malformed_json() {
+        assert_eq!(parse_ollama_thinking("not json"), crate::model::ThinkingSupport::None);
+        assert_eq!(parse_ollama_thinking(""), crate::model::ThinkingSupport::None);
     }
 
     /// Spawn a throwaway server that accepts one connection, optionally writes
