@@ -198,7 +198,8 @@ pub fn route_paste(state: &ShellState) -> PasteTarget {
         | Overlay::Mcp
         | Overlay::Help
         | Overlay::PluginCatalog
-        | Overlay::ProviderSwitch => return PasteTarget::None,
+        | Overlay::ProviderSwitch
+        | Overlay::Onboarding => return PasteTarget::None,
         Overlay::None => {}
     }
     // 2. Focus-contextual: only the message box accepts text.
@@ -256,6 +257,8 @@ pub fn route_key(state: &ShellState, key: KeyEvent) -> Action {
             return Action::Noop;
         }
         Overlay::None => {}
+        // Onboarding key routing is added in a later task; Noop keeps it inert.
+        Overlay::Onboarding => return Action::Noop,
     }
 
     // 2. Global combos.

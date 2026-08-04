@@ -231,7 +231,7 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
         )),
         // Config and ProviderSwitch draw full-frame (`frame.area()`), so they
         // need no centered palette rect; None has no overlay at all.
-        Overlay::Config | Overlay::ProviderSwitch | Overlay::None => None,
+        Overlay::Config | Overlay::ProviderSwitch | Overlay::Onboarding | Overlay::None => None,
     };
 
     ShellLayout {
