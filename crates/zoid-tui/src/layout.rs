@@ -26,9 +26,11 @@ pub const SESSION_BODY_ROWS: u16 = 5;
 /// Context drawer body rows: items + the churn/cache sparkline line (the manual
 /// evict toggle and token-budget line were removed — observe-only drawer).
 pub const CONTEXT_BODY_ROWS: u16 = 7;
-/// Tasks drawer body rows: up to a handful of the model's current tasks.
+/// Tasks drawer body rows: base allocation, grows with `task_count` up to
+/// the available rail height (no hard cap — the rail bottom clamp is enough).
 pub const TASKS_BODY_ROWS: u16 = 5;
-/// Subagents drawer body rows: up to a handful of in-flight subagents.
+/// Subagents drawer body rows: base allocation when subagents are in flight.
+/// Collapses to 1 row when empty (just the "none" placeholder).
 pub const SUBAGENTS_BODY_ROWS: u16 = 5;
 /// Message-box max content rows before it stops growing and scrolls internally
 /// (spec §2.2). Not a §16 token — a numeric layout constant, like RAIL_WIDTH.
@@ -60,12 +62,13 @@ pub const MIN_HEIGHT: u16 = 40;
 /// Every open drawer gets its full [`drawer_body_rows`]; closed drawers get 0.
 /// No collapse/fill — the hard 160×40 minimum guarantees there's always room.
 /// `task_count` lets the Tasks drawer grow beyond its base when it has more
-/// items (unused now that degradation is gone, but kept for future content-
-/// driven sizing).
+/// items. `subagent_count` lets the Subagents drawer collapse to 1 row when
+/// empty (just the "none" placeholder).
 pub fn allocate_drawer_bodies(
     drawers: &[Drawer],
     _height: u16,
     task_count: u16,
+    subagent_count: u16,
 ) -> Vec<u16> {
     drawers
         .iter()
@@ -74,7 +77,20 @@ pub fn allocate_drawer_bodies(
                 return 0;
             }
             match d.id {
-                DrawerId::Tasks => drawer_body_rows(d.id).min(task_count.max(1)),
+                DrawerId::Tasks => {
+                    if task_count == 0 {
+                        1 // collapse to single "none" row
+                    } else {
+                        task_count // exact fit, no cap
+                    }
+                }
+                DrawerId::Subagents => {
+                    if subagent_count == 0 {
+                        1 // collapse to single "none" row
+                    } else {
+                        subagent_count // exact fit, no cap
+                    }
+                }
                 _ => drawer_body_rows(d.id),
             }
         })
@@ -155,7 +171,7 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
         // Resolve each open drawer's body rows: every open drawer gets its
         // full body height (no collapse/fill — the 160×40 minimum guarantees
         // the rail has room for all drawers).
-        let bodies = allocate_drawer_bodies(&state.drawers, inner.height, state.tasks_len);
+        let bodies = allocate_drawer_bodies(&state.drawers, inner.height, state.tasks_len, state.subagent_rows.len() as u16);
         let mut y = inner.y;
         let bottom = inner.y.saturating_add(inner.height);
         for (d, &body) in state.drawers.iter().zip(bodies.iter()) {
@@ -285,26 +301,50 @@ mod tests {
 
     #[test]
     fn alloc_open_drawers_get_full_body_at_baseline() {
-        let body = allocate_drawer_bodies(&all_open(), 35, 3);
+        let body = allocate_drawer_bodies(&all_open(), 35, 3, 2);
         assert_eq!(body[REPO], REPO_BODY_ROWS);
         assert_eq!(body[SESSION], SESSION_BODY_ROWS);
         assert_eq!(body[CONTEXT], CONTEXT_BODY_ROWS);
         assert_eq!(body[TASKS], 3, "3 tasks => 3 rows");
-        assert_eq!(body[SUBAGENTS], SUBAGENTS_BODY_ROWS);
+        assert_eq!(body[SUBAGENTS], 2, "2 subagents => 2 rows");
+    }
+
+    #[test]
+    fn alloc_tasks_grows_beyond_base() {
+        let body = allocate_drawer_bodies(&all_open(), 35, 12, 0);
+        assert_eq!(body[TASKS], 12, "12 tasks => 12 rows (grows past base of 5)");
+    }
+
+    #[test]
+    fn alloc_empty_tasks_collapses_to_one() {
+        let body = allocate_drawer_bodies(&all_open(), 35, 0, 0);
+        assert_eq!(body[TASKS], 1, "0 tasks => 1 row for 'none'");
+    }
+
+    #[test]
+    fn alloc_empty_subagents_collapses_to_one() {
+        let body = allocate_drawer_bodies(&all_open(), 35, 3, 0);
+        assert_eq!(body[SUBAGENTS], 1, "0 subagents => 1 row for 'none'");
+    }
+
+    #[test]
+    fn alloc_subagents_grows_beyond_base() {
+        let body = allocate_drawer_bodies(&all_open(), 35, 0, 7);
+        assert_eq!(body[SUBAGENTS], 7, "7 subagents => 7 rows (grows past base of 5)");
     }
 
     #[test]
     fn alloc_closed_drawers_take_no_body() {
         let mut drawers = all_open();
         drawers[CONTEXT].open = false;
-        let body = allocate_drawer_bodies(&drawers, 35, 3);
+        let body = allocate_drawer_bodies(&drawers, 35, 3, 2);
         assert_eq!(body[CONTEXT], 0, "a closed drawer gets 0 body rows");
         assert_eq!(body[TASKS], 3);
     }
 
     #[test]
     fn alloc_empty_is_empty() {
-        assert!(allocate_drawer_bodies(&[], 40, 5).is_empty());
+        assert!(allocate_drawer_bodies(&[], 40, 5, 0).is_empty());
     }
 
     #[test]

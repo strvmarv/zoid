@@ -830,12 +830,12 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
 /// The tasks drawer body (Task 8): one row per task, a token glyph+color for
 /// status (☐ pending/dim, ◐ active/warn, ✓ done/ok — spec §16, no literals),
 /// label truncated to fit, capped to the rows the box actually has. Empty →
-/// a dim "no tasks" line rather than a blank body.
+/// a dim "none" line rather than a blank body.
 fn render_tasks_body(frame: &mut Frame, area: Rect, items: &[zoid_core::tasks::TaskItem]) {
     use crate::text::truncate;
     use zoid_core::tasks::TaskStatus;
     if items.is_empty() {
-        let line = Line::from(Span::styled("no tasks", Style::new().fg(color::DIM)));
+        let line = Line::from(Span::styled("none", Style::new().fg(color::DIM)));
         frame.render_widget(Paragraph::new(line), area);
         return;
     }

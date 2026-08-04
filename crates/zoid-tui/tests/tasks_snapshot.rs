@@ -33,7 +33,7 @@ fn draw(state: &ShellState, tasks: &[TaskItem]) -> String {
 fn draw_at(state: &ShellState, tasks: &[TaskItem], w: u16, h: u16) -> String {
     // Mirror the bin: publish the task count so the rail's fit allocator sizes
     // the Tasks drawer to the list it is about to render (otherwise it defaults
-    // to the 1-row "no tasks" height and truncates a multi-item list).
+    // to the 1-row "none" height and truncates a multi-item list).
     let mut state = state.clone();
     state.tasks_len = tasks.len() as u16;
     let msgs: Vec<ChatMsg> = vec![];

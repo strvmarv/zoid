@@ -478,7 +478,7 @@ pub struct ShellState {
     /// Number of items the Tasks rail drawer would show, sampled by the bin each
     /// frame from `tasks(&events)` so `layout::compute` can grow the drawer to fit
     /// a longer list (rehydrate-safe: this is a layout hint, not the task list —
-    /// the rendered content still comes from the event log). Default 0 ("no tasks").
+    /// the rendered content still comes from the event log). Default 0 ("none").
     pub tasks_len: u16,
     /// In-flight subagent rows for the Subagents drawer (right rail). Populated
     /// by the bin from `in_flight_subagents`. Cleared when a DelegationResult
