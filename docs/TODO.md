@@ -174,6 +174,18 @@ dedicated adapter per gateway is likely required.
   Google auth. Own request shape; dedicated adapter.
 - **Vertex AI Model Garden** — hosts many open models behind Google auth.
 
+## UI: move "SELECT" chip away from mode
+
+The "SELECT" chip currently renders as part of the mode display. It should
+be moved to a different location in the UI so it doesn't visually crowd the
+mode indicator.
+
+## UI: show "YOLO" chip/message when enabled
+
+When YOLO mode (auto-approve all tool calls) is active, there's no visible
+indicator in the UI. Add a chip or status message so the user can see at a
+glance that approvals are bypassed.
+
 ## Agent `model` field not seamed (runtime honors it)
 
 The agents-as-entity design (`docs/superpowers/specs/2026-07-23-agents-as-entity-design.md`
