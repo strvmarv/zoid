@@ -16,7 +16,10 @@ knows nothing about connection readiness — it keys only on
 the user through choosing a provider and entering an API key, fires only when
 there is no working connection, and writes the result back through the existing
 config + secret-store paths. After completing it, the user lands in the normal
-empty-state chat with a live connection.
+empty-state chat with a provider and key *configured*. The wizard guarantees
+key **presence**, not key **correctness** — a mistyped key completes the wizard
+and fails on the first message with a provider-side auth error (no
+reachability probing; see §1 Out of scope).
 
 ---
 
@@ -91,6 +94,17 @@ The wizard writes a non-empty provider id on completion; until then `provider`
 stays empty. `select_provider` already handles an unknown/empty provider id
 gracefully (family lookup fails → `FakeProvider` fallback).
 
+> **Invariant — overloaded sentinel value.** Empty string already means
+> "provider picks its default model" for the `model` field (`config.rs:200`).
+> It now *also* means "no provider chosen" for the `provider` field. Two fields,
+> one sentinel, two meanings — the distinction is purely positional. Every
+> reader of `config.provider` that checks `is_empty()` must know it means
+> "unconfigured," not "use default." To keep this from rotting, the
+> `Config::default()` line carries a comment:
+> ```rust
+> provider: String::new(), // empty = unconfigured (see onboarding wizard gate)
+> ```
+
 ### Migration for existing users
 
 There is **no silent migration** — we do not auto-write `"ollama-local"` for
@@ -107,11 +121,38 @@ anyone. On next launch:
   see the wizard once, pick a provider (possibly `ollama-local`), and continue.
   This is an acceptable one-time friction for a clean "unconfigured" state.
 
+**Env-var interaction (must document).** A user with a stale `OLLAMA_API_KEY`
+exported in their shell environment gets a subtle surprise: with the empty
+default, `select_provider` resolves family `"ollama"` (the `_ =>` fallback at
+`main.rs:1101`) and finds the ambient key — so it constructs a *live*
+`OllamaProvider` for `ollama-cloud`, not `FakeProvider`. That user is silently
+routed to a cloud provider they never chose. The wizard's step-1 commit writes
+the user's explicit choice to TOML, but the ambient env var continues to
+shadow it at read time until unset. This is existing config-precedence
+behavior, not a wizard bug — but the wizard is the one UI surface that could
+detect the shadow (the config screen already marks rows `env_shadowed`,
+`config_view.rs:151/159`) and warn. See §5 (step-1 env-shadow hint) and §9
+(edge case).
+
+**The silent-no-improvement population.** A returning user (has sessions) who
+was running on the old `"ollama"` default with no key — silently on
+`FakeProvider` the whole time — is *not* reached by the wizard: they have
+sessions so `first_time_user` is false, the gate returns false, and they stay
+on `FakeProvider`. Their experience is unchanged (still broken). The wizard
+does not fix their situation; they must `:config` manually. A lighter inline
+hint for returning users with a missing key is the correct long-term fix (out
+of scope, §1) but the spec names this population explicitly so it isn't
+forgotten.
+
 **What `canonical_id` does with `""`:** `canonical_id("")` returns `""` (the
 `other => other` arm). `entry("")` returns `None`. `select_provider`'s
 `canonical_id(&config.provider) == "ollama-local"` check is false, the family
 match falls through to the `_ =>` arm, `key_for("OLLAMA_API_KEY")` is likely
-`None`, and `FakeProvider` is returned. All safe — no panic, no bad state.
+`None`, and `FakeProvider` is returned. All safe — no panic, no bad state. The
+gate's `ollama-local` exemption (§3) is placed *before* the empty-provider
+check; its correctness depends on `canonical_id("") != "ollama-local"` (true
+via the `other => other` arm). This ordering invariant is pinned by a test
+(§10).
 
 ---
 
@@ -237,7 +278,7 @@ gate fires → Onboarding { step: Provider, options: provider_options("") }
    │                                    ├─ non-empty key + Enter → write key, clear buffer
    │                                    │    → step 3 (if >1 model) or DONE
    │                                    ├─ empty key + Enter → no-op (stay)
-   │                                    └─ Esc → skip wizard (overlay closed, state dropped)
+   │                                    └─ Esc → retreat to step 1 (see §4 Navigation)
    │
    └─ step 3 (if reached):
         ├─ pick "use default" → model stays "" → DONE
@@ -245,21 +286,56 @@ gate fires → Onboarding { step: Provider, options: provider_options("") }
         └─ Esc → skip wizard
 ```
 
-**Navigation is strictly forward.** No back button, no retreat to a previous
-step. `Esc` at any step skips the whole wizard (closes the overlay). This is
-deliberate: it enforces the "no key, no complete" rule (there is no way to
-retreat past step 2 to avoid entering a key) and avoids the confusion of what
-"going back to step 2" shows (the buffer is cleared after commit).
+**Navigation: forward by default, Esc-retreat from step 2.** Steps advance
+forward only (no back button). `Esc` behavior is step-dependent:
+
+- **Step 1 (Provider):** `Esc` skips the whole wizard (closes the overlay,
+  drops state). There's nothing to retreat to.
+- **Step 2 (API key):** `Esc` **retreats to step 1**, it does *not* abort the
+  wizard. This is the escape hatch for a keyless user who picked a key-requiring
+  provider — they land back on the provider list and can pick `ollama-local`
+  (no key needed) or a different provider. The step-1 provider write stays
+  (already in TOML); re-picking overwrites it. The "no key, no complete" rule
+  is preserved: there is still no way to *complete* the wizard without a key
+  for a key-requiring provider — you can only retreat and choose differently.
+- **Step 3 (Model):** `Esc` skips the whole wizard. The provider + key are
+  already written; the user lands in empty-state chat with a working connection
+  and the provider's default model.
+
+This avoids the trap the original "strictly forward, Esc-abort" design created:
+a keyless user on step 2 was stuck (enter a key they don't have, or lose their
+step-1 choice entirely). Now `Esc` from step 2 is a graceful "go back and pick
+differently."
+
+> **Why not a back button?** A dedicated `Back`/`Left` key would need to handle
+> step 3 → step 2 retreat, where the key buffer was cleared on commit — showing
+> an empty input where the user already entered a key is confusing. Esc-retreat
+> is scoped to step 2 only (the one place a user gets trapped), and step 2's
+> buffer is only cleared *on commit*, so retreating from an uncommitted step 2
+> just drops the in-progress buffer, which is fine.
 
 ### Completion (DONE)
 
 1. Close the overlay: `shell.overlay = Overlay::None`, `shell.onboarding = None`.
-2. Re-select the provider: `let (provider, label, has_key) =
-   select_provider(&app.config, &app.secrets);` — the same call the bin makes at
-   startup and after config-screen edits. Swap in the new provider.
-3. The next frame, `proj.msgs.is_empty()` is true and `first_time_user` is still
-   true, so the existing empty-state intercept fires — the user sees the normal
-   onboarding prompts ("explain this codebase", etc.) with a working connection.
+2. The provider re-selection has **already happened** — the wizard's step-1
+   and step-3 commits call `apply_config_write` (see §7), which writes TOML,
+   reloads the full layered config, refreshes provenance, and re-selects the
+   provider (`main.rs:4198`) on every call. The step-2 key write goes to the
+   `SecretStore`, which the *next* `apply_config_write` call (step 3 or, if
+   step 3 is skipped, a final no-op reload) picks up. No separate
+   `select_provider` call is needed at DONE — using one would re-mutate
+   `app.provider`/`app.shell.provider` a second time.
+3. If step 3 is skipped (≤1 model), the last config write was step 1's
+   `apply_config_write` — but that happened *before* the key was written in
+   step 2, so it re-selected with `has_key = false`. To ensure the key takes
+   effect, the wizard does one final `apply_config_write(app, "model",
+   TomlValue::Unset, false)` (a no-op write that triggers reload + re-select,
+   now with the key present) before closing. This mirrors the config screen's
+   pattern of re-evaluating after a secret write.
+4. The next frame, `proj.msgs.is_empty()` is true and `first_time_user` is still
+   true (frozen at boot — see §10 invariant), so the existing empty-state
+   intercept fires — the user sees the normal onboarding prompts ("explain
+   this codebase", etc.) with a configured provider + key.
 
 ---
 
@@ -277,14 +353,50 @@ pub enum Overlay {
 }
 ```
 
-Rendered in `render_shell` (`render.rs`) alongside the other overlays, full-frame
-like `render_config`:
+Adding this variant forces **three** compiler-checked integration points (all
+exhaustive `match` arms — the compiler rejects a missing arm, so these are
+impossible to ship broken, but the spec lists them so the implementer knows
+upfront):
 
-```rust
-} else if state.overlay == Overlay::Onboarding {
-    render_onboarding(frame, state, frame.area());
-}
-```
+1. **`render_shell` dispatch** (`render.rs`, the overlay `if`/`else if` chain
+   at `render.rs:235`): add the `Onboarding` branch calling `render_onboarding`
+   full-frame.
+   ```rust
+   } else if state.overlay == Overlay::Onboarding {
+       render_onboarding(frame, state, frame.area());
+   }
+   ```
+2. **`layout.rs:219`** (the overlay-rect exhaustive match — the comment at
+   `layout.rs:215` says "every overlay must declare its modal-rect policy
+   here"): `Onboarding` draws full-frame like `Config`/`ProviderSwitch`, so it
+   joins the `None` arm:
+   ```rust
+   Overlay::Config | Overlay::ProviderSwitch | Overlay::Onboarding | Overlay::None => None,
+   ```
+3. **`route_paste`** (`route.rs:170`, exhaustive `match state.overlay`): step 2
+   is a free-text API-key field — users **paste** keys (they're long, copied
+   from a dashboard). The existing `PasteTarget` enum (`route.rs:152`) needs a
+   new variant, and the wizard must route paste into `key_buffer` on step 2:
+   ```rust
+   #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+   pub enum PasteTarget {
+       // ... existing ...
+       OnboardingKey,
+       None,
+   }
+
+   // in route_paste, the overlay match:
+   Overlay::Onboarding => {
+       return match &state.onboarding {
+           Some(o) if o.step == OnboardingStep::ApiKey => PasteTarget::OnboardingKey,
+           _ => PasteTarget::None, // steps 1, 3 are pick-lists — paste drops
+       };
+   }
+   ```
+   The bin's paste handler then appends to `onboarding.key_buffer`. This matches
+   the config screen's `PasteTarget::ConfigEdit` pattern (`route.rs:179`) —
+   the wizard claims to mirror the config screen, so paste support is
+   consistency, not an enhancement.
 
 ### Layout
 
@@ -337,6 +449,19 @@ picker: highlighted row in accent with a `›` marker (`glyph::USER_TURN`), deta
 line (endpoint) in dim. `ollama-local` is first (registry order) with
 `(no key needed)` appended to its detail. `Up`/`Down` moves, `Enter` selects.
 
+**Env-shadow warning (step 1 only, conditional).** If `app.prov.provider ==
+Source::Env` at boot (a `ZOID_PROVIDER` env var is set), render a dim warning
+line above the pick-list:
+
+```
+  ⚠ ZOID_PROVIDER is set to "{value}" — your choice here writes to TOML
+    but won't take effect until you unset it.
+```
+
+This uses the existing `Provenance.provider` field (already computed at boot)
+and `color::WARN` for the glyph. The warning is the wizard's one chance to catch
+a shadowed config before the user completes and is surprised on next launch.
+
 **Step 2 — API key (masked free-text):**
 
 ```
@@ -346,13 +471,17 @@ line (endpoint) in dim. `ollama-local` is first (registry order) with
      │ sk-ant-••••••••••••••••••                  │
      └──────────────────────────────────────────┘
      Get one at https://console.anthropic.com/settings/keys
+     No key? Press Esc to choose a different provider.
 ```
 
 A single-line input box (reusing the input-rendering idiom from `render_input`),
 masked with `•` per char. A help line below shows the chosen provider's
-`key_url`. `Enter` commits (non-empty only — empty `Enter` is a no-op).
-`Backspace` deletes. `Esc` → skip whole wizard. The friendly provider name
-("Anthropic") comes from the registry `display` field.
+`key_url`. A second help line — "No key? Press Esc to choose a different
+provider." in `color::DIM` — surfaces the escape hatch (§4 Navigation: Esc
+from step 2 retreats to step 1, not aborts). `Enter` commits (non-empty only —
+empty `Enter` is a no-op). `Backspace` deletes. `Esc` → retreat to step 1.
+The friendly provider name ("Anthropic") comes from the registry `display`
+field.
 
 **Step 3 — Model (pick-list):**
 Same pick-list rendering as step 1, with `config_view::model_options(provider_id,
@@ -374,13 +503,20 @@ pub fn render_onboarding(frame: &mut Frame, state: &ShellState, area: Rect) {
     // Step rail: render all 3 steps with ●/✓/☐ glyphs; expand the active one.
     //   - Provider/Model: pick-list rows (PickOption), highlighted = list_sel.
     //   - ApiKey: masked input box + key_url help line.
-    // Footer: "↑↓ move · Enter select · Esc skip setup"
-    //   (step 2 footer: "Enter submit · Backspace delete · Esc skip setup")
+    // Footer: step-dependent keybind hints:
+    //   step 1: "↑↓ move · Enter select · Esc skip setup"
+    //   step 2: "Enter submit · Backspace delete · Esc back to provider"
+    //   step 3: "↑↓ move · Enter select · Esc skip setup"
 }
 ```
 
-**Width/degrade:** The card uses `frame.area()`. At the 100×24 floor (~51 content
-cols), the pick-list detail (endpoint URL) truncates via the existing
+**Width/degrade:** The card uses `frame.area()`. At the 100×24 floor, the
+content width is approximately `100 - 2 (border) - 2 (padding) ≈ 96` columns at
+160 width; the 100×24 floor yields ~51 content columns after the card border
+and inner padding. (For reference, `render_config`'s three-column threshold is
+`RAIL_W + FIELDS_W + PICKER_MIN = 82` at `render.rs:1418`, but the wizard is
+single-column so that threshold doesn't apply — the floor is just "card border +
+padding fits.") The pick-list detail (endpoint URL) truncates via the existing
 `fit`/`truncate` helpers (same as `overview.rs`); the masked input box shrinks
 to fit. The layout never overflows or panics.
 
@@ -400,7 +536,7 @@ snapshots.
 
 ---
 
-## 6. New registry field: `key_url`
+## 6. New registry field: `key_url` — and consolidating `entry_requires_key`
 
 A per-provider URL for the API-key step's help line.
 
@@ -434,6 +570,49 @@ A provider with `key_url: None` is keyless — the step-1→DONE short-circuit
 handles it, so the wizard never reaches step 2 for a keyless provider. Adding a
 future keyless provider works without wizard changes.
 
+### Consolidating `entry_requires_key`
+
+`key_url: None` is exactly the "keyless" predicate that `entry_requires_key`
+(`main.rs:1046`, currently a hardcoded `id != "ollama-local"`) is hand-coding.
+The two must agree. Rather than maintain two tables, **derive
+`entry_requires_key` from the registry**:
+
+```rust
+fn entry_requires_key(id: &str) -> bool {
+    zoid_provider::model::entry(id)
+        .map(|e| e.key_url.is_some())
+        .unwrap_or(true) // unknown provider → assume key required (safe default)
+}
+```
+
+This makes `key_url` the single source of truth for "does this provider need a
+key." Adding a keyless provider means setting `key_url: None` in the registry —
+`entry_requires_key` follows automatically, and `key_env_for`'s
+`!entry_requires_key(id) → None` early return picks it up.
+
+### The `key_env_for` / `key_url` lockstep invariant
+
+`key_env_for` (`main.rs:1051`) maps provider family → env var name with a
+`_ => Some("OLLAMA_API_KEY")` default arm. A future provider with
+`key_url: Some(...)` but no `key_env_for` arm would hit the `_ =>` default and
+silently write the key to `OLLAMA_API_KEY` — the wrong env var. This is a
+latent footgun. Two safeguards:
+
+1. The wizard's step-2 commit uses `key_env_for(&onb.chosen_provider)` — if it
+   returns `None` for a provider the wizard thinks is key-requiring (because
+   `key_url: Some`), that's a contradiction. The wizard should **never reach
+   step 2 for a provider where `key_env_for` returns `None`** — the step-1
+   commit's `ollama-local` short-circuit handles the keyless case, and any
+   other keyless provider (future `key_url: None`) short-circuits the same way.
+2. A test (§10) asserts that every `PROVIDERS` entry with `key_url: Some` has
+   a `key_env_for` arm returning `Some` (i.e., no key-requiring provider falls
+   through to the `_ => OLLAMA_API_KEY` default by accident).
+
+The `expect` in the step-2 commit code (§7) is safe because the wizard only
+reaches step 2 for providers where `entry_requires_key` is true (i.e.,
+`key_url: Some`), and the lockstep test guarantees those providers have a
+`key_env_for` arm.
+
 ---
 
 ## 7. Key routing, write-back, and bin-side orchestration
@@ -441,31 +620,57 @@ future keyless provider works without wizard changes.
 ### Config write-back
 
 The wizard writes to **user-global TOML** (`~/.config/zoid/config.toml`), the
-same default target as the config screen. It reuses existing machinery — no new
-write path.
+same default target as the config screen. It reuses the existing
+`apply_config_write` helper (`main.rs:4144`) — the same function the config
+screen's `ConfigPickerSelect` uses. `apply_config_write` does the TOML write
+(via `write_config_file` → `set_in_toml`) *plus* the full config reload,
+provenance refresh, provider re-selection (`select_provider` at `main.rs:4198`),
+and model-info fetch. **No new write path, no new helper.** This keeps the
+in-memory `app.config`/`app.prov` and the on-disk TOML in sync within the
+session — critical so a later `:config` doesn't show stale provenance.
 
 **Step 1 commit (provider selected):**
 
 ```rust
 let provider_id = onb.options[onb.list_sel].id.clone();
-// existing set_in_toml + write to user-global config.toml
-write_config_field("provider", TomlValue::Str(provider_id.clone()));
-app.config.provider = provider_id.clone();
+// Mirror ConfigPickerSelect (main.rs:4974): write provider, seed base_url
+// from the registry, clear model (Unset) to avoid an incompatible
+// provider+model pair. All three go through apply_config_write so the full
+// reload + re-select happens on each.
+apply_config_write(app, "provider", TomlValue::Str(provider_id.clone()), false);
+apply_config_write(app, "base_url", base_url_write_for(&provider_id), false);
+apply_config_write(app, "model", TomlValue::Unset, false);
 ```
+
+This matches the config screen exactly (`main.rs:4977–4985`). `base_url` is
+seeded from the registry default (`base_url_write_for`, `main.rs:4134`) so the
+endpoint is materialized in TOML for provenance honesty; `model` is cleared so
+a stale model from a prior provider doesn't survive into the new one.
+
+**Step 1 short-circuit (ollama-local / keyless):** If the chosen provider is
+keyless (`entry_requires_key` is false, i.e., `key_url: None`), the wizard is
+DONE — the three `apply_config_write` calls above have already re-selected the
+provider with `has_key = true`. No step 2, no step 3.
 
 **Step 2 commit (key entered, non-empty):**
 
 ```rust
 let key_env = key_env_for(&onb.chosen_provider)
-    .expect("key-requiring provider has a key env");
-secrets.as_ref().unwrap().set(key_env, &onb.key_buffer)?;
+    .expect("wizard only reaches step 2 for key-requiring providers; \
+             lockstep test (§10) guarantees a key_env_for arm");
+secrets
+    .as_ref()
+    .expect("wizard gate guarantees secrets available")
+    .set(key_env, &onb.key_buffer)?;
 onb.key_buffer.clear(); // plaintext not held after write
 ```
 
 The key goes to the `SecretStore` (encrypted DB), never to TOML — same rule as
-the config screen's secret editing. `key_env_for` (`main.rs`) maps provider
-family → env var name and is reused as-is, so the wizard stays in sync with
-`select_provider`'s key lookup automatically. No new mapping table.
+the config screen's secret editing. The `expect`s are safe: the gate checked
+`secrets.is_some()` at boot, and the lockstep test guarantees every
+`key_url: Some` provider has a `key_env_for` arm. After the write, the next
+`apply_config_write` (step 3, or the final reload if step 3 is skipped) picks
+up the key via `select_provider`'s `key_for` lookup.
 
 **Step 3 commit (model selected):**
 
@@ -475,11 +680,16 @@ let model = if onb.list_sel == 0 {
 } else {
     onb.options[onb.list_sel].id.clone()
 };
-write_config_field("model", TomlValue::Str(model.clone()));
-app.config.model = model;
+apply_config_write(app, "model", TomlValue::Str(model), false);
 ```
 
-**DONE:** close overlay, re-select provider (see §4 "Completion").
+If step 3 is skipped (≤1 model), the wizard does one final
+`apply_config_write(app, "model", TomlValue::Unset, false)` before closing — a
+no-op write that triggers the reload + re-select, now picking up the step-2
+key. See §4 "Completion."
+
+**DONE:** close overlay (`overlay = None`, `onboarding = None`). No separate
+`select_provider` call — the last `apply_config_write` already did it.
 
 ### Key routing
 
@@ -497,13 +707,17 @@ pub fn route_onboarding_key(state: &ShellState, key: KeyEvent) -> Action {
             KeyCode::Up => Action::OnboardingMove(-1),
             KeyCode::Down => Action::OnboardingMove(1),
             KeyCode::Enter => Action::OnboardingSelect,
+            // Step 1: Esc skips the whole wizard. Step 3: Esc skips the wizard
+            // (provider + key already written; default model used).
             KeyCode::Esc => Action::OnboardingAbort,
             _ => Action::Noop,
         },
         OnboardingStep::ApiKey => match key.code {
             KeyCode::Enter => Action::OnboardingSubmitKey,
             KeyCode::Backspace => Action::OnboardingKeyBackspace,
-            KeyCode::Esc => Action::OnboardingAbort,
+            // Step 2: Esc RETREATS to step 1 (not abort) — the escape hatch
+            // for a keyless user who picked a key-requiring provider.
+            KeyCode::Esc => Action::OnboardingBack,
             KeyCode::Char(c) => Action::OnboardingKeyChar(c),
             _ => Action::Noop,
         },
@@ -519,17 +733,44 @@ OnboardingSelect,           // Enter in step 1 or 3
 OnboardingSubmitKey,        // Enter in step 2 (non-empty only)
 OnboardingKeyChar(char),    // typed char in step 2
 OnboardingKeyBackspace,     // backspace in step 2
-OnboardingAbort,            // Esc — skip wizard
+OnboardingBack,             // Esc in step 2 — retreat to step 1
+OnboardingAbort,            // Esc in step 1/3 — skip wizard
 ```
 
 The bin's `handle_action` processes these:
-- `OnboardingSelect` — reads the selected option, writes config, advances the
-  step (ollama-local → DONE; key-requiring → step 2; model step → DONE).
+- `OnboardingSelect` — reads the selected option, runs the step-1 commit
+  (three `apply_config_write` calls) or step-3 commit, advances the step
+  (ollama-local/keyless → DONE; key-requiring → step 2; model step → DONE).
 - `OnboardingSubmitKey` — validates non-empty (no-op if empty), writes to the
   secret store, clears the buffer, advances to step 3 (or DONE if ≤1 model).
-- `OnboardingMove` — moves `list_sel`, wrapping via the existing `palette::nav`.
+- `OnboardingMove` — moves `list_sel`, **skipping non-selectable rows** (same
+  loop pattern as `ConfigPickerMove` at `main.rs:4950–4956`, not `palette::nav`'s
+  simpler wrap — `provider_options` marks `Status::Planned` rows
+  `selectable: false`, and a future `Planned` provider would land the cursor on
+  a non-selectable row with `palette::nav`).
 - `OnboardingKeyChar` / `OnboardingKeyBackspace` — mutate `key_buffer`.
+- `OnboardingBack` — step 2 → step 1: set `onb.step = OnboardingStep::Provider`,
+  rebuild `onb.options = provider_options("")`, reset `onb.list_sel` to the
+  previously-chosen provider (so the user sees their last selection highlighted).
+  The step-1 provider write stays in TOML; re-picking overwrites it.
 - `OnboardingAbort` — `shell.overlay = Overlay::None`, `shell.onboarding = None`.
+
+### `ShellState` field
+
+`ShellState` gains a new field (`crates/zoid-tui/src/state.rs`):
+
+```rust
+/// The onboarding wizard state, or `None` when the wizard isn't open. Set at
+/// boot by the gate; cleared on completion or abort. Defaults `None` so tests
+/// and examples that don't set it get no wizard.
+pub onboarding: Option<OnboardingState>,
+```
+
+`ShellState::new()` (the constructor used at boot, `main.rs:2436`) sets
+`onboarding: None`. The boot-time orchestration below sets it to `Some(...)`
+when the gate fires. `OnboardingState` derives `Clone + Debug + PartialEq + Eq`
+(§4); `PickOption` already derives these (`config_view.rs:21`), so the field
+composes.
 
 ### Boot-time orchestration
 
@@ -574,12 +815,16 @@ Adding a provider or updating models in the registry (`zoid-model/src/lib.rs`)
 automatically updates the wizard's lists. One source of truth, already
 maintained.
 
-**The one coupling:** step 2's key routing (which env var to write) uses
+**The coupling:** step 2's key routing (which env var to write) uses
 `key_env_for` (`main.rs`), which maps provider family → env var name. This is
 the same function `select_provider` uses to look up keys, so the wizard and the
-provider selector stay in sync. Adding a new provider family requires adding its
-family → env mapping to `key_env_for` (already true today for
-`select_provider`); the wizard needs no separate mapping.
+provider selector stay in sync. `entry_requires_key` is now derived from
+`key_url` (§6), so adding a keyless provider means setting `key_url: None` in
+the registry — both `entry_requires_key` and the wizard's step-1 short-circuit
+follow automatically. Adding a new *key-requiring* provider family requires
+adding its family → env mapping to `key_env_for` (already true today for
+`select_provider`); the lockstep test (§10) guards against a missing arm. The
+wizard needs no separate mapping.
 
 ---
 
@@ -587,14 +832,19 @@ family → env mapping to `key_env_for` (already true today for
 
 | Case | Behavior |
 |------|----------|
-| `Esc` at any step | Overlay closes, wizard state dropped, user lands in empty-state chat. Gate re-fires on next launch if still unconfigured. |
+| `Esc` at step 1 (Provider) | Skips the whole wizard. Overlay closes, wizard state dropped, user lands in empty-state chat. Gate re-fires on next launch if still unconfigured. |
+| `Esc` at step 2 (API key) | **Retreats to step 1** (not abort). The user lands back on the provider list with their previous selection highlighted. This is the escape hatch for a keyless user who picked a key-requiring provider — they can pick `ollama-local` or a different provider. The step-1 provider write stays in TOML; re-picking overwrites it. |
+| `Esc` at step 3 (Model) | Skips the wizard. Provider + key are already written; the user lands in empty-state chat with a working connection and the provider's default model. |
 | `Esc` then restart (nothing configured) | Gate re-fires → wizard appears again. |
-| User picks `ollama-local` in step 1 | Steps 2–3 skipped, DONE immediately. No key required, no probe. |
+| User picks `ollama-local` (or any keyless provider) in step 1 | Steps 2–3 skipped, DONE immediately. No key required, no probe. |
+| User completes wizard with a mistyped/wrong key | The wizard guarantees key **presence**, not correctness. `has_key` is true (non-empty string), the overlay closes, and the first message fails with a provider-side auth error (e.g. 401). No reachability probe is run (out of scope, §1). |
 | User completes wizard, then deletes their key | Within the session: no wizard (gate not re-checked). On next launch: `first_time_user` is now false (they have a session) → gate false → no wizard. They configure via `:config`. (Returning-user hint is out of scope.) |
-| Empty `Enter` in step 2 | No-op. The user must enter a non-empty key or `Esc`. |
-| Provider with ≤1 registry model | Step 3 skipped; `model` stays empty (provider default used at runtime). |
+| Empty `Enter` in step 2 | No-op. The user must enter a non-empty key, `Esc` to retreat, or (no other escape). |
+| Paste into step 2 | Pasted text appends to `key_buffer` (via `PasteTarget::OnboardingKey`, §5). Paste into steps 1/3 drops (pick-lists; `PasteTarget::None`). |
+| Provider with ≤1 registry model | Step 3 skipped; `model` stays empty (provider default used at runtime). A final `apply_config_write("model", Unset)` triggers the reload that picks up the step-2 key. |
 | Very narrow terminal (100×24 floor) | Card degrades: pick-list detail truncates, input box shrinks. No overflow, no panic. Covered by the floor snapshot test. |
-| `config.provider` set in env (`ZOID_PROVIDER`) | Env shadows TOML. If the env value is a key-requiring provider with no key, the gate fires (first-time-user branch) — `has_key` is false. The wizard's step-1 commit writes to TOML, but the env value still shadows at read time. The user would need to unset the env var. This is an existing config-precedence behavior, not a wizard bug; the wizard writes the user's intent to TOML as designed. |
+| `config.provider` set in env (`ZOID_PROVIDER`) | Env shadows TOML. If the env value is a key-requiring provider with no key, the gate fires (first-time-user branch) — `has_key` is false. The wizard's step-1 screen shows an env-shadow warning (§5). The step-1 commit writes to TOML, but the env value still shadows at read time until unset. The user would need to unset the env var. This is existing config-precedence behavior, not a wizard bug; the wizard warns and writes the user's intent to TOML as designed. |
+| Ambient `OLLAMA_API_KEY` with empty `provider` default | `select_provider` resolves family `"ollama"` (the `_ =>` fallback) and finds the ambient key → constructs a live `OllamaProvider` for `ollama-cloud`. A first-time user with `OLLAMA_API_KEY` set and empty `provider` has `has_key = true`, but the gate still fires (empty-provider check precedes `!has_key`). The wizard's step-1 env-shadow warning covers this. A *returning* user in this state is silently on `ollama-cloud` (no wizard, first_time_user false) — named in §2 as the silent-no-improvement population. |
 | Secret store failed to open at boot | `secrets` is `None`, so `secrets_available` is false → `wizard_needed` returns false → no wizard. The user is directed to `:config` via the normal empty state (where the same limitation exists — the secret store is needed to save a key). |
 
 ---
@@ -615,16 +865,41 @@ family → env mapping to `key_env_for` (already true today for
 
 2. **`OnboardingState` transitions** (in a pure test module or via
    `handle_action` with a test `App`):
-   - step 1 select `ollama-local` → overlay closes, provider written.
-   - step 1 select key-requiring → step 2, provider written, options rebuilt.
+   - step 1 select `ollama-local` (or any keyless provider) → overlay closes,
+     provider + base_url written, model cleared.
+   - step 1 select key-requiring → step 2, provider + base_url written, model
+     cleared, options rebuilt for step 2.
    - step 2 empty `Enter` → no-op (stays in step 2).
-   - step 2 non-empty `Enter` → key written, buffer cleared, step 3 (or DONE).
+   - step 2 non-empty `Enter` → key written, buffer cleared, step 3 (or DONE
+     if ≤1 model).
+   - step 2 `Esc` → **retreats to step 1** (not abort): `step = Provider`,
+     `options` rebuilt, `list_sel` reset to previously-chosen provider. Overlay
+     stays open.
    - step 3 "use default" → model empty, DONE.
    - step 3 pick model → model written, DONE.
-   - `Esc` at any step → overlay closed, state dropped.
+   - step 1 `Esc` → overlay closed, state dropped (abort).
+   - step 3 `Esc` → overlay closed, state dropped (abort; provider + key kept).
 
 3. **`canonical_id("")`** returns `""` — confirm the sentinel doesn't trip the
-   legacy alias mapping (regression guard).
+   legacy alias mapping (regression guard). Also assert
+   `canonical_id("") != "ollama-local"` — this is the ordering invariant the
+   gate's `ollama-local` exemption depends on (the exemption check precedes
+   the empty-provider check and relies on the empty sentinel not aliasing to
+   `ollama-local`).
+
+4. **`key_url` / `entry_requires_key` / `key_env_for` lockstep:** For every
+   `PROVIDERS` entry with `key_url: Some(...)`, assert `entry_requires_key(id)`
+   is true and `key_env_for(id)` returns `Some`. For every entry with
+   `key_url: None`, assert `entry_requires_key(id)` is false and `key_env_for`
+   returns `None`. This guards against a future provider with `key_url: Some`
+   falling through `key_env_for`'s `_ => OLLAMA_API_KEY` default (which would
+   silently write the key to the wrong env var).
+
+5. **`first_time_user` frozen invariant:** Add a comment at `main.rs:2470`
+   (`shell.first_time_user = first_time_user;`) noting that the value is
+   deliberately frozen at boot and the onboarding wizard + post-wizard
+   empty-state copy depend on it not being recomputed mid-session. (No test —
+   it's a documentation invariant, not a runtime check.)
 
 ### Snapshot tests (`render.rs`)
 
@@ -635,16 +910,23 @@ family → env mapping to `key_env_for` (already true today for
 Each asserts no line exceeds the content width and the visual structure matches
 the golden snapshot.
 
-### Existing tests unaffected
+### Existing tests affected
 
 - The `onboarding.rs` empty-state tests (`empty_state_lines`) are unchanged —
   they test the *post-wizard* empty state, which still fires when
   `first_time_user && msgs.is_empty()` and no overlay is open.
-- Config screen tests (`config_view`) are unchanged — the wizard reuses
-  `provider_options` / `model_options` without modifying them.
-- The `Config::default()` change (`provider: ""` instead of `"ollama"`) may
-  affect tests that assert `c.provider == "ollama"` — there is one
-  (`config.rs:242`). It must be updated to assert `c.provider.is_empty()`.
+- The `Config::default()` change (`provider: ""` instead of `"ollama"`) affects
+  tests that assert `c.provider == "ollama"` — there is one (`config.rs:242`).
+  It must be updated to assert `c.provider.is_empty()`.
+- **`config_view` tests must be run, not assumed unaffected.** `config_view.rs`
+  tests call `Config::default()` (e.g. `config_view.rs:304`) and `build_sections`
+  does `model::entry(&cfg.provider)` (`config_view.rs:123`) to pick the
+  `connection_row`. With `provider = ""`, `entry("")` is `None`, so the
+  `connection_row` match hits the `_ =>` arm (renders a `base_url` row) — *same
+  arm as today* (today `entry("ollama")` → `ollama-cloud` → Http → also
+  `base_url` row). So the structure is the same, but the test should be run to
+  confirm no assertion on the provider label breaks. Don't claim immunity;
+  verify.
 
 ---
 
@@ -652,22 +934,29 @@ the golden snapshot.
 
 | Change | File | Size |
 |--------|------|------|
-| Sentinel default | `crates/zoid-core/src/config.rs` (`Config::default()`: `provider: String::new()`) | ~1 line |
+| Sentinel default + invariant comment | `crates/zoid-core/src/config.rs` (`Config::default()`: `provider: String::new()` + `// empty = unconfigured` comment) | ~2 lines |
 | Fix test asserting old default | `crates/zoid-core/src/config.rs` (test: `c.provider == "ollama"` → `is_empty()`) | ~1 line |
 | `key_url` field on `ProviderEntry` | `crates/zoid-model/src/lib.rs` (struct + 6 registry entries) | ~10 lines |
+| Derive `entry_requires_key` from `key_url` | `crates/zoid/src/main.rs` (`entry_requires_key` body → `entry(id).map(\|e\| e.key_url.is_some())`) | ~3 lines |
 | `Overlay::Onboarding` variant | `crates/zoid-tui/src/state.rs` | ~1 line |
-| `OnboardingStep` + `OnboardingState` | `crates/zoid-tui/src/state.rs` | ~20 lines |
-| `render_onboarding` | `crates/zoid-tui/src/render.rs` (+ overlay dispatch branch) | ~120 lines |
-| `route_onboarding_key` + new `Action` variants | `crates/zoid-tui/src/route.rs` | ~40 lines |
+| `OnboardingStep` + `OnboardingState` + `ShellState.onboarding` field | `crates/zoid-tui/src/state.rs` (struct, enum, field + `new()` default) | ~25 lines |
+| `render_onboarding` + `render_shell` dispatch branch | `crates/zoid-tui/src/render.rs` | ~120 lines |
+| `layout.rs` overlay-rect arm | `crates/zoid-tui/src/layout.rs` (add `Onboarding` to the `None` arm) | ~1 line |
+| `route_onboarding_key` + new `Action` variants (incl. `OnboardingBack`) | `crates/zoid-tui/src/route.rs` | ~45 lines |
+| `PasteTarget::OnboardingKey` + `route_paste` arm | `crates/zoid-tui/src/route.rs` | ~10 lines |
 | `wizard_needed` predicate | `crates/zoid/src/main.rs` (or a pure helper) | ~15 lines |
 | Boot-time orchestration | `crates/zoid/src/main.rs` (in `run()`, after `select_provider`) | ~10 lines |
-| `handle_action` for onboarding actions | `crates/zoid/src/main.rs` | ~60 lines |
+| `handle_action` for onboarding actions (uses `apply_config_write`) | `crates/zoid/src/main.rs` | ~70 lines |
+| `first_time_user` frozen-invariant comment | `crates/zoid/src/main.rs` (`shell.first_time_user = ...`) | ~1 line |
 | Snapshot tests | `crates/zoid-tui/src/render.rs` (tests) | ~80 lines |
-| Unit tests (gate, transitions) | `crates/zoid/src/main.rs` + `crates/zoid-tui/src/state.rs` | ~80 lines |
+| Unit tests (gate, transitions, lockstep, `canonical_id`) | `crates/zoid/src/main.rs` + `crates/zoid-tui/src/state.rs` + `crates/zoid-model/src/lib.rs` | ~100 lines |
 
 **No signature changes** to `select_provider`, `config_view::provider_options`,
-`config_view::model_options`, `key_env_for`, or the existing config write
-machinery. The wizard composes existing primitives.
+`config_view::model_options`, `key_env_for`, `apply_config_write`, or
+`base_url_write_for`. The wizard composes existing primitives. The three
+compiler-enforced integration points (`render_shell`, `layout.rs`,
+`route_paste`) are mandatory follow-ons of adding the `Overlay::Onboarding`
+variant — the compiler rejects a missing arm, so they can't ship broken.
 
 ---
 
@@ -688,24 +977,26 @@ machinery. The wizard composes existing primitives.
                     │
          ┌──────────┴───────────┐
          │  render_onboarding   │  ← render.rs, full-frame card
-         │  (step rail + active │
+         │  (step rail + active │   (also: layout.rs rect arm, route_paste arm)
          │   step content)      │
          └──────────┬───────────┘
                     │
          route_onboarding_key → Action::Onboarding*
                     │
-         handle_action:
-           OnboardingSelect   → write provider (set_in_toml)
-           OnboardingSubmitKey→ write key (SecretStore::set), clear buffer
-           OnboardingMove     → move list_sel
-           OnboardingAbort    → close overlay
+         handle_action (uses apply_config_write — no new write path):
+           OnboardingSelect    → apply_config_write(provider + base_url + model-Unset)
+           OnboardingSubmitKey → SecretStore::set(key), clear buffer
+           OnboardingMove      → move list_sel (skip non-selectable)
+           OnboardingBack      → step 2 → step 1 (Esc retreat; options rebuilt)
+           OnboardingAbort     → close overlay (step 1/3 Esc)
                     │
-         step transitions (strictly forward):
-           Provider → (ollama-local: DONE) | (key-requiring: ApiKey)
+         step transitions:
+           Provider → (keyless: DONE) | (key-requiring: ApiKey)
            ApiKey   → (non-empty: write, → Model or DONE) | (empty: no-op)
-           Model    → (pick: write, DONE) | (use default: DONE)
+                    │ (Esc: → back to Provider)
+           Model    → (pick: apply_config_write(model), DONE) | (use default: DONE)
                     │
          DONE: overlay = None, onboarding = None
-               select_provider(new config) → live connection
-               next frame: empty-state onboarding (prompts) with working LLM
+               (last apply_config_write already re-selected the provider)
+               next frame: empty-state onboarding (prompts) with configured LLM
 ```
