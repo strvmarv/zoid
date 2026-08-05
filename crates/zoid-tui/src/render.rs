@@ -2572,12 +2572,6 @@ mod tests {
         assert!(content.contains("keyboard shortcuts"));
     }
 
-    /// Flatten a `Line`'s spans back into the visible string.
-    #[allow(dead_code)]
-    fn line_text(line: &Line) -> String {
-        line.spans.iter().map(|s| s.content.as_ref()).collect()
-    }
-
     /// Render `title_line` into a buffer at the given width for testing.
     fn title_buffer(w: u16, select_mode: bool, yolo: bool) -> ratatui::buffer::Buffer {
         use ratatui::{backend::TestBackend, Terminal};
@@ -2609,13 +2603,6 @@ mod tests {
             }
         }
         None
-    }
-
-    /// The palette hint string width — used for centering balance checks.
-    /// Matches the constant in `title_line`.
-    #[allow(dead_code)]
-    fn palette_hint_width() -> usize {
-        "Esc interrupt · : command · ^P palette".width()
     }
 
     #[test]
@@ -2658,7 +2645,6 @@ mod tests {
         let ver_str = VERSION;
         let expected_ver_col = zoid_col + 4 + 1;
         let (ver_col, _) = find_word(&buf, ver_str)
-            .or_else(|| find_word(&buf, &ver_str[1..]))
             .expect("version must be present in the title bar");
         assert_eq!(
             ver_col, expected_ver_col,
