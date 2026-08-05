@@ -31,13 +31,61 @@ paths:
 ```
 logs table:
   ts          INTEGER NOT NULL     -- epoch milliseconds
-  level       TEXT NOT NULL        -- "warn" | "error" | "info"
+  level       TEXT NOT NULL        -- "warn" | "error" (info deferred — see below)
   scope       TEXT NOT NULL        -- "turn" | "system"
   session_id  TEXT                 -- NULL for system logs
   event_id    TEXT                 -- links to events.id (NULL for system)
   message     TEXT NOT NULL        -- the log message text
   fields      TEXT                 -- JSON object of structured fields (OIDs, error codes)
 ```
+
+**Constraints:**
+
+```sql
+CHECK (
+  (scope = 'system' AND session_id IS NULL AND event_id IS NULL)
+  OR
+  (scope = 'turn' AND session_id IS NOT NULL AND event_id IS NOT NULL)
+)
+```
+
+This makes the turn-vs-system invariant a db-level guarantee, not just caller
+discipline.
+
+**`level` domain:** the schema accepts `"warn"` and `"error"`. `info` is
+deferred — the ring buffer only captures `warn`/`error` (the existing
+`on_event` behavior). `info`-level logs (turn timing, provider stats) stay in
+`ObsState`'s rolling stats and are not written to the `logs` table. If
+`info`-level db logging is needed in the future, add it to the ring buffer
+capture and the `level` `CHECK` constraint then.
+
+**The `Cmd::WriteLog` payload.** The ring buffer stores `LogEntry` (reduced —
+no `scope`/`session_id`/`event_id`). The `Cmd::WriteLog` command carries a
+fuller `LogRow` struct:
+
+```rust
+pub struct LogRow {
+    pub ts: i64,
+    pub level: String,
+    pub scope: String,
+    pub session_id: Option<String>,
+    pub event_id: Option<String>,
+    pub message: String,
+    pub fields: Option<String>,
+}
+```
+
+Turn-scoped writes build a `LogRow` directly (the agent loop has `session_id`
+and `event_id` in scope). The flush maps each `LogEntry` → `LogRow` with
+`scope = "system"`, nulls for the ids.
+
+**The `fields` column and schema drift.** Unlike `vram_curve` in the
+`local_models` table (which is parsed structurally by `recommend_model` and
+persists indefinitely), `fields` is opaque JSON read only by humans running
+`sqlite3`. No code parses it structurally. The 72h TTL purge is itself the
+schema-drift mitigation: old rows with old `fields` shapes age out in 72h.
+This is the key asymmetry — `fields` is drift-tolerant *because* it's
+TTL-bounded; `vram_curve` is drift-fragile *because* it isn't.
 
 - Index on `ts` for the purge query: `CREATE INDEX IF NOT EXISTS logs_ts ON logs(ts)`.
 - Purge: `DELETE FROM logs WHERE ts < ?` where `?` is 72h ago. One query, one
@@ -61,14 +109,39 @@ through the actor. These are `scope = "system"`, `session_id = NULL`.
 **Logs before the actor starts** (config warnings, build-expiry,
 pre-`obs::init`): these are rare and mostly `info`-level. They live only in the
 `ObsState` ring buffer and are flushed when the actor is up. If zoid crashes
-before the actor starts, they're lost — but that's a narrow window, and the
-panic hook captures panics through `tracing` into the ring buffer.
+before the actor starts, the ring buffer is lost (it's in-memory). The panic
+hook routes panics through `tracing` into the ring buffer — but the ring buffer
+is not durable. A pre-actor panic is only durable if `ZOID_LOG` is set (the
+JSON file layer). This is acceptable: pre-actor failures are deterministic and
+reproducible (bad db path, permissions), and the window is narrow (~70 lines of
+boot code). For crash diagnosis specifically, `ZOID_LOG` remains the
+recommendation; the `logs` table is for runtime debugging, not crash
+post-mortem.
 
 ### 3. The `ObsState` ring buffer
 
-`ObsState` gains a `logs: VecDeque<LogEntry>` (bounded, e.g. 500 entries). The
-`ObsLayer`'s `Visit` implementation captures `warn`/`error` events into this
-buffer. The buffer serves two purposes:
+`ObsState` gains a `logs: VecDeque<LogEntry>` (bounded, 500 entries). The
+`ObsLayer`'s `on_event` already captures `WARN`/`ERROR` level events into the
+existing `errors: VecDeque<ErrEntry>` (obs.rs:305-317) — extracting `message`
+via `FieldGrab`'s `Visit` and `ctx` from a known field name. Extending to the
+`logs` ring buffer is a near-mechanical change: the same extraction path, a
+larger ring (500 vs 20), and an added `fields` capture.
+
+**The `fields` JSON column requires a new `Visit` fallback.** The existing
+`FieldGrab` `Visit` impl (obs.rs:239-274) knows specific field names (`kind`,
+`name`, `ctx`, `message`, `ms`, etc.) and discards everything else (`_ => {}`
+in every `record_*` method). The `fields` column is the entire point of the
+feature — it captures structured data like the `branch_oid`/`head_oid` from
+the `exit_worktree` diagnostic. To populate it, `FieldGrab` is extended with a
+`serde_json::Map` collector: each `record_*` method's `_ => {}` fallback
+appends the unknown field to the map. After `Visit` completes, the map is
+serialized to the `fields` JSON string (or `None` if empty).
+
+**The existing `errors` ring stays.** `errors: VecDeque<ErrEntry>` (capped at
+20, obs.rs:49) powers the Overview page's error widget and is read on every
+frame. The new `logs` ring (500 entries) feeds the db flush and the future
+debug view. They serve different readers (Overview widget vs. db/debug); the
+cost of double-capturing `warn`/`error` in `on_event` is trivial.
 
 1. **Pre-actor buffering** — holds logs until the db is available, then flushes.
 2. **Overview/debug view** — the ring buffer powers a live log view in the TUI
@@ -113,7 +186,10 @@ After `SessionHandle::spawn` (and after `seed_local_models` + `purge_logs`),
 the bin flushes the `ObsState` ring buffer to the `logs` table:
 
 ```rust
-let entries = obs.state.lock().unwrap().take_logs();
+let entries = match obs.state.lock() {
+    Ok(mut s) => s.take_logs(),
+    Err(_) => return, // poisoned mutex — don't crash the boot path
+};
 for entry in &entries {
     if let Err(e) = session.write_log(entry, "system", None, None).await {
         tracing::warn!(error = %e, "failed to flush system log to db");
@@ -156,8 +232,9 @@ debugging:
   the only sink.
 - **`emit_ephemeral` for `ModelThinking`** — unchanged. Thinking stays
   in-memory only (not a log).
-- **The panic hook** — unchanged. It already routes through `tracing`, so
-  panics land in the ring buffer → db.
+- **The panic hook** — unchanged. It routes through `tracing`, so panics land
+  in the ring buffer (and the db once the actor is up). Pre-actor panics are
+  only durable via `ZOID_LOG` (the file layer), not the db.
 - **The `events` table** — unchanged. Logs are in `logs`, not `events`. No
   new `EventKind` variant.
 
@@ -180,10 +257,21 @@ pessimistic 10 warn/error entries per turn, 20 turns per session, 200 bytes
 each = 40KB per session. Across 73 sessions that's ~3MB — less than 0.5% of the
 db. The 72h purge keeps the `logs` table bounded regardless of session count.
 
-The purge runs once at boot (one `DELETE` with a `ts` index), not during turns.
-Turn-scoped log writes go through the actor (same path as `emit()`, which
-already writes larger `ToolResult` events on every tool call). One small
-`INSERT` per warn is negligible relative to existing write volume.
+The purge runs once at boot. If zoid runs continuously for days without
+restart, the `logs` table grows past 72h until the next boot's purge. This is
+acceptable for a TUI app (users close it regularly), but the spec acknowledges
+the bound is a boot-time bound, not a runtime bound. If long-running instances
+become a concern, a periodic purge (e.g. hourly via a timer command through the
+actor) is a follow-up.
+
+**Chatty warn-site flooding.** A retry loop or stuck provider stream can emit
+hundreds of `tracing::warn!` calls in seconds. The 72h window means a chatty
+site accumulates unboundedly until the next boot. The ring buffer (500 entries,
+FIFO) bounds the in-memory view, but the db can grow. Admission control at the
+write site — deduplication of identical `(message, target)` within a 1s window
+in `ObsLayer::on_event` — is deferred to a follow-up if a chatty site is
+observed in practice. The spec flags this as a known risk, not an unaddressed
+gap.
 
 ### Testing
 
