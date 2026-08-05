@@ -2306,8 +2306,7 @@ mod tests {
         );
     }
 
-    /// When `compacting: false`, the compaction segment must NOT appear —
-    /// the status bar matches the post-SELECT-removal layout.
+    /// When `compacting: false`, the compaction segment must NOT appear.
     #[test]
     fn compaction_segment_absent_when_not_compacting() {
         let state = ShellState::new();
