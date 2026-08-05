@@ -203,3 +203,69 @@ field is honored and document the contract. The seamed behavior is safer
 (an agent file can't accidentally 400 the session by naming a nonexistent
 model); honoring it is more flexible (per-agent model overrides) but
 needs validation against the live model list.
+
+## `exit_worktree` intermittently deletes branches with unmerged commits
+
+**Status:** Unreproduced in tests. Diagnostic logging added (commit `f57cb40`).
+The bug is real — it happened twice in practice (the `ollama-local-thinking`
+and `local-models-phase1` worktrees) — but the code is correct in every test
+scenario.
+
+**What happened:** `exit_worktree` returned `"exited worktree"` (no "retained"
+warning), meaning `branch_has_unmerged_commits` returned `false` for a branch
+that had 4 unmerged commits on top of main HEAD. The branch was deleted by
+`remove_worktree(repo_root, name, delete_branch=true)`. Recovery required
+cherry-picking from dangling commits found via `git fsck --lost-found`.
+
+**The code path** (`crates/zoid/src/main.rs:6957-6988`):
+
+```
+WorktreeAction::Exit → is_worktree_clean(&wt.path)?
+  → branch_has_unmerged_commits(repo_root, &wt.name)  ← returned false (wrong)
+  → remove_worktree(repo_root, &wt.name, !false = true)  ← deleted the branch
+  → Ok((root, None))  ← no "retained" warning
+```
+
+**`branch_has_unmerged_commits`** (`crates/zoid/src/worktree.rs:133-156`):
+opens the repo at `repo_root`, finds the branch by name, gets the branch tip
+OID, resolves main HEAD via `commondir()`, and returns
+`graph_descendant_of(branch_oid, head_oid)`. If any step fails, it returns
+`false` (conservative — don't block cleanup).
+
+**`repo_root` in production:** `handle_worktree_request` passes
+`Path::new(".")` (main.rs:7004). The process cwd never changes (`set_current_dir`
+is never called), so `.` is the main checkout. Tests confirm this path works.
+
+**Tests added** (`crates/zoid/tests/worktree_test.rs`):
+- `exit_worktree_retains_branch_with_unmerged_commits` — full enter→commit→exit
+  round-trip, asserts branch retained. **Passes.**
+- `remove_worktree_from_inside_worktree_path` — `remove_worktree` called with
+  the worktree path as `repo_root`. **Passes.**
+- `branch_has_unmerged_commits_detects_from_inside_worktree` (pre-existing) —
+  tests the `commondir()` fix. **Passes.**
+
+**Hypotheses (untested):**
+
+1. **Race condition:** `handle_worktree_request` runs in the UI event loop.
+  Subagent commits may not be fully flushed to git's object store by the time
+  `graph_descendant_of` runs. The subagent's `git commit` and the UI loop's
+  `branch_has_unmerged_commits` could race on the same `.git` directory.
+
+2. **`git2` branch visibility:** `find_branch(name, Local)` on the main repo
+  might not see a branch created by `git2::Repository::worktree()` in a prior
+  event-loop iteration if git2 caches the ref list. The `find_branch` returning
+  `Err` causes `branch_has_unmerged_commits` to return `false` (line 137-139).
+
+3. **`main_head_oid` returns wrong OID:** `commondir()` resolution might return
+  a stale or worktree HEAD in some edge case, making `graph_descendant_of` a
+  self-comparison (branch vs itself) which returns `false`.
+
+**Diagnostic logging added** (main.rs:6980-6993): when `has_unmerged` is false
+and the branch is about to be deleted, logs `branch_oid`, `head_oid`, and
+`branch` name. Next time this happens, check the zoid log
+(`ZOID_LOG=/tmp/zoid-debug.jsonl`) for `"deleting worktree branch"` to see the
+OIDs and determine which hypothesis is correct.
+
+**Mitigation until fixed:** when exiting a worktree with unmerged work, check
+the tool result for the "retained" warning. If absent, the branch was deleted —
+recover with `git fsck --lost-found` and cherry-pick the dangling commits.
