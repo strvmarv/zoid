@@ -11,6 +11,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
 
 pub const MAX_ERR_RING: usize = 20;
+pub const MAX_LOG_RING: usize = 500;
 
 #[derive(Debug, Default, Clone)]
 pub struct ToolStat {
@@ -31,6 +32,14 @@ pub struct ErrEntry {
     pub message: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct LogEntry {
+    pub ts: i64,
+    pub level: String,
+    pub message: String,
+    pub fields: Option<String>,
+}
+
 #[derive(Debug, Default)]
 pub struct ObsState {
     pub turn: RollingStats,
@@ -47,6 +56,7 @@ pub struct ObsState {
     pub cache_total: u64,
     pub proj_rebuilds: u64,
     pub errors: std::collections::VecDeque<ErrEntry>,
+    pub logs: std::collections::VecDeque<LogEntry>,
 }
 
 impl ObsState {
@@ -91,6 +101,22 @@ impl ObsState {
             context,
             message,
         });
+    }
+    pub fn record_log(&mut self, ts: i64, level: &str, message: &str, fields: Option<String>) {
+        if self.logs.len() == MAX_LOG_RING {
+            self.logs.pop_front();
+        }
+        self.logs.push_back(LogEntry {
+            ts,
+            level: level.to_string(),
+            message: message.to_string(),
+            fields,
+        });
+    }
+
+    /// Drain and return all entries from the logs ring buffer.
+    pub fn take_logs(&mut self) -> Vec<LogEntry> {
+        self.logs.drain(..).collect()
     }
 }
 
@@ -222,6 +248,7 @@ struct FieldGrab {
     name: Option<String>,
     ctx: Option<String>,
     message: Option<String>,
+    extra_fields: serde_json::Map<String, serde_json::Value>,
     ms: u64,
     ttft_ms: u64,
     total_ms: u64,
@@ -243,7 +270,7 @@ impl Visit for FieldGrab {
             "ttft_ms" => self.ttft_ms = value,
             "total_ms" => self.total_ms = value,
             "iterations" => self.iterations = value,
-            _ => {}
+            _ => { self.extra_fields.insert(field.name().to_string(), value.into()); }
         }
     }
     fn record_bool(&mut self, field: &Field, value: bool) {
@@ -253,7 +280,7 @@ impl Visit for FieldGrab {
                 self.cache_hit_present = true;
             }
             "proj_rebuilt" => self.proj_rebuilt = value,
-            _ => {}
+            _ => { self.extra_fields.insert(field.name().to_string(), value.into()); }
         }
     }
     fn record_str(&mut self, field: &Field, value: &str) {
@@ -262,13 +289,15 @@ impl Visit for FieldGrab {
             "name" => self.name = Some(value.to_string()),
             "ctx" => self.ctx = Some(value.to_string()),
             "message" => self.message = Some(value.to_string()),
-            _ => {}
+            _ => { self.extra_fields.insert(field.name().to_string(), value.into()); }
         }
     }
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
         // The implicit event message arrives as the `message` field via Debug.
         if field.name() == "message" && self.message.is_none() {
             self.message = Some(format!("{value:?}"));
+        } else if field.name() != "message" {
+            self.extra_fields.insert(field.name().to_string(), format!("{value:?}").into());
         }
     }
 }
@@ -308,11 +337,22 @@ impl<S: tracing::Subscriber> Layer<S> for ObsLayer {
             } else {
                 "warn"
             };
+            let fields = if g.extra_fields.is_empty() {
+                None
+            } else {
+                Some(serde_json::to_string(&g.extra_fields).unwrap_or_default())
+            };
             s.record_error(
                 now_ms(),
                 lvl,
                 g.ctx.unwrap_or_default(),
-                g.message.unwrap_or_default(),
+                g.message.clone().unwrap_or_default(),
+            );
+            s.record_log(
+                now_ms(),
+                lvl,
+                &g.message.unwrap_or_default(),
+                fields,
             );
         }
     }
@@ -507,5 +547,72 @@ mod tests {
         assert_eq!(s.cache_hits, 1);
         assert_eq!(s.errors.len(), 1);
         assert_eq!(s.errors.back().unwrap().context, "provider");
+    }
+
+    #[test]
+    fn ring_buffer_captures_warn_and_error() {
+        let state = Arc::new(Mutex::new(ObsState::default()));
+        let layer = ObsLayer { state: state.clone() };
+        let sub = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(sub, || {
+            tracing::warn!("test warning");
+            tracing::error!("test error");
+            tracing::info!("test info — should NOT be captured");
+        });
+        let s = state.lock().unwrap();
+        assert_eq!(s.logs.len(), 2, "warn and error captured, info not");
+        assert_eq!(s.logs[0].level, "warn");
+        assert!(s.logs[0].message.contains("test warning"));
+        assert_eq!(s.logs[1].level, "error");
+        assert!(s.logs[1].message.contains("test error"));
+    }
+
+    #[test]
+    fn ring_buffer_captures_unknown_fields() {
+        let state = Arc::new(Mutex::new(ObsState::default()));
+        let layer = ObsLayer { state: state.clone() };
+        let sub = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(sub, || {
+            tracing::warn!(branch = "test-branch", branch_oid = "abc123", head_oid = "def456", "worktree diagnostic");
+        });
+        let s = state.lock().unwrap();
+        assert_eq!(s.logs.len(), 1);
+        let fields = s.logs[0].fields.as_ref().expect("fields must be captured");
+        assert!(fields.contains("branch"), "fields must include branch: {fields}");
+        assert!(fields.contains("abc123"), "fields must include branch_oid: {fields}");
+        assert!(fields.contains("def456"), "fields must include head_oid: {fields}");
+    }
+
+    #[test]
+    fn ring_buffer_drops_oldest_when_full() {
+        let state = Arc::new(Mutex::new(ObsState::default()));
+        let layer = ObsLayer { state: state.clone() };
+        let sub = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(sub, || {
+            for i in 0..(MAX_LOG_RING + 5) {
+                tracing::warn!(i, "fill entry {}", i);
+            }
+        });
+        let s = state.lock().unwrap();
+        assert_eq!(s.logs.len(), MAX_LOG_RING, "ring must be at capacity");
+        // The oldest 5 entries are dropped; the first remaining is index 5.
+        assert_eq!(s.logs[0].message, "fill entry 5", "oldest surviving entry should be entry 5");
+    }
+
+    #[test]
+    fn take_logs_drains_and_returns_entries() {
+        let state = Arc::new(Mutex::new(ObsState::default()));
+        {
+            let mut s = state.lock().unwrap();
+            s.record_log(now_ms(), "warn", "test message", None);
+            s.record_log(now_ms(), "error", "another", None);
+        }
+        let entries = {
+            let mut s = state.lock().unwrap();
+            s.take_logs()
+        };
+        assert_eq!(entries.len(), 2);
+        let s = state.lock().unwrap();
+        assert!(s.logs.is_empty(), "take_logs must drain the ring");
     }
 }
