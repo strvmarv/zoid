@@ -145,6 +145,119 @@ impl EventStore {
         Ok(EventStore { conn })
     }
 
+    /// Create the `local_models` table (if absent), seed curated entries from
+    /// `zoid_model::local_seed::CURATED_LOCAL_MODELS`, and version the schema
+    /// with `PRAGMA user_version`. Idempotent: re-running on an existing db
+    /// updates curated entries where the seed's `schema_version` is higher,
+    /// and leaves `source = "user"` entries untouched. Phase 1: nothing reads
+    /// the table yet.
+    pub fn seed_local_models(&self) -> Result<()> {
+        // Table creation (idempotent).
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS local_models (
+                id              TEXT PRIMARY KEY,
+                display_name    TEXT NOT NULL,
+                provider        TEXT NOT NULL,
+                runtime         TEXT NOT NULL,
+                source          TEXT NOT NULL,
+                download_source TEXT NOT NULL,
+                quant           TEXT,
+                modelfile       TEXT,
+                context_window  INTEGER,
+                thinking        TEXT,
+                thinking_wire   TEXT,
+                max_output      INTEGER,
+                tools           INTEGER,
+                prompt_cache    INTEGER,
+                num_ctx         INTEGER,
+                vram_curve      TEXT,
+                schema_version  INTEGER
+            )",
+        )?;
+
+        // Seed curated entries. Upsert: insert if absent, update if the seed's
+        // version is higher. Never touch source = "user" rows.
+        for seed in zoid_model::local_seed::CURATED_LOCAL_MODELS {
+            // Check if the row exists and its source/schema_version.
+            let existing: Option<(String, u32)> = self.conn.query_row(
+                "SELECT source, COALESCE(schema_version, 0) FROM local_models WHERE id = ?1",
+                params![seed.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            ).ok();
+
+            match existing {
+                None => {
+                    // Insert new curated entry.
+                    self.conn.execute(
+                        "INSERT INTO local_models (
+                            id, display_name, provider, runtime, source,
+                            download_source, quant, modelfile, context_window,
+                            thinking, thinking_wire, max_output, tools,
+                            prompt_cache, num_ctx, vram_curve, schema_version
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                        params![
+                            seed.id,
+                            seed.display_name,
+                            seed.provider,
+                            seed.runtime,
+                            "curated",
+                            seed.download_source,
+                            seed.quant,
+                            seed.modelfile,
+                            seed.context_window as i64,
+                            seed.thinking,
+                            seed.thinking_wire,
+                            seed.max_output as i64,
+                            seed.tools as i64,
+                            seed.prompt_cache as i64,
+                            seed.num_ctx as i64,
+                            seed.vram_curve,
+                            seed.schema_version as i64,
+                        ],
+                    )?;
+                }
+                Some((source, row_version)) if source == "curated" && seed.schema_version > row_version => {
+                    // Update curated entry with newer seed version.
+                    self.conn.execute(
+                        "UPDATE local_models SET
+                            display_name = ?2, provider = ?3, runtime = ?4,
+                            download_source = ?5, quant = ?6, modelfile = ?7,
+                            context_window = ?8, thinking = ?9, thinking_wire = ?10,
+                            max_output = ?11, tools = ?12, prompt_cache = ?13,
+                            num_ctx = ?14, vram_curve = ?15, schema_version = ?16
+                        WHERE id = ?1",
+                        params![
+                            seed.id,
+                            seed.display_name,
+                            seed.provider,
+                            seed.runtime,
+                            seed.download_source,
+                            seed.quant,
+                            seed.modelfile,
+                            seed.context_window as i64,
+                            seed.thinking,
+                            seed.thinking_wire,
+                            seed.max_output as i64,
+                            seed.tools as i64,
+                            seed.prompt_cache as i64,
+                            seed.num_ctx as i64,
+                            seed.vram_curve,
+                            seed.schema_version as i64,
+                        ],
+                    )?;
+                }
+                _ => {
+                    // Row exists as "user" or with >= seed version: leave untouched.
+                }
+            }
+        }
+
+        // Set the db-level schema version for local_models.
+        self.conn.pragma_update(None, "user_version", 1)?;
+
+        Ok(())
+    }
+
     pub fn append(&self, event: &Event) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
@@ -1480,5 +1593,53 @@ mod tests {
         let store = EventStore::open(":memory:").unwrap();
         // No error, no panic.
         store.delete_session(Ulid::new()).unwrap();
+    }
+
+    #[test]
+    fn seed_local_models_creates_table_and_seeds_qwythos() {
+        let dir = std::env::temp_dir().join(format!("zoid-seed-test-{}", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let store = EventStore::open(dir.to_str().unwrap()).unwrap();
+        store.seed_local_models().unwrap();
+
+        // Table exists.
+        let count: i64 = store.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='local_models'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(count, 1, "local_models table must exist");
+
+        // qwythos is seeded.
+        let id: String = store.conn.query_row(
+            "SELECT id FROM local_models WHERE id = 'qwythos'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(id, "qwythos");
+
+        // source is "curated".
+        let source: String = store.conn.query_row(
+            "SELECT source FROM local_models WHERE id = 'qwythos'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(source, "curated");
+    }
+
+    #[test]
+    fn seed_local_models_is_idempotent() {
+        let dir = std::env::temp_dir().join(format!("zoid-seed-idempotent-{}", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let store = EventStore::open(dir.to_str().unwrap()).unwrap();
+        store.seed_local_models().unwrap();
+        // Seeding again must not duplicate or error.
+        store.seed_local_models().unwrap();
+        let count: i64 = store.conn.query_row(
+            "SELECT COUNT(*) FROM local_models WHERE id = 'qwythos'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(count, 1, "qwythos must appear exactly once after double-seed");
     }
 }
