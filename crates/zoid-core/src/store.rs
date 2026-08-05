@@ -1669,4 +1669,37 @@ mod tests {
         ).unwrap();
         assert_eq!(count, 1, "qwythos must appear exactly once after double-seed");
     }
+
+    #[test]
+    fn seed_local_models_preserves_user_entries() {
+        let dir = std::env::temp_dir().join(format!("zoid-seed-user-{}", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let store = EventStore::open(dir.to_str().unwrap()).unwrap();
+        store.seed_local_models().unwrap();
+
+        // Insert a user-defined entry.
+        store.conn.execute(
+            "INSERT INTO local_models (id, display_name, provider, runtime, source, download_source, schema_version)
+             VALUES ('my-model', 'My Model', 'ollama-local', 'ollama', 'user', 'test', 1)",
+            [],
+        ).unwrap();
+
+        // Re-seed: must not overwrite the user entry.
+        store.seed_local_models().unwrap();
+
+        let source: String = store.conn.query_row(
+            "SELECT source FROM local_models WHERE id = 'my-model'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(source, "user", "user-defined entry must survive re-seed");
+
+        // And the curated entry must still be present.
+        let curated_source: String = store.conn.query_row(
+            "SELECT source FROM local_models WHERE id = 'qwythos'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(curated_source, "curated", "curated entry must still be present");
+    }
 }
