@@ -429,20 +429,6 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
         chip,
         Style::new().fg(color::CHAT_ACCENT).bg(color::CHAT_BG),
     )];
-    // A blank cell separates the two pills — adjacent spans sharing a bg would
-    // merge into one block, so the gap is what makes them read as two badges.
-    left.push(Span::raw(" "));
-    // Always-visible SELECT pill, right of the mode pill. It's the purple
-    // sibling of the (blue) mode pill: ON = light-purple BRANCH glyph on the
-    // dark-purple SELECT_BG fill, mirroring CHAT_ACCENT-on-CHAT_BG. OFF drops
-    // the fill entirely (dim glyph on the bar background) so it reads as
-    // recessive, not a second lit badge.
-    let select_style = if state.select_mode {
-        Style::new().fg(color::BRANCH).bg(color::SELECT_BG)
-    } else {
-        Style::new().fg(color::DIM)
-    };
-    left.push(Span::styled(" SELECT ", select_style));
     // Transient one-line hint (e.g. "queued: <msg>", command usage/errors), set
     // by the bin. Pure-renderer-readable since it lives on ShellState.
     // One Span, no wrapping: anything multi-line or per-row belongs in a drawer
@@ -2728,6 +2714,36 @@ mod tests {
         assert!(
             zoid_col > left_zone_w,
             "centered block (col {zoid_col}) must not overlap left zone (width {left_zone_w})"
+        );
+    }
+
+    #[test]
+    fn status_bar_has_no_select_pill() {
+        // After SELECT moved to the title bar, the bottom status bar must
+        // not contain "SELECT" anywhere.
+        let view = ChatView {
+            zoom: Zoom::Normal,
+            caret_on: false,
+            reveal: None,
+            tz_offset_secs: 0,
+        };
+        let mut state = ShellState::new();
+        state.select_mode = true; // even when ON, it must not appear in the status bar
+        let backend = ratatui::backend::TestBackend::new(160, 1);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| render_status(f, &state, &view, f.area()))
+            .unwrap();
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
+        assert!(
+            !content.contains("SELECT"),
+            "status bar must NOT contain 'SELECT': got {content:?}"
         );
     }
 
