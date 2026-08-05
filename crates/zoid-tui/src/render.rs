@@ -13,7 +13,7 @@ use crate::palette::{
     Phase,
 };
 use crate::state::{
-    DrawerId, Focus, OnboardingStep, Overlay, PaletteStage, ShellState, SessionConfirmKind,
+    DrawerId, Focus, OnboardingStep, Overlay, PaletteStage, ShellState, SessionConfirmKind, Zoom,
 };
 use crate::tokens::{color, glyph};
 use ratatui::{
@@ -286,74 +286,30 @@ const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 
 /// Build the one-row top status bar for inner width `w`.
 ///
-/// Three zones on a single line: SELECT + optional YOLO pills flush-left,
-/// the `zoid VERSION` wordmark+version centered on the full width, and the
-/// palette hint flush-right.
-///
-/// The left zone (SELECT pill always, YOLO pill when `yolo`) fills from column
-/// 0. The centered block (`zoid {VERSION}`) is positioned at
-/// `(w - combined_w) / 2`. A saturating guard fires if `left_zone_w >=
-/// center_start`: the centered block left-aligns at `left_zone_w + 1` instead.
-/// (Won't fire at the 160-col minimum, but protects against future growth.)
-fn title_line(w: usize, select_mode: bool, yolo: bool) -> Line<'static> {
+/// Three zones on a single line: the crate `VERSION` flush-left, the `zoid`
+/// wordmark centered, and the palette hint flush-right. The wordmark-centering
+/// and hint-right-alignment math is identical to the pre-version bar — the
+/// version merely overlays the left padding that used to be blank spaces. When
+/// the left pad cannot hold the version plus a one-column gap (`pad < ver_w + 1`,
+/// i.e. a very narrow terminal) the version is dropped and the original
+/// two-element bar renders unchanged.
+fn title_line(w: usize) -> Line<'static> {
     let wordmark = "zoid";
     let palette_hint = "Esc interrupt · : command · ^P palette";
+    let wm_w = wordmark.width();
+    let pad = w.saturating_sub(wm_w) / 2;
+    let ver_w = VERSION.width();
 
-    // --- Left zone: SELECT pill (always) + 1-cell gap + YOLO pill (if yolo) ---
-    let select_style = if select_mode {
-        Style::new().fg(color::BRANCH).bg(color::SELECT_BG)
-    } else {
-        Style::new().fg(color::DIM)
-    };
-    let select_span = Span::styled(" SELECT ", select_style);
-
-    let yolo_span = if yolo {
-        Some(Span::styled(
-            format!(" {} YOLO ", glyph::WARNING),
-            Style::new().fg(color::WARN).bg(color::WARN_DIM),
-        ))
-    } else {
-        None
-    };
-
-    // Left zone width: SELECT + gap (if YOLO follows) + YOLO.
-    let gap_w = if yolo_span.is_some() { 1 } else { 0 };
-    let left_zone_w = select_span.content.width()
-        + gap_w
-        + yolo_span.as_ref().map(|s| s.content.width()).unwrap_or(0);
-
-    // --- Center zone: "zoid {VERSION}" centered on the full width ---
-    let combined = format!("{} {}", wordmark, VERSION);
-    let combined_w = combined.width();
-    let center_start = w.saturating_sub(combined_w) / 2;
-
-    // Guard: if the left zone would overlap the centered block, left-align
-    // the centered block right after the left zone instead.
-    let center_col = if left_zone_w >= center_start {
-        left_zone_w + 1
-    } else {
-        center_start
-    };
-
-    // --- Build spans ---
     let mut spans = Vec::new();
-
-    // Left zone.
-    spans.push(select_span);
-    if let Some(ys) = yolo_span {
-        spans.push(Span::raw(" ".repeat(gap_w)));
-        spans.push(ys);
+    if pad > ver_w {
+        spans.push(Span::styled(VERSION, Style::new().fg(color::DIM)));
+        spans.push(Span::styled(" ".repeat(pad - ver_w), Style::new()));
+    } else {
+        spans.push(Span::styled(" ".repeat(pad), Style::new()));
     }
+    spans.push(Span::styled(wordmark.to_string(), Style::new().fg(color::DIM)));
 
-    // Pad from left zone to the centered block.
-    let pad_to_center = center_col.saturating_sub(left_zone_w);
-    if pad_to_center > 0 {
-        spans.push(Span::raw(" ".repeat(pad_to_center)));
-    }
-    spans.push(Span::styled(combined, Style::new().fg(color::DIM)));
-
-    // Pad from centered block to the palette hint.
-    let used = center_col + combined_w;
+    let used = pad + wm_w;
     let right_pad = w.saturating_sub(used).saturating_sub(palette_hint.width());
     if right_pad > 0 {
         spans.push(Span::raw(" ".repeat(right_pad)));
@@ -362,15 +318,11 @@ fn title_line(w: usize, select_mode: bool, yolo: bool) -> Line<'static> {
         palette_hint.to_string(),
         Style::new().fg(color::DIM),
     ));
-
     Line::from(spans)
 }
 
-fn render_title(frame: &mut Frame, state: &ShellState, area: Rect) {
-    frame.render_widget(
-        Paragraph::new(title_line(area.width as usize, state.select_mode, state.yolo)),
-        area,
-    );
+fn render_title(frame: &mut Frame, _state: &ShellState, area: Rect) {
+    frame.render_widget(Paragraph::new(title_line(area.width as usize)), area);
 }
 
 fn render_input(frame: &mut Frame, input: &TextArea<'_>, area: Rect) {
@@ -476,13 +428,50 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
         }
     };
 
-    // Right segment: zoom hint (palette hint moved to the top-right title bar).
-    let right = format!(" zoom {} ", view.zoom.label());
+    // Right segment: zoom pill + SELECT pill + optional YOLO pill, flush-right
+    // (order right-to-left: zoom, select, yolo). The zoom pill is the green
+    // sibling of the (blue) mode pill: `OK` glyph on `ZOOM_BG` fill. SELECT is
+    // the purple sibling (BRANCH on SELECT_BG). YOLO is the warn pill. The
+    // palette hint moved to the top-right title bar.
+    let zoom_label = match view.zoom {
+        Zoom::Overview => "Overview",
+        Zoom::Summary => "Summary",
+        Zoom::Normal => "Normal",
+        Zoom::Detail => "Detail",
+    };
+    let zoom_span = Span::styled(
+        format!(" {} ", zoom_label),
+        Style::new().fg(color::OK).bg(color::ZOOM_BG),
+    );
+
+    let select_style = if state.select_mode {
+        Style::new().fg(color::BRANCH).bg(color::SELECT_BG)
+    } else {
+        Style::new().fg(color::DIM)
+    };
+    let select_span = Span::styled(" SELECT ", select_style);
+
+    let yolo_span = if state.yolo {
+        Some(Span::styled(
+            format!(" {} YOLO ", glyph::WARNING),
+            Style::new().fg(color::WARN).bg(color::WARN_DIM),
+        ))
+    } else {
+        None
+    };
+
+    // Right zone width: zoom + 1-cell gap + select + optional gap + yolo.
+    let right_gap_w = if yolo_span.is_some() { 1 } else { 0 };
+    let right_zone_w = zoom_span.content.width()
+        + 1 // gap between zoom and select
+        + select_span.content.width()
+        + right_gap_w
+        + yolo_span.as_ref().map(|s| s.content.width()).unwrap_or(0);
 
     let w = area.width as usize;
     let left_w: usize = left.iter().map(|s| s.content.width()).sum();
     let center_w = center.width();
-    let right_w = right.width();
+    let right_w = right_zone_w;
 
     // Fixed anchors: tool at ⅓, working at ½, compaction at ⅔. Each is computed
     // independently — an absent indicator doesn't displace the others. Zero
@@ -565,13 +554,20 @@ fn render_status(frame: &mut Frame, state: &ShellState, view: &ChatView, area: R
     };
     spans.push(Span::styled(tool_text, Style::new().fg(tool_fg)));
 
-    // Pad to the zoom hint (right edge).
+    // Pad to the right zone (right edge), then emit the pills right-to-left:
+    // zoom (rightmost), 1-cell gap, SELECT, optional 1-cell gap, YOLO.
     let consumed_so_far: usize = spans.iter().map(|s| s.content.width()).sum();
     let pad2 = right_start.saturating_sub(consumed_so_far);
     if pad2 > 0 {
         spans.push(Span::styled(" ".repeat(pad2), Style::new()));
     }
-    spans.push(Span::styled(right, Style::new().fg(color::DIM)));
+    if let Some(ys) = yolo_span {
+        spans.push(ys);
+        spans.push(Span::raw(" ".repeat(right_gap_w)));
+    }
+    spans.push(select_span);
+    spans.push(Span::raw(" "));
+    spans.push(zoom_span);
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -2266,7 +2262,7 @@ mod tests {
     /// `SELECT_BG` fill (the purple sibling of the mode pill's blue pair).
     #[test]
     fn select_pill_on_is_filled_purple() {
-        let buf = title_buffer(160, true, false);
+        let buf = status_buffer(160, true, false);
         let (_, style) = find_word(&buf, "SELECT").expect("SELECT pill must be present");
         assert_eq!(
             style.fg,
@@ -2284,7 +2280,7 @@ mod tests {
     /// appear on no cell, so it never reads as a second lit badge.
     #[test]
     fn select_pill_off_is_recessive_no_fill() {
-        let buf = title_buffer(160, false, false);
+        let buf = status_buffer(160, false, false);
         let (_, style) = find_word(&buf, "SELECT").expect("SELECT pill must be present");
         assert_eq!(
             style.fg,
@@ -2572,11 +2568,29 @@ mod tests {
     }
 
     /// Render `title_line` into a buffer at the given width for testing.
-    fn title_buffer(w: u16, select_mode: bool, yolo: bool) -> ratatui::buffer::Buffer {
+    fn title_buffer(w: u16) -> ratatui::buffer::Buffer {
         use ratatui::{backend::TestBackend, Terminal};
-        let line = title_line(w as usize, select_mode, yolo);
+        let line = title_line(w as usize);
         let mut term = Terminal::new(TestBackend::new(w, 1)).unwrap();
         term.draw(|f| f.render_widget(ratatui::widgets::Paragraph::new(line), f.area()))
+            .unwrap();
+        term.backend().buffer().clone()
+    }
+
+    /// Render `render_status` into a buffer at the given width for testing.
+    fn status_buffer(w: u16, select_mode: bool, yolo: bool) -> ratatui::buffer::Buffer {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut state = ShellState::new();
+        state.select_mode = select_mode;
+        state.yolo = yolo;
+        let view = ChatView {
+            zoom: Zoom::Normal,
+            caret_on: false,
+            reveal: None,
+            tz_offset_secs: 0,
+        };
+        let mut term = Terminal::new(TestBackend::new(w, 1)).unwrap();
+        term.draw(|f| render_status(f, &state, &view, f.area()))
             .unwrap();
         term.backend().buffer().clone()
     }
@@ -2605,130 +2619,98 @@ mod tests {
     }
 
     #[test]
-    fn title_select_on_is_flush_left_and_filled() {
-        let buf = title_buffer(160, true, false);
-        let (col, style) = find_word(&buf, "SELECT").expect("SELECT must be present");
-        assert_eq!(col, 1, "SELECT must be flush-left (col 1, after the leading space): col={col}");
-        assert_eq!(style.fg, Some(color::BRANCH), "ON: fg must be BRANCH");
-        assert_eq!(style.bg, Some(color::SELECT_BG), "ON: bg must be SELECT_BG");
+    fn title_version_is_flush_left() {
+        let buf = title_buffer(160);
+        let (ver_col, _) = find_word(&buf, VERSION).expect("version must be present");
+        assert_eq!(ver_col, 0, "version must be flush-left: col={ver_col}");
     }
 
     #[test]
-    fn title_select_off_is_recessive() {
-        let buf = title_buffer(160, false, false);
+    fn title_wordmark_is_centered() {
+        let buf = title_buffer(160);
+        let (zoid_col, _) = find_word(&buf, "zoid").expect("zoid wordmark must be present");
+        // "zoid" is 4 chars; dead-center on a 160-col line → start ≈ 78.
+        let expected = 160usize.saturating_sub(4) / 2;
+        assert_eq!(
+            zoid_col, expected,
+            "zoid must be centered: got {zoid_col}, expected {expected}"
+        );
+    }
+
+    #[test]
+    fn title_version_dropped_on_narrow_width() {
+        // When the left pad can't hold the version plus a one-column gap, the
+        // version is dropped and the original two-element bar renders.
+        let w = 10; // narrow: pad = (10-4)/2 = 3, ver_w = ~6 → pad < ver_w+1
+        let buf = title_buffer(w);
+        assert!(
+            find_word(&buf, VERSION).is_none(),
+            "version must be dropped on narrow width"
+        );
+        assert!(find_word(&buf, "zoid").is_some(), "zoid must still be present");
+    }
+
+    #[test]
+    fn status_select_on_is_flush_right_of_zoom() {
+        let buf = status_buffer(160, true, false);
+        let (sel_col, _) = find_word(&buf, "SELECT").expect("SELECT must be present");
+        let (zoom_col, _) = find_word(&buf, "Normal").expect("zoom label must be present");
+        // SELECT sits immediately left of the zoom pill (1-cell gap between).
+        assert!(
+            sel_col < zoom_col,
+            "SELECT (col {sel_col}) must be left of zoom (col {zoom_col})"
+        );
+    }
+
+    #[test]
+    fn status_select_off_is_recessive() {
+        let buf = status_buffer(160, false, false);
         let (col, style) = find_word(&buf, "SELECT").expect("SELECT must be present");
-        assert_eq!(col, 1, "SELECT must be flush-left even when off: col={col}");
+        assert!(col > 0, "SELECT must not be flush-left: col={col}");
         assert_eq!(style.fg, Some(color::DIM), "OFF: fg must be DIM");
         assert_ne!(style.bg, Some(color::SELECT_BG), "OFF: bg must not be SELECT_BG");
     }
 
     #[test]
-    fn title_yolo_shown_when_enabled() {
-        let buf = title_buffer(160, true, true);
+    fn status_yolo_shown_when_enabled() {
+        let buf = status_buffer(160, true, true);
         let (_, style) = find_word(&buf, "YOLO").expect("YOLO must be present when yolo=true");
         assert_eq!(style.fg, Some(color::WARN), "YOLO fg must be WARN");
         assert_eq!(style.bg, Some(color::WARN_DIM), "YOLO bg must be WARN_DIM");
     }
 
     #[test]
-    fn title_yolo_hidden_when_disabled() {
-        let buf = title_buffer(160, true, false);
+    fn status_yolo_hidden_when_disabled() {
+        let buf = status_buffer(160, true, false);
         assert!(find_word(&buf, "YOLO").is_none(), "YOLO must not appear when yolo=false");
     }
 
     #[test]
-    fn title_version_centered_with_wordmark() {
-        let buf = title_buffer(160, false, false);
-        let (zoid_col, _) = find_word(&buf, "zoid").expect("zoid wordmark must be present");
-        // Version must be present and immediately after "zoid " (wordmark + space).
-        let ver_str = VERSION;
-        let expected_ver_col = zoid_col + 4 + 1;
-        let (ver_col, _) = find_word(&buf, ver_str)
-            .expect("version must be present in the title bar");
-        assert_eq!(
-            ver_col, expected_ver_col,
-            "version must be immediately after 'zoid ': got {ver_col}, expected {expected_ver_col}"
-        );
-        // Centering: verify the space left of the block and right of the block
-        // are balanced (difference <= 1). This independently checks centering
-        // without recomputing the production formula. The palette hint sits
-        // flush-right within that right space, so it is NOT subtracted out.
-        let combined = format!("zoid {}", VERSION);
-        let combined_w = combined.width();
-        let left_pad = zoid_col;
-        let right_pad = 160usize.saturating_sub(zoid_col + combined_w);
-        assert!(
-            left_pad.abs_diff(right_pad) <= 1,
-            "centered block must have balanced padding: left_pad={left_pad}, right_pad={right_pad}"
-        );
+    fn status_zoom_pill_is_green_filled() {
+        let buf = status_buffer(160, false, false);
+        let (_, style) = find_word(&buf, "Normal").expect("zoom label must be present");
+        assert_eq!(style.fg, Some(color::OK), "zoom pill fg must be OK (green)");
+        assert_eq!(style.bg, Some(color::ZOOM_BG), "zoom pill bg must be ZOOM_BG");
     }
 
     #[test]
-    fn title_guard_left_aligns_when_left_zone_overlaps_center() {
-        // Force the guard to fire: with SELECT on + YOLO on at a narrow width
-        // (below the 160 minimum, but title_line is a pure function with no
-        // minimum check), the left zone will overlap the centered block.
-        // The guard must left-align the centered block after the left zone.
-        let w = 40; // narrow enough to force overlap with SELECT + YOLO
-        let buf = title_buffer(w, true, true);
-        // Left zone: " SELECT " (7) + " " (1) + " ⚠ YOLO " (via .width()).
-        let left_zone_w = Span::styled(" SELECT ", Style::new()).content.width()
-            + 1 // gap
-            + Span::styled(" \u{26a0} YOLO ", Style::new()).content.width();
-        // The guard sets center_col = left_zone_w + 1. So "zoid" should start
-        // at left_zone_w + 1 (plus the leading space in " SELECT " is already
-        // counted in left_zone_w).
-        let expected_zoid_col = left_zone_w + 1;
-        let (zoid_col, _) = find_word(&buf, "zoid").expect("zoid must be present even when guard fires");
-        assert_eq!(
-            zoid_col, expected_zoid_col,
-            "guard must left-align zoid after left zone: got {zoid_col}, expected {expected_zoid_col}"
-        );
+    fn status_pills_ordered_right_to_left_zoom_select_yolo() {
+        let buf = status_buffer(160, true, true);
+        let (zoom_col, _) = find_word(&buf, "Normal").expect("zoom label");
+        let (sel_col, _) = find_word(&buf, "SELECT").expect("SELECT");
+        let (yolo_col, _) = find_word(&buf, "YOLO").expect("YOLO");
+        assert!(zoom_col > sel_col, "zoom must be rightmost: zoom={zoom_col} select={sel_col}");
+        assert!(sel_col > yolo_col, "select must be right of yolo: select={sel_col} yolo={yolo_col}");
     }
 
     #[test]
-    fn title_left_zone_does_not_overlap_centered_block() {
-        // Worst case: SELECT on + YOLO on + 160 cols.
-        let buf = title_buffer(160, true, true);
-        let (zoid_col, _) = find_word(&buf, "zoid").expect("zoid must be present");
-        // Left zone = " SELECT " (7) + " " (1 gap) + " ⚠ YOLO " (width via .width()).
-        let select_span = Span::styled(" SELECT ", Style::new());
-        let gap_span = Span::raw(" ");
-        let yolo_span = Span::styled(" \u{26a0} YOLO ", Style::new());
-        let left_zone_w = select_span.content.width() + gap_span.content.width() + yolo_span.content.width();
+    fn title_bar_has_no_select_pill() {
+        // After SELECT moved back to the bottom status bar, the top title bar
+        // must not contain "SELECT" anywhere.
+        let buf = title_buffer(160);
         assert!(
-            zoid_col > left_zone_w,
-            "centered block (col {zoid_col}) must not overlap left zone (width {left_zone_w})"
-        );
-    }
-
-    #[test]
-    fn status_bar_has_no_select_pill() {
-        // After SELECT moved to the title bar, the bottom status bar must
-        // not contain "SELECT" anywhere.
-        let view = ChatView {
-            zoom: Zoom::Normal,
-            caret_on: false,
-            reveal: None,
-            tz_offset_secs: 0,
-        };
-        let mut state = ShellState::new();
-        state.select_mode = true; // even when ON, it must not appear in the status bar
-        let backend = ratatui::backend::TestBackend::new(160, 1);
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal
-            .draw(|f| render_status(f, &state, &view, f.area()))
-            .unwrap();
-        let content: String = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|c| c.symbol().to_string())
-            .collect();
-        assert!(
-            !content.contains("SELECT"),
-            "status bar must NOT contain 'SELECT': got {content:?}"
+            find_word(&buf, "SELECT").is_none(),
+            "title bar must NOT contain 'SELECT'"
         );
     }
 

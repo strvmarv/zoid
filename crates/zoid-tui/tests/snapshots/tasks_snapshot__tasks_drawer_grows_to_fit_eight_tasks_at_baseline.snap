@@ -2,7 +2,7 @@
 source: crates/zoid-tui/tests/tasks_snapshot.rs
 expression: "draw_at(&s, &many_tasks(8), 160, 40)"
 ---
-" SELECT                                                                   zoid v0.9.0                                     Esc interrupt · : command · ^P palette"
+"v0.9.0                                                                        zoid                                        Esc interrupt · : command · ^P palette"
 "    (no messages yet)                                                                                             █ ╭ ▾ repo ─────────────────────────────────╮ "
 "                                                                                                                  █ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(118, " ")]
 "                                                                                                                  █ │🔧 worktree (none)                       │ " Hidden by multi-width symbols: [(118, " ")]
@@ -41,4 +41,4 @@ expression: "draw_at(&s, &many_tasks(8), 160, 40)"
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│                                                                                                                                                              │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" CHAT                                                         ⊟ compact     ● idle      ◐ tool                                                      zoom normal "
+" CHAT                                                         ⊟ compact     ● idle      ◐ tool                                                  SELECT   Normal "

@@ -100,6 +100,9 @@ pub mod color {
     /// `CHAT_ACCENT` (light blue) on `CHAT_BG` (dark blue).
     pub const SELECT_BG: Color = Color::Rgb(0x2a, 0x1a, 0x4d);
     pub const BUILD_BG: Color = Color::Rgb(0x3d, 0x2a, 0x0a);
+    /// Dark-green fill for the zoom pill — the green sibling of `CHAT_BG`/
+    /// `SELECT_BG`, paired with the `OK` light-green glyph.
+    pub const ZOOM_BG: Color = Color::Rgb(0x0a, 0x2a, 0x18);
     // ⑤ context heat — reuse the status palette so the visual language stays uniform.
     pub const HEAT_HOT: Color = OK;
     pub const HEAT_WARM: Color = WARN;
