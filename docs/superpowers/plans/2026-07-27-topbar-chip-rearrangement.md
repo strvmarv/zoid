@@ -122,6 +122,12 @@ In `crates/zoid-tui/src/render.rs`, in the `#[cfg(test)] mod tests` module (line
         }
         None
     }
+
+    /// The palette hint string width — used for centering balance checks.
+    /// Matches the constant in `title_line`.
+    fn palette_hint_width() -> usize {
+        "Esc interrupt · : command · ^P palette".width()
+    }
 ```
 
 Now add the test functions (after the existing title tests, before `sessions_overlay_shows_confirm_line_when_pending`):
@@ -163,21 +169,52 @@ Now add the test functions (after the existing title tests, before `sessions_ove
     fn title_version_centered_with_wordmark() {
         let buf = title_buffer(160, false, false);
         let (zoid_col, _) = find_word(&buf, "zoid").expect("zoid wordmark must be present");
-        // The combined block is "zoid v0.9.0" (wordmark + space + VERSION).
-        // It's centered on the full width w: center_start = (w - combined_w) / 2.
-        // Compute combined_w from the actual VERSION constant.
-        let combined = format!("zoid {}", VERSION);
-        let combined_w = combined.width();
-        let expected_start = (160usize).saturating_sub(combined_w) / 2;
-        assert_eq!(
-            zoid_col, expected_start,
-            "zoid must start at the centered position: got {zoid_col}, expected {expected_start}"
-        );
-        // Version must be immediately after the wordmark + space.
+        // Version must be present and immediately after "zoid " (wordmark + space).
         let ver_str = VERSION;
-        let (_, _) = find_word(&buf, &ver_str[1..])  // search without leading 'v' to avoid matching other v's
+        let expected_ver_col = zoid_col + 4 + 1;
+        let (ver_col, _) = find_word(&buf, &ver_str[1..])
             .or_else(|| find_word(&buf, ver_str))
             .expect("version must be present in the title bar");
+        assert_eq!(
+            ver_col, expected_ver_col,
+            "version must be immediately after 'zoid ': got {ver_col}, expected {expected_ver_col}"
+        );
+        // Centering: verify left-pad and right-pad around the combined block
+        // are balanced (difference <= 1). This independently checks centering
+        // without recomputing the production formula.
+        let combined = format!("zoid {}", VERSION);
+        let combined_w = combined.width();
+        let left_pad = zoid_col;
+        let right_pad = 160usize
+            .saturating_sub(zoid_col + combined_w)
+            .saturating_sub(palette_hint_width());
+        assert!(
+            left_pad.abs_diff(right_pad) <= 1,
+            "centered block must have balanced padding: left_pad={left_pad}, right_pad={right_pad}"
+        );
+    }
+
+    #[test]
+    fn title_guard_left_aligns_when_left_zone_overlaps_center() {
+        // Force the guard to fire: with SELECT on + YOLO on at a narrow width
+        // (below the 160 minimum, but title_line is a pure function with no
+        // minimum check), the left zone will overlap the centered block.
+        // The guard must left-align the centered block after the left zone.
+        let w = 40; // narrow enough to force overlap with SELECT + YOLO
+        let buf = title_buffer(w, true, true);
+        // Left zone: " SELECT " (7) + " " (1) + " ⚠ YOLO " (via .width()).
+        let left_zone_w = Span::styled(" SELECT ", Style::new()).content.width()
+            + 1 // gap
+            + Span::styled(" \u{26a0} YOLO ", Style::new()).content.width();
+        // The guard sets center_col = left_zone_w + 1. So "zoid" should start
+        // at left_zone_w + 1 (plus the leading space in " SELECT " is already
+        // counted in left_zone_w).
+        let expected_zoid_col = left_zone_w + 1;
+        let (zoid_col, _) = find_word(&buf, "zoid").expect("zoid must be present even when guard fires");
+        assert_eq!(
+            zoid_col, expected_zoid_col,
+            "guard must left-align zoid after left zone: got {zoid_col}, expected {expected_zoid_col}"
+        );
     }
 
     #[test]
@@ -488,13 +525,17 @@ Replace the test (line ~2583) with:
             ver_col, expected_ver_col,
             "version must be immediately after 'zoid ': got {ver_col}, expected {expected_ver_col}"
         );
-        // Wordmark is centered: (w - combined_w) / 2.
+        // Centering: verify left-pad and right-pad around the combined block
+        // are balanced (difference <= 1). Independent of the production formula.
         let combined = format!("zoid {}", VERSION);
         let combined_w = combined.width();
-        let expected_zoid = (160usize).saturating_sub(combined_w) / 2;
-        assert_eq!(
-            zoid_col, expected_zoid,
-            "wordmark must be centered: got {zoid_col}, expected {expected_zoid}"
+        let left_pad = zoid_col;
+        let right_pad = 160usize
+            .saturating_sub(zoid_col + combined_w)
+            .saturating_sub(palette_hint_width());
+        assert!(
+            left_pad.abs_diff(right_pad) <= 1,
+            "centered block must have balanced padding: left_pad={left_pad}, right_pad={right_pad}"
         );
         // Palette hint stays flush-right.
         let text: String = buf
