@@ -29,6 +29,18 @@ pub fn is_live(
         }
 }
 
+/// One row in the `logs` table. Turn-scoped logs populate `session_id` and
+/// `event_id`; system logs leave them `None`.
+pub struct LogRow {
+    pub ts: i64,
+    pub level: String,
+    pub scope: String,
+    pub session_id: Option<String>,
+    pub event_id: Option<String>,
+    pub message: String,
+    pub fields: Option<String>,
+}
+
 /// Single-writer, append-only event log backed by SQLite. The store owns the
 /// connection; readers obtain owned `Vec<Event>` snapshots via `load_all`.
 pub struct EventStore {
@@ -109,7 +121,22 @@ impl EventStore {
                 dim       INTEGER NOT NULL,
                 vector    BLOB NOT NULL,
                 PRIMARY KEY (event_id, model_id)
-            );",
+            );
+            CREATE TABLE IF NOT EXISTS logs (
+                ts          INTEGER NOT NULL,
+                level       TEXT NOT NULL,
+                scope       TEXT NOT NULL,
+                session_id  TEXT,
+                event_id    TEXT,
+                message     TEXT NOT NULL,
+                fields      TEXT,
+                CHECK (
+                    (scope = 'system' AND session_id IS NULL AND event_id IS NULL)
+                    OR
+                    (scope = 'turn' AND session_id IS NOT NULL AND event_id IS NOT NULL)
+                )
+            );
+            CREATE INDEX IF NOT EXISTS logs_ts ON logs(ts);",
         )?;
         // First-ever schema migration (spec §11). `CREATE TABLE IF NOT EXISTS`
         // above is a no-op for an existing DB, so a NEW column must be added with
@@ -283,6 +310,36 @@ impl EventStore {
                 |r| r.get(0),
             )
             .ok()
+    }
+
+    /// Insert one log entry. Called through the actor (single-writer).
+    pub fn write_log(&self, row: &LogRow) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO logs (ts, level, scope, session_id, event_id, message, fields)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                row.ts,
+                row.level,
+                row.scope,
+                row.session_id,
+                row.event_id,
+                row.message,
+                row.fields,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Delete log entries older than `ttl_ms` ago. Called at boot (non-fatal).
+    /// One DELETE with the logs_ts index — fast even on a large table.
+    pub fn purge_logs(&self, ttl_ms: i64) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let cutoff = now - ttl_ms;
+        self.conn.execute("DELETE FROM logs WHERE ts < ?1", params![cutoff])?;
+        Ok(())
     }
 
     pub fn append(&self, event: &Event) -> Result<()> {
@@ -1701,5 +1758,99 @@ mod tests {
             |r| r.get(0),
         ).unwrap();
         assert_eq!(curated_source, "curated", "curated entry must still be present");
+    }
+
+    #[test]
+    fn write_log_inserts_turn_scoped_entry() {
+        let dir = std::env::temp_dir().join(format!("zoid-wlog-turn-{}", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let store = EventStore::open(dir.to_str().unwrap()).unwrap();
+
+        let row = LogRow {
+            ts: 1000,
+            level: "warn".into(),
+            scope: "turn".into(),
+            session_id: Some("01KZ7TEST".into()),
+            event_id: Some("01KZ7EV1".into()),
+            message: "provider error".into(),
+            fields: Some(r#"{"status":429}"#.into()),
+        };
+        store.write_log(&row).unwrap();
+
+        let (level, scope, sid, eid, msg, fields): (String, String, Option<String>, Option<String>, String, Option<String>) = store.conn.query_row(
+            "SELECT level, scope, session_id, event_id, message, fields FROM logs WHERE ts = 1000",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+        ).unwrap();
+        assert_eq!(level, "warn");
+        assert_eq!(scope, "turn");
+        assert_eq!(sid.as_deref(), Some("01KZ7TEST"));
+        assert_eq!(eid.as_deref(), Some("01KZ7EV1"));
+        assert_eq!(msg, "provider error");
+        assert_eq!(fields.as_deref(), Some(r#"{"status":429}"#));
+    }
+
+    #[test]
+    fn write_log_inserts_system_entry_with_null_ids() {
+        let dir = std::env::temp_dir().join(format!("zoid-wlog-sys-{}", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let store = EventStore::open(dir.to_str().unwrap()).unwrap();
+
+        let row = LogRow {
+            ts: 2000,
+            level: "error".into(),
+            scope: "system".into(),
+            session_id: None,
+            event_id: None,
+            message: "seed failed".into(),
+            fields: None,
+        };
+        store.write_log(&row).unwrap();
+
+        let (sid, eid): (Option<String>, Option<String>) = store.conn.query_row(
+            "SELECT session_id, event_id FROM logs WHERE ts = 2000",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).unwrap();
+        assert!(sid.is_none(), "system log must have NULL session_id");
+        assert!(eid.is_none(), "system log must have NULL event_id");
+    }
+
+    #[test]
+    fn purge_logs_deletes_old_entries() {
+        let dir = std::env::temp_dir().join(format!("zoid-purge-{}", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let store = EventStore::open(dir.to_str().unwrap()).unwrap();
+
+        // Insert entries at ts 1000 (old) and ts 5000 (recent).
+        let old = LogRow { ts: 1000, level: "warn".into(), scope: "system".into(), session_id: None, event_id: None, message: "old".into(), fields: None };
+        let recent = LogRow { ts: 5000, level: "warn".into(), scope: "system".into(), session_id: None, event_id: None, message: "recent".into(), fields: None };
+        store.write_log(&old).unwrap();
+        store.write_log(&recent).unwrap();
+
+        // Purge entries older than ts 3000 (ttl_ms relative to now).
+        // purge_logs computes cutoff = now - ttl_ms. To test, we pass a
+        // ttl_ms that makes the cutoff land between 1000 and 5000.
+        // Now is ~current epoch ms; we want cutoff = 3000. So ttl_ms = now - 3000.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        store.purge_logs(now - 3000).unwrap();
+
+        let count: i64 = store.conn.query_row("SELECT COUNT(*) FROM logs", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 1, "only the recent entry (ts=5000) should survive");
+        let msg: String = store.conn.query_row("SELECT message FROM logs", [], |r| r.get(0)).unwrap();
+        assert_eq!(msg, "recent");
+    }
+
+    #[test]
+    fn purge_logs_with_no_entries_is_noop() {
+        let dir = std::env::temp_dir().join(format!("zoid-purge-empty-{}", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let store = EventStore::open(dir.to_str().unwrap()).unwrap();
+        store.purge_logs(72 * 60 * 60 * 1000).unwrap();
+        let count: i64 = store.conn.query_row("SELECT COUNT(*) FROM logs", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 0);
     }
 }
