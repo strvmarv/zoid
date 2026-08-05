@@ -260,11 +260,13 @@ is never called), so `.` is the main checkout. Tests confirm this path works.
   a stale or worktree HEAD in some edge case, making `graph_descendant_of` a
   self-comparison (branch vs itself) which returns `false`.
 
-**Diagnostic logging added** (main.rs:6980-6993): when `has_unmerged` is false
-and the branch is about to be deleted, logs `branch_oid`, `head_oid`, and
-`branch` name. Next time this happens, check the zoid log
-(`ZOID_LOG=/tmp/zoid-debug.jsonl`) for `"deleting worktree branch"` to see the
-OIDs and determine which hypothesis is correct.
+**Diagnostic logging added** (main.rs:6995-7001): when `has_unmerged` is false
+and the branch is deleted, the return message now includes `branch_oid` and
+`head_oid` — e.g. `"exited worktree (branch 'foo' deleted — no unmerged commits
+detected; branch_oid=Some(...) head_oid=Some(...))"`. This is visible in the
+tool result (not just `tracing::warn`), so no `ZOID_LOG` env var is needed.
+Next time this happens, the agent sees the OIDs directly in the `exit_worktree`
+tool result and can determine which hypothesis is correct.
 
 **Mitigation until fixed:** when exiting a worktree with unmerged work, check
 the tool result for the "retained" warning. If absent, the branch was deleted —
