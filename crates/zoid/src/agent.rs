@@ -364,6 +364,11 @@ pub enum Answer {
     Feedback(zoid_core::feedback::FeedbackReport),
 }
 
+/// Reply payload for a worktree relocation: the new absolute cwd + optional
+/// warning (or an error string). Shared by `WorktreeRequested` and
+/// `handle_worktree_request`.
+pub type WorktreeReply = tokio::sync::oneshot::Sender<Result<(std::path::PathBuf, Option<String>), String>>;
+
 /// A request from the `enter_worktree` / `exit_worktree` Emitting tools (or
 /// the `:worktree` user commands) to relocate the session cwd. Ephemeral —
 /// travels via `AgentUpdate`, never persisted to SQLite (spec: chat-worktree-
@@ -468,7 +473,7 @@ pub enum AgentUpdate {
     /// unmerged commits is retained on exit.
     WorktreeRequested {
         action: WorktreeAction,
-        reply: tokio::sync::oneshot::Sender<Result<(std::path::PathBuf, Option<String>), String>>,
+        reply: WorktreeReply,
     },
     /// The wake watcher's timer elapsed; the main loop should drain any wakes
     /// whose `fire_at_ms <= now` (inject if idle, else defer to TurnComplete).

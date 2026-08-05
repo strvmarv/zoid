@@ -31,7 +31,7 @@ pub struct AgentsConfig {
     pub source_dirs: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Config {
     pub provider: String,
     pub base_url: Option<String>,
@@ -189,29 +189,6 @@ pub struct WakeConfig {
 impl Default for WakeConfig {
     fn default() -> Self {
         Self { enabled: true }
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            provider: String::new(), // empty = unconfigured (see onboarding wizard gate)
-            base_url: None,
-            model: String::new(), // empty → binary falls back to provider default_model()
-            economy: EconomyConfig::default(),
-            reduced_motion: false,
-            skills: SkillsConfig::default(),
-            modes: ModesConfig::default(),
-            agents: AgentsConfig::default(),
-            companion: CompanionConfig::default(),
-            thinking: ThinkingConfig::default(),
-            approval: ApprovalConfig::default(),
-            embed: EmbedConfig::default(),
-            eviction: EvictionConfig::default(),
-            ui: UiConfig::default(),
-            subagent: SubagentConfig::default(),
-            wake: WakeConfig::default(),
-        }
     }
 }
 

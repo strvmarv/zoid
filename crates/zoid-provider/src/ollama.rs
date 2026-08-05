@@ -35,7 +35,7 @@ pub fn parse_num_ctx(raw: Option<&str>) -> u32 {
 /// (back-compat) > `[economy] num_ctx` in config.toml > `DEFAULT_LOCAL_NUM_CTX`.
 /// Read at provider-construction time by the bin's `ollama-local` branch.
 pub fn configured_num_ctx(config_num_ctx: Option<u32>) -> u32 {
-    if let Some(raw) = std::env::var("ZOID_NUM_CTX").ok() {
+    if let Ok(raw) = std::env::var("ZOID_NUM_CTX") {
         // Env var present: it wins (back-compat). Invalid value → default.
         return parse_num_ctx(Some(&raw));
     }

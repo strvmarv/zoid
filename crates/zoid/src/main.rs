@@ -4673,7 +4673,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::SessionPick => {
             if app.streaming || !app.in_flight_subagents.is_empty() {
-                app.shell.status_hint = Some(busy_block_hint(app).into());
+                app.shell.status_hint = Some(busy_block_hint(app));
                 app.shell.close_overlay();
                 return Ok(false);
             }
@@ -4736,7 +4736,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         }
         Action::SessionDelete => {
             if app.streaming || !app.in_flight_subagents.is_empty() {
-                app.shell.status_hint = Some(busy_block_hint(app).into());
+                app.shell.status_hint = Some(busy_block_hint(app));
                 app.shell.close_overlay();
                 return Ok(false);
             }
@@ -6615,7 +6615,7 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
         }
         Command::NewSession => {
             if app.streaming || !app.in_flight_subagents.is_empty() {
-                app.shell.status_hint = Some(busy_block_hint(app).into());
+                app.shell.status_hint = Some(busy_block_hint(app));
                 app.shell.close_overlay();
                 return Ok(false);
             }
@@ -7070,7 +7070,7 @@ fn compute_worktree_switch(
 fn handle_worktree_request(
     app: &mut App,
     action: zoid::agent::WorktreeAction,
-    reply: Option<tokio::sync::oneshot::Sender<Result<(std::path::PathBuf, Option<String>), String>>>,
+    reply: Option<zoid::agent::WorktreeReply>,
 ) {
     let subagent_running = !app.in_flight_subagents.is_empty();
     let result = compute_worktree_switch(
@@ -7216,11 +7216,12 @@ async fn handle_schedule_wake(
     // already exists. Prevents the LLM from accumulating duplicate wakes for
     // the same event.
     if app.pending_wakes.values().any(|n| n == &note) {
-        return Err(format!(
+        return Err(
             "a pending wake with this note already exists — cancel it first \
              with cancel_wake, or wait for it to fire. Do not schedule \
              duplicate wakes for the same event."
-        ));
+                .to_string(),
+        );
     }
 
     let wake_id = Ulid::new().to_string();

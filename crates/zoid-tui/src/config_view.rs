@@ -247,7 +247,7 @@ pub fn build_sections(
         title: "Interface".into(),
         rows: vec![
             FieldRow {
-                label: "reduced motion".into(),
+                label: "reduced motion",
                 value: onoff(cfg.reduced_motion),
                 kind: FieldKind::Bool,
                 source: prov.reduced_motion,
@@ -255,7 +255,7 @@ pub fn build_sections(
                 secret_key: None,
             },
             FieldRow {
-                label: "companion".into(),
+                label: "companion",
                 value: onoff(cfg.companion.enabled),
                 kind: FieldKind::Bool,
                 source: prov.companion_enabled,

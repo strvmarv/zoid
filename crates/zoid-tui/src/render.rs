@@ -1891,7 +1891,7 @@ fn render_api_key_input(
         format!(
             "{indent}  {tl}{h}{tr}",
             tl = glyph::TABLE_TL,
-            h = std::iter::repeat(glyph::TABLE_H).take(box_inner_w).collect::<String>(),
+            h = std::iter::repeat_n(glyph::TABLE_H, box_inner_w).collect::<String>(),
             tr = glyph::TABLE_TR
         ),
         Style::new().fg(color::DIM),
@@ -1911,7 +1911,7 @@ fn render_api_key_input(
         format!(
             "{indent}  {bl}{h}{br}",
             bl = glyph::TABLE_BL,
-            h = std::iter::repeat(glyph::TABLE_H).take(box_inner_w).collect::<String>(),
+            h = std::iter::repeat_n(glyph::TABLE_H, box_inner_w).collect::<String>(),
             br = glyph::TABLE_BR
         ),
         Style::new().fg(color::DIM),
