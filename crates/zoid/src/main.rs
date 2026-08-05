@@ -3151,6 +3151,7 @@ where
         // (kept out of the pure renderer for snapshot determinism); the motion
         // tick below redraws at MOTION_FPS while busy so it actually animates.
         app.shell.busy = app.streaming;
+        app.shell.yolo = app.yolo;
         // Only a chat turn carries a cancellation token; delegation has none, so
         // Esc/Ctrl-C routes to CancelTurn while this is true. Also true when
         // subagents are in flight (no main turn) so the two-press subagent-kill
