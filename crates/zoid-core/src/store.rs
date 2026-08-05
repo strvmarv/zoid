@@ -44,7 +44,11 @@ pub struct LogRow {
 /// Single-writer, append-only event log backed by SQLite. The store owns the
 /// connection; readers obtain owned `Vec<Event>` snapshots via `load_all`.
 pub struct EventStore {
-    conn: Connection,
+    /// `pub(crate)` so session-level integration tests can run raw read-only
+    /// SQL (e.g. verifying a `LogRow` landed in `logs`) without adding a
+    /// bespoke public accessor per query. Production code routes through the
+    /// actor; tests read directly off the reopened store.
+    pub(crate) conn: Connection,
 }
 
 /// Little-endian pack of an embedding vector for BLOB storage.

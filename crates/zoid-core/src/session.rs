@@ -108,6 +108,16 @@ enum Cmd {
     SeedLocalModels {
         reply: oneshot::Sender<Result<()>>,
     },
+    /// Write one log entry to the `logs` table.
+    WriteLog {
+        row: crate::store::LogRow,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    /// Purge log entries older than `ttl_ms` ago.
+    PurgeLogs {
+        ttl_ms: i64,
+        reply: oneshot::Sender<Result<()>>,
+    },
 }
 
 /// A cloneable handle to the single-writer event-store actor (spec §4.1).
@@ -252,6 +262,12 @@ impl SessionHandle {
                     Cmd::SeedLocalModels { reply } => {
                         let _ = reply.send(store.seed_local_models());
                     }
+                    Cmd::WriteLog { row, reply } => {
+                        let _ = reply.send(store.write_log(&row));
+                    }
+                    Cmd::PurgeLogs { ttl_ms, reply } => {
+                        let _ = reply.send(store.purge_logs(ttl_ms));
+                    }
                 }
             }
         });
@@ -361,6 +377,28 @@ impl SessionHandle {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(Cmd::SeedLocalModels { reply })
+            .await
+            .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
+    }
+
+    /// Write one log entry to the `logs` table via the actor.
+    pub async fn write_log(&self, row: crate::store::LogRow) -> Result<()> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Cmd::WriteLog { row, reply })
+            .await
+            .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
+        rx.await
+            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
+    }
+
+    /// Purge log entries older than `ttl_ms` ago via the actor.
+    pub async fn purge_logs(&self, ttl_ms: i64) -> Result<()> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Cmd::PurgeLogs { ttl_ms, reply })
             .await
             .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
         rx.await
@@ -785,5 +823,46 @@ mod tests {
             store.local_model_source("qwythos").as_deref(),
             Some("curated")
         );
+    }
+
+    #[tokio::test]
+    async fn write_log_via_handle_inserts_system_entry() {
+        let dir = std::env::temp_dir().join(format!("zoid-wlog-handle-{}", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let h = SessionHandle::spawn(dir.to_str().unwrap()).unwrap();
+
+        let row = crate::store::LogRow {
+            ts: 42_000,
+            level: "warn".into(),
+            scope: "system".into(),
+            session_id: None,
+            event_id: None,
+            message: "test via handle".into(),
+            fields: None,
+        };
+        h.write_log(row).await.unwrap();
+        drop(h); // flush the actor writer
+
+        // Re-open and verify.
+        let store = crate::store::EventStore::open(dir.to_str().unwrap()).unwrap();
+        let msg: String = store.conn.query_row(
+            "SELECT message FROM logs WHERE ts = 42000",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(msg, "test via handle");
+    }
+
+    #[tokio::test]
+    async fn purge_logs_via_handle_is_noop_on_empty() {
+        let dir = std::env::temp_dir().join(format!("zoid-purge-handle-{}", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let h = SessionHandle::spawn(dir.to_str().unwrap()).unwrap();
+        h.purge_logs(72 * 60 * 60 * 1000).await.unwrap();
+        drop(h);
+
+        let store = crate::store::EventStore::open(dir.to_str().unwrap()).unwrap();
+        let count: i64 = store.conn.query_row("SELECT COUNT(*) FROM logs", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 0);
     }
 }
