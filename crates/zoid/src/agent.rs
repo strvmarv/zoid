@@ -976,6 +976,7 @@ async fn run_turn_inner(
                         emit_eviction(&session, &mut events, ui, config, session_id, now, plan)
                             .await?;
                         tracing::warn!(ctx = "provider", "context-length error; forced eviction, retrying ({context_retries}/{MAX_CONTEXT_RETRIES})");
+                        log_turn_warn(&session, "warn", session_id, &format!("context-length error; forced eviction, retrying ({context_retries}/{MAX_CONTEXT_RETRIES})"), None).await;
                         continue 'turn;
                     }
                     emit(
@@ -991,6 +992,7 @@ async fn run_turn_inner(
                     )
                     .await?;
                     tracing::warn!(ctx = "provider", message = msg.as_str(), "turn error");
+                    log_turn_warn(&session, "warn", session_id, &msg, None).await;
                     outcome = "error";
                     break 'turn;
                 }
@@ -1238,6 +1240,7 @@ async fn run_turn_inner(
                         message = reason_msg.as_str(),
                         "tool failed"
                     );
+                    log_turn_warn(&session, "warn", session_id, &reason_msg, None).await;
                     continue;
                 }
                 Gate::Prompt { question, choices } => {
@@ -1444,6 +1447,7 @@ async fn run_turn_inner(
                                 message = tool_msg.as_str(),
                                 "tool failed"
                             );
+                            log_turn_warn(&session, "warn", session_id, &tool_msg, None).await;
                         }
                     }
                 }
@@ -2460,6 +2464,7 @@ async fn run_turn_inner(
                     if let Some(msg) = tool_fail_msg {
                         let ctx = format!("tool {tool_name}");
                         tracing::warn!(ctx = ctx.as_str(), message = msg.as_str(), "tool failed");
+                        log_turn_warn(&session, "warn", session_id, &msg, None).await;
                     }
                 }
                 Some(zoid_tools::ToolKind::Network) => {
@@ -2543,6 +2548,7 @@ async fn run_turn_inner(
                     if let Some(msg) = tool_fail_msg {
                         let ctx = format!("tool {tool_name}");
                         tracing::warn!(ctx = ctx.as_str(), message = msg.as_str(), "tool failed");
+                        log_turn_warn(&session, "warn", session_id, &msg, None).await;
                     }
                 }
                 _ => {
@@ -2649,6 +2655,7 @@ async fn run_turn_inner(
                     if let Some(msg) = tool_fail_msg {
                         let ctx = format!("tool {tool_name}");
                         tracing::warn!(ctx = ctx.as_str(), message = msg.as_str(), "tool failed");
+                        log_turn_warn(&session, "warn", session_id, &msg, None).await;
                     }
                 }
             }
@@ -2717,6 +2724,35 @@ async fn emit_ephemeral(
     events.push(ev.clone());
     let _ = ui.send(AgentUpdate::Appended(Box::new(ev))).await;
     Ok(())
+}
+
+/// Write a turn-scoped log entry to the `logs` table. Called alongside
+/// `tracing::warn!` at key warn sites in the agent loop so the entry carries
+/// `session_id` for contextual debugging. Non-fatal: a write failure is
+/// silently dropped (the `tracing::warn!` already captured it in the ring
+/// buffer). `event_id` is optional — not every warn has a specific triggering
+/// event.
+#[allow(clippy::too_many_arguments)]
+async fn log_turn_warn(
+    session: &SessionHandle,
+    level: &str,
+    session_id: Ulid,
+    message: &str,
+    fields: Option<String>,
+) {
+    let row = zoid_core::store::LogRow {
+        ts: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64,
+        level: level.into(),
+        scope: "turn".into(),
+        session_id: Some(session_id.to_string()),
+        event_id: None,
+        message: message.into(),
+        fields,
+    };
+    let _ = session.write_log(row).await;
 }
 
 async fn emit(

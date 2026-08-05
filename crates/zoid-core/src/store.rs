@@ -137,7 +137,7 @@ impl EventStore {
                 CHECK (
                     (scope = 'system' AND session_id IS NULL AND event_id IS NULL)
                     OR
-                    (scope = 'turn' AND session_id IS NOT NULL AND event_id IS NOT NULL)
+                    (scope = 'turn' AND session_id IS NOT NULL)
                 )
             );
             CREATE INDEX IF NOT EXISTS logs_ts ON logs(ts);",
@@ -339,7 +339,7 @@ impl EventStore {
     pub fn purge_logs(&self, ttl_ms: i64) -> Result<()> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as i64;
         let cutoff = now - ttl_ms;
         self.conn.execute("DELETE FROM logs WHERE ts < ?1", params![cutoff])?;

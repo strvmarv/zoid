@@ -2920,6 +2920,11 @@ where
     let mut subagent_tick = tokio::time::interval(subagent_tick_period);
     subagent_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+    // Periodic log-flush tick: drain the ObsState ring buffer to the logs table
+    // every 60s so in-session warn/error events are persisted without waiting
+    // for a restart. Non-fatal — a flush failure warns and continues.
+    let mut log_flush_tick = tokio::time::interval(std::time::Duration::from_secs(60));
+
     // Off-load `git status` to a background task so the subprocess never blocks
     // the render loop (it previously ran synchronously on the loop every second,
     // hitching typing/scrolling). The loop reads the latest value non-blocking.
@@ -3923,6 +3928,28 @@ where
             }
             _ = subagent_tick.tick(), if !app.streaming && !app.in_flight_subagents.is_empty() => {
                 // Excluded when streaming (the 30 FPS tick covers it).
+            }
+            _ = log_flush_tick.tick() => {
+                // Drain the ObsState ring buffer to the logs table so in-session
+                // warn/error events are persisted without a restart. Non-fatal.
+                let entries = match obs_state.lock() {
+                    Ok(mut s) => s.take_logs(),
+                    Err(_) => Vec::new(),
+                };
+                for entry in entries {
+                    let row = zoid_core::store::LogRow {
+                        ts: entry.ts,
+                        level: entry.level,
+                        scope: "system".into(),
+                        session_id: None,
+                        event_id: None,
+                        message: entry.message,
+                        fields: entry.fields,
+                    };
+                    if let Err(e) = app.session.write_log(row).await {
+                        tracing::warn!(error = %e, "failed to flush system log to db");
+                    }
+                }
             }
         }
     }
