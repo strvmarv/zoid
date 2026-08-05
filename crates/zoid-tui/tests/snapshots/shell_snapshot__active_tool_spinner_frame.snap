@@ -2,7 +2,7 @@
 source: crates/zoid-tui/tests/shell_snapshot.rs
 expression: "draw(&s, &seeded(), 160, 40)"
 ---
-"v0.9.0                                                                        zoid                                        Esc interrupt · : command · ^P palette"
+" SELECT                                                                   zoid v0.9.0                                     Esc interrupt · : command · ^P palette"
 "  00:00 › what's causing the 500?                                                                                 █ ╭ ▾ repo ─────────────────────────────────╮ "
 "                                                                                                                  █ │📦 repo   ⎇ main                         │ " Hidden by multi-width symbols: [(118, " ")]
 "  00:00 zoid an unwrapped lookup in the handler.                                                                  █ │🔧 worktree (none)                       │ " Hidden by multi-width symbols: [(118, " ")]
@@ -41,4 +41,4 @@ expression: "draw(&s, &seeded(), 160, 40)"
 "┌ message ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│                                                                                                                                                              │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" CHAT   SELECT                                                ⊟ compact     ● idle      ◐ shell …                                                   zoom normal "
+" CHAT                                                         ⊟ compact     ● idle      ◐ shell …                                                   zoom normal "
