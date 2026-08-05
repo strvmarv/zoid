@@ -2334,6 +2334,36 @@ async fn main() -> Result<()> {
         tracing::warn!(error = %e, "failed to seed local_models table");
     }
 
+    // Purge log entries older than 72h (non-fatal — same pattern as
+    // seed_local_models). Bounds the logs table across restarts.
+    if let Err(e) = session.purge_logs(72 * 60 * 60 * 1000).await {
+        tracing::warn!(error = %e, "failed to purge old logs");
+    }
+
+    // Flush the ObsState ring buffer to the logs table. Pre-actor system
+    // logs (config warnings, boot diagnostics) were captured in-memory;
+    // persist them now that the actor is available. Non-fatal.
+    {
+        let entries = match obs.state.lock() {
+            Ok(mut s) => s.take_logs(),
+            Err(_) => Vec::new(), // poisoned mutex — skip flush, don't crash
+        };
+        for entry in &entries {
+            let row = zoid_core::store::LogRow {
+                ts: entry.ts,
+                level: entry.level.clone(),
+                scope: "system".into(),
+                session_id: None,
+                event_id: None,
+                message: entry.message.clone(),
+                fields: entry.fields.clone(),
+            };
+            if let Err(e) = session.write_log(row).await {
+                tracing::warn!(error = %e, "failed to flush system log to db");
+            }
+        }
+    }
+
     let sessions = session
         .list_sessions(Some(root.clone()))
         .await
