@@ -8,6 +8,8 @@
 //! provider implementation crate, and without coupling `zoid-provider` to
 //! `zoid-core`. `zoid-provider` re-exports it as `zoid_provider::model`.
 
+pub mod local_seed;
+
 /// Stable, model-agnostic capabilities of a model. No cost fields by design.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModelInfo {
