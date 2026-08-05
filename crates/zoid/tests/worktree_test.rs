@@ -256,3 +256,123 @@ fn name_collision_enters_existing_worktree() {
     // Clean up.
     zoid::worktree::remove_worktree(tmp.path(), &name1, true).unwrap();
 }
+
+/// Regression: `remove_worktree` must correctly remove the worktree directory
+/// and (optionally) the branch even when called with the **worktree path** as
+/// `repo_root` — which is what happens in production when the process cwd is
+/// inside the worktree at `exit_worktree` time and `handle_worktree_request`
+/// passes `Path::new(".")` as `repo_root`.
+///
+/// Before this test, `remove_worktree` used `repo_root.join(".zoid")...` for
+/// the directory path, which resolved inside the worktree (wrong) and
+/// `find_worktree` + `prune` on a worktree-opened repo didn't work correctly.
+/// The fix resolves the main checkout root before calling remove_worktree.
+#[test]
+fn remove_worktree_from_inside_worktree_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo(tmp.path());
+
+    // Create worktree with an unmerged commit.
+    let wt = create_worktree(tmp.path(), "inside-wt-remove").unwrap();
+    let (wt_path, name) = wt.into_kept();
+    let wt_path = std::fs::canonicalize(&wt_path).unwrap_or(wt_path.clone());
+
+    // Commit on the worktree branch.
+    std::fs::write(wt_path.join("new.txt"), "data").unwrap();
+    let _ = std::process::Command::new("git")
+        .args(["-C"])
+        .arg(&wt_path)
+        .args(["add", "-A"])
+        .status();
+    let _ = std::process::Command::new("git")
+        .args(["-C"])
+        .arg(&wt_path)
+        .args(["commit", "-q", "-m", "unmerged work"])
+        .status();
+
+    // Verify unmerged detection works from the worktree path.
+    assert!(
+        zoid::worktree::branch_has_unmerged_commits(&wt_path, &name),
+        "must detect unmerged commits from worktree path"
+    );
+
+    // Call remove_worktree with the WORKTREE path as repo_root (delete_branch=false
+    // because has_unmerged=true — same as production code path).
+    zoid::worktree::remove_worktree(&wt_path, &name, false).unwrap();
+
+    // The worktree directory must be removed.
+    assert!(
+        !wt_path.exists(),
+        "worktree dir must be removed even when repo_root is the worktree path"
+    );
+
+    // The branch must be retained (delete_branch=false).
+    let repo = git2::Repository::open(tmp.path()).unwrap();
+    assert!(
+        repo.find_branch(&name, git2::BranchType::Local).is_ok(),
+        "branch must be retained when delete_branch=false (unmerged commits)"
+    );
+
+    // Now clean up: remove with the main checkout path and delete_branch=true.
+    zoid::worktree::remove_worktree(tmp.path(), &name, true).unwrap();
+    assert!(
+        repo.find_branch(&name, git2::BranchType::Local).is_err(),
+        "branch must be deleted when delete_branch=true from main checkout"
+    );
+}
+
+/// Regression: simulates the exact production scenario — enter worktree, commit
+/// from inside it (as subagents do), exit_worktree. The branch must be retained
+/// because it has unmerged commits. If `branch_has_unmerged_commits` returns false
+/// here, the branch is silently deleted on exit.
+#[test]
+fn exit_worktree_retains_branch_with_unmerged_commits() {
+    let tmp = tempfile::tempdir().unwrap();
+    init_repo(tmp.path());
+
+    // Create worktree (simulates enter_worktree → create_worktree → into_kept).
+    let wt = create_worktree(tmp.path(), "retain-test").unwrap();
+    let (wt_path, name) = wt.into_kept();
+    let wt_path = std::fs::canonicalize(&wt_path).unwrap_or(wt_path.clone());
+
+    // Commit from inside the worktree (simulates subagent work).
+    std::fs::write(wt_path.join("work.txt"), "done").unwrap();
+    let _ = std::process::Command::new("git")
+        .args(["-C"])
+        .arg(&wt_path)
+        .args(["add", "-A"])
+        .status();
+    let _ = std::process::Command::new("git")
+        .args(["-C"])
+        .arg(&wt_path)
+        .args(["commit", "-q", "-m", "subagent work"])
+        .status();
+
+    // Verify the worktree is clean (all committed).
+    let clean = std::process::Command::new("git")
+        .args(["-C"])
+        .arg(&wt_path)
+        .args(["status", "--porcelain"])
+        .output()
+        .map(|o| o.stdout.is_empty())
+        .unwrap();
+    assert!(clean, "worktree must be clean after commit");
+
+    // Simulate exit_worktree: check has_unmerged from the MAIN checkout (repo_root=".").
+    let has_unmerged = zoid::worktree::branch_has_unmerged_commits(tmp.path(), &name);
+    assert!(
+        has_unmerged,
+        "branch_has_unmerged_commits must return true — the branch has a commit not on main HEAD"
+    );
+
+    // The production code path: delete_branch = !has_unmerged = false → branch retained.
+    zoid::worktree::remove_worktree(tmp.path(), &name, !has_unmerged);
+
+    // Verify: worktree dir removed, branch retained.
+    assert!(!wt_path.exists(), "worktree dir removed");
+    let repo = git2::Repository::open(tmp.path()).unwrap();
+    assert!(
+        repo.find_branch(&name, git2::BranchType::Local).is_ok(),
+        "branch must be retained — it has unmerged commits"
+    );
+}

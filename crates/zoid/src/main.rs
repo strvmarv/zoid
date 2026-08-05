@@ -6973,6 +6973,25 @@ fn compute_worktree_switch(
                 // the branch ref so the work isn't orphaned. The worktree
                 // directory is still removed; only the branch is retained.
                 let has_unmerged = zoid::worktree::branch_has_unmerged_commits(repo_root, &wt.name);
+                if !has_unmerged {
+                    // Log diagnostic data when the branch is about to be deleted
+                    // — if this is wrong (the branch actually has unmerged work),
+                    // the OIDs here will reveal why graph_descendant_of returned false.
+                    let repo = git2::Repository::open(repo_root).ok();
+                    let branch_oid = repo.as_ref()
+                        .and_then(|r| r.find_branch(&wt.name, git2::BranchType::Local).ok())
+                        .and_then(|b| b.get().target());
+                    let head_oid = repo.as_ref()
+                        .and_then(|r| r.head().ok())
+                        .and_then(|h| h.target());
+                    tracing::warn!(
+                        branch = %wt.name,
+                        has_unmerged = false,
+                        branch_oid = ?branch_oid,
+                        head_oid = ?head_oid,
+                        "deleting worktree branch (no unmerged commits detected)"
+                    );
+                }
                 let _ = zoid::worktree::remove_worktree(repo_root, &wt.name, !has_unmerged);
                 if has_unmerged {
                     let warn = format!(
