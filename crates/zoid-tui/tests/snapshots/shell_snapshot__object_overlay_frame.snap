@@ -5,7 +5,7 @@ expression: "draw_overlay(Overlay::Objects, 160, 40)"
 Buffer {
     area: Rect { x: 0, y: 0, width: 160, height: 40 },
     content: [
-        "v0.9.0                                                                        zoid                                        Esc interrupt · : command · ^P palette",
+        " SELECT                                                                   zoid v0.9.0                                     Esc interrupt · : command · ^P palette",
         "    ● read_file(path: src/ast.rs)                                                                                 █ ╭ ▾ repo ─────────────────────────────────╮ ",
         "    ✓ read_file → fn parse() {}                                                                                   █ │📦 repo   ⎇ main                         │ ", // hidden by multi-width symbols: [(118, " ")]
         "    ⚠ shell → FAILED                                                                                              █ │🔧 worktree (none)                       │ ", // hidden by multi-width symbols: [(118, " ")]
@@ -44,13 +44,13 @@ Buffer {
         "┌ message ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐",
         "│                                                                                                                                                              │",
         "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘",
-        " CHAT   SELECT                                                ⊟ compact     ● idle      ◐ tool                                                      zoom normal ",
+        " CHAT                                                         ⊟ compact     ● idle      ◐ tool                                                      zoom normal ",
     ],
     styles: [
         x: 0, y: 0, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 6, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 78, y: 0, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 82, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 8, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 74, y: 0, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
+        x: 85, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 122, y: 0, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 2, y: 1, fg: Rgb(88, 166, 255), bg: Reset, underline: Reset, modifier: NONE,
@@ -338,8 +338,6 @@ Buffer {
         x: 159, y: 37, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 39, fg: Rgb(88, 166, 255), bg: Rgb(13, 42, 77), underline: Reset, modifier: NONE,
         x: 6, y: 39, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 7, y: 39, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
-        x: 15, y: 39, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 62, y: 39, fg: Rgb(110, 118, 129), bg: Reset, underline: Reset, modifier: NONE,
         x: 71, y: 39, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 75, y: 39, fg: Rgb(63, 185, 80), bg: Reset, underline: Reset, modifier: NONE,
