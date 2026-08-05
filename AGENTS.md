@@ -59,6 +59,15 @@ we own is the custom publish job `.github/workflows/publish-public.yml`, which
 runs sandboxed (no checkout of the private repo, `contents: none`) and mirrors
 the release to `strvmarv/zoid-releases`.
 
+## Terminal minimum size
+
+The TUI enforces a hard minimum of **160×40** (`layout::MIN_WIDTH` /
+`MIN_HEIGHT`). Below this, a "too small" overlay renders instead of the normal
+shell — `render_shell` and its sub-functions (`render_status`, `render_title`,
+etc.) never run. This means renderers can assume at least 160 columns: no
+narrow-terminal fallback, degradation, or progressive-collapse logic is needed
+in render code.
+
 ## Memory
 
 The maintainer (strvmarv) uses the **total-recall** MCP as the system of
