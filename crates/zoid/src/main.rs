@@ -2326,6 +2326,14 @@ async fn main() -> Result<()> {
             .context("session DB path is not valid UTF-8")?,
     )?;
 
+    // Seed the local_models table (curated entries from zoid_model). Phase 1:
+    // creates the table and seeds it; nothing reads from it yet. Idempotent —
+    // re-runs on every boot, updates curated entries if the seed version is
+    // higher, leaves user-defined entries untouched.
+    if let Err(e) = session.seed_local_models().await {
+        tracing::warn!(error = %e, "failed to seed local_models table");
+    }
+
     let sessions = session
         .list_sessions(Some(root.clone()))
         .await

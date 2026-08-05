@@ -258,6 +258,33 @@ impl EventStore {
         Ok(())
     }
 
+    /// Test-only: count rows in `local_models` with the given id. Used by the
+    /// session-actor wiring test to confirm `seed_local_models` persisted
+    /// through the actor thread. Not part of the public API.
+    #[cfg(test)]
+    pub(crate) fn local_model_count(&self, id: &str) -> i64 {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM local_models WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0)
+    }
+
+    /// Test-only: read the `source` of a `local_models` row. Returns `None`
+    /// if the row is absent (or the table missing).
+    #[cfg(test)]
+    pub(crate) fn local_model_source(&self, id: &str) -> Option<String> {
+        self.conn
+            .query_row(
+                "SELECT source FROM local_models WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .ok()
+    }
+
     pub fn append(&self, event: &Event) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
