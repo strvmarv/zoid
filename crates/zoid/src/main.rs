@@ -7030,6 +7030,15 @@ fn compute_worktree_switch(
                 // Check if the branch has commits not on HEAD — if so, keep
                 // the branch ref so the work isn't orphaned. The worktree
                 // directory is still removed; only the branch is retained.
+                // Capture OIDs BEFORE remove_worktree deletes the branch —
+                // otherwise the diagnostic branch_oid is always None.
+                let repo = git2::Repository::open(repo_root).ok();
+                let branch_oid = repo.as_ref()
+                    .and_then(|r| r.find_branch(&wt.name, git2::BranchType::Local).ok())
+                    .and_then(|b| b.get().target());
+                let head_oid = repo.as_ref()
+                    .and_then(|r| r.head().ok())
+                    .and_then(|h| h.target());
                 let has_unmerged = zoid::worktree::branch_has_unmerged_commits(repo_root, &wt.name);
                 let _ = zoid::worktree::remove_worktree(repo_root, &wt.name, !has_unmerged);
                 if has_unmerged {
@@ -7044,14 +7053,7 @@ fn compute_worktree_switch(
                     // Diagnostic: include OIDs in the return message so the agent
                     // sees them without needing ZOID_LOG. If has_unmerged is a
                     // false negative (the branch actually has unmerged work), the
-                    // OIDs here reveal why graph_descendant_of returned false.
-                    let repo = git2::Repository::open(repo_root).ok();
-                    let branch_oid = repo.as_ref()
-                        .and_then(|r| r.find_branch(&wt.name, git2::BranchType::Local).ok())
-                        .and_then(|b| b.get().target());
-                    let head_oid = repo.as_ref()
-                        .and_then(|r| r.head().ok())
-                        .and_then(|h| h.target());
+                    // OIDs here reveal why merge_base returned the wrong result.
                     let diag = format!(
                         "exited worktree (branch '{}' deleted — no unmerged commits detected; \
                          branch_oid={:?} head_oid={:?})",
@@ -11331,6 +11333,53 @@ mod worktree_switch_tests {
         // The warning must mention the branch name and "retained".
         let warn = warn.expect("warning should be Some when branch is retained");
         assert!(warn.contains("unmerged"), "warning mentions branch name: {warn}");
+        assert!(warn.contains("retained"), "warning says 'retained': {warn}");
+    }
+
+    #[test]
+    fn clean_exit_retains_branch_when_main_advanced() {
+        // Regression: the branch has unmerged commits, but main's HEAD moved
+        // forward while the worktree was active. The branch and HEAD diverged.
+        // graph_descendant_of(branch, head) returns false because HEAD is not
+        // an ancestor of the branch — so the old check deleted the branch.
+        // The merge-base check correctly retains it.
+        let repo = init_repo();
+        let mut active = None;
+        let (cwd, _warn) = compute_worktree_switch(
+            &mut active,
+            WorktreeAction::Enter { name: "diverged".into() },
+            false,
+            repo.path(),
+        )
+        .unwrap();
+        // Commit on the branch.
+        std::fs::write(cwd.join("branch.txt"), "branch work").unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&cwd).args(["add", "."]).output().unwrap();
+        std::process::Command::new("git")
+            .args(["-C"]).arg(&cwd).args(["commit", "-m", "branch commit"]).output().unwrap();
+        // Advance main past the branch point — main and the branch now diverge.
+        std::process::Command::new("git")
+            .args(["-C"]).arg(repo.path()).args(["commit", "--allow-empty", "-m", "main advanced"])
+            .output().unwrap();
+        // Exit — the branch has a commit not reachable from main's HEAD.
+        let (_root, warn) = compute_worktree_switch(
+            &mut active,
+            WorktreeAction::Exit,
+            false,
+            repo.path(),
+        )
+        .unwrap();
+        assert!(active.is_none(), "exit clears active");
+        let branch_exists = std::process::Command::new("git")
+            .args(["-C"]).arg(repo.path()).args(["rev-parse", "--verify", "diverged"])
+            .output().map(|o| o.status.success()).unwrap_or(false);
+        assert!(
+            branch_exists,
+            "branch 'diverged' must be retained — has unmerged commits even though main advanced"
+        );
+        let warn = warn.expect("warning should be Some when branch is retained");
+        assert!(warn.contains("diverged"), "warning mentions branch name: {warn}");
         assert!(warn.contains("retained"), "warning says 'retained': {warn}");
     }
 

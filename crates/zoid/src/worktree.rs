@@ -127,9 +127,20 @@ pub fn remove_worktree(repo_root: &Path, name: &str, delete_branch: bool) -> Res
 /// **Important:** `repo_root` may be the *worktree* path (the process cwd is
 /// inside the worktree at `exit_worktree` time). A naive `repo.head()` on the
 /// worktree repo returns the worktree's own HEAD — the branch being exited —
-/// so `graph_descendant_of(branch, branch)` is false and unmerged work is
-/// silently orphaned. To compare against the *main* checkout's HEAD, we open
-/// the common git dir (`repo.commondir()`) and read HEAD from there.
+/// so checking the branch against itself would always report "merged." To
+/// compare against the *main* checkout's HEAD, we open the common git dir
+/// (`repo.commondir()`) and read HEAD from there.
+///
+/// **Merge-base check, not descendant-of:** The branch has unmerged work if
+/// its tip is NOT reachable from HEAD — i.e., `merge_base(branch, head) !=
+/// branch`. The previous check (`graph_descendant_of(branch, head)`) only
+/// returned `true` when the branch was a strict descendant of HEAD (HEAD is
+/// an ancestor of the branch). When main advances while the worktree is
+/// active, HEAD moves past the branch point and the two diverge — HEAD is no
+/// longer an ancestor of the branch, so `graph_descendant_of` returns `false`
+/// even though the branch still has commits HEAD doesn't. The merge-base
+/// check handles both cases: HEAD behind the branch (original) and HEAD
+/// diverged from the branch (the bug this fixed).
 pub fn branch_has_unmerged_commits(repo_root: &Path, name: &str) -> bool {
     let Ok(repo) = Repository::open(repo_root) else {
         return false;
@@ -149,10 +160,14 @@ pub fn branch_has_unmerged_commits(repo_root: &Path, name: &str) -> bool {
         Some(oid) => oid,
         None => return false,
     };
-    // If the branch tip is a descendant of HEAD, it has commits not in HEAD
-    // — i.e., unmerged work. graph_descendant_of(branch, head) = true means
-    // branch is ahead of HEAD.
-    repo.graph_descendant_of(branch_oid, head_oid).unwrap_or(false)
+    // The branch has unmerged commits if its tip is NOT reachable from HEAD.
+    // merge_base(branch, head) == branch means all branch commits are in HEAD
+    // (no unmerged work). merge_base != branch means the branch has commits
+    // not reachable from HEAD (unmerged work). This correctly handles the case
+    // where main advanced while the worktree was active — the branch and HEAD
+    // diverged, but the branch still has commits HEAD doesn't.
+    let merge_base = repo.merge_base(branch_oid, head_oid).unwrap_or(head_oid);
+    merge_base != branch_oid
 }
 
 /// Resolve the main checkout's HEAD OID from a repo opened on either the main
