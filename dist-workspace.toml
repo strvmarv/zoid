@@ -15,19 +15,10 @@ targets = ["x86_64-unknown-linux-musl", "aarch64-apple-darwin", "x86_64-pc-windo
 unix-archive = ".tar.gz"
 # Archive format for windows builds (must match the updater's asset names)
 windows-archive = ".zip"
-# Let dist host the Release in this (private) source repo — its `host` job
-# CREATES the release here, which the custom publish-public job then mirrors to
-# the PUBLIC strvmarv/zoid-releases repo. (create-release = false means "upload
-# to a pre-existing release", which fails with "release not found" since none
-# is pre-created — that is NOT what we want.) The private-repo release is
-# binaries-only and private-access-only; it leaks no source.
+# dist's `host` job creates the GitHub Release directly on this repo and
+# uploads the build artifacts to it.
 create-release = true
 # Where the shell/PowerShell installer scripts install the binary.
 install-path = "CARGO_HOME"
-# Custom publish job: lands the Release in the public strvmarv/zoid-releases repo.
-publish-jobs = ["./publish-public"]
-# Never build a source tarball: source is private and must not leak into the
-# public strvmarv/zoid-releases repo.
-source-tarball = false
 # Build release binaries with the local-embed feature (candle embedder) baked in.
 features = ["local-embed"]

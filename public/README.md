@@ -39,32 +39,28 @@ So `capture-preview.sh` strips the version span from each frame, replacing it
 with spaces of identical width. That is exactly what `title_line()`
 (`crates/zoid-tui/src/render.rs`) renders when a terminal is too narrow to fit
 the version, so the mockups stay authentic and the wordmark stays centered.
-`publish-site.yml` fails the build if a version token reappears anywhere in the
-site.
+This was previously CI-enforced by `publish-site.yml`, now removed. Until a
+replacement publish workflow exists, verify manually (`grep -rEo
+'v[0-9]+\.[0-9]+\.[0-9]+' public/index.html public/preview.html
+public/frames/`, expect no output) before shipping a new capture.
 
 Keep it this way: there is no release step that touches `public/`, and adding
 one is how the drift comes back.
 
 ## Hosting
 
-`index.html` is portable — drop it on any static host. For GitHub Pages, publish
-from a **public** repo, since the source repo is private. Do not enable Pages on
-the private source repo.
+`index.html` is portable — drop it on any static host.
 
 ## Publishing
 
-The site is mirrored into the public `strvmarv/zoid-releases` repo (the same
-repo that hosts binary release artifacts) and served via GitHub Pages from its
-`docs/` folder.
+There is currently no automated publish workflow for this site. The
+previous pipeline mirrored `public/` into the (now-retired) private/public
+repo split for GitHub Pages hosting; that pipeline was removed as part of
+open-sourcing zoid (see
+`docs/superpowers/specs/2026-08-05-open-source-zoid-design.md`). Once this
+repo is public, GitHub Pages can be enabled directly on it (Settings →
+Pages) without a separate mirror repo — setting that up is tracked as
+follow-up work, not yet done.
 
-- **Workflow:** `.github/workflows/publish-site.yml` in the private source repo.
-- **Trigger:** push to `main` touching `public/**`, or `workflow_dispatch`.
-- **Secret:** reuses `RELEASES_REPO_TOKEN` (same PAT the binary-release mirror
-  uses to write to `strvmarv/zoid-releases`). No separate secret needed.
-- **What ships:** `index.html`, `preview.html`, and `frames/`, copied as-is.
-  The authoring scripts, `preview.template.html`, and this README are stripped
-  from the published payload — **if you add a dev-only file to `public/`, add it
-  to that `rm -f` list too**, or it ships. The workflow fails if any `.sh`
-  survives into `docs/`.
-- **Pages config (one-time, on `strvmarv/zoid-releases`):** Settings → Pages →
-  Source: Deploy from a branch → Branch: `main` / `/docs`.
+For now, publish the built `index.html` manually to whatever static host you
+choose, or run it locally.
