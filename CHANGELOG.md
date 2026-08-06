@@ -1,10 +1,8 @@
 # Changelog
 
-> **Internal engineering changelog.** This file is the detailed development
-> record and is **not** published. It lives under `docs/` specifically so
-> cargo-dist does not detect it as a root changelog. Customer-facing release
-> notes (what ships to the public releases repo) live in the root
-> `RELEASES.md`.
+All notable changes to zoid are documented here. Each `## X.Y.Z` section
+matches a released version tag; `cargo-dist` parses the section matching the
+tag being released and uses it as that release's announcement notes.
 
 ## 0.9.1
 
