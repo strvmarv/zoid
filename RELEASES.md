@@ -10,6 +10,24 @@
 
 # Release Notes
 
+## 0.9.1
+
+Subagent reliability hardening, two platform fixes, and a refreshed top bar.
+
+### Fixed
+
+- **Worktree branches with unmerged commits no longer deleted** — when exiting a git worktree, zoid could incorrectly delete your branch if the main branch had advanced while you were working. The unmerged-commits check now uses a merge-base comparison instead of a descendant-of check, correctly retaining branches in all cases.
+- **Windows: config and data files now land in your home directory** — on Windows, zoid could create `.local/share/`, `.config/`, and `.cache/` directories in your current working directory instead of your user home. zoid now falls back to `USERPROFILE` when `HOME` is unset (the normal case outside Git Bash).
+
+### New
+
+- **Subagent dispatch hardening** — zoid now rejects duplicate subagent dispatches with the same agent and task, caps runaway narration after a dispatch (preventing fabricated/hallucinated predictions of subagent results), and directs the agent to always respond in English regardless of source-content language.
+- **Internal logging** — zoid now persists structured logs to its database with automatic TTL-based purge, improving diagnosability without manual log file management.
+- **Ollama thinking detection** — zoid now reads thinking capability from Ollama's `/api/show` endpoint, so thinking mode is correctly enabled or disabled per model without manual configuration.
+- **Top bar redesign** — SELECT and YOLO indicators are now chips in the title bar with a centered version number, replacing the old bottom-status-bar SELECT pill.
+
+> **Beta note:** builds are for evaluation and expire ~30 days after release — run `zoid update` periodically to stay current.
+
 ## 0.9.0
 
 A guided first-run setup wizard, smarter context retention, and a fix for

@@ -6,6 +6,76 @@
 > notes (what ships to the public releases repo) live in the root
 > `RELEASES.md`.
 
+## 0.9.1
+
+Subagent dispatch hardening, worktree branch-deletion fix, Windows home-dir
+fix, unified logging, Ollama thinking detection, top bar redesign. 44
+commits since v0.9.0.
+
+Subagent dispatch hardening (spec:
+2026-08-04-subagent-dispatch-hardening-design.md; plan:
+2026-08-04-subagent-dispatch-hardening.md).
+- `zoid/src/agent.rs`: duplicate-dispatch guard keyed on `(agent, task)`
+  that rejects identical `dispatch_subagent` calls before the pool-capacity
+  check. A turn-scoped `dispatched_this_turn: bool` latch gates post-dispatch
+  free-text narration; a 60-token budget cap trips runaway narration, guarded
+  by `!tool_call_seen_this_sub_turn` so a compliant ack+dispatch+follow-up is
+  never falsely capped. Reuses the existing `aborted`/`stream_task.abort()`
+  cleanup path. `SYSTEM_PROMPT` gets an English-language directive.
+- Reviewed by gilfoyle (per-task + whole-branch); two blockers (dead prune,
+  false-positive cap) found and fixed in the plan before implementation.
+
+Worktree branch-deletion fix (bug:
+2026-08-04-exit-worktree-branch-deletion.md).
+- `zoid/src/worktree.rs`: `branch_has_unmerged_commits` used
+  `graph_descendant_of(branch, head)` which returns false when main advanced
+  while the worktree was active (HEAD diverged from the branch). Replaced
+  with a `merge_base(branch, head) != branch` check that handles both cases.
+  Diagnostic OIDs in `compute_worktree_switch` moved before `remove_worktree`
+  so they're not captured after the branch is already deleted.
+
+Windows home-dir fix.
+- `zoid/src/main.rs`: all five path resolvers (`resolve_db_path`,
+  `resolve_config_dir`, `resolve_cache_dir`, `resolve_secret_key_path`,
+  `uninstall_targets`) fell back to `env("HOME").unwrap_or_default()` which
+  is `""` on Windows when HOME is unset — so `.local/share`, `.config`, and
+  `.cache` resolved against the CWD. Added a `home_dir()` helper that checks
+  `HOME` then `USERPROFILE` and used it in all six resolution sites.
+
+Unified logging with TTL purge (spec:
+2026-07-30-unified-logging-design.md; plan:
+2026-07-30-unified-logging.md).
+- `zoid-core/src/store.rs`: `logs` table in the event store with
+  `write_log`/`purge_logs` methods and `Cmd::WriteLog`/`Cmd::PurgeLogs`
+  session commands.
+- `zoid/src/main.rs`: boot-time purge + ring-buffer flush to the logs table.
+- `zoid/src/obs.rs`: logs ring buffer + `FieldGrab` fields collector for
+  structured tracing output.
+
+Ollama thinking capability detection (spec:
+2026-07-28-ollama-thinking-capability.md).
+- `zoid-provider/src/ollama.rs`: `fetch_model_info` reads thinking capability
+  from `/api/show`; `parse_ollama_thinking` parses the capabilities.
+- `zoid-provider/src/lib.rs`: `resolve_thinking` uses provider-aware default
+  for ollama-local; `request_body` trusts the `resolve_thinking` gate for the
+  `think` field.
+
+Top bar chip rearrangement (spec:
+2026-07-28-top-bar-chip-spec.md).
+- `zoid-tui/src/render.rs`: title line rewritten with SELECT+YOLO chips and
+  centered version; SELECT pill removed from the bottom status bar.
+- `zoid-tui/src/state.rs`: `yolo` field added to `ShellState`, synced to
+  `app.yolo` for the renderer.
+
+Local model seed data.
+- `zoid-model/src/registry.rs`: curated local model seed data.
+- `zoid-core/src/store.rs`: `local_models` db table + curated seed step.
+- `zoid/src/main.rs`: seeds the `local_models` table at boot.
+
+AGENTS.md reminder.
+- `zoid/src/agent.rs`: `SYSTEM_PROMPT` now directs the agent to read
+  `AGENTS.md` before touching anything.
+
 ## 0.9.0
 
 First-run onboarding wizard, token-budgeted turn protection, Ollama context
