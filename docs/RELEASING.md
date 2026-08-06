@@ -3,6 +3,14 @@
 Users install prebuilt binaries via the installer script or `zoid update`
 (anonymous, checksum-verified). No tokens live on user machines.
 
+> **Do not cut a release yet.** This repo is not yet the canonical
+> distribution point: the self-updater and installer links currently point
+> at a separate, still-live distribution repo. Cutting a `vX.Y.Z` tag here
+> before this repo's releases and that self-updater/installer both point at
+> the same place will produce a release nobody can actually install or
+> update to. Wait until that migration is complete before following the
+> steps below.
+
 ## How a release is wired
 
 - `dist-workspace.toml` sets `create-release = true`: cargo-dist's `host` job

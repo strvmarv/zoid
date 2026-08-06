@@ -489,7 +489,7 @@ Two tiers, mirroring Slice-3. The behavioral question ("does the model produce a
 
 ### Tier 2 — real-model go/no-go smoke (manual, documented)
 
-A runbook at `docs/superpowers/runbooks/2026-07-05-url-import-wizard-smoke.md` (created in the implementation plan, not this spec).
+A smoke-test runbook for this feature was created during implementation (not part of this spec) but was an internal-process artifact not carried into the public repo.
 
 **Import smoke:** fresh session, `$GITHUB_TOKEN` set, `github.com/obra/superpowers/tree/main/skills` as the input.
 - **PASS** = the model calls `propose_mode_mapping`, proposes a mapping with `Superpowers` as the mode name, the ~13 methodology skills as scoped skills, `using-superpowers` as the `mode.md` body, and skips the genuinely-irrelevant files (README, license, tests-for-upstream). User approves → folder materializes at `~/.config/zoid/modes/superpowers/` → `:mode` shows `Superpowers` → switching to it loads the skills → `invoke_skill("brainstorming")` returns its body.

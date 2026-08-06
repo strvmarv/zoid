@@ -264,7 +264,7 @@ Placeholder `MODEL_CAPS` entries: one per Zen model id with conservative fields 
 
 ## 6. Model catalog — filled (52 models, 4 wire shapes)
 
-The concrete Zen model ids, their wire shapes, and per-model caps were confirmed via API research (see `docs/superpowers/spikes/2026-07-10-opencode-zen-api-research.md`). The `/v1/models` endpoint returns 52 models; model→wire-shape mapping is determined by the upstream provider:
+The concrete Zen model ids, their wire shapes, and per-model caps were confirmed via API research against the `/v1/models` endpoint. That endpoint returns 52 models; model→wire-shape mapping is determined by the upstream provider:
 
 - **Anthropic Messages (13):** claude-fable-5, claude-opus-4-5..4-8, claude-sonnet-4-5..4-6/5, claude-haiku-4-5, qwen3.5-plus..3.7-max
 - **OpenAI Responses (17):** gpt-5..5.5, gpt-*-codex, gpt-5.4-mini/nano
@@ -278,7 +278,7 @@ Deprecated models excluded: claude-opus-4-1, claude-sonnet-4.
 Each Zen model id gets an explicit `MODEL_CAPS` entry (family-level conservative caps).
 The four-way routing table covers all 52 models.
 
-Constraints on the placeholders so the fill-in is mechanical: (filled — see §4.2 `ZEN_MODELS` for the concrete 52-model table; see `docs/superpowers/spikes/2026-07-10-opencode-zen-api-research.md` for the research)
+Constraints on the placeholders so the fill-in is mechanical: (filled — see §4.2 `ZEN_MODELS` for the concrete 52-model table, populated from API research against the `/v1/models` endpoint)
 - `ZEN_MODELS[0]` must equal the registry entry's `models[0]` (the default model).
 - Each Zen model id gets exactly one `MODEL_CAPS` entry (case-insensitive lookup is already supported by `model_info`).
 - The four-way routing table covers every model in the registry's `models` list — no model without a wire-shape entry.
@@ -303,7 +303,7 @@ Offline, `TcpListener`-stubbed, matching the existing stance (no live-endpoint C
 
 ## 9. Open questions (to resolve before/during implementation plan)
 
-1. **~~Zen model catalog~~** — RESOLVED. 52 models across four wire shapes: 17 OpenAI Responses (GPT), 13 Anthropic Messages (Claude + Qwen), 19 OpenAI Chat Completions (deepseek, glm, grok, kimi, minimax, misc), 3 Google Gemini. Disabled models (claude-opus-4-1, claude-sonnet-4) excluded. See `docs/superpowers/spikes/2026-07-10-opencode-zen-api-research.md`.
+1. **~~Zen model catalog~~** — RESOLVED. 52 models across four wire shapes: 17 OpenAI Responses (GPT), 13 Anthropic Messages (Claude + Qwen), 19 OpenAI Chat Completions (deepseek, glm, grok, kimi, minimax, misc), 3 Google Gemini. Disabled models (claude-opus-4-1, claude-sonnet-4) excluded. Confirmed via API research against the `/v1/models` endpoint.
 2. **~~Default Zen base URL~~** — RESOLVED: `https://opencode.ai/zen` (confirmed via curl).
 3. **~~Responses `call_id` source~~** — RESOLVED (2026-07-11 capture). `call_id` ≠ `item_id`. The `response.output_item.added` event carries the full item including `call_id`; `function_call_arguments.delta/.done` carry only `item_id`. The accumulator must learn `call_id` from `output_item.added` (keyed by `item_id`) and emit it on flush. See spike `## Tool-call captures`.
 4. **~~Gemini tool-call `id`~~** — RESOLVED (2026-07-11 capture). `functionCall.id` is **absent** from Zen's Gemini. The fallback (empty-string id, matching Ollama's shape) is correct. See spike `## Tool-call captures`.

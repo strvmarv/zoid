@@ -36,7 +36,7 @@
 | `crates/zoid/src/agent.rs` | modify | Add `default_profile()`; add `chat_turn_config_with(profile, menu)`; make `chat_turn_config()` delegate. |
 | `crates/zoid/src/main.rs` | modify | `App` gains `profiles` + `skills`; construction builds the skill registry + `chat_tools`; `spawn_turn` reads the active profile + menu. |
 | `crates/zoid/tests/mode_skill_spike.rs` | **new** | Deterministic wiring test: a scripted `invoke_skill` call flows its body back into the loop. |
-| `docs/superpowers/runbooks/2026-07-03-mode-skill-spike-smoke.md` | **new** | The Tier-2 real-model go/no-go runbook + recorded outcome. |
+| `docs/superpowers/runbooks/2026-07-03-mode-skill-spike-smoke.md` | **new** | The Tier-2 real-model go/no-go runbook + recorded outcome (an internal-process artifact, not carried into the public repo). |
 
 ---
 
@@ -882,6 +882,8 @@ git commit -m "test(zoid): invoke_skill body flows back into the agent loop (wir
 ---
 
 ## Task 8: Real-model go/no-go smoke runbook + recorded outcome
+
+> This runbook was an internal-process artifact tied to the maintainer's spike-testing workflow; it was removed prior to open-sourcing this repo and is no longer present at the path below.
 
 **Files:**
 - Create: `docs/superpowers/runbooks/2026-07-03-mode-skill-spike-smoke.md`

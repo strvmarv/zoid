@@ -15,12 +15,12 @@ cargo nextest run --workspace --features zoid/local-embed --no-fail-fast
 ```
 
 (`cargo test --workspace --no-fail-fast` also works if you don't have
-`cargo-nextest` installed, but nextest is what CI uses.)
+`cargo-nextest` installed.)
 
 ## Before opening a pull request
 
-- Run `cargo fmt --all` and `cargo clippy --workspace --all-targets` — CI
-  enforces both.
+- Run `cargo fmt --all` and `cargo clippy --workspace --all-targets` before
+  opening a PR.
 - If your change touches the TUI's rendering, you may need to regenerate
   snapshot tests: `cargo insta test --accept -p zoid-tui`. Review the diff
   (`git diff`) before committing regenerated snapshots — an unexpected visual
