@@ -2054,6 +2054,14 @@ struct WorktreeSession {
     name: String,
 }
 
+/// The optional embedder + its in-memory index. A type alias keeps the `App`
+/// struct field and the local-embed wiring site in sync without repeating the
+/// long generic tuple (satisfies clippy::type_complexity).
+pub type EmbedStore = (
+    Option<std::sync::Arc<std::sync::RwLock<zoid_core::embed_index::EmbeddingIndex>>>,
+    Option<std::sync::Arc<dyn zoid_core::retrieval::Embedder>>,
+);
+
 struct App {
     session: SessionHandle,
     session_id: Ulid,
@@ -2587,10 +2595,7 @@ async fn main() -> Result<()> {
     };
 
     #[cfg(feature = "local-embed")]
-    let (embed_index, embedder): (
-        Option<std::sync::Arc<std::sync::RwLock<zoid_core::embed_index::EmbeddingIndex>>>,
-        Option<std::sync::Arc<dyn zoid_core::retrieval::Embedder>>,
-    ) = if config.embed.enabled {
+    let (embed_index, embedder): EmbedStore = if config.embed.enabled {
         let cache = resolve_cache_dir(|k| std::env::var(k).ok())
             .join("models")
             .join("bge-small-en-v1.5");
@@ -2680,11 +2685,7 @@ async fn main() -> Result<()> {
         (None, None)
     };
     #[cfg(not(feature = "local-embed"))]
-    #[allow(clippy::type_complexity)]
-    let (embed_index, embedder): (
-        Option<std::sync::Arc<std::sync::RwLock<zoid_core::embed_index::EmbeddingIndex>>>,
-        Option<std::sync::Arc<dyn zoid_core::retrieval::Embedder>>,
-    ) = (None, None);
+    let (embed_index, embedder): EmbedStore = (None, None);
 
     let mut app = App {
         session,
