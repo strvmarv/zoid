@@ -2,6 +2,7 @@
 name = "zoid-plugin-import"
 edition = "2021"
 version.workspace = true
+license.workspace = true
 publish = false
 
 [dependencies]

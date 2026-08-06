@@ -3,6 +3,7 @@ name = "zoid-companion"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
+license.workspace = true
 
 [dependencies]
 tiny_http = { workspace = true }
