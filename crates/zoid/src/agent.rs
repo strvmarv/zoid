@@ -45,7 +45,10 @@ pub const SYSTEM_PROMPT: &str =
      DelegationResult event — never poll for status or call list_subagents to \
      check on a subagent you dispatched. When waiting on something, schedule \
      exactly one wake — never schedule duplicate wakes for the same event, and \
-     cancel a pending wake before scheduling a replacement.";
+     cancel a pending wake before scheduling a replacement. \
+     If the working directory has an AGENTS.md file, read it before touching \
+     anything — it carries project-specific rules (test commands, release \
+     flow, constraints) you must follow.";
 
 /// Wrap the system prompt as a standing, tail-injected reminder. The pre/post
 /// framing is the only added text; `system` is verbatim (zero drift). The
