@@ -37,6 +37,25 @@ use zoid_tui::route::{PasteTarget, palette_selected_command, route_key, route_mo
 /// Duration of the zoom fold/unfold line-reveal animation (Ⓡ2, T5).
 const ZOOM_ANIM_MS: u64 = 160;
 
+/// Resolve the user's home directory from the injected env. Checks `HOME`
+/// (Unix, and Git Bash / MSYS on Windows) then `USERPROFILE` (native Windows).
+/// Returns `None` if neither is set — callers must handle this (e.g. by
+/// erroring or falling back to a relative path with a warning). On Windows,
+/// `HOME` is often unset outside MSYS/Git Bash, so the `USERPROFILE` fallback
+/// prevents `.local/share`, `.config`, and `.cache` from resolving against
+/// the CWD (the bug: files landing in the project directory instead of the
+/// user's home).
+fn home_dir(env: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    env("HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            env("USERPROFILE")
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from)
+        })
+}
+
 /// Pure DB-path resolver (env injected for testing). Precedence:
 /// `$ZOID_DB` > `$XDG_DATA_HOME/zoid/zoid.db` > `$HOME/.local/share/zoid/zoid.db`.
 fn resolve_db_path(env: impl Fn(&str) -> Option<String>) -> PathBuf {
@@ -46,7 +65,7 @@ fn resolve_db_path(env: impl Fn(&str) -> Option<String>) -> PathBuf {
     let base = env("XDG_DATA_HOME")
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env("HOME").unwrap_or_default()).join(".local/share"));
+        .unwrap_or_else(|| home_dir(env).unwrap_or_default().join(".local/share"));
     base.join("zoid").join("zoid.db")
 }
 
@@ -66,7 +85,7 @@ fn resolve_config_dir(env: impl Fn(&str) -> Option<String>) -> PathBuf {
     let base = env("XDG_CONFIG_HOME")
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env("HOME").unwrap_or_default()).join(".config"));
+        .unwrap_or_else(|| home_dir(env).unwrap_or_default().join(".config"));
     base.join("zoid")
 }
 
@@ -77,9 +96,8 @@ fn resolve_cache_dir(env: impl Fn(&str) -> Option<String>) -> PathBuf {
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
         .or_else(|| {
-            env("HOME")
-                .filter(|s| !s.is_empty())
-                .map(|h| PathBuf::from(h).join(".cache"))
+            home_dir(&env)
+                .map(|h| h.join(".cache"))
         })
         .unwrap_or_else(|| PathBuf::from(".cache"));
     base.join("zoid")
@@ -92,7 +110,7 @@ fn resolve_secret_key_path(env: impl Fn(&str) -> Option<String>) -> PathBuf {
     let base = env("XDG_DATA_HOME")
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env("HOME").unwrap_or_default()).join(".local/share"));
+        .unwrap_or_else(|| home_dir(env).unwrap_or_default().join(".local/share"));
     base.join("zoid").join("secret.key")
 }
 
@@ -105,7 +123,7 @@ fn uninstall_targets() -> zoid::uninstall::Targets {
     let data_dir = env("XDG_DATA_HOME")
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env("HOME").unwrap_or_default()).join(".local/share"))
+        .unwrap_or_else(|| home_dir(env).unwrap_or_default().join(".local/share"))
         .join("zoid");
     zoid::uninstall::Targets {
         data_dir,
@@ -2551,7 +2569,7 @@ async fn main() -> Result<()> {
     let (ui_tx, mut ui_rx) = mpsc::channel::<AgentUpdate>(256);
 
     let cfg_dir = resolve_config_dir(|k: &str| std::env::var(k).ok());
-    let home = std::env::var("HOME").ok().map(std::path::PathBuf::from);
+    let home = home_dir(|k: &str| std::env::var(k).ok());
     rep.step("building skills & modes");
     let skills = {
         let dirs = zoid::skill_import::resolve_skill_dirs(
@@ -8288,6 +8306,30 @@ mod tests {
     fn falls_back_to_home_local_share() {
         let p = resolve_db_path(env_of(&[("HOME", "/home/u")]));
         assert_eq!(p, PathBuf::from("/home/u/.local/share/zoid/zoid.db"));
+    }
+
+    #[test]
+    fn userprofile_fallback_when_home_unset() {
+        // Windows: HOME is unset outside Git Bash; USERPROFILE is the native
+        // home dir. Without this fallback, paths resolve against the CWD.
+        let p = resolve_db_path(env_of(&[("USERPROFILE", r"C:\Users\u")]));
+        assert_eq!(
+            p,
+            PathBuf::from(r"C:\Users\u").join(".local/share/zoid/zoid.db")
+        );
+    }
+
+    #[test]
+    fn home_preferred_over_userprofile() {
+        // On Git Bash, both HOME and USERPROFILE are set; HOME wins (Unix-style).
+        let p = resolve_db_path(env_of(&[("HOME", "/home/u"), ("USERPROFILE", r"C:\Users\u")]));
+        assert_eq!(p, PathBuf::from("/home/u/.local/share/zoid/zoid.db"));
+    }
+
+    #[test]
+    fn config_dir_userprofile_fallback() {
+        let p = resolve_config_dir(env_of(&[("USERPROFILE", r"C:\Users\u")]));
+        assert_eq!(p, PathBuf::from(r"C:\Users\u").join(".config/zoid"));
     }
 
     #[test]
