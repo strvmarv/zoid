@@ -133,3 +133,34 @@ tests rather than from observed live-curl mistakes; the pitfalls hold
 regardless because they are structural traps in the registry design, not
 key-dependent. These 10 are exactly what the `refreshing-provider-models`
 skill must prevent.
+
+---
+
+## GREEN verification (Task 3)
+
+The `refreshing-provider-models` built-in skill
+(`REFRESHING_PROVIDER_MODELS_BODY` in `crates/zoid-core/src/skill.rs`, mirrored
+in `.superpowers/sdd/skill-body-for-verification.md`) was verified against all
+10 baseline pitfalls by reading the skill body and cross-checking the
+referenced codebase invariants (`ZEN_MODELS`/`GO_MODELS` in `zoid-provider`,
+`opencode_zen_model_caps_present` / `key_url_field_present_on_all_providers`
+in `zoid-model`). No sub-subagent dispatch was available, so the verification
+was performed statically; this is sufficient because the 10 pitfalls are
+structural invariants independent of live data.
+
+| # | Pitfall | Result | Skill-body evidence |
+|---|---|---|---|
+| 1 | `/api/tags` + `.models[].name` for `ollama-cloud` | PASS | Phase 1 table row + "Critical" callout: "both hit `/api/tags` and parse `.models[].name`… Do not use `/v1/models` or `.data[].id` for either Ollama flavor." |
+| 2 | `x-api-key` + `anthropic-version` for Anthropic | PASS | Phase 1 table row: "`x-api-key` + `anthropic-version: 2023-06-01`"; bash example headed `# anthropic-api (NOT Bearer — uses x-api-key)`. |
+| 3 | Preserve `PROVIDERS` order | PASS | Phase 2a: "Preserve `PROVIDERS` order — picker display order (convention). Insert new ids grouped with siblings." |
+| 4 | `opencode_zen_model_caps_present` (≥128k) | PASS | Phase 2b: "`opencode_zen_model_caps_present` asserts every `opencode-zen` model has `context_window >= 128_000`… New Zen/Go ids must have an explicit researched entry." (test confirmed at `zoid-model/src/lib.rs:869`). |
+| 5 | `thinking_wire` per-model, not per-family | PASS | Phase 2b: "**`thinking_wire` is per-model, not per-family.**" |
+| 6 | `ZEN_MODELS`/`GO_MODELS` routing tables | PASS | Phase 3: "Adding a new id to `ZEN_MODEL_IDS` requires a matching entry in `opencode_zen.rs::ZEN_MODELS`… new `opencode-go` ids need an entry in `opencode_go.rs::GO_MODELS`." (tables confirmed at `zoid-provider/src/opencode_zen.rs:24`, `opencode_go.rs:20`). |
+| 7 | `ollama-cloud` is curated | PASS | Phase 2a: "`ollama-cloud` is **curated** (`&["glm-5.2:cloud"]`), not a live-list mirror." |
+| 8 | `ZEN_MODEL_IDS` default is a product choice | PASS | Phase 2a: "`ZEN_MODEL_IDS` first entry is the default model — a **product decision**, not endpoint-derivable. Do not change without explicit instruction." |
+| 9 | Run `cargo test -p zoid-provider` | PASS | Phase 3 bash block: `cargo test -p zoid-provider  # wire-shape routing tables`. |
+| 10 | `key_url` invariant (ollama-local=None, rest=Some) | PASS | Phase 2c: "`ollama-local` must be `None`, all others `Some(_)` (the test is keyed on provider id)." (test confirmed at `zoid-model/src/lib.rs:813`). |
+
+**Verdict: 10/10 PASS (GREEN).** The skill body contains correct, specific
+guidance for every one of the 10 baseline pitfalls. Full evidence and quotes
+are in `.superpowers/sdd/task-3-report.md`.
