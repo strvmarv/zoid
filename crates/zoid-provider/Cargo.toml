@@ -2,6 +2,7 @@
 name = "zoid-provider"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 zoid-model = { path = "../zoid-model" }

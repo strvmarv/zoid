@@ -2,6 +2,7 @@
 name = "zoid-mcp"
 version.workspace = true
 edition = "2021"
+license.workspace = true
 
 [[bin]]
 name = "zoid_mcp_fake_server"

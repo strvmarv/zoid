@@ -29,7 +29,7 @@
 - `crates/zoid/src/mode_wizard.rs` — `ModeImportWizard` state, `ProposeModeMappingTool`, `ApplyModeMappingTool`, `materialize`, `MaterializeError`, `slugify`.
 - `crates/zoid/tests/mode_import_wiring.rs` — integration test: scripted provider + injected scan → AskUser → Approve → files materialized + mode loads.
 - `crates/zoid/tests/mode_update_wiring.rs` — integration test: pre-seeded mode + sidecar → fresh scan → merged mapping → Approve → file-set reconciled.
-- `docs/superpowers/runbooks/2026-07-05-url-import-wizard-smoke.md` — Tier-2 go/no-go runbook.
+- `docs/superpowers/runbooks/2026-07-05-url-import-wizard-smoke.md` — Tier-2 go/no-go runbook (an internal-process artifact, not carried into the public repo).
 
 **Modified:**
 - `crates/zoid-core/src/lib.rs` — `pub mod wizard;`.
@@ -3175,6 +3175,8 @@ git commit -m "feat(zoid): :mode update — read sidecar, re-fetch, build reconc
 ---
 
 ## Task 16: Real-model go/no-go smoke runbook (`docs/superpowers/runbooks/2026-07-05-url-import-wizard-smoke.md`)
+
+> This runbook was an internal-process artifact tied to the maintainer's spike-testing workflow; it was removed prior to open-sourcing this repo and is no longer present at the path below.
 
 **Files:**
 - Create: `docs/superpowers/runbooks/2026-07-05-url-import-wizard-smoke.md`

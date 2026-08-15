@@ -1,5 +1,0 @@
-# Throwaway spike build output — never commit (Docker builds, root-owned, GBs).
-target/
-target-*/
-*/target/
-*.log

@@ -53,9 +53,7 @@ The approval machinery already exists as a tested seam:
   `Allow`/`Deny`; it cannot itself suspend and ask the user. That needs a new
   `Gate::Prompt` variant (see Mechanism below).
 
-- **Conceptual ancestor** — the deferred Build-mode spec
-  (`docs/superpowers/archive/2026-07-02/specs/2026-06-30-zoid-build-mode-design.md`
-  §2.1) already names a dangerous-actions list (force-push to main, prod/network
+- **Conceptual ancestor** — the deferred Build-mode design already named a dangerous-actions list (force-push to main, prod/network
   writes, deleting external data, spending money), framed as Build "blockers by
   definition — never auto-done regardless of settings." This approvals design
   brings that concept into Chat via the `ToolGate` seam.

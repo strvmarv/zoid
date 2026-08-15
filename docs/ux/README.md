@@ -2,7 +2,7 @@
 
 The **visual source of truth** for zoid's TUI. The visual-language contract and fidelity pipeline live in the **core-architecture** spec (`docs/superpowers/specs/2026-06-30-zoid-core-architecture.md` §13); the Chat-mode layout lives in `2026-06-30-zoid-chat-mode-design.md`. The built TUI must match these mockups, enforced via snapshot tests (see "Fidelity pipeline").
 
-> **Build mode is deferred and being redesigned.** Its spec and mockups (build-pipeline, build-mode, finalize-and-decisions, blocker-notifications) plus the earlier superseded scenes were archived on 2026-07-02 to `docs/superpowers/archive/2026-07-02/`. The screens below are the live Chat-mode set.
+> **Build mode is deferred and being redesigned.** The screens below are the live Chat-mode set.
 
 > Open any file in a browser — self-contained HTML, no server.
 
@@ -14,8 +14,6 @@ The **visual source of truth** for zoid's TUI. The visual-language contract and 
 | `chat-mode.html` | **Chat mode** (full scale): conversation + *manual* implementation, flush-left stream + measure-cap slack, light rail (**repo / session / context ⑤**, no drawer keybinds; files via palette), ① semantic zoom, ④ object-first verbs, markdown + highlighted-code message rendering, single-step cadence, single-subagent delegation |
 | `palette.html` | **Command palette (^P)** — adaptive: fuzzy mode-aware list, or type `:` inside it for direct commands; grouped actions with keybinds |
 | `rust-unlocks.html` | Rust-enabled UX: Ⓡ2 motion, Ⓡ3 tree-sitter rendering, Ⓡ4 live data viz (Ⓡ1 inline graphics = later) |
-
-*Build-mode screens (`build-pipeline`, `build-mode`, `finalize-and-decisions`, `blocker-notifications`) and the `_superseded-*` scenes are archived under `docs/superpowers/archive/2026-07-02/ux/`.*
 
 ## Visual language (authoritative — mirror in the Rust design-tokens module)
 

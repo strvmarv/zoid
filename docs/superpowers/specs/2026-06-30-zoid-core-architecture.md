@@ -7,7 +7,7 @@
 
 > **Spec set.** This is one of three documents. This **core** doc holds everything cross-cutting — the event-sourced spine, the modal seam, the shared subagent runtime, data model, extensibility, testing, and visual language. The two mode specs layer on top and reference it:
 > - **Chat mode** → `2026-06-30-zoid-chat-mode-design.md` (the v1 near-term surface: conversation + manual implementation + single-subagent delegation).
-> - **Build mode** → **deferred and being redesigned** (original archived 2026-07-02 to `docs/superpowers/archive/2026-07-02/specs/`; a fresh design supersedes it).
+> - **Build mode** → **deferred and being redesigned** (the original design was archived 2026-07-02 and was not carried into the public repo; a fresh design supersedes it).
 >
 > Where a section is mode-specific it says so and points to the owning doc. Nothing here is a release — see the roadmap (§9).
 

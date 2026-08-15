@@ -2,6 +2,7 @@
 name = "zoid-embed"
 version.workspace = true
 edition = "2021"
+license.workspace = true
 
 [dependencies]
 zoid-core = { path = "../zoid-core" }
