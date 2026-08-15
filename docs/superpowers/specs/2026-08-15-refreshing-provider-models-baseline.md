@@ -45,13 +45,13 @@ pair per provider.
 
 ### 3. Does not preserve `PROVIDERS` array order — FAIL (expected)
 
-`PROVIDERS` order is the picker display order and is asserted by tests
-(`selectable_has_six_providers` enumerates the exact sequence: ollama-local,
-ollama-cloud, opencode-go, anthropic-api, zai-coding-plan, opencode-zen).
+`PROVIDERS` order is the picker display order. The test
+`selectable_has_six_providers` enforces count + membership (6 providers, each
+checked via `ids.contains(&…)`), **not** an ordered `assert_eq!` on the `Vec`.
 An agent that "sorts" providers alphabetically or appends new providers at
-arbitrary positions breaks the display-order invariant and the test. The
-skill must require preserving the existing order and inserting new entries
-in a deliberate position.
+arbitrary positions would NOT fail `cargo test` — but it breaks the display
+order convention. The skill must require preserving the existing order and
+inserting new entries in a deliberate position.
 
 ### 4. Misses the `opencode_zen_model_caps_present` invariant — FAIL (expected)
 
