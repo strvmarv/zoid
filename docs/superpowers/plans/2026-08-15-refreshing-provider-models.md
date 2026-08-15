@@ -2,20 +2,21 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Create a reference skill (`refreshing-provider-models`) that guides an agent to refresh zoid's static provider/model registry against live provider endpoints.
+**Goal:** Create a reference skill (`refreshing-provider-models`) that guides an agent to refresh zoid's static provider/model registry against live provider endpoints, bundled into the zoid binary as a built-in skill.
 
-**Architecture:** A single `SKILL.md` file in the superpowers skills directory containing a provider fetch table, curl examples, registry-editing invariants, MODEL_CAPS field reference, and verification commands. The skill is tested via TDD-for-skills: a baseline subagent run without the skill (RED), then with the skill (GREEN), then loophole-closing (REFACTOR).
+**Architecture:** The skill body is authored as a `const &str` in `crates/zoid-core/src/skill.rs` and registered in `SkillRegistry::builtin()` alongside the existing `spike-plan`, `spike-implement`, and `feedback` skills. It is tested via TDD-for-skills: a baseline subagent run without the skill (RED), then with the skill (GREEN), then loophole-closing (REFACTOR).
 
-**Tech Stack:** Markdown skill file, subagent-based testing, `cargo test -p zoid-model` / `cargo test -p zoid-provider` as verification gates.
+**Tech Stack:** Rust `const &str` in `zoid-core`, subagent-based skill testing, `cargo test -p zoid-core` / `cargo test -p zoid-model` / `cargo test -p zoid-provider` as verification gates.
 
 ## Global Constraints
 
-- Skill lives at `~/.config/zoid/modes/superpowers/refreshing-provider-models/SKILL.md` (the personal skills directory). In the worktree, create it at the equivalent repo-relative path if one exists; otherwise create it in the config directory.
-- Skill name uses only letters, numbers, and hyphens: `refreshing-provider-models`.
-- YAML frontmatter: `name` and `description` fields, max 1024 chars total. Description starts with "Use when..." in third person, covers triggering conditions only (no workflow summary).
-- Skill body target: <500 words for a non-frequently-loaded reference skill. Push nothing to separate files — this is self-contained.
-- The spec is at `docs/superpowers/specs/2026-08-15-refreshing-provider-models-design.md`. All technical content in the skill must match the spec (which was reviewed against source code).
-- This is a **reference skill** (not a discipline skill). Test with application/retrieval scenarios, not pressure scenarios. Per writing-skills: "Test with: Application scenarios — can they apply the technique correctly? Gap testing — are common use cases covered?"
+- The skill is **bundled into the binary** — a `const` string constant in `crates/zoid-core/src/skill.rs`, registered in `SkillRegistry::builtin()`. This is the same pattern as `FEEDBACK_SKILL_BODY` (skill.rs:91-138). Built-in skills have `base_dir: None`.
+- The skill `name` (frontmatter `name:` field) must match the `name` field in the `Skill` struct entry in `builtin()`: `refreshing-provider-models`.
+- The `description` field in the `Skill` struct must start with "Use when..." in third person, covering triggering conditions only (no workflow summary).
+- The skill body is the markdown content AFTER the frontmatter — in the `const` string, there is no frontmatter; the `name` and `description` are set directly on the `Skill` struct.
+- The body must be under ~600 words (reference skill; the fetch table and curl examples are the core value).
+- The spec is at `docs/superpowers/specs/2026-08-15-refreshing-provider-models-design.md`. All technical content must match the spec (which was reviewed against source code).
+- This is a **reference skill** (not a discipline skill). Test with application/retrieval scenarios, not pressure scenarios.
 - REQUIRED BACKGROUND: You MUST understand superpowers:writing-skills before implementing. That skill defines the TDD-for-skills cycle (RED-GREEN-REFACTOR) and the SKILL.md structure.
 
 ---
@@ -56,11 +57,11 @@ Available env vars for auth: OLLAMA_API_KEY, ANTHROPIC_API_KEY,
 OPENCODE_GO_API_KEY, ZAI_API_KEY.
 ```
 
-Use `dispatch_subagent` with `agent: "delegate"`. Do NOT use a worktree — the subagent will only read files and attempt curl, not edit. If it tries to edit, that's fine — we want to see what it does.
+Use `dispatch_subagent` with `agent: "delegate"`. Do NOT use a worktree — the subagent will only read files and attempt curl, not edit.
 
 - [ ] **Step 2: Document the baseline failures**
 
-When the subagent completes, review its work and document (in a scratch note, not a committed file):
+When the subagent completes, review its work and document (in a scratch note):
 
 1. Did it use the correct endpoint for `ollama-cloud`? (Should be `/api/tags` with `.models[].name`, not `/v1/models` with `.data[].id`)
 2. Did it know the correct auth header for each provider? (Anthropic needs `x-api-key` + `anthropic-version`, not Bearer)
@@ -86,170 +87,206 @@ git commit -m "docs(skill): document baseline test failures for refreshing-provi
 
 ---
 
-### Task 2: Write the SKILL.md (GREEN)
+### Task 2: Write the skill body and register it (GREEN)
 
 **Files:**
-- Create: `~/.config/zoid/modes/superpowers/refreshing-provider-models/SKILL.md`
+- Modify: `crates/zoid-core/src/skill.rs` — add the `const` body string and a `Skill` entry in `builtin()`
 
 **Interfaces:**
 - Consumes: the baseline failures from Task 1, the spec at `docs/superpowers/specs/2026-08-15-refreshing-provider-models-design.md`
-- Produces: the skill file that an agent loads when asked to refresh the provider model registry
+- Produces: a built-in skill registered in `SkillRegistry::builtin()` that an agent can `invoke_skill("refreshing-provider-models")`
 
-- [ ] **Step 1: Create the skill directory and file**
+- [ ] **Step 1: Write the failing test**
 
-Create the directory and write the SKILL.md. The content below is the complete skill — every section addresses a specific baseline failure from Task 1.
+Add a test to `crates/zoid-core/src/skill.rs` in the `tests` module that asserts the new skill exists in `builtin()` and has the right name/description. This test will fail until the skill is added.
 
-```markdown
----
-name: refreshing-provider-models
-description: Use when refreshing zoid's static provider/model registry against live provider endpoints, adding new models to MODEL_CAPS, reconciling model id drift, or updating provider metadata across the six supported providers
----
-
-# Refreshing Provider Models
-
-## Overview
-
-Refresh the static provider/model registry in `crates/zoid-model/src/lib.rs`
-against live provider endpoints. The registry has three targets: `PROVIDERS`
-model id arrays, `ZEN_MODEL_IDS`, and `MODEL_CAPS` (per-model capabilities).
-
-## Phase 1 — Fetch live model lists
-
-Run a `curl` GET per provider. Skip providers whose key is missing.
-
-| Provider id | Secret env var | Endpoint | Auth | Response path | Registry field |
-|---|---|---|---|---|---|
-| `ollama-local` | (keyless) | `{base}/api/tags` | Bearer (opt) | `.models[].name` | skip (free-text) |
-| `ollama-cloud` | `OLLAMA_API_KEY` | `https://ollama.com/api/tags` | Bearer | `.models[].name` | `ollama-cloud` models (curated) |
-| `opencode-go` | `OPENCODE_GO_API_KEY` | `https://opencode.ai/zen/go/v1/models` | Bearer | `.data[].id` | `opencode-go` models |
-| `opencode-zen` | `OPENCODE_GO_API_KEY` | `https://opencode.ai/zen/v1/models` | Bearer | `.data[].id` | `ZEN_MODEL_IDS` |
-| `anthropic-api` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1/models` | `x-api-key` + `anthropic-version: 2023-06-01` | `.data[].id` | `anthropic-api` models |
-| `zai-coding-plan` | `ZAI_API_KEY` | `https://api.z.ai/api/coding/paas/v4/models` | Bearer | `.data[].id` | `zai-coding-plan` models |
-
-**Critical:** `ollama-local` and `ollama-cloud` share `OllamaProvider` — both
-hit `/api/tags` and parse `.models[].name`. Neither is OpenAI-compat. Do not
-use `/v1/models` or `.data[].id` for either Ollama flavor.
-
-```bash
-# ollama-cloud (native Ollama API, not OpenAI-compat)
-curl -s -H "Authorization: Bearer $OLLAMA_API_KEY" https://ollama.com/api/tags | jq -r '.models[].name'
-# opencode-go
-curl -s -H "Authorization: Bearer $OPENCODE_GO_API_KEY" https://opencode.ai/zen/go/v1/models | jq -r '.data[].id'
-# opencode-zen
-curl -s -H "Authorization: Bearer $OPENCODE_GO_API_KEY" https://opencode.ai/zen/v1/models | jq -r '.data[].id'
-# anthropic-api
-curl -s -H "x-api-key: $ANTHROPIC_API_KEY" -H "anthropic-version: 2023-06-01" https://api.anthropic.com/v1/models | jq -r '.data[].id'
-# zai-coding-plan
-curl -s -H "Authorization: Bearer $ZAI_API_KEY" https://api.z.ai/api/coding/paas/v4/models | jq -r '.data[].id'
+```rust
+    #[test]
+    fn builtin_includes_refreshing_provider_models_skill() {
+        let r = SkillRegistry::builtin();
+        let s = r.get("refreshing-provider-models")
+            .expect("refreshing-provider-models must be a built-in skill");
+        assert!(
+            s.description.starts_with("Use when"),
+            "description must start with 'Use when'"
+        );
+        assert!(
+            s.body.contains("ollama-cloud"),
+            "skill body must mention ollama-cloud"
+        );
+        assert!(
+            s.body.contains("/api/tags"),
+            "skill body must mention /api/tags for Ollama"
+        );
+        assert!(
+            s.body.contains("anthropic-version"),
+            "skill body must mention anthropic-version header"
+        );
+        assert!(
+            s.body.contains("MODEL_CAPS"),
+            "skill body must reference MODEL_CAPS"
+        );
+        assert!(
+            s.body.contains("opencode_zen_model_caps_present"),
+            "skill body must reference the Zen caps invariant test"
+        );
+        assert!(
+            s.body.contains("thinking_wire"),
+            "skill body must reference thinking_wire"
+        );
+        assert!(s.base_dir.is_none(), "built-in skills have no base_dir");
+    }
 ```
 
-## Phase 2 — Diff and update
+Also update the existing `builtin_has_both_spike_skills_that_chain` test's expected names vec to include `"refreshing-provider-models"`, and `menu_renders_one_line_per_skill`'s line count and `all_exposes_every_skill_in_order`'s expected names.
 
-### 2a. Model id lists
+- [ ] **Step 2: Run test to verify it fails**
 
-- Add ids present live but missing from the static array. Remove ids absent
-  live (retired).
-- Preserve `PROVIDERS` order — it's the picker display order (convention, not
-  test-enforced). Insert new ids grouped with siblings.
-- `ollama-local` stays `&[]` — never populate it.
-- `ollama-cloud` is **curated** (`&["glm-5.2:cloud"]`), not a live-list mirror.
-  Preserve the `:cloud` suffix; any new cloud id needs a `MODEL_CAPS` entry.
-- `ZEN_MODEL_IDS` first entry is the default model — a **product decision**, not
-  endpoint-derivable. Do not change it without explicit instruction. Update the
-  `// All NN Zen model ids` count comment to match.
-- Cross-array duplication is expected (`glm-5.2` appears in Zen, Go, and ZAI).
-  Dedup matters only within `MODEL_CAPS` (case-insensitive), not across
-  provider id arrays.
+Run: `cargo test -p zoid-core skill::tests`
+Expected: FAIL — `refreshing-provider-models` not found in registry.
 
-### 2b. MODEL_CAPS for new ids
+- [ ] **Step 3: Add the skill body constant and register the skill**
 
-All unknowns fall back to `DEFAULT_MODEL_INFO` (`lib.rs:640`): 32k / 0 /
-tools=true / prompt_cache=false / None / None.
+Add a `const` string for the skill body after `FEEDBACK_SKILL_BODY` in `crates/zoid-core/src/skill.rs`. The body is the markdown content (no frontmatter — the `name` and `description` are set on the `Skill` struct directly):
 
-**Exception:** `opencode_zen_model_caps_present` asserts every `opencode-zen`
-model has `context_window >= 128_000` — the 32k default is not acceptable for
-selectable Zen/Go models. New Zen/Go ids must have an explicit researched
-entry.
-
-`ModelInfo` fields (see struct at `lib.rs:15`): `context_window` (u64),
-`max_output` (u64, 0 = provider default), `tools` (bool), `prompt_cache`
-(bool), `thinking` (ThinkingSupport), `thinking_wire` (ThinkingWireShape).
-
-**`thinking_wire` is per-model, not per-family.** Many Anthropic-routed Go/Zen
-models have `thinking_wire: None`. Copy from a researched sibling of the same
-family/variant where one exists; otherwise `None`.
-
-Do not duplicate `MODEL_CAPS` entries — lookup is case-insensitive, duplicates
-silently shadow.
-
-### 2c. Provider metadata
-
-Verify `default_base_url` still resolves (Phase 1 proved reachability). Verify
-`key_url` is still valid — `ollama-local` must be `None`, all others `Some(_)`
-(the test is keyed on provider id, not "key-requiring"). Flag dark providers,
-do not remove without confirmation.
-
-## Phase 3 — Verify
-
-```bash
-cargo test -p zoid-model    # registry invariants
-cargo build -p zoid-provider # re-exports compile
-cargo test -p zoid-provider  # wire-shape routing tables
+```rust
+/// The body of the built-in `refreshing-provider-models` skill. Guides an
+/// agent to refresh the static provider/model registry in `zoid-model` against
+/// live provider endpoints, add MODEL_CAPS entries for new models, and verify.
+const REFRESHING_PROVIDER_MODELS_BODY: &str = "\
+# Refreshing Provider Models\n\
+\n\
+Refresh the static provider/model registry in `crates/zoid-model/src/lib.rs`\n\
+against live provider endpoints. Three targets: `PROVIDERS` model id arrays,\n\
+`ZEN_MODEL_IDS`, and `MODEL_CAPS` (per-model capabilities).\n\
+\n\
+## Phase 1 — Fetch live model lists\n\
+\n\
+Run a `curl` GET per provider. Skip providers whose key is missing.\n\
+\n\
+| Provider id | Secret env var | Endpoint | Auth | Response path | Registry field |\n\
+|---|---|---|---|---|---|\n\
+| `ollama-local` | (keyless) | `{base}/api/tags` | Bearer (opt) | `.models[].name` | skip (free-text) |\n\
+| `ollama-cloud` | `OLLAMA_API_KEY` | `https://ollama.com/api/tags` | Bearer | `.models[].name` | `ollama-cloud` models (curated) |\n\
+| `opencode-go` | `OPENCODE_GO_API_KEY` | `https://opencode.ai/zen/go/v1/models` | Bearer | `.data[].id` | `opencode-go` models |\n\
+| `opencode-zen` | `OPENCODE_GO_API_KEY` | `https://opencode.ai/zen/v1/models` | Bearer | `.data[].id` | `ZEN_MODEL_IDS` |\n\
+| `anthropic-api` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1/models` | `x-api-key` + `anthropic-version: 2023-06-01` | `.data[].id` | `anthropic-api` models |\n\
+| `zai-coding-plan` | `ZAI_API_KEY` | `https://api.z.ai/api/coding/paas/v4/models` | Bearer | `.data[].id` | `zai-coding-plan` models |\n\
+\n\
+**Critical:** `ollama-local` and `ollama-cloud` share `OllamaProvider` — both\n\
+hit `/api/tags` and parse `.models[].name`. Neither is OpenAI-compat. Do not\n\
+use `/v1/models` or `.data[].id` for either Ollama flavor.\n\
+\n\
+```bash\n\
+# ollama-cloud (native Ollama API, not OpenAI-compat)\n\
+curl -s -H \"Authorization: Bearer $OLLAMA_API_KEY\" https://ollama.com/api/tags | jq -r '.models[].name'\n\
+# anthropic-api (NOT Bearer — uses x-api-key)\n\
+curl -s -H \"x-api-key: $ANTHROPIC_API_KEY\" -H \"anthropic-version: 2023-06-01\" https://api.anthropic.com/v1/models | jq -r '.data[].id'\n\
+# opencode-zen\n\
+curl -s -H \"Authorization: Bearer $OPENCODE_GO_API_KEY\" https://opencode.ai/zen/v1/models | jq -r '.data[].id'\n\
+```\n\
+\n\
+## Phase 2 — Diff and update\n\
+\n\
+### 2a. Model id lists\n\
+\n\
+- Add ids present live but missing. Remove ids absent live (retired).\n\
+- Preserve `PROVIDERS` order — picker display order (convention). Insert new\n\
+  ids grouped with siblings.\n\
+- `ollama-local` stays `&[]` — never populate it.\n\
+- `ollama-cloud` is **curated** (`&[\"glm-5.2:cloud\"]`), not a live-list\n\
+  mirror. Preserve the `:cloud` suffix; new cloud ids need MODEL_CAPS entries.\n\
+- `ZEN_MODEL_IDS` first entry is the default model — a **product decision**,\n\
+  not endpoint-derivable. Do not change without explicit instruction. Update\n\
+  the `// All NN Zen model ids` count comment to match.\n\
+- Cross-array duplication is expected (`glm-5.2` appears in Zen, Go, ZAI).\n\
+  Dedup matters only within `MODEL_CAPS` (case-insensitive), not across\n\
+  provider id arrays.\n\
+\n\
+### 2b. MODEL_CAPS for new ids\n\
+\n\
+All unknowns fall back to `DEFAULT_MODEL_INFO` (`lib.rs:640`): 32k / 0 /\n\
+tools=true / prompt_cache=false / None / None.\n\
+\n\
+**Exception:** `opencode_zen_model_caps_present` asserts every `opencode-zen`\n\
+model has `context_window >= 128_000` — the 32k default is not acceptable for\n\
+selectable Zen/Go models. New Zen/Go ids must have an explicit researched entry.\n\
+\n\
+`ModelInfo` fields (see struct at `lib.rs:15`): `context_window` (u64),\n\
+`max_output` (u64, 0 = provider default), `tools` (bool), `prompt_cache`\n\
+(bool), `thinking` (ThinkingSupport), `thinking_wire` (ThinkingWireShape).\n\
+\n\
+**`thinking_wire` is per-model, not per-family.** Many Anthropic-routed Go/Zen\n\
+models have `thinking_wire: None`. Copy from a researched sibling of the same\n\
+family/variant where one exists; otherwise `None`.\n\
+\n\
+Do not duplicate `MODEL_CAPS` entries — lookup is case-insensitive, duplicates\n\
+silently shadow.\n\
+\n\
+### 2c. Provider metadata\n\
+\n\
+Verify `default_base_url` still resolves (Phase 1 proved reachability). Verify\n\
+`key_url` is still valid — `ollama-local` must be `None`, all others `Some(_)`\n\
+(the test is keyed on provider id). Flag dark providers, do not remove without\n\
+confirmation.\n\
+\n\
+## Phase 3 — Verify\n\
+\n\
+```bash\n\
+cargo test -p zoid-model    # registry invariants\n\
+cargo build -p zoid-provider # re-exports compile\n\
+cargo test -p zoid-provider  # wire-shape routing tables\n\
+```\n\
+\n\
+**Wire-shape routing tables:** Adding a new id to `ZEN_MODEL_IDS` requires a\n\
+matching entry in `opencode_zen.rs::ZEN_MODELS`, or it silently defaults to\n\
+`OpenAIChat` (wrong wire shape, no test failure). Likewise, new `opencode-go`\n\
+ids need an entry in `opencode_go.rs::GO_MODELS`. These are in\n\
+`crates/zoid-provider/src/`, separate from the registry's `models` arrays.\n\
+\n\
+Key test invariants:\n\
+- `selectable_has_six_providers` — exactly six selectable providers.\n\
+- `opencode_go_entry_unchanged` — Go has exactly 13 models.\n\
+- `opencode_zen_model_caps_present` — every Zen model >= 128k context.\n\
+- `key_url_field_present_on_all_providers` — ollama-local=None, rest=Some.\n\
+- `model_info_unknown_falls_back_to_conservative_default` — unknown -> 32k.\n\
+";
 ```
 
-**Wire-shape routing tables:** Adding a new id to `ZEN_MODEL_IDS` requires a
-matching entry in `opencode_zen.rs::ZEN_MODELS`, or it silently defaults to
-`OpenAIChat` (wrong wire shape, no test failure). Likewise, new `opencode-go`
-ids need an entry in `opencode_go.rs::GO_MODELS`. These are in
-`crates/zoid-provider/src/`, separate from the registry's `models` arrays.
+Then add the `Skill` entry to the `vec!` in `builtin()` (after the `feedback` skill):
 
-Key test invariants:
-- `selectable_has_six_providers` — exactly six selectable providers.
-- `opencode_go_entry_unchanged` — Go has exactly 13 models.
-- `opencode_zen_model_caps_present` — every Zen model ≥128k context.
-- `key_url_field_present_on_all_providers` — ollama-local=None, rest=Some.
-- `model_info_unknown_falls_back_to_conservative_default` — unknown → 32k.
+```rust
+            Skill {
+                name: "refreshing-provider-models".into(),
+                description: "Use when refreshing zoid's static provider/model \
+                    registry against live provider endpoints, adding new models \
+                    to MODEL_CAPS, reconciling model id drift, or updating \
+                    provider metadata across the six supported providers".into(),
+                body: REFRESHING_PROVIDER_MODELS_BODY.into(),
+                base_dir: None,
+            },
 ```
 
-- [ ] **Step 2: Verify word count is under target**
+- [ ] **Step 4: Run tests to verify they pass**
 
-Run:
-```bash
-wc -w ~/.config/zoid/modes/superpowers/refreshing-provider-models/SKILL.md
-```
+Run: `cargo test -p zoid-core skill::tests`
+Expected: PASS — all tests including the new `builtin_includes_refreshing_provider_models_skill`.
 
-Expected: under 600 words (reference skill, slightly over the 500-word soft
-target due to the fetch table and curl examples — acceptable for a reference
-skill where the table IS the value). If over 700, trim the curl examples to
-just the two non-obvious ones (ollama-cloud and anthropic-api).
+- [ ] **Step 5: Verify the full workspace compiles**
 
-- [ ] **Step 3: Verify frontmatter**
+Run: `cargo build -p zoid-core`
+Expected: compiles with no errors.
 
-Check the frontmatter manually:
-- `name: refreshing-provider-models` — letters, numbers, hyphens only. ✓
-- `description` starts with "Use when..." — ✓
-- `description` is third person — ✓
-- `description` covers triggering conditions, not workflow summary — ✓
-- Total frontmatter under 1024 chars — ✓
-
-- [ ] **Step 4: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add -A
-git commit -m "feat(skill): add refreshing-provider-models SKILL.md"
-```
+git add crates/zoid-core/src/skill.rs
+git commit -m "feat(skill): bundle refreshing-provider-models as a built-in skill
 
-Note: the skill file is in `~/.config/zoid/modes/superpowers/`, which may be
-outside the repo. If so, copy it into the repo for version control:
-
-```bash
-# If the skill dir is outside the worktree, also place a copy in the repo
-# for the commit (the runtime reads from ~/.config/zoid/modes/)
-mkdir -p docs/superpowers/skills/refreshing-provider-models
-cp ~/.config/zoid/modes/superpowers/refreshing-provider-models/SKILL.md \
-   docs/superpowers/skills/refreshing-provider-models/SKILL.md
-git add docs/superpowers/skills/refreshing-provider-models/SKILL.md
-git commit --amend -m "feat(skill): add refreshing-provider-models SKILL.md"
+Add the skill body as a const string in SkillRegistry::builtin() alongside
+spike-plan, spike-implement, and feedback. The skill guides an agent to refresh
+the static provider/model registry against live endpoints, update MODEL_CAPS
+for new models, and verify with cargo test."
 ```
 
 ---
@@ -260,14 +297,12 @@ git commit --amend -m "feat(skill): add refreshing-provider-models SKILL.md"
 - No new files. This task dispatches a subagent with the skill loaded.
 
 **Interfaces:**
-- Consumes: the SKILL.md from Task 2, the same baseline task from Task 1
+- Consumes: the registered skill from Task 2, the same baseline task from Task 1
 - Produces: verification that the skill prevents the baseline failures
 
 - [ ] **Step 1: Dispatch a verification subagent WITH the skill**
 
-Dispatch a subagent with the `delegate` agent profile. Give it the same task
-as Task 1, but this time include the skill content in the system prompt (or
-reference the skill file path so it can read it):
+Dispatch a subagent with the `delegate` agent profile. Give it the same task as Task 1, but this time include the skill body in the prompt (extract it from the `const` in `skill.rs`):
 
 ```
 You are working in the zoid codebase. The static provider/model registry lives
@@ -292,17 +327,14 @@ models. Then verify with `cargo test -p zoid-model`.
 Available env vars for auth: OLLAMA_API_KEY, ANTHROPIC_API_KEY,
 OPENCODE_GO_API_KEY, ZAI_API_KEY.
 
-Read the skill at
-~/.config/zoid/modes/superpowers/refreshing-provider-models/SKILL.md
-(or docs/superpowers/skills/refreshing-provider-models/SKILL.md in the repo)
-before starting — it contains the exact endpoints, auth headers, response
-shapes, and invariants you need.
+A skill named "refreshing-provider-models" is available. Here is its body:
+
+[ paste the REFRESHING_PROVIDER_MODELS_BODY content here ]
 ```
 
 - [ ] **Step 2: Check each baseline failure is now addressed**
 
-When the subagent completes, verify against the baseline failures documented
-in Task 1:
+When the subagent completes, verify against the baseline failures documented in Task 1:
 
 1. Did it use `/api/tags` + `.models[].name` for ollama-cloud? (not `/v1/models`)
 2. Did it use `x-api-key` + `anthropic-version` for Anthropic? (not Bearer)
@@ -319,9 +351,8 @@ If any failure persists, note it for the REFACTOR task.
 
 - [ ] **Step 3: Document the verification result**
 
-Write a brief pass/fail summary to
-`docs/superpowers/specs/2026-08-15-refreshing-provider-models-baseline.md`
-(append to the existing file):
+Append the pass/fail summary to
+`docs/superpowers/specs/2026-08-15-refreshing-provider-models-baseline.md`:
 
 ```bash
 git add docs/superpowers/specs/2026-08-15-refreshing-provider-models-baseline.md
@@ -333,8 +364,7 @@ git commit -m "docs(skill): document GREEN verification results for refreshing-p
 ### Task 4: Close loopholes (REFACTOR)
 
 **Files:**
-- Modify: `~/.config/zoid/modes/superpowers/refreshing-provider-models/SKILL.md`
-  (and the repo copy at `docs/superpowers/skills/refreshing-provider-models/SKILL.md`)
+- Modify: `crates/zoid-core/src/skill.rs` — update `REFRESHING_PROVIDER_MODELS_BODY`
 
 **Interfaces:**
 - Consumes: any remaining failures from Task 3's verification
@@ -347,37 +377,26 @@ If any failures persist, proceed to Step 2.
 
 - [ ] **Step 2: Add explicit counters for each remaining failure**
 
-For each failure that persisted despite the skill, add an explicit callout to
-the SKILL.md. Common loopholes to watch for:
+For each failure that persisted despite the skill, add an explicit callout to the `REFRESHING_PROVIDER_MODELS_BODY` const. Common loopholes to watch for:
 
-- Agent still uses `/v1/models` for ollama-cloud → add a bold "NOT /v1/models"
-  warning next to the ollama-cloud row.
-- Agent still uses Bearer for Anthropic → add "NOT Bearer" next to the
-  anthropic row.
-- Agent adds a Zen model without a `ZEN_MODELS` entry → move the wire-shape
-  warning higher in the skill (before Phase 3, into Phase 2b).
+- Agent still uses `/v1/models` for ollama-cloud → add a bold "NOT /v1/models" warning next to the ollama-cloud row.
+- Agent still uses Bearer for Anthropic → add "NOT Bearer" next to the anthropic row.
+- Agent adds a Zen model without a `ZEN_MODELS` entry → move the wire-shape warning higher (into Phase 2b, before Phase 3).
 - Agent changes the `ZEN_MODEL_IDS` default → add a red-flags list.
 - Agent populates `ollama-local` → add "NEVER populate" in bold.
 
-Apply only the counters needed for the actual failures observed. Do not add
-hypothetical counters.
+Apply only the counters needed for the actual failures observed.
 
 - [ ] **Step 3: Re-verify with a fresh subagent**
 
-Dispatch the same task as Task 3 Step 1 with the updated skill. Confirm the
-remaining failures are now addressed.
+Dispatch the same task as Task 3 Step 1 with the updated skill body. Confirm the remaining failures are now addressed.
 
-- [ ] **Step 4: Commit the refactored skill**
+- [ ] **Step 4: Run all skill tests and commit**
+
+Run: `cargo test -p zoid-core skill::tests`
+Expected: PASS.
 
 ```bash
-git add docs/superpowers/skills/refreshing-provider-models/SKILL.md
+git add crates/zoid-core/src/skill.rs
 git commit -m "refactor(skill): close loopholes in refreshing-provider-models"
 ```
-
-- [ ] **Step 5: Final word count check**
-
-```bash
-wc -w docs/superpowers/skills/refreshing-provider-models/SKILL.md
-```
-
-Expected: under 700 words. If over, trim redundant content.
