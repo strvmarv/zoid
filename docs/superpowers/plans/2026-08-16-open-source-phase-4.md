@@ -43,9 +43,13 @@ Copy the full Contributor Covenant v2.1 text into `CODE_OF_CONDUCT.md`. In the "
 ```bash
 test -f CODE_OF_CONDUCT.md && head -1 CODE_OF_CONDUCT.md
 grep -c 'strvmarv@gmail.com' CODE_OF_CONDUCT.md
+grep -c 'Contributor Covenant' CODE_OF_CONDUCT.md
+test $(wc -l < CODE_OF_CONDUCT.md) -gt 100
 ```
 
-Expected: file exists, first line is `# Code of Conduct`, and the email appears at least once (in the enforcement section).
+Expected: file exists, first line is `# Code of Conduct`, the email appears
+at least once (in the enforcement section), "Contributor Covenant" appears
+at least once, and the file is over 100 lines (catches truncated copies).
 
 - [ ] **Step 4: Commit**
 
@@ -192,13 +196,44 @@ remains at `docs/RELEASING.md`.
 ```
 
 This preserves backward compatibility (external links to `AGENTS.md` still
-resolve) while making `DEVELOPMENT.md` the canonical source.
+resolve) while making `DEVELOPMENT.md` the canonical source. Note: this full
+replacement also satisfies the spec's `AGENTS.md` fallback-test-command fix —
+the stale `cargo test --workspace --no-fail-fast` (no feature flag) on old
+line 30 is removed entirely; the correct fallback lives in
+`docs/DEVELOPMENT.md` (Step 1, which includes `--features zoid/local-embed`).
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add docs/DEVELOPMENT.md AGENTS.md
 git commit -m "docs: add DEVELOPMENT.md as canonical developer reference, freeze AGENTS.md as legacy pointer"
+```
+
+- [ ] **Step 4: Update CONTRIBUTING.md to point at DEVELOPMENT.md**
+
+`CONTRIBUTING.md` currently points contributors at `AGENTS.md` for repository
+conventions. Update that reference to point directly at `docs/DEVELOPMENT.md`
+to avoid the extra redirect hop through the now-frozen `AGENTS.md`:
+
+```bash
+# Find the line referencing AGENTS.md and replace with DEVELOPMENT.md
+sed -i 's|\[AGENTS\.md\](AGENTS\.md)|[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)|g' CONTRIBUTING.md
+sed -i 's|`AGENTS\.md`|`docs/DEVELOPMENT.md`|g' CONTRIBUTING.md
+```
+
+Verify:
+
+```bash
+grep -n 'AGENTS.md' CONTRIBUTING.md
+```
+
+Expected: no output (all references now point to `docs/DEVELOPMENT.md`).
+
+- [ ] **Step 5: Commit CONTRIBUTING.md update**
+
+```bash
+git add CONTRIBUTING.md
+git commit --amend --no-edit
 ```
 
 ---
@@ -367,7 +402,7 @@ to:
     <p class="betanote">Run <code>zoid update</code> to stay current (anonymous, checksum-verified, from GitHub Releases). PowerShell installer &amp; per-platform archives on the releases page.</p>
 ```
 
-- [ ] **Step 4: Replace the footer (lines 853-857)**
+- [ ] **Step 4: Replace the footer (lines 852-857)**
 
 Replace:
 
