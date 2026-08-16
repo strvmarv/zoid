@@ -1,6 +1,7 @@
 use crate::{str_arg, Tool, ToolOutput};
 use serde_json::{json, Value};
 use std::path::Path;
+use zoid_core::ErrorKind;
 use zoid_provider::ToolSpec;
 
 /// Replace the unique occurrence of `old` with `new` in a file. Errors if `old`
@@ -46,17 +47,19 @@ impl Tool for Edit {
                     let old = match e.get("old_string").and_then(|x| x.as_str()) {
                         Some(s) => s.to_string(),
                         None => {
-                            return ToolOutput::err(format!(
-                                "edit({path}): edits[{i}] missing old_string"
-                            ))
+                            return ToolOutput::err_kind(
+                                ErrorKind::InvalidInput,
+                                format!("edit({path}): edits[{i}] missing old_string"),
+                            )
                         }
                     };
                     let new = match e.get("new_string").and_then(|x| x.as_str()) {
                         Some(s) => s.to_string(),
                         None => {
-                            return ToolOutput::err(format!(
-                                "edit({path}): edits[{i}] missing new_string"
-                            ))
+                            return ToolOutput::err_kind(
+                                ErrorKind::InvalidInput,
+                                format!("edit({path}): edits[{i}] missing new_string"),
+                            )
                         }
                     };
                     let all = e
@@ -83,20 +86,43 @@ impl Tool for Edit {
             };
 
         if edits.is_empty() {
-            return ToolOutput::err(format!("edit({path}): empty edits list"));
+            return ToolOutput::err_kind(
+                ErrorKind::InvalidInput,
+                format!("edit({path}): empty edits list"),
+            );
         }
 
         let full = crate::resolve(cwd, &path);
         let before = match std::fs::read_to_string(&full) {
             Ok(c) => c,
-            Err(e) => return ToolOutput::err(format!("edit({path}): {e}")),
+            Err(e) => {
+                let kind = match e.kind() {
+                    std::io::ErrorKind::NotFound => ErrorKind::NotFound,
+                    std::io::ErrorKind::InvalidData => ErrorKind::InvalidInput,
+                    std::io::ErrorKind::PermissionDenied => ErrorKind::PermissionDenied,
+                    _ => ErrorKind::Internal,
+                };
+                return ToolOutput::err_kind(kind, format!("edit({path}): {e}"));
+            }
         };
         let mut contents = before.clone();
         // Apply all edits in memory; bail (writing nothing) on the first failure.
         for (i, (old, new, replace_all)) in edits.iter().enumerate() {
             match apply_one(&contents, old, new, *replace_all) {
                 Ok(updated) => contents = updated,
-                Err(msg) => return ToolOutput::err(format!("edit({path}) edit #{}: {msg}", i + 1)),
+                Err(msg) => {
+                    let kind = if msg.contains("not found") {
+                        ErrorKind::NotFound
+                    } else if msg.contains("ambiguous") {
+                        ErrorKind::Conflict
+                    } else {
+                        ErrorKind::Internal
+                    };
+                    return ToolOutput::err_kind(
+                        kind,
+                        format!("edit({path}) edit #{}: {msg}", i + 1),
+                    );
+                }
             }
         }
         match std::fs::write(&full, contents.as_bytes()) {
@@ -109,7 +135,13 @@ impl Tool for Edit {
                 );
                 ToolOutput::ok(format!("edited {path} ({} change(s))", edits.len())).with_diff(fd)
             }
-            Err(e) => ToolOutput::err(format!("edit({path}): {e}")),
+            Err(e) => {
+                let kind = match e.kind() {
+                    std::io::ErrorKind::PermissionDenied => ErrorKind::PermissionDenied,
+                    _ => ErrorKind::Internal,
+                };
+                ToolOutput::err_kind(kind, format!("edit({path}): {e}"))
+            }
         }
     }
 }
@@ -166,6 +198,7 @@ mod tests {
         );
         assert!(out.is_error);
         assert!(out.text.contains("ambiguous"));
+        assert_eq!(out.error_kind, Some(ErrorKind::Conflict));
     }
 
     #[test]
@@ -177,6 +210,7 @@ mod tests {
         );
         assert!(out.is_error);
         assert!(out.text.contains("not found"));
+        assert_eq!(out.error_kind, Some(ErrorKind::NotFound));
     }
 
     #[test]
@@ -239,6 +273,46 @@ mod tests {
         );
         assert!(out.is_error, "{}", out.text);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
+        assert_eq!(out.error_kind, Some(ErrorKind::InvalidInput));
+    }
+
+    /// `edits[].old_string` / `edits[].new_string` bypass the `str_arg`
+    /// helper (they read from an array element, not the top-level args), so
+    /// they need their own categorization. Both are malformed input.
+    #[test]
+    fn edits_entry_missing_old_string_is_invalid_input() {
+        let (_d, path) = seed("hello");
+        let out = Edit.run(
+            &json!({ "path": path, "edits": [{ "new_string": "b" }] }),
+            std::path::Path::new("."),
+        );
+        assert!(out.is_error, "{}", out.text);
+        assert!(out.text.contains("missing old_string"), "{}", out.text);
+        assert_eq!(out.error_kind, Some(ErrorKind::InvalidInput));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
+    }
+
+    #[test]
+    fn edits_entry_missing_new_string_is_invalid_input() {
+        let (_d, path) = seed("hello");
+        let out = Edit.run(
+            &json!({ "path": path, "edits": [{ "old_string": "hello" }] }),
+            std::path::Path::new("."),
+        );
+        assert!(out.is_error, "{}", out.text);
+        assert!(out.text.contains("missing new_string"), "{}", out.text);
+        assert_eq!(out.error_kind, Some(ErrorKind::InvalidInput));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
+    }
+
+    #[test]
+    fn missing_path_is_error() {
+        let out = Edit.run(
+            &json!({ "old_string": "a", "new_string": "b" }),
+            std::path::Path::new("."),
+        );
+        assert!(out.is_error);
+        assert_eq!(out.error_kind, Some(ErrorKind::InvalidInput));
     }
 
     #[test]

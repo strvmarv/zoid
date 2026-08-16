@@ -71,6 +71,7 @@ mod tests {
             name: "shell".into(),
             output: out.into(),
             is_error: false,
+            error_kind: None,
         })
     }
     fn compacted(id: &str, original_tokens: u64) -> Event {

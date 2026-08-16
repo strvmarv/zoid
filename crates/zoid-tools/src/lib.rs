@@ -31,6 +31,7 @@ pub mod write;
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use zoid_core::ErrorKind;
 use zoid_provider::{ToolCall, ToolSpec};
 
 /// The outcome of running a tool. `text` is fed back to the model as the tool
@@ -44,6 +45,11 @@ pub struct ToolOutput {
     /// non-persisted `AgentUpdate` and drops it here. `None` for every other
     /// tool and every error path.
     pub diff: Option<diff::FileDiff>,
+    /// Machine-readable error category. `None` for successful outputs; `Some`
+    /// for errors. `err()` defaults to `Internal`; migrated call sites use
+    /// `err_kind()` to set a specific kind. Propagated through
+    /// `EventKind::ToolResult` to the projection/UI.
+    pub error_kind: Option<ErrorKind>,
 }
 
 impl ToolOutput {
@@ -52,6 +58,7 @@ impl ToolOutput {
             text: text.into(),
             is_error: false,
             diff: None,
+            error_kind: None,
         }
     }
     pub fn err(text: impl Into<String>) -> Self {
@@ -59,6 +66,17 @@ impl ToolOutput {
             text: text.into(),
             is_error: true,
             diff: None,
+            error_kind: Some(ErrorKind::Internal),
+        }
+    }
+    /// Construct an error output with an explicit [`ErrorKind`]. Use this
+    /// instead of `err()` once a call site has been categorized.
+    pub fn err_kind(kind: ErrorKind, text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            is_error: true,
+            diff: None,
+            error_kind: Some(kind),
         }
     }
     /// Attach an ephemeral UI diff to a successful output.
@@ -200,7 +218,12 @@ pub(crate) fn str_arg(args: &Value, key: &str) -> Result<String, ToolOutput> {
     args.get(key)
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| ToolOutput::err(format!("missing or non-string argument: {key}")))
+        .ok_or_else(|| {
+            ToolOutput::err_kind(
+                ErrorKind::InvalidInput,
+                format!("missing or non-string argument: {key}"),
+            )
+        })
 }
 
 /// Resolve a tool's path argument against the run's working directory.
@@ -401,5 +424,42 @@ mod tests {
                 "{want} must declare properties"
             );
         }
+    }
+
+    #[test]
+    fn error_kind_as_str_returns_snake_case() {
+        assert_eq!(
+            ErrorKind::BackendUnavailable.as_str(),
+            "backend_unavailable"
+        );
+        assert_eq!(ErrorKind::Timeout.as_str(), "timeout");
+        assert_eq!(ErrorKind::NotFound.as_str(), "not_found");
+        assert_eq!(ErrorKind::InvalidInput.as_str(), "invalid_input");
+        assert_eq!(ErrorKind::PermissionDenied.as_str(), "permission_denied");
+        assert_eq!(ErrorKind::Conflict.as_str(), "conflict");
+        assert_eq!(ErrorKind::CwdDeleted.as_str(), "cwd_deleted");
+        assert_eq!(ErrorKind::Internal.as_str(), "internal");
+    }
+
+    #[test]
+    fn err_kind_sets_error_flag_and_kind() {
+        let out = ToolOutput::err_kind(ErrorKind::NotFound, "file missing");
+        assert!(out.is_error);
+        assert_eq!(out.error_kind, Some(ErrorKind::NotFound));
+        assert_eq!(out.text, "file missing");
+    }
+
+    #[test]
+    fn err_defaults_to_internal() {
+        let out = ToolOutput::err("something broke");
+        assert!(out.is_error);
+        assert_eq!(out.error_kind, Some(ErrorKind::Internal));
+    }
+
+    #[test]
+    fn ok_has_no_error_kind() {
+        let out = ToolOutput::ok("success");
+        assert!(!out.is_error);
+        assert_eq!(out.error_kind, None);
     }
 }

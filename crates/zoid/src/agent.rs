@@ -15,6 +15,7 @@ use zoid_core::agent_profile::AgentProfile;
 use zoid_core::event::{BranchId, Event, EventKind};
 use zoid_core::projection::ChatMsg;
 use zoid_core::session::SessionHandle;
+use zoid_core::ErrorKind;
 use zoid_provider::{
     CompletionRequest, Message, Provider, ProviderEvent, ThinkingMode, ToolCall, ToolSpec,
 };
@@ -561,8 +562,24 @@ fn map_msg(m: ChatMsg) -> Message {
             tool_call_id: None,
         },
         ChatMsg::ToolResult {
-            id, name, output, ..
-        } => Message::tool_with_call_id(name, id, output),
+            id,
+            name,
+            output,
+            is_error,
+            error_kind,
+            ..
+        } => {
+            let text = if is_error {
+                if let Some(kind) = error_kind {
+                    format!("[error: {}] {}", kind.as_str(), output)
+                } else {
+                    output
+                }
+            } else {
+                output
+            };
+            Message::tool_with_call_id(name, id, &text)
+        }
         ChatMsg::Delegated { summary, .. } => Message {
             role: zoid_provider::MsgRole::Assistant,
             content: format!("[delegated subagent] {summary}"),
@@ -746,6 +763,18 @@ pub async fn run_agent_turn(
         CancellationToken::new(), // hard (never fires here)
     )
     .await
+}
+
+/// Synthetic short-circuit output for a turn-control outcome (graceful cancel
+/// or hard-stop). These are control-flow results, not tool failures, so they
+/// carry **no** [`ErrorKind`] — `ToolOutput::err()` would default to
+/// `Internal` and the model would see a misleading `[error: internal]` prefix.
+/// This matches the batch-drain sites, which emit the identical strings with
+/// `error_kind: None`.
+fn turn_control_output(text: &str) -> zoid_tools::ToolOutput {
+    let mut out = zoid_tools::ToolOutput::err(text);
+    out.error_kind = None;
+    out
 }
 
 /// Like [`run_agent_turn`] but cancellable: when `cancel` fires (Esc/Ctrl-C from
@@ -1107,6 +1136,7 @@ async fn run_turn_inner(
                         name: tc.name,
                         output: "[skipped: turn aborted]".to_string(),
                         is_error: false,
+                        error_kind: None,
                     },
                     session_id,
                     now,
@@ -1282,6 +1312,7 @@ async fn run_turn_inner(
                             name: rest.name,
                             output: "[skipped: turn aborted]".to_string(),
                             is_error: false,
+                            error_kind: None,
                         },
                         session_id,
                         now,
@@ -1308,6 +1339,7 @@ async fn run_turn_inner(
                             name: tc.name,
                             output: reason,
                             is_error: true,
+                            error_kind: None,
                         },
                         session_id,
                         now,
@@ -1372,6 +1404,7 @@ async fn run_turn_inner(
                                 name: tc.name,
                                 output: "[user aborted]".to_string(),
                                 is_error: true,
+                                error_kind: None,
                             },
                             session_id,
                             now,
@@ -1420,6 +1453,7 @@ async fn run_turn_inner(
                                 name: tc.name,
                                 output,
                                 is_error,
+                                error_kind: None,
                             },
                             session_id,
                             now,
@@ -1437,6 +1471,7 @@ async fn run_turn_inner(
                                         name: rest.name,
                                         output: "[skipped: turn aborted]".to_string(),
                                         is_error: false,
+                                        error_kind: None,
                                     },
                                     session_id,
                                     now,
@@ -1490,6 +1525,7 @@ async fn run_turn_inner(
                                     name: tc.name,
                                     output: format!("{n} tasks · {active} active"),
                                     is_error: false,
+                                    error_kind: None,
                                 },
                                 session_id,
                                 now,
@@ -1515,6 +1551,7 @@ async fn run_turn_inner(
                                     name: tc.name,
                                     output: msg,
                                     is_error: true,
+                                    error_kind: None,
                                 },
                                 session_id,
                                 now,
@@ -1631,6 +1668,7 @@ async fn run_turn_inner(
                                 rendered
                             },
                             is_error: false,
+                            error_kind: None,
                         },
                         session_id,
                         now,
@@ -1662,6 +1700,11 @@ async fn run_turn_inner(
                             name: tc.name,
                             output,
                             is_error,
+                            error_kind: if is_error {
+                                Some(ErrorKind::Internal)
+                            } else {
+                                None
+                            },
                         },
                         session_id,
                         now,
@@ -1697,6 +1740,7 @@ async fn run_turn_inner(
                                 name: tc.name,
                                 output: "dispatch_subagent: 'task' is required".into(),
                                 is_error: true,
+                                error_kind: Some(ErrorKind::InvalidInput),
                             },
                             session_id,
                             now,
@@ -1724,6 +1768,7 @@ async fn run_turn_inner(
                                         name: tc.name,
                                         output: msg,
                                         is_error: true,
+                                        error_kind: Some(ErrorKind::Internal),
                                     },
                                     session_id,
                                     now,
@@ -1808,6 +1853,7 @@ async fn run_turn_inner(
                                         config.max_concurrent
                                     ),
                                     is_error: false,
+                                    error_kind: None,
                                 },
                                 session_id,
                                 now,
@@ -1928,6 +1974,7 @@ async fn run_turn_inner(
                                  check on it. End your turn now and await the result."
                             ),
                             is_error: false,
+                            error_kind: None,
                         },
                         session_id,
                         now,
@@ -1959,6 +2006,7 @@ async fn run_turn_inner(
                                 name: tc.name,
                                 output: "enter_worktree: 'name' is required".into(),
                                 is_error: true,
+                                error_kind: Some(ErrorKind::InvalidInput),
                             },
                             session_id,
                             now,
@@ -1989,6 +2037,7 @@ async fn run_turn_inner(
                                     name: tc.name,
                                     output: format!("{{\"worktree\": \"{name}\"}}"),
                                     is_error: false,
+                                    error_kind: None,
                                 },
                                 session_id,
                                 now,
@@ -2000,6 +2049,16 @@ async fn run_turn_inner(
                                 Ok(Err(m)) => m,
                                 _ => "worktree switch failed (no reply)".to_string(),
                             };
+                            // "already in a worktree" is a state conflict, not
+                            // an internal failure. Production string (see
+                            // `compute_worktree_switch` in main.rs):
+                            //   "already in a worktree — exit with :worktree exit first"
+                            // Everything else in this arm stays Internal.
+                            let error_kind = if msg.contains("already in a worktree") {
+                                Some(ErrorKind::Conflict)
+                            } else {
+                                Some(ErrorKind::Internal)
+                            };
                             emit(
                                 &session,
                                 &mut events,
@@ -2010,6 +2069,7 @@ async fn run_turn_inner(
                                     name: tc.name,
                                     output: msg,
                                     is_error: true,
+                                    error_kind,
                                 },
                                 session_id,
                                 now,
@@ -2047,6 +2107,7 @@ async fn run_turn_inner(
                                     name: tc.name,
                                     output,
                                     is_error: false,
+                                    error_kind: None,
                                 },
                                 session_id,
                                 now,
@@ -2058,6 +2119,19 @@ async fn run_turn_inner(
                                 Ok(Err(m)) => m,
                                 _ => "worktree exit failed (no reply)".to_string(),
                             };
+                            // Both refusals are state conflicts, not internal
+                            // failures. Production strings (see
+                            // `compute_worktree_switch` in main.rs):
+                            //   "not in a worktree"
+                            //   "cannot exit worktree while a subagent is running"
+                            // Match on "subagent" rather than the full phrase so
+                            // a reworded refusal still categorizes correctly.
+                            let error_kind =
+                                if msg.contains("not in a worktree") || msg.contains("subagent") {
+                                    Some(ErrorKind::Conflict)
+                                } else {
+                                    Some(ErrorKind::Internal)
+                                };
                             emit(
                                 &session,
                                 &mut events,
@@ -2068,6 +2142,7 @@ async fn run_turn_inner(
                                     name: tc.name,
                                     output: msg,
                                     is_error: true,
+                                    error_kind,
                                 },
                                 session_id,
                                 now,
@@ -2126,6 +2201,11 @@ async fn run_turn_inner(
                             name: tc.name,
                             output,
                             is_error,
+                            error_kind: if is_error {
+                                Some(ErrorKind::InvalidInput)
+                            } else {
+                                None
+                            },
                         },
                         session_id,
                         now,
@@ -2162,6 +2242,11 @@ async fn run_turn_inner(
                             name: tc.name,
                             output,
                             is_error,
+                            error_kind: if is_error {
+                                Some(ErrorKind::InvalidInput)
+                            } else {
+                                None
+                            },
                         },
                         session_id,
                         now,
@@ -2196,6 +2281,7 @@ async fn run_turn_inner(
                             name: tc.name,
                             output: format!("{{\"cancelled\": {fired}}}"),
                             is_error: false,
+                            error_kind: None,
                         },
                         session_id,
                         now,
@@ -2219,6 +2305,7 @@ async fn run_turn_inner(
                             name: tc.name,
                             output,
                             is_error: false,
+                            error_kind: None,
                         },
                         session_id,
                         now,
@@ -2249,6 +2336,7 @@ async fn run_turn_inner(
                                             bug|feature|general; title and body must be non-empty."
                                             .into(),
                                         is_error: true,
+                                        error_kind: Some(ErrorKind::InvalidInput),
                                     },
                                     session_id,
                                     now,
@@ -2330,6 +2418,7 @@ async fn run_turn_inner(
                                 name: tc.name.clone(),
                                 output,
                                 is_error: false,
+                                error_kind: None,
                             },
                             session_id,
                             now,
@@ -2388,6 +2477,7 @@ async fn run_turn_inner(
                                             "apply_mode_mapping: {reason}. Re-propose with valid args."
                                         ),
                                         is_error: true,
+                                        error_kind: None,
                                     },
                                     session_id,
                                     now,
@@ -2488,6 +2578,7 @@ async fn run_turn_inner(
                             name: tc.name,
                             output: tool_output,
                             is_error,
+                            error_kind: None,
                         },
                         session_id,
                         now,
@@ -2516,6 +2607,7 @@ async fn run_turn_inner(
                                     name: rest.name,
                                     output: "[skipped: turn aborted]".to_string(),
                                     is_error: false,
+                                    error_kind: None,
                                 },
                                 session_id,
                                 now,
@@ -2554,6 +2646,7 @@ async fn run_turn_inner(
                                     name: tc.name,
                                     output: "[skipped: turn aborted]".to_string(),
                                     is_error: false,
+                                    error_kind: None,
                                 },
                                 session_id,
                                 now,
@@ -2570,6 +2663,7 @@ async fn run_turn_inner(
                                         name: rest.name,
                                         output: "[skipped: turn aborted]".to_string(),
                                         is_error: false,
+                                        error_kind: None,
                                     },
                                     session_id,
                                     now,
@@ -2592,6 +2686,7 @@ async fn run_turn_inner(
                             name: tc.name,
                             output: out.text,
                             is_error: out.is_error,
+                            error_kind: out.error_kind,
                         },
                         session_id,
                         now,
@@ -2616,6 +2711,54 @@ async fn run_turn_inner(
                             name: tc.name.clone(),
                         })
                         .await;
+                    // CWD-deleted pre-check (spec: CWD-deleted detection and recovery).
+                    // Emitting tools are exempt — they're the recovery path.
+                    if !cwd_for_exec.exists() {
+                        let in_worktree = cwd_for_exec.iter().any(|c| c == ".zoid");
+                        let msg = if in_worktree {
+                            format!(
+                                "You are in a worktree — the working directory \"{}\" no longer exists. \
+                                 Call exit_worktree to return to the main checkout.",
+                                cwd_for_exec.display()
+                            )
+                        } else {
+                            format!(
+                                "The working directory \"{}\" no longer exists. \
+                                 Navigate to an existing directory (e.g., the repo root) \
+                                 before running another command.",
+                                cwd_for_exec.display()
+                            )
+                        };
+                        let out = zoid_tools::ToolOutput::err_kind(ErrorKind::CwdDeleted, msg);
+                        // The `continue` below skips the normal post-dispatch
+                        // warn path, so record the failure in the persisted
+                        // session here — a vanished working directory must not
+                        // be visible only in the emitted event.
+                        let ctx = format!("tool {} (cwd deleted)", tc.name);
+                        tracing::warn!(
+                            ctx = ctx.as_str(),
+                            message = out.text.as_str(),
+                            "tool skipped: cwd deleted"
+                        );
+                        log_turn_warn(&session, "warn", session_id, &out.text, Some(ctx)).await;
+                        emit(
+                            &session,
+                            &mut events,
+                            ui,
+                            &config.branch,
+                            EventKind::ToolResult {
+                                id: tc.id,
+                                name: tc.name,
+                                output: out.text,
+                                is_error: out.is_error,
+                                error_kind: out.error_kind,
+                            },
+                            session_id,
+                            now,
+                        )
+                        .await?;
+                        continue; // skip to the next tool in the batch
+                    }
                     let tools_for_async = tools.clone();
                     let name = tc.name.clone();
                     let args = tc.args.clone();
@@ -2625,10 +2768,10 @@ async fn run_turn_inner(
                         _ = cancel.cancelled() => {
                             // Graceful cancel during a Network tool: return a
                             // non-fatal skip so the batch drain can end the turn.
-                            zoid_tools::ToolOutput::err("[skipped: turn aborted]")
+                            turn_control_output("[skipped: turn aborted]")
                         }
                         _ = hard.cancelled() => {
-                            zoid_tools::ToolOutput::err("[killed: hard-stop]")
+                            turn_control_output("[killed: hard-stop]")
                         }
                         o = async move {
                             match tools_for_async.iter().find(|t| t.name() == name) {
@@ -2649,6 +2792,7 @@ async fn run_turn_inner(
                             name: tc.name,
                             output: out.text,
                             is_error: out.is_error,
+                            error_kind: out.error_kind,
                         },
                         session_id,
                         now,
@@ -2672,6 +2816,7 @@ async fn run_turn_inner(
                                     name: rest.name,
                                     output: "[skipped: turn aborted]".to_string(),
                                     is_error: false,
+                                    error_kind: None,
                                 },
                                 session_id,
                                 now,
@@ -2701,6 +2846,54 @@ async fn run_turn_inner(
                             name: tc.name.clone(),
                         })
                         .await;
+                    // CWD-deleted pre-check (spec: CWD-deleted detection and recovery).
+                    // Emitting tools are exempt — they're the recovery path.
+                    if !cwd_for_exec.exists() {
+                        let in_worktree = cwd_for_exec.iter().any(|c| c == ".zoid");
+                        let msg = if in_worktree {
+                            format!(
+                                "You are in a worktree — the working directory \"{}\" no longer exists. \
+                                 Call exit_worktree to return to the main checkout.",
+                                cwd_for_exec.display()
+                            )
+                        } else {
+                            format!(
+                                "The working directory \"{}\" no longer exists. \
+                                 Navigate to an existing directory (e.g., the repo root) \
+                                 before running another command.",
+                                cwd_for_exec.display()
+                            )
+                        };
+                        let out = zoid_tools::ToolOutput::err_kind(ErrorKind::CwdDeleted, msg);
+                        // The `continue` below skips the normal post-dispatch
+                        // warn path, so record the failure in the persisted
+                        // session here — a vanished working directory must not
+                        // be visible only in the emitted event.
+                        let ctx = format!("tool {} (cwd deleted)", tc.name);
+                        tracing::warn!(
+                            ctx = ctx.as_str(),
+                            message = out.text.as_str(),
+                            "tool skipped: cwd deleted"
+                        );
+                        log_turn_warn(&session, "warn", session_id, &out.text, Some(ctx)).await;
+                        emit(
+                            &session,
+                            &mut events,
+                            ui,
+                            &config.branch,
+                            EventKind::ToolResult {
+                                id: tc.id,
+                                name: tc.name,
+                                output: out.text,
+                                is_error: out.is_error,
+                                error_kind: out.error_kind,
+                            },
+                            session_id,
+                            now,
+                        )
+                        .await?;
+                        continue; // skip to the next tool in the batch
+                    }
                     let tools_for_exec = tools.clone();
                     let name = tc.name.clone();
                     let args = tc.args.clone();
@@ -2715,7 +2908,7 @@ async fn run_turn_inner(
                             // shell's process group (same as hard) and return a
                             // non-fatal skip. The blocking task is detached.
                             config.kill.kill();
-                            zoid_tools::ToolOutput::err("[skipped: turn aborted]")
+                            turn_control_output("[skipped: turn aborted]")
                         }
                         _ = hard.cancelled() => {
                             // Force-kill the shell's process group (sticky kill:
@@ -2728,7 +2921,7 @@ async fn run_turn_inner(
                             // "abandon-wait" behavior. `exec` is dropped here,
                             // detaching (not cancelling) the blocking task.
                             config.kill.kill();
-                            zoid_tools::ToolOutput::err("[killed: hard-stop]")
+                            turn_control_output("[killed: hard-stop]")
                         }
                         joined = &mut exec => joined?,
                     };
@@ -2762,6 +2955,7 @@ async fn run_turn_inner(
                             name: tc.name,
                             output: out.text,
                             is_error: out.is_error,
+                            error_kind: out.error_kind,
                         },
                         session_id,
                         now,
@@ -2782,6 +2976,7 @@ async fn run_turn_inner(
                                     name: rest.name,
                                     output: "[skipped: turn aborted]".to_string(),
                                     is_error: false,
+                                    error_kind: None,
                                 },
                                 session_id,
                                 now,
@@ -3578,6 +3773,7 @@ mod tests {
                     name: "shell".into(),
                     output: "HUGE ORIGINAL DUMP".into(),
                     is_error: false,
+                    error_kind: None,
                 },
             ),
             Event::new(
@@ -4213,6 +4409,7 @@ mod tests {
                     name: "bash".into(),
                     output: tool_output,
                     is_error: false,
+                    error_kind: None,
                 },
             );
             session.append(user_ev.clone()).await.unwrap();
@@ -5222,7 +5419,10 @@ mod tests {
             .expect("dispatch_subagent tool result must be emitted");
         match &tool_result.kind {
             EventKind::ToolResult {
-                output, is_error, ..
+                output,
+                is_error,
+                error_kind,
+                ..
             } => {
                 assert!(*is_error, "unknown agent must produce an error ToolResult");
                 assert!(
@@ -5233,6 +5433,7 @@ mod tests {
                     output.contains("delegate"),
                     "error must list available agents (delegate): got {output}"
                 );
+                assert_eq!(*error_kind, Some(ErrorKind::Internal));
             }
             _ => panic!(),
         }
@@ -5351,6 +5552,685 @@ mod tests {
             "second dispatch tool result should announce it was queued: {:?}",
             results[1]
         );
+    }
+
+    /// `dispatch_subagent` with an empty/missing `task` is a validation
+    /// failure, not an execution failure — `error_kind` must be `InvalidInput`.
+    #[tokio::test]
+    async fn dispatch_subagent_missing_task_is_invalid_input() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "dispatch without a task".into(),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d1".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let tool_result = out
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ToolResult { name, .. } if name == "dispatch_subagent"
+                )
+            })
+            .expect("dispatch_subagent tool result must be emitted");
+        match &tool_result.kind {
+            EventKind::ToolResult {
+                output,
+                is_error,
+                error_kind,
+                ..
+            } => {
+                assert!(*is_error, "missing task must be an error");
+                assert!(output.contains("'task' is required"), "got: {output}");
+                assert_eq!(*error_kind, Some(ErrorKind::InvalidInput));
+            }
+            _ => panic!(),
+        }
+    }
+
+    /// `enter_worktree` with an empty/missing `name` is a validation failure.
+    #[tokio::test]
+    async fn enter_worktree_missing_name_is_invalid_input() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "enter a worktree".into(),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "w1".into(),
+                    name: "enter_worktree".into(),
+                    args: json!({}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let tool_result = out
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ToolResult { name, .. } if name == "enter_worktree"
+                )
+            })
+            .expect("enter_worktree tool result must be emitted");
+        match &tool_result.kind {
+            EventKind::ToolResult {
+                output,
+                is_error,
+                error_kind,
+                ..
+            } => {
+                assert!(*is_error, "missing name must be an error");
+                assert!(output.contains("'name' is required"), "got: {output}");
+                assert_eq!(*error_kind, Some(ErrorKind::InvalidInput));
+            }
+            _ => panic!(),
+        }
+    }
+
+    /// `enter_worktree` whose relocation request comes back `Err` (or is
+    /// dropped without a reply) is an execution failure — `Internal`.
+    #[tokio::test]
+    async fn enter_worktree_switch_failure_is_internal() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "enter a worktree".into(),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "w1".into(),
+                    name: "enter_worktree".into(),
+                    args: json!({"name": "feature-x"}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move {
+            while let Some(upd) = rx.recv().await {
+                if let AgentUpdate::WorktreeRequested { reply, .. } = upd {
+                    let _ = reply.send(Err("worktree switch failed: simulated".into()));
+                }
+            }
+        });
+
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let tool_result = out
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ToolResult { name, .. } if name == "enter_worktree"
+                )
+            })
+            .expect("enter_worktree tool result must be emitted");
+        match &tool_result.kind {
+            EventKind::ToolResult {
+                output,
+                is_error,
+                error_kind,
+                ..
+            } => {
+                assert!(*is_error, "failed switch must be an error");
+                assert!(output.contains("simulated"), "got: {output}");
+                assert_eq!(*error_kind, Some(ErrorKind::Internal));
+            }
+            _ => panic!(),
+        }
+    }
+
+    /// `exit_worktree` failing with a "not in a worktree" / "subagent
+    /// running" message is a state conflict, not an internal failure.
+    #[tokio::test]
+    async fn exit_worktree_not_in_worktree_is_conflict() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "exit the worktree".into(),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "w1".into(),
+                    name: "exit_worktree".into(),
+                    args: json!({}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move {
+            while let Some(upd) = rx.recv().await {
+                if let AgentUpdate::WorktreeRequested { reply, .. } = upd {
+                    let _ = reply.send(Err("not in a worktree".into()));
+                }
+            }
+        });
+
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let tool_result = out
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ToolResult { name, .. } if name == "exit_worktree"
+                )
+            })
+            .expect("exit_worktree tool result must be emitted");
+        match &tool_result.kind {
+            EventKind::ToolResult {
+                output,
+                is_error,
+                error_kind,
+                ..
+            } => {
+                assert!(*is_error, "not-in-a-worktree must be an error");
+                assert!(output.contains("not in a worktree"), "got: {output}");
+                assert_eq!(*error_kind, Some(ErrorKind::Conflict));
+            }
+            _ => panic!(),
+        }
+    }
+
+    /// `exit_worktree` failing with an unrecognized message (not the
+    /// "not in a worktree" / "subagent running" conflict markers) falls
+    /// through to `Internal`.
+    #[tokio::test]
+    async fn exit_worktree_other_failure_is_internal() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "exit the worktree".into(),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "w1".into(),
+                    name: "exit_worktree".into(),
+                    args: json!({}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move {
+            while let Some(upd) = rx.recv().await {
+                if let AgentUpdate::WorktreeRequested { reply, .. } = upd {
+                    let _ = reply.send(Err("git worktree remove failed: fatal error".into()));
+                }
+            }
+        });
+
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let tool_result = out
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ToolResult { name, .. } if name == "exit_worktree"
+                )
+            })
+            .expect("exit_worktree tool result must be emitted");
+        match &tool_result.kind {
+            EventKind::ToolResult {
+                output,
+                is_error,
+                error_kind,
+                ..
+            } => {
+                assert!(*is_error, "unrecognized failure must be an error");
+                assert!(output.contains("fatal error"), "got: {output}");
+                assert_eq!(*error_kind, Some(ErrorKind::Internal));
+            }
+            _ => panic!(),
+        }
+    }
+
+    /// `show` on the reachable (always non-error) `companion_show` path
+    /// carries no `error_kind`. `companion_show` currently has no failure
+    /// branch (see `zoid_companion::CompanionHub`), so the `Internal` arm in
+    /// the `show` match cannot be exercised without changing production
+    /// behavior; this test covers the only path currently reachable.
+    #[tokio::test]
+    async fn show_success_has_no_error_kind() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "show a card".into(),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "s1".into(),
+                    name: "show".into(),
+                    args: json!({"html": "<b>hi</b>"}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let tool_result = out
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ToolResult { name, .. } if name == "show"
+                )
+            })
+            .expect("show tool result must be emitted");
+        match &tool_result.kind {
+            EventKind::ToolResult {
+                is_error,
+                error_kind,
+                ..
+            } => {
+                assert!(!*is_error);
+                assert_eq!(*error_kind, None);
+            }
+            _ => panic!(),
+        }
+    }
+
+    /// `schedule_wake` validation failures (rejected by the main loop) are
+    /// `InvalidInput`.
+    #[tokio::test]
+    async fn schedule_wake_validation_error_is_invalid_input() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "schedule a wake".into(),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "sw1".into(),
+                    name: "schedule_wake".into(),
+                    args: json!({"delay_secs": 30, "note": "check back"}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move {
+            while let Some(upd) = rx.recv().await {
+                if let AgentUpdate::ScheduleWake { reply, .. } = upd {
+                    let _ = reply.send(Err("schedule_wake: too many pending wakes".into()));
+                }
+            }
+        });
+
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let tool_result = out
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ToolResult { name, .. } if name == "schedule_wake"
+                )
+            })
+            .expect("schedule_wake tool result must be emitted");
+        match &tool_result.kind {
+            EventKind::ToolResult {
+                output,
+                is_error,
+                error_kind,
+                ..
+            } => {
+                assert!(*is_error, "rejected schedule must be an error");
+                assert!(output.contains("too many pending wakes"), "got: {output}");
+                assert_eq!(*error_kind, Some(ErrorKind::InvalidInput));
+            }
+            _ => panic!(),
+        }
+    }
+
+    /// `cancel_wake` validation failures (rejected by the main loop) are
+    /// `InvalidInput`.
+    #[tokio::test]
+    async fn cancel_wake_validation_error_is_invalid_input() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "cancel a wake".into(),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "cw1".into(),
+                    name: "cancel_wake".into(),
+                    args: json!({"id": "nope"}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move {
+            while let Some(upd) = rx.recv().await {
+                if let AgentUpdate::CancelWake { reply, .. } = upd {
+                    let _ = reply.send(Err("cancel_wake: no such wake 'nope'".into()));
+                }
+            }
+        });
+
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let tool_result = out
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ToolResult { name, .. } if name == "cancel_wake"
+                )
+            })
+            .expect("cancel_wake tool result must be emitted");
+        match &tool_result.kind {
+            EventKind::ToolResult {
+                output,
+                is_error,
+                error_kind,
+                ..
+            } => {
+                assert!(*is_error, "rejected cancel must be an error");
+                assert!(output.contains("no such wake"), "got: {output}");
+                assert_eq!(*error_kind, Some(ErrorKind::InvalidInput));
+            }
+            _ => panic!(),
+        }
     }
 
     #[tokio::test]
@@ -6482,6 +7362,18 @@ mod tests {
             killed,
             "the interrupted shell call must get a [killed] result"
         );
+        // A hard-stop is turn control, not a tool failure — the result must
+        // carry no `ErrorKind` (otherwise the model reads `[error: internal]`).
+        let kind = out
+            .iter()
+            .find_map(|e| match &e.kind {
+                EventKind::ToolResult {
+                    output, error_kind, ..
+                } if output.contains("[killed") => Some(*error_kind),
+                _ => None,
+            })
+            .expect("killed result must exist");
+        assert_eq!(kind, None, "[killed: hard-stop] must have no error_kind");
     }
 
     #[tokio::test]
@@ -6566,6 +7458,26 @@ mod tests {
             skipped,
             "the remaining batched call must get a [skipped] result"
         );
+        // (d) Turn-control short-circuits are NOT tool failures: neither the
+        // hard-stop kill nor the drained skip may carry an `ErrorKind`, or the
+        // model sees a misleading `[error: internal]` prefix on a result that
+        // only says the turn was interrupted.
+        for e in out.iter() {
+            if let EventKind::ToolResult {
+                id,
+                output,
+                error_kind,
+                ..
+            } = &e.kind
+            {
+                if output.contains("[killed") || output.contains("[skipped") {
+                    assert_eq!(
+                        *error_kind, None,
+                        "turn-control result for {id} must carry no error_kind: {output}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -6610,6 +7522,440 @@ mod tests {
         assert_eq!(name, "delegate");
         assert_eq!(profile.name, "delegate");
     }
+
+    /// Drive one real turn through `run_agent_turn` with a scripted provider
+    /// that issues exactly one tool call, and return the emitted `ToolResult`
+    /// for that call. `worktree_reply` is the answer the fake UI gives to a
+    /// `WorktreeRequested` signal (Emitting worktree tools only).
+    ///
+    /// This goes through the production dispatch loop — no predicate or
+    /// message is re-implemented here — so a test built on it fails if the
+    /// code path under test is removed.
+    async fn single_tool_result(
+        config: TurnConfig,
+        tool: &str,
+        args: serde_json::Value,
+        worktree_reply: Result<(std::path::PathBuf, Option<String>), String>,
+    ) -> zoid_core::event::Event {
+        single_tool_result_in(":memory:", config, tool, args, worktree_reply).await
+    }
+
+    /// As [`single_tool_result`], but backed by the store at `db` so a test can
+    /// re-read the persisted `logs` table afterwards.
+    async fn single_tool_result_in(
+        db: &str,
+        config: TurnConfig,
+        tool: &str,
+        args: serde_json::Value,
+        worktree_reply: Result<(std::path::PathBuf, Option<String>), String>,
+    ) -> zoid_core::event::Event {
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(db).unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: format!("call {tool}"),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "call-1".into(),
+                    name: tool.into(),
+                    args,
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move {
+            while let Some(upd) = rx.recv().await {
+                if let AgentUpdate::WorktreeRequested { reply, .. } = upd {
+                    let _ = reply.send(worktree_reply.clone());
+                }
+            }
+        });
+
+        let out = run_agent_turn(
+            config,
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let found = out
+            .iter()
+            .find(|e| matches!(&e.kind, EventKind::ToolResult { id, .. } if id == "call-1"))
+            .cloned();
+        found.unwrap_or_else(|| panic!("no ToolResult emitted for {tool}"))
+    }
+
+    /// A CWD that does not exist, in a path shaped like a `.zoid` worktree.
+    fn missing_worktree_cwd() -> std::path::PathBuf {
+        std::path::PathBuf::from("/nonexistent-zoid-test-root/.zoid/worktrees/gone")
+    }
+
+    /// A CWD that does not exist and is NOT a worktree path.
+    fn missing_plain_cwd() -> std::path::PathBuf {
+        std::path::PathBuf::from("/nonexistent-zoid-test-root/plain-project")
+    }
+
+    /// The CWD-deleted pre-check must short-circuit a Local tool: the tool
+    /// never runs, and the result carries `ErrorKind::CwdDeleted` plus the
+    /// worktree-aware recovery instruction naming `exit_worktree`.
+    ///
+    /// Drives the real dispatch arm (not a local re-implementation of the
+    /// `.zoid` predicate or the message), so deleting the pre-check fails this.
+    #[tokio::test]
+    async fn cwd_deleted_short_circuits_local_tool_in_worktree() {
+        use zoid_core::event::EventKind;
+        let mut cfg = chat_turn_config();
+        cfg.cwd = missing_worktree_cwd();
+        // `read` is a Local tool. With a live CWD this would return the file's
+        // contents; with a deleted CWD the pre-check must answer instead.
+        let ev = single_tool_result(
+            cfg,
+            "read",
+            serde_json::json!({ "path": "Cargo.toml" }),
+            Err("unused".into()),
+        )
+        .await;
+        match &ev.kind {
+            EventKind::ToolResult {
+                output,
+                is_error,
+                error_kind,
+                ..
+            } => {
+                assert!(*is_error, "a deleted CWD is an error result");
+                assert_eq!(
+                    *error_kind,
+                    Some(ErrorKind::CwdDeleted),
+                    "deleted CWD must categorize as CwdDeleted, got: {output}"
+                );
+                assert!(
+                    output.contains("no longer exists"),
+                    "must be the pre-check's recovery message, got: {output}"
+                );
+                assert!(
+                    output.contains("exit_worktree"),
+                    "in a worktree the recovery message must name exit_worktree, got: {output}"
+                );
+                // The underlying `read` never ran: no file contents, and none
+                // of read's own error wording.
+                assert!(
+                    !output.contains("[package]") && !output.starts_with("read:"),
+                    "the underlying tool must not have executed, got: {output}"
+                );
+            }
+            _ => panic!("expected a ToolResult"),
+        }
+    }
+
+    /// Same pre-check, outside a worktree: the recovery message must point at
+    /// navigating to an existing directory and must NOT name `exit_worktree`
+    /// (there is no worktree to exit).
+    #[tokio::test]
+    async fn cwd_deleted_short_circuits_local_tool_outside_worktree() {
+        use zoid_core::event::EventKind;
+        let mut cfg = chat_turn_config();
+        cfg.cwd = missing_plain_cwd();
+        let ev = single_tool_result(
+            cfg,
+            "read",
+            serde_json::json!({ "path": "Cargo.toml" }),
+            Err("unused".into()),
+        )
+        .await;
+        match &ev.kind {
+            EventKind::ToolResult {
+                output, error_kind, ..
+            } => {
+                assert_eq!(*error_kind, Some(ErrorKind::CwdDeleted));
+                assert!(
+                    output.contains("Navigate to an existing directory"),
+                    "got: {output}"
+                );
+                assert!(
+                    !output.contains("exit_worktree"),
+                    "outside a worktree the message must not name exit_worktree, got: {output}"
+                );
+            }
+            _ => panic!("expected a ToolResult"),
+        }
+    }
+
+    /// The pre-check must also cover Network tools (the second dispatch arm).
+    #[tokio::test]
+    async fn cwd_deleted_short_circuits_network_tool() {
+        use zoid_core::event::EventKind;
+        let mut cfg = chat_turn_config();
+        cfg.cwd = missing_worktree_cwd();
+        // `web_fetch` is a Network tool. The URL is never reachable in tests —
+        // the point is that the pre-check answers before any network work.
+        let ev = single_tool_result(
+            cfg,
+            "web_fetch",
+            serde_json::json!({ "url": "https://example.invalid/" }),
+            Err("unused".into()),
+        )
+        .await;
+        match &ev.kind {
+            EventKind::ToolResult {
+                output, error_kind, ..
+            } => {
+                assert_eq!(
+                    *error_kind,
+                    Some(ErrorKind::CwdDeleted),
+                    "Network arm must short-circuit too, got: {output}"
+                );
+                assert!(
+                    !output.contains("web_fetch failed"),
+                    "the underlying fetch must not have run, got: {output}"
+                );
+            }
+            _ => panic!("expected a ToolResult"),
+        }
+    }
+
+    /// **The safety-net property.** Emitting tools are exempt from the
+    /// CWD-deleted pre-check — they are the recovery path. If `exit_worktree`
+    /// were short-circuited when the CWD is gone, the agent would be trapped
+    /// with no way out. This test drives `exit_worktree` with a deleted CWD
+    /// and asserts it executed normally (the worktree signal was answered and
+    /// its reply became the result), not short-circuited.
+    #[tokio::test]
+    async fn cwd_deleted_does_not_short_circuit_emitting_exit_worktree() {
+        use zoid_core::event::EventKind;
+        let mut cfg = chat_turn_config();
+        cfg.cwd = missing_worktree_cwd();
+        // The UI answers the exit request with a real (existing) directory —
+        // exactly the recovery the agent needs.
+        let recovered = std::env::temp_dir();
+        let ev = single_tool_result(
+            cfg,
+            "exit_worktree",
+            serde_json::json!({}),
+            Ok((recovered, Some("exited worktree".into()))),
+        )
+        .await;
+        match &ev.kind {
+            EventKind::ToolResult {
+                output,
+                is_error,
+                error_kind,
+                ..
+            } => {
+                assert_ne!(
+                    *error_kind,
+                    Some(ErrorKind::CwdDeleted),
+                    "exit_worktree must NOT be short-circuited by the CWD pre-check — \
+                     it is the agent's escape hatch; got: {output}"
+                );
+                assert!(
+                    !*is_error,
+                    "the worktree exit succeeded, so the result must not be an error: {output}"
+                );
+                assert_eq!(*error_kind, None);
+                assert!(
+                    output.contains("exited worktree"),
+                    "the Emitting arm must have run and used the reply, got: {output}"
+                );
+            }
+            _ => panic!("expected a ToolResult"),
+        }
+    }
+
+    /// `enter_worktree` is Emitting too, and equally exempt from the
+    /// pre-check.
+    #[tokio::test]
+    async fn cwd_deleted_does_not_short_circuit_emitting_enter_worktree() {
+        use zoid_core::event::EventKind;
+        let mut cfg = chat_turn_config();
+        cfg.cwd = missing_worktree_cwd();
+        let recovered = std::env::temp_dir();
+        let ev = single_tool_result(
+            cfg,
+            "enter_worktree",
+            serde_json::json!({ "name": "feature-x" }),
+            Ok((recovered, None)),
+        )
+        .await;
+        match &ev.kind {
+            EventKind::ToolResult {
+                output,
+                is_error,
+                error_kind,
+                ..
+            } => {
+                assert_ne!(*error_kind, Some(ErrorKind::CwdDeleted), "got: {output}");
+                assert!(!*is_error, "got: {output}");
+                assert!(output.contains("feature-x"), "got: {output}");
+            }
+            _ => panic!("expected a ToolResult"),
+        }
+    }
+
+    /// The CWD-deleted branch `continue`s past the normal post-dispatch warn
+    /// path, so it must record its own `log_turn_warn` — otherwise the single
+    /// most alarming failure mode (the agent's working directory vanished) is
+    /// visible only in the emitted event and absent from the persisted
+    /// session. Verified by reading the `logs` table back off disk.
+    #[tokio::test]
+    async fn cwd_deleted_is_recorded_in_the_persisted_session() {
+        use zoid_core::event::EventKind;
+        let db = std::env::temp_dir().join(format!(
+            "zoid-cwd-deleted-log-{}-{:?}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&db);
+
+        let mut cfg = chat_turn_config();
+        cfg.cwd = missing_plain_cwd();
+        let ev = single_tool_result_in(
+            db.to_str().unwrap(),
+            cfg,
+            "read",
+            serde_json::json!({ "path": "Cargo.toml" }),
+            Err("unused".into()),
+        )
+        .await;
+        assert!(matches!(
+            &ev.kind,
+            EventKind::ToolResult { error_kind, .. } if *error_kind == Some(ErrorKind::CwdDeleted)
+        ));
+
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM logs \
+                 WHERE scope = 'turn' AND level = 'warn' AND message LIKE '%no longer exists%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        drop(conn);
+        let _ = std::fs::remove_file(&db);
+        assert_eq!(
+            n, 1,
+            "the CWD-deleted skip must write a turn warn to the persisted session"
+        );
+    }
+
+    /// `exit_worktree` refused because a subagent is running is a state
+    /// conflict, not an internal failure. The message asserted here is the
+    /// verbatim production string from `compute_worktree_switch` in main.rs —
+    /// the previous check tested for `"subagent running"`, which is NOT a
+    /// substring of `"subagent is running"`, so this path never categorized.
+    #[tokio::test]
+    async fn exit_worktree_subagent_running_is_conflict() {
+        use zoid_core::event::EventKind;
+        let ev = single_tool_result(
+            chat_turn_config(),
+            "exit_worktree",
+            serde_json::json!({}),
+            Err("cannot exit worktree while a subagent is running".into()),
+        )
+        .await;
+        match &ev.kind {
+            EventKind::ToolResult {
+                output,
+                is_error,
+                error_kind,
+                ..
+            } => {
+                assert!(*is_error);
+                assert!(output.contains("subagent is running"), "got: {output}");
+                assert_eq!(
+                    *error_kind,
+                    Some(ErrorKind::Conflict),
+                    "a subagent-held worktree is a Conflict, not Internal; got: {output}"
+                );
+            }
+            _ => panic!("expected a ToolResult"),
+        }
+    }
+
+    /// `enter_worktree` refused because the session is already in a worktree
+    /// is a state conflict (spec audit table), not an internal failure. The
+    /// message is the verbatim production string from `compute_worktree_switch`.
+    #[tokio::test]
+    async fn enter_worktree_already_in_a_worktree_is_conflict() {
+        use zoid_core::event::EventKind;
+        let ev = single_tool_result(
+            chat_turn_config(),
+            "enter_worktree",
+            serde_json::json!({ "name": "feature-x" }),
+            Err("already in a worktree — exit with :worktree exit first".into()),
+        )
+        .await;
+        match &ev.kind {
+            EventKind::ToolResult {
+                output,
+                is_error,
+                error_kind,
+                ..
+            } => {
+                assert!(*is_error);
+                assert!(output.contains("already in a worktree"), "got: {output}");
+                assert_eq!(
+                    *error_kind,
+                    Some(ErrorKind::Conflict),
+                    "already-in-a-worktree is a Conflict, not Internal; got: {output}"
+                );
+            }
+            _ => panic!("expected a ToolResult"),
+        }
+    }
+
+    /// Every other `enter_worktree` failure stays `Internal`.
+    #[tokio::test]
+    async fn enter_worktree_other_failure_stays_internal() {
+        use zoid_core::event::EventKind;
+        let ev = single_tool_result(
+            chat_turn_config(),
+            "enter_worktree",
+            serde_json::json!({ "name": "feature-x" }),
+            Err("enter_worktree failed: disk on fire".into()),
+        )
+        .await;
+        match &ev.kind {
+            EventKind::ToolResult {
+                output, error_kind, ..
+            } => {
+                assert_eq!(*error_kind, Some(ErrorKind::Internal), "got: {output}");
+            }
+            _ => panic!("expected a ToolResult"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -6647,6 +7993,7 @@ mod tool_call_id_threading_tests {
                     name: "read".into(),
                     output: "ok".into(),
                     is_error: false,
+                    error_kind: None,
                 },
             ),
         ]);

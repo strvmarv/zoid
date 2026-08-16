@@ -96,6 +96,7 @@ mod tests {
                 name: name.into(),
                 output: if err { "boom".into() } else { "fine".into() },
                 is_error: err,
+                error_kind: None,
             };
             Event::new(ulid::Ulid::nil(), None, 0, kind)
         };

@@ -1109,6 +1109,7 @@ mod plan_tests {
                 name: "bash".into(),
                 output: String::new(),
                 is_error: false,
+                error_kind: None,
             },
         );
         let summary = "row 0\n… (compacted: 199 more lines, ~700 tokens elided)".to_string();

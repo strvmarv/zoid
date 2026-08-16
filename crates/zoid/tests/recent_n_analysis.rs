@@ -56,6 +56,7 @@ fn build_session(
                     name: "read_file".into(),
                     output,
                     is_error: false,
+                    error_kind: None,
                 },
             ));
             id += 1;

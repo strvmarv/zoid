@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
+use zoid_core::ErrorKind;
 use zoid_web::FetchResult;
 
 pub struct WebFetch;
@@ -99,7 +100,19 @@ impl Tool for WebFetch {
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20_000) as usize;
             match zoid_web::fetch(&url, offset, limit).await {
                 Ok(r) => ToolOutput::ok(format_fetch(&r)),
-                Err(e) => ToolOutput::err(format!("web_fetch failed: {e}")),
+                Err(e) => {
+                    let msg = e.to_string();
+                    let kind = if msg.contains("HTTP ") || msg.contains("no extractable content") {
+                        ErrorKind::BackendUnavailable
+                    } else if msg.contains("http/https only") || msg.contains("past end") {
+                        ErrorKind::InvalidInput
+                    } else if msg.contains("timeout") || msg.contains("timed out") {
+                        ErrorKind::Timeout
+                    } else {
+                        ErrorKind::BackendUnavailable
+                    };
+                    ToolOutput::err_kind(kind, format!("web_fetch failed: {msg}"))
+                }
             }
         })
     }

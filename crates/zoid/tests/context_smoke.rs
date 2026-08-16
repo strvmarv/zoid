@@ -301,6 +301,7 @@ async fn smoke_compaction_path_trace() {
                 name: "shell".into(),
                 output: big_output.clone(),
                 is_error: false,
+                error_kind: None,
             },
         ));
         seed.push(Event::new(

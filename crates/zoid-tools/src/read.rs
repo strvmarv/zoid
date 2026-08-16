@@ -1,6 +1,7 @@
 use crate::{str_arg, Tool, ToolOutput};
 use serde_json::{json, Value};
 use std::path::Path;
+use zoid_core::ErrorKind;
 use zoid_provider::ToolSpec;
 
 /// Read a UTF-8 text file relative to the working directory.
@@ -36,7 +37,14 @@ impl Tool for Read {
         };
         let contents = match std::fs::read_to_string(crate::resolve(cwd, &path)) {
             Ok(c) => c,
-            Err(e) => return ToolOutput::err(format!("read({path}): {e}")),
+            Err(e) => {
+                let kind = match e.kind() {
+                    std::io::ErrorKind::NotFound => ErrorKind::NotFound,
+                    std::io::ErrorKind::InvalidData => ErrorKind::InvalidInput,
+                    _ => ErrorKind::Internal,
+                };
+                return ToolOutput::err_kind(kind, format!("read({path}): {e}"));
+            }
         };
         let offset = args
             .get("offset")
@@ -54,13 +62,17 @@ impl Tool for Read {
             return ToolOutput::ok("(empty file)".to_string());
         }
         if limit == 0 {
-            return ToolOutput::err("read: limit must be >= 1".to_string());
+            return ToolOutput::err_kind(
+                ErrorKind::InvalidInput,
+                "read: limit must be >= 1".to_string(),
+            );
         }
         let start = offset.saturating_sub(1).min(total);
         if start >= total {
-            return ToolOutput::err(format!(
-                "read: offset {offset} is past the end of the file ({total} lines)"
-            ));
+            return ToolOutput::err_kind(
+                ErrorKind::InvalidInput,
+                format!("read: offset {offset} is past the end of the file ({total} lines)"),
+            );
         }
         let end = start.saturating_add(limit).min(total);
         let mut out = String::new();
@@ -121,6 +133,7 @@ mod tests {
             std::path::Path::new("."),
         );
         assert!(out.is_error);
+        assert_eq!(out.error_kind, Some(ErrorKind::NotFound));
     }
 
     #[test]
@@ -181,6 +194,7 @@ mod tests {
             std::path::Path::new("."),
         );
         assert!(out.is_error);
+        assert_eq!(out.error_kind, Some(ErrorKind::InvalidInput));
     }
 
     #[test]
@@ -229,6 +243,9 @@ mod tests {
         );
         assert!(out.is_error, "{}", out.text);
         assert!(out.text.contains("past the end"), "{}", out.text);
+        // A bad offset is a caller mistake, not an internal failure (spec
+        // audit table): the model must be told to retry with a valid offset.
+        assert_eq!(out.error_kind, Some(ErrorKind::InvalidInput));
     }
 
     #[test]
@@ -240,6 +257,7 @@ mod tests {
             std::path::Path::new("."),
         );
         assert!(out.is_error, "{}", out.text);
+        assert_eq!(out.error_kind, Some(ErrorKind::InvalidInput));
     }
 
     #[test]

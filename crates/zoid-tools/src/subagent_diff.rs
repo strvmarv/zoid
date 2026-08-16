@@ -2,6 +2,7 @@ use crate::{str_arg, Tool, ToolKind, ToolOutput};
 use serde_json::{json, Value};
 use std::path::Path;
 use std::process::Command;
+use zoid_core::ErrorKind;
 use zoid_provider::ToolSpec;
 
 pub struct SubagentDiff;
@@ -47,12 +48,16 @@ impl Tool for SubagentDiff {
             .output();
         match verify {
             Ok(o) if !o.status.success() => {
-                return ToolOutput::err(format!(
-                    "subagent {id} history not found — it may have been cleaned up."
-                ));
+                return ToolOutput::err_kind(
+                    ErrorKind::NotFound,
+                    format!("subagent {id} history not found — it may have been cleaned up."),
+                );
             }
             Err(e) => {
-                return ToolOutput::err(format!("git rev-parse failed: {e}"));
+                return ToolOutput::err_kind(
+                    ErrorKind::Internal,
+                    format!("subagent_diff: git rev-parse failed: {e}"),
+                );
             }
             _ => {}
         }
@@ -131,5 +136,6 @@ mod tests {
         );
         assert!(out.is_error);
         assert!(out.text.contains("not found"));
+        assert_eq!(out.error_kind, Some(ErrorKind::NotFound));
     }
 }

@@ -342,6 +342,7 @@ mod tests {
             name: "read_file".into(),
             output: out.into(),
             is_error: false,
+            error_kind: None,
         })
     }
     // Helper: an assistant text event (canonical assistant-text variant).
@@ -467,6 +468,7 @@ mod tests {
             name: "read".into(),
             output: "some output".into(),
             is_error: false,
+            error_kind: None,
         })];
         let (summary, ok) = distill(&evs);
         assert!(!ok, "empty summary must be failure");
@@ -492,6 +494,7 @@ mod tests {
                 name: "write".into(),
                 output: "permission denied".into(),
                 is_error: true,
+                error_kind: None,
             }),
         ];
         let (summary, ok) = distill(&evs);
@@ -556,6 +559,7 @@ mod tests {
                 name: "read_file".into(),
                 output: "boom".into(),
                 is_error: true,
+                error_kind: None,
             }),
         ];
         let (summary, ok) = distill(&evs);
@@ -662,6 +666,7 @@ mod tests {
                 name: "read_file".into(),
                 output: "boom".into(),
                 is_error: true,
+                error_kind: None,
             }),
             call("c2", "b.rs"), // orphan — no matching result
         ];

@@ -1738,6 +1738,8 @@ impl ProjectionCache {
                 name,
                 output,
                 is_error,
+                error_kind,
+                ..
             } => {
                 self.flush_pending_assistant();
                 if self.question_ids.contains(id.as_str()) {
@@ -1749,6 +1751,7 @@ impl ProjectionCache {
                     name: name.clone(),
                     output: output.clone(),
                     is_error: *is_error,
+                    error_kind: *error_kind,
                     compacted: false,
                     ts: ev.ts,
                 });
@@ -8984,6 +8987,7 @@ mod tests {
             name: "read".into(),
             output: "file contents".into(),
             is_error: false,
+            error_kind: None,
         });
         tr.tokens = Some(TokenStat {
             input: 100,
@@ -9282,6 +9286,7 @@ mod tests {
                 name: "ask_user".into(),
                 output: "answer".into(),
                 is_error: false,
+                error_kind: None,
             },
         );
         let impact = cache.apply_event(&tr);
@@ -9314,6 +9319,7 @@ mod tests {
                 name: "shell".into(),
                 output: "done".into(),
                 is_error: false,
+                error_kind: None,
             },
         );
         let impact = cache.apply_event(&tr);
@@ -9339,6 +9345,7 @@ mod tests {
                 name: "read".into(),
                 output: "full output".into(),
                 is_error: false,
+                error_kind: None,
             },
         );
         cache.apply_event(&tr);
@@ -9494,6 +9501,7 @@ mod tests {
                 name: "read".into(),
                 output: "ok".into(),
                 is_error: false,
+                error_kind: None,
             },
         );
         let impact = cache.apply_event(&tr);
@@ -9524,6 +9532,7 @@ mod tests {
                 name: "read".into(),
                 output: "full output".into(),
                 is_error: false,
+                error_kind: None,
             },
         );
         cache.apply_event(&tr);
@@ -11107,6 +11116,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n"),
             is_error: false,
+            error_kind: None,
         })
         .await
         .unwrap();

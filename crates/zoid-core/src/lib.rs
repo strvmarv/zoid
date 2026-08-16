@@ -11,6 +11,7 @@ pub mod economy;
 pub mod embed_index;
 pub mod embed_lane;
 pub mod event;
+pub use event::ErrorKind;
 pub mod eviction;
 pub mod feedback;
 pub mod hybrid;

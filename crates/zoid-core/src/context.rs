@@ -482,6 +482,7 @@ mod tests {
             name: name.into(),
             output: out.into(),
             is_error: false,
+            error_kind: None,
         })
     }
 
@@ -506,6 +507,7 @@ mod tests {
                 name: "shell".into(),
                 output: "out".into(),
                 is_error: false,
+                error_kind: None,
             }),
         ];
         let map = file_contents(&evs);
@@ -527,6 +529,7 @@ mod tests {
                 name: "read_file".into(),
                 output: "boom".into(),
                 is_error: true,
+                error_kind: None,
             }),
         ];
         let map = file_contents(&evs);
@@ -657,6 +660,7 @@ mod tests {
                 name: "shell".into(),
                 output: "ok".into(),
                 is_error: false,
+                error_kind: None,
             }),
         ];
         let w = context_window(&evs);
@@ -735,6 +739,7 @@ mod tests {
                     name: "search".into(),
                     output: big,
                     is_error: false,
+                    error_kind: None,
                 },
             ),
             Event::new(
