@@ -2,14 +2,22 @@ use std::path::Path;
 use zoid::worktree::create_worktree;
 
 /// Init a git repo at `dir` with one committed file (worktrees need a HEAD).
-/// Also sets local git identity so CLI `git commit` commands in tests work
-/// in CI environments with no global git config.
 fn init_repo(dir: &Path) {
     let repo = git2::Repository::init(dir).unwrap();
-    // Set local identity so `git commit` via CLI works without global config.
-    let mut config = repo.config().unwrap();
-    config.set_str("user.name", "zoid-test").unwrap();
-    config.set_str("user.email", "zoid-test@example.com").unwrap();
+    // Set local git identity so shell `git commit` commands work in CI
+    // environments that lack a global git config (e.g. GitHub Actions runners).
+    std::process::Command::new("git")
+        .args(["-C"])
+        .arg(dir)
+        .args(["config", "user.name", "zoid-test"])
+        .status()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["-C"])
+        .arg(dir)
+        .args(["config", "user.email", "zoid-test@example.com"])
+        .status()
+        .unwrap();
     std::fs::write(dir.join("a.txt"), "hi").unwrap();
     let mut idx = repo.index().unwrap();
     idx.add_path(Path::new("a.txt")).unwrap();
