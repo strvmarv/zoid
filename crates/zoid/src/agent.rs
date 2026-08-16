@@ -50,7 +50,9 @@ pub const SYSTEM_PROMPT: &str =
      cancel a pending wake before scheduling a replacement. \
      If the working directory has an AGENTS.md file, read it before touching \
      anything — it carries project-specific rules (test commands, release \
-     flow, constraints) you must follow.";
+     flow, constraints) you must follow. Always respond in English, \
+     regardless of what language any file, tool output, subagent summary, \
+     or prior turn contains.";
 
 /// Wrap the system prompt as a standing, tail-injected reminder. The pre/post
 /// framing is the only added text; `system` is verbatim (zero drift). The
@@ -341,6 +343,17 @@ pub fn chat_turn_config() -> TurnConfig {
 
 /// Max tool rounds per user message before the loop force-ends (safety leash).
 pub const MAX_TOOL_ITERATIONS: u32 = 1000;
+/// Free-text budget (estimated tokens) for a sub-turn immediately following an
+/// unresolved dispatch_subagent — the exact moment the model is told to "end
+/// your turn now" and free-form narration risks running away into a
+/// fabricated/hallucinated prediction of the subagent's result instead of
+/// stopping (docs/bugs/subagent-dispatch-language-drift.md: 300 chunks / 77s
+/// before the real result, drifting into another language mid-sentence).
+/// This bounds cost and blast radius; it does NOT guarantee zero
+/// contamination of context. Only counted when `dispatched_this_turn` is
+/// latched AND no ToolCall has arrived yet in this sub-turn (so a compliant
+/// ack + dispatch + brief follow-up is never falsely capped).
+const DISPATCH_NARRATION_BUDGET_TOKENS: u64 = 60;
 /// Bound on the capacity-error retry (Task 1.7): the hard-bound backstop when
 /// the pre-flight estimate under-reads reality and the provider still rejects
 /// the request as too large. Each retry forces an eviction wave before
@@ -857,6 +870,19 @@ async fn run_turn_inner(
     // `app.active_worktree` — that path only runs between turns, never between
     // sub-turns, which is the gap this scoping closes.
     let mut cwd_for_exec = config.cwd.clone();
+    // Latched true the moment this turn dispatches a subagent, and never
+    // un-set within this run_turn_inner call. Gates post-dispatch free-text
+    // narration (the DISPATCH_NARRATION_BUDGET_TOKENS cap below).
+    // Position-independent by construction — it does not consult event
+    // ordering, so it is immune to preflight_gate's compaction/eviction
+    // bookkeeping events (which can append a TurnsEvicted event after the
+    // dispatch's ToolResult) and to dispatch_subagent being batched with an
+    // unrelated tool call that executes after it. A DelegationResult
+    // re-enters via a FRESH run_turn_inner call (spawn_turn after
+    // plan_delegation_wake), which starts with this false — a mid-turn
+    // UserMessage is queued (app.pending_message), not injected into the
+    // running call, so a fresh call's response is never gated.
+    let mut dispatched_this_turn = false;
 
     'turn: loop {
         // Cancelled between sub-turns: nothing is pending here, so end cleanly.
@@ -912,6 +938,9 @@ async fn run_turn_inner(
         let mut pending: Vec<ToolCall> = Vec::new();
         let mut thinking_buf: String = String::new();
         let mut aborted = false;
+        let mut narration_capped = false;
+        let mut narration_tokens: u64 = 0;
+        let mut tool_call_seen_this_sub_turn = false;
         loop {
             let pe = tokio::select! {
                 biased;
@@ -931,6 +960,9 @@ async fn run_turn_inner(
             match pe {
                 ProviderEvent::TextDelta(s) => {
                     turn_produced_content = true;
+                    if dispatched_this_turn && !tool_call_seen_this_sub_turn {
+                        narration_tokens += zoid_core::economy::estimate_tokens(&s);
+                    }
                     emit(
                         &session,
                         &mut events,
@@ -941,8 +973,17 @@ async fn run_turn_inner(
                         now,
                     )
                     .await?;
+                    if dispatched_this_turn
+                        && !tool_call_seen_this_sub_turn
+                        && narration_tokens > DISPATCH_NARRATION_BUDGET_TOKENS
+                    {
+                        narration_capped = true;
+                        aborted = true;
+                        break;
+                    }
                 }
                 ProviderEvent::ToolCall(mut tc) => {
+                    tool_call_seen_this_sub_turn = true;
                     tc.id = ensure_tool_call_id(std::mem::take(&mut tc.id));
                     turn_produced_content = true;
                     emit(
@@ -1072,7 +1113,27 @@ async fn run_turn_inner(
                 )
                 .await?;
             }
-            outcome = "aborted";
+            if narration_capped {
+                emit(
+                    &session,
+                    &mut events,
+                    ui,
+                    &config.branch,
+                    EventKind::AssistantMessage {
+                        text: format!(
+                            "{WARN_GLYPH} turn ended early — continued narrating past a \
+                             subagent dispatch instead of waiting; discarded speculative \
+                             text."
+                        ),
+                    },
+                    session_id,
+                    now,
+                )
+                .await?;
+                outcome = "narration_capped";
+            } else {
+                outcome = "aborted";
+            }
             break 'turn;
         }
         let _ = stream_task.await;
@@ -1677,6 +1738,54 @@ async fn run_turn_inner(
                             "delegate".to_string(),
                         ),
                     };
+                    // Duplicate-dispatch guard: a real incident dispatched the
+                    // identical task twice, 270ms apart, and the pool-capacity check
+                    // alone didn't catch it (both had headroom) — see
+                    // docs/bugs/subagent-dispatch-language-drift.md. Keyed on
+                    // (agent, task), not task alone — an identical task dispatched to
+                    // a DIFFERENT agent profile (e.g. two independent reviewer
+                    // opinions on the same diff) is legitimate and must not be
+                    // rejected. Both sides use the RESOLVED agent name: the registry
+                    // stores `resolved_agent_name` at insert (below), so this
+                    // comparison is in a single name space. `task.trim()` normalizes
+                    // only the comparison; the stored handle keeps the raw task (so
+                    // list_subagents shows what the model actually sent). NOTE: this
+                    // only sees currently-RUNNING subagents (`config.in_flight`), not
+                    // ones sitting in the main loop's queued-dispatch backlog
+                    // (`app.queued_subagents`, main.rs) when the pool is already at
+                    // capacity — that queue isn't reachable from this turn context.
+                    if let Some(set) = &config.in_flight {
+                        let dup_id = set
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .find(|(_, h)| {
+                                h.agent == resolved_agent_name && h.task.trim() == task.trim()
+                            })
+                            .map(|(id, _)| id.clone());
+                        if let Some(dup_id) = dup_id {
+                            emit(
+                                &session,
+                                &mut events,
+                                ui,
+                                &config.branch,
+                                EventKind::ToolResult {
+                                    id: tc.id,
+                                    name: tc.name,
+                                    output: format!(
+                                        "dispatch_subagent: an identical task is already \
+                                         running as {dup_id} — do not dispatch a duplicate, \
+                                         wait for its DelegationResult."
+                                    ),
+                                    is_error: false,
+                                },
+                                session_id,
+                                now,
+                            )
+                            .await?;
+                            continue;
+                        }
+                    }
                     // Pool check: if the global in-flight set is at capacity, queue
                     // the dispatch instead of spawning. Returns a non-error "queued"
                     // tool result and signals the main loop to enqueue the subagent;
@@ -1778,6 +1887,7 @@ async fn run_turn_inner(
                             },
                         );
                     }
+                    dispatched_this_turn = true;
 
                     crate::spawn_subagent::spawn_subagent(
                         task,
@@ -3269,6 +3379,16 @@ mod tests {
         assert!(
             SYSTEM_PROMPT.contains("duplicate wakes"),
             "SYSTEM_PROMPT must warn against duplicate wakes: {SYSTEM_PROMPT}"
+        );
+    }
+
+    #[test]
+    fn system_prompt_directs_english_regardless_of_source_language() {
+        assert!(
+            SYSTEM_PROMPT.contains("Always respond in English"),
+            "SYSTEM_PROMPT must direct English regardless of file/tool-output/\
+             subagent-summary language, so wrap_reassertion periodically \
+             reinforces it: {SYSTEM_PROMPT}"
         );
     }
 
@@ -5229,6 +5349,987 @@ mod tests {
             results[1].0.starts_with("subagent queued"),
             "second dispatch tool result should announce it was queued: {:?}",
             results[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_subagent_rejects_exact_duplicate_agent_and_task() {
+        // Regression: a real incident dispatched the identical task twice,
+        // 270ms apart, and both ran (the pool had headroom, so the
+        // capacity check alone didn't catch it). Uses the default
+        // config.agents = None path (always resolves to "delegate"),
+        // matching `dispatch_two_subagents_second_is_rejected`'s style, and
+        // plenty of pool headroom so the DEDUP check — not the pool-capacity
+        // check — is what must reject the second call.
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "dispatch two identical tasks".into(),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d1".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({"task": "review the diff", "worktree": false}),
+                }),
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d2".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({"task": "review the diff", "worktree": false}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![
+                ProviderEvent::TextDelta("both handled".into()),
+                ProviderEvent::Done,
+            ],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let mut config = chat_turn_config();
+        config.in_flight = Some(std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )));
+        // Default max_concurrent (3): plenty of headroom for both dispatches —
+        // this must be rejected by the DEDUP check, not the pool-capacity
+        // check, matching the incident (both duplicates had headroom).
+
+        let out = run_agent_turn(
+            config,
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let results: Vec<(String, bool)> = out
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EventKind::ToolResult {
+                    name,
+                    output,
+                    is_error,
+                    ..
+                } if name == "dispatch_subagent" => Some((output.clone(), *is_error)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results.len(), 2, "two dispatch tool results");
+        assert!(!results[0].1, "first dispatch succeeds: {:?}", results[0]);
+        assert!(
+            !results[1].1,
+            "duplicate rejection is not an error result: {:?}",
+            results[1]
+        );
+        assert!(
+            results[1].0.contains("already running as sub-"),
+            "second result must name the duplicate: {:?}",
+            results[1]
+        );
+        assert!(
+            !results[1].0.starts_with("subagent queued"),
+            "must be rejected by the dedup check, not the pool-capacity check: {:?}",
+            results[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_subagent_allows_same_task_different_agent() {
+        // An identical task dispatched to a DIFFERENT agent profile (e.g. two
+        // independent reviewer opinions on the same diff) is legitimate and
+        // must not be rejected by the dedup guard.
+        use serde_json::json;
+        use zoid_core::agent_profile::{AgentProfile, AgentRegistry};
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "two independent reviews".into(),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d1".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({"task": "review the diff", "agent": "delegate", "worktree": false}),
+                }),
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d2".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({"task": "review the diff", "agent": "reviewer", "worktree": false}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![
+                ProviderEvent::TextDelta("both handled".into()),
+                ProviderEvent::Done,
+            ],
+        ]));
+
+        let reg = std::sync::Arc::new(AgentRegistry::new(vec![
+            AgentProfile::builtin(),
+            AgentProfile {
+                name: "reviewer".into(),
+                ..AgentProfile::builtin()
+            },
+        ]));
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            reg.clone(),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let mut config = chat_turn_config();
+        config.agents = Some(reg);
+        config.in_flight = Some(std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )));
+
+        let out = run_agent_turn(
+            config,
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let errored: Vec<_> = out
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EventKind::ToolResult {
+                    name,
+                    output,
+                    is_error,
+                    ..
+                } if name == "dispatch_subagent" && *is_error => Some(output.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            errored.is_empty(),
+            "identical task to a DIFFERENT agent must not be rejected: {errored:?}"
+        );
+        let dup_rejections: Vec<_> = out
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EventKind::ToolResult { name, output, .. }
+                    if name == "dispatch_subagent"
+                        && output.contains("already running as sub-") =>
+                {
+                    Some(output.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            dup_rejections.is_empty(),
+            "identical task to a DIFFERENT agent must not trip the dedup guard: {dup_rejections:?}"
+        );
+    }
+
+    // --- narration_gate / narration_cap tests -----------------------------
+    //
+    // `SequencedProvider` is a shared `VecDeque` behind a `std::sync::Mutex`.
+    // `dispatch_subagent` clones the provider into a detached `tokio::spawn`,
+    // and the subagent's own turn calls `provider.stream()` — popping the
+    // NEXT script off the SAME shared queue. Tests below that need the
+    // parent to retrieve a specific post-dispatch script provide a SPARE
+    // copy of that script so the subagent can pop one without stealing the
+    // parent's continuation.
+
+    #[tokio::test]
+    async fn narration_gate_survives_compaction_after_dispatch() {
+        // Proves the latch is position-independent: preflight_gate's eviction
+        // path can append a TurnsEvicted event AFTER the dispatch's
+        // ToolResult — a positional "is the last branch event a dispatch
+        // ToolResult" gate would be defeated by this. The latch ignores
+        // event ordering, so it stays on.
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let big = "x".repeat(3000);
+        let mut seed = Vec::new();
+        for i in 0..8u128 {
+            seed.push(Event::new(
+                Ulid::from(i * 2 + 1),
+                None,
+                (i * 2 + 1) as i64,
+                EventKind::UserMessage { text: big.clone() },
+            ));
+            seed.push(Event::new(
+                Ulid::from(i * 2 + 2),
+                None,
+                (i * 2 + 2) as i64,
+                EventKind::AssistantMessage { text: "ok".into() },
+            ));
+        }
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        // Two chunks, not one: the trip check runs AFTER emit(), so the single
+        // chunk that crosses the budget is always recorded (the cap can only
+        // suppress what comes AFTER it, never retroactively un-emit the chunk
+        // that tripped it). `first` alone already exceeds the 60-token budget;
+        // `second` must never appear.
+        let first = "y".repeat(1000);
+        let second = "should never be reached".to_string();
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d1".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({"task": "review", "worktree": false}),
+                }),
+                ProviderEvent::Done,
+            ],
+            // Spare copy: the detached subagent shares the SequencedProvider
+            // and may pop one of these; two copies guarantee the parent
+            // retrieves the other for its gated sub-turn.
+            vec![
+                ProviderEvent::TextDelta(first.clone()),
+                ProviderEvent::TextDelta(second.clone()),
+                ProviderEvent::Done,
+            ],
+            vec![
+                ProviderEvent::TextDelta(first.clone()),
+                ProviderEvent::TextDelta(second.clone()),
+                ProviderEvent::Done,
+            ],
+        ]));
+
+        let mut cfg = chat_turn_config();
+        cfg.eviction = zoid_core::eviction::EvictionPolicy {
+            enabled: true,
+            capacity: 1_000_000,
+            context_target: 3_000,
+            band_headroom_pct: 20,
+            min_protected_turns: 2,
+            protection_pct: 15,
+            max_output: None,
+            rescue_weight: None,
+        };
+        cfg.in_flight = Some(std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let out = run_agent_turn(
+            cfg,
+            provider,
+            std::sync::Arc::new(crate::invoke_skill::chat_tools(
+                std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+                std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+                zoid_tools::KillSlot::new(),
+            )),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::new(),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            out.iter()
+                .any(|e| matches!(e.kind, EventKind::TurnsEvicted { .. })),
+            "sanity: eviction must actually have fired for this test to prove anything"
+        );
+        assert!(
+            out.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::ToolResult { name, .. } if name == "dispatch_subagent"
+            )),
+            "sanity: the dispatch ToolResult must be present"
+        );
+        // NOTE: this seed's own size already crosses context_target, so
+        // preflight_gate's eviction fires on sub-turn 1 (before the dispatch's
+        // OWN ToolCall/ToolResult even append) rather than strictly after it —
+        // exact ordering isn't asserted. What matters for position-independence
+        // is that a TurnsEvicted event sits somewhere in this turn's history
+        // before the gated sub-turn, and the latch (set during sub-turn 1's
+        // tool processing, unconditionally on dispatch) survives it regardless.
+        assert!(
+            !out.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::ModelDelta { text } if text == &second
+            )),
+            "the second chunk must NOT appear — the latch must have stayed on \
+             despite the TurnsEvicted event landing in this turn's history"
+        );
+    }
+
+    #[tokio::test]
+    async fn narration_gate_fires_when_dispatch_is_not_the_last_batched_call() {
+        // Proves the latch is position-independent in a second way:
+        // dispatch_subagent batched with an unrelated tool call, executed
+        // first — its ToolResult isn't the last event even without any
+        // compaction. The latch is set the moment the dispatch arm runs,
+        // regardless of what executes after it in the same batch.
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "dispatch then read".into(),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        // Two chunks: the trip check runs AFTER emit(), so the single chunk
+        // that crosses budget is always recorded; `second` proves the cap
+        // actually suppressed what came after it.
+        let first = "y".repeat(1000);
+        let second = "should never be reached".to_string();
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d1".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({"task": "review", "worktree": false}),
+                }),
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "r1".into(),
+                    name: "read".into(),
+                    args: json!({"path": "Cargo.toml"}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![
+                ProviderEvent::TextDelta(first.clone()),
+                ProviderEvent::TextDelta(second.clone()),
+                ProviderEvent::Done,
+            ],
+            // Spare copy for the detached subagent (see shared-provider note).
+            vec![
+                ProviderEvent::TextDelta(first.clone()),
+                ProviderEvent::TextDelta(second.clone()),
+                ProviderEvent::Done,
+            ],
+        ]));
+
+        let mut config = chat_turn_config();
+        config.in_flight = Some(std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let out = run_agent_turn(
+            config,
+            provider,
+            std::sync::Arc::new(crate::invoke_skill::chat_tools(
+                std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+                std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+                zoid_tools::KillSlot::new(),
+            )),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !out.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::ModelDelta { text } if text == &second
+            )),
+            "must be gated even though dispatch_subagent's ToolResult wasn't the \
+             last event in the batch (the 'read' call's ToolResult came after it)"
+        );
+    }
+
+    #[tokio::test]
+    async fn narration_cap_trips_and_discards_speculative_text() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "dispatch a review".into(),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        // Well past the 60-token (~180 char) budget.
+        let runaway = "the reviewer said this and that and more and more ".repeat(10);
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d1".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({"task": "review", "worktree": false}),
+                }),
+                ProviderEvent::Done,
+            ],
+            // Spare copy for the detached subagent (see shared-provider note).
+            vec![
+                ProviderEvent::TextDelta(runaway.clone()),
+                ProviderEvent::TextDelta("more text that should never be reached".into()),
+                ProviderEvent::Done,
+            ],
+            vec![
+                ProviderEvent::TextDelta(runaway.clone()),
+                ProviderEvent::TextDelta("more text that should never be reached".into()),
+                ProviderEvent::Done,
+            ],
+        ]));
+
+        let mut config = chat_turn_config();
+        config.in_flight = Some(std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let out = run_agent_turn(
+            config,
+            provider,
+            std::sync::Arc::new(crate::invoke_skill::chat_tools(
+                std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+                std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+                zoid_tools::KillSlot::new(),
+            )),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !out.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::ModelDelta { text } if text.contains("should never be reached")
+            )),
+            "text emitted after the trip must never be persisted"
+        );
+        assert!(
+            out.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::AssistantMessage { text } if text.contains("turn ended early")
+            )),
+            "the warning marker must be persisted so the transcript shows why the turn ended"
+        );
+    }
+
+    #[tokio::test]
+    async fn narration_under_budget_completes_normally() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "dispatch a review".into(),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let reply = "Dispatched, waiting for review.";
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d1".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({"task": "review", "worktree": false}),
+                }),
+                ProviderEvent::Done,
+            ],
+            // Spare copy for the detached subagent.
+            vec![ProviderEvent::TextDelta(reply.into()), ProviderEvent::Done],
+            vec![ProviderEvent::TextDelta(reply.into()), ProviderEvent::Done],
+        ]));
+
+        let mut config = chat_turn_config();
+        config.in_flight = Some(std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let out = run_agent_turn(
+            config,
+            provider,
+            std::sync::Arc::new(crate::invoke_skill::chat_tools(
+                std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+                std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+                zoid_tools::KillSlot::new(),
+            )),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            out.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::ModelDelta { text } if text == reply
+            )),
+            "a short, compliant post-dispatch turn must pass through untouched"
+        );
+        assert!(
+            !out.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::AssistantMessage { text } if text.contains("turn ended early")
+            )),
+            "no cap marker when the budget wasn't crossed"
+        );
+        assert!(
+            !out.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::ToolResult { is_error, .. } if *is_error
+            )),
+            "turn must have completed normally — no error ToolResult"
+        );
+    }
+
+    #[tokio::test]
+    async fn narration_gate_does_not_block_immediate_second_dispatch() {
+        // A gated sub-turn whose FIRST action is a ToolCall (e.g. dispatching
+        // the next task) with no preceding narration must proceed completely
+        // normally — the budget only counts free-text, never tool calls.
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "dispatch task 4, then task 5".into(),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d1".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({"task": "task 4", "worktree": false}),
+                }),
+                ProviderEvent::Done,
+            ],
+            // Sub-turn 2: first thing is a ToolCall, zero preceding text.
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d2".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({"task": "task 5", "worktree": false}),
+                }),
+                ProviderEvent::Done,
+            ],
+            // Sub-turn 3: after the second dispatch, the parent's turn loop
+            // always makes one more round-trip for the model's next response
+            // (a tool call always implies a follow-up) — this is that clean,
+            // compliant "end my turn" response.
+            vec![ProviderEvent::Done],
+            // Spare copies for the two detached subagents (one per dispatch).
+            // Their content doesn't matter (each runs on its own branch,
+            // never asserted on) — they only need to not starve the parent's
+            // 3 sub-turns above, whichever order the shared queue hands them
+            // out in.
+            vec![ProviderEvent::Done],
+            vec![ProviderEvent::Done],
+        ]));
+
+        let mut config = chat_turn_config();
+        config.in_flight = Some(std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let out = run_agent_turn(
+            config,
+            provider,
+            std::sync::Arc::new(crate::invoke_skill::chat_tools(
+                std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+                std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+                zoid_tools::KillSlot::new(),
+            )),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        // Exclude dedup-rejections (non-error by design, but not a real
+        // dispatch) — this test's own detached subagents share the
+        // SequencedProvider queue with the parent, so a subagent stealing the
+        // wrong script could in principle cause a spurious redundant dispatch
+        // attempt; that must be caught by the dedup guard, not counted here.
+        let dispatch_results: Vec<_> = out
+            .iter()
+            .filter(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ToolResult { name, output, is_error, .. }
+                        if name == "dispatch_subagent"
+                            && !*is_error
+                            && !output.contains("already running as sub-")
+                )
+            })
+            .collect();
+        assert_eq!(
+            dispatch_results.len(),
+            2,
+            "both dispatches must succeed — the second must not be blocked by \
+             the narration gate just because it landed in a gated sub-turn: {dispatch_results:?}"
+        );
+        assert!(
+            !out.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::AssistantMessage { text } if text.contains("turn ended early")
+            )),
+            "no cap marker — the gated sub-turn never emitted any free text to trip on"
+        );
+    }
+
+    #[tokio::test]
+    async fn narration_cap_does_not_false_trip_after_a_dispatch_in_the_same_sub_turn() {
+        // The false-positive risk: a compliant sub-turn that acks briefly,
+        // then dispatches (a ToolCall), then narrates a bit more — the
+        // cumulative TextDelta tokens would cross the budget, but because a
+        // ToolCall arrived this sub-turn the cap must NOT trip. Without the
+        // `!tool_call_seen_this_sub_turn` guard this would falsely cap a
+        // correct turn.
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "ack then dispatch then narrate".into(),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let ack = "Dispatching the next review now. ".repeat(3); // ~33 tokens
+        let more = " and then I will wait for the result to come back. ".repeat(3); // ~33 tokens
+                                                                                    // ack (~33) + more (~33) = ~66 > 60, but a ToolCall sits between them.
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d1".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({"task": "first review", "worktree": false}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![
+                ProviderEvent::TextDelta(ack.clone()),
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d2".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({"task": "second review", "worktree": false}),
+                }),
+                ProviderEvent::TextDelta(more.clone()),
+                ProviderEvent::Done,
+            ],
+            // Spare copies for the detached subagents.
+            vec![
+                ProviderEvent::TextDelta(ack.clone()),
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d2".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({"task": "second review", "worktree": false}),
+                }),
+                ProviderEvent::TextDelta(more.clone()),
+                ProviderEvent::Done,
+            ],
+            vec![
+                ProviderEvent::TextDelta(ack.clone()),
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d2".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({"task": "second review", "worktree": false}),
+                }),
+                ProviderEvent::TextDelta(more.clone()),
+                ProviderEvent::Done,
+            ],
+        ]));
+
+        let mut config = chat_turn_config();
+        config.in_flight = Some(std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let out = run_agent_turn(
+            config,
+            provider,
+            std::sync::Arc::new(crate::invoke_skill::chat_tools(
+                std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+                std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+                zoid_tools::KillSlot::new(),
+            )),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            out.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::ModelDelta { text } if text == &more
+            )),
+            "the post-ToolCall narration must be preserved — the cap must not \
+             trip once a ToolCall arrived in this sub-turn"
+        );
+        assert!(
+            !out.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::AssistantMessage { text } if text.contains("turn ended early")
+            )),
+            "no cap marker — a ToolCall in this sub-turn disables the trip"
+        );
+    }
+
+    #[tokio::test]
+    async fn narration_gate_never_caps_a_response_to_a_fresh_user_message() {
+        // Regression test for the core UX constraint: a subagent dispatched
+        // in an EARLIER, separate run_agent_turn call must never suppress a
+        // full response in a NEW call answering a fresh user message, even
+        // though that earlier dispatch is still unresolved in the persisted
+        // event log.
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+
+        // First call: dispatch a subagent, leave it unresolved.
+        let seed1 = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "dispatch a review".into(),
+            },
+        )];
+        for e in &seed1 {
+            session.append(e.clone()).await.unwrap();
+        }
+        let provider1 = std::sync::Arc::new(SequencedProvider::new(vec![vec![
+            ProviderEvent::ToolCall(ToolCall {
+                id: "d1".into(),
+                name: "dispatch_subagent".into(),
+                args: json!({"task": "review", "worktree": false}),
+            }),
+            ProviderEvent::Done,
+        ]]));
+        let mut config1 = chat_turn_config();
+        config1.in_flight = Some(std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )));
+        let (tx1, mut rx1) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx1.recv().await.is_some() {} });
+        let mut all_events = run_agent_turn(
+            config1,
+            provider1,
+            std::sync::Arc::new(crate::invoke_skill::chat_tools(
+                std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+                std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+                zoid_tools::KillSlot::new(),
+            )),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session.clone(),
+            crate::eventlog::EventLog::from_vec(seed1),
+            "m".into(),
+            tx1,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+        assert!(
+            !all_events
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::DelegationResult { .. })),
+            "sanity: the dispatch must still be unresolved going into the second call"
+        );
+
+        // Second call: a BRAND NEW user message, long reply, no ToolCall at
+        // all — must complete in full, uncapped, despite the still-unresolved
+        // dispatch sitting in the persisted history.
+        let long_reply = "here is a very long, perfectly legitimate answer ".repeat(10);
+        all_events.push(Event::new(
+            Ulid::from(99u128),
+            None,
+            99,
+            EventKind::UserMessage {
+                text: "actually, tell me something else entirely".into(),
+            },
+        ));
+        let provider2 = std::sync::Arc::new(SequencedProvider::new(vec![vec![
+            ProviderEvent::TextDelta(long_reply.clone()),
+            ProviderEvent::Done,
+        ]]));
+        let mut config2 = chat_turn_config();
+        config2.in_flight = Some(std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )));
+        let (tx2, mut rx2) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx2.recv().await.is_some() {} });
+        let out2 = run_agent_turn(
+            config2,
+            provider2,
+            std::sync::Arc::new(crate::invoke_skill::chat_tools(
+                std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+                std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+                zoid_tools::KillSlot::new(),
+            )),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            all_events,
+            "m".into(),
+            tx2,
+            Ulid::from(1u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            out2.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::ModelDelta { text } if text == &long_reply
+            )),
+            "a response to a fresh user message must never be capped, regardless \
+             of an unresolved dispatch elsewhere in history"
+        );
+        assert!(
+            !out2.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::AssistantMessage { text } if text.contains("turn ended early")
+            )),
+            "no cap marker — this call's dispatched_this_turn starts false"
         );
     }
 

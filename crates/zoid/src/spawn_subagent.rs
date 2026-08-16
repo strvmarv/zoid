@@ -239,7 +239,8 @@ mod tests {
         // line. Before this fix, `hard.is_cancelled()` alone unconditionally
         // overwrote Ok with an abort Err, discarding the summary and (at the
         // call site) dropping the worktree's commits.
-        let res = reconcile_hard_cancel(sample_ok(), true, Some(crate::agent::AbortReason::Ceiling));
+        let res =
+            reconcile_hard_cancel(sample_ok(), true, Some(crate::agent::AbortReason::Ceiling));
         let r = res.expect("a real Ok must survive a racing hard-cancellation");
         assert_eq!(r.id, "sub-01ABC");
         assert!(r.ok);
