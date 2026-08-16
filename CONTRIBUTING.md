@@ -30,7 +30,7 @@ cargo nextest run --workspace --features zoid/local-embed --no-fail-fast
 
 ## Repository conventions
 
-`AGENTS.md` documents repository-specific conventions for anyone (human or
+`docs/DEVELOPMENT.md` documents repository-specific conventions for anyone (human or
 AI agent) working in this codebase — release process, the TUI's minimum
 terminal size, and similar cross-cutting rules. Read it before touching
 anything related to releases or changelogs.
