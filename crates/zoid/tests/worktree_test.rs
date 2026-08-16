@@ -4,6 +4,20 @@ use zoid::worktree::create_worktree;
 /// Init a git repo at `dir` with one committed file (worktrees need a HEAD).
 fn init_repo(dir: &Path) {
     let repo = git2::Repository::init(dir).unwrap();
+    // Set local git identity so shell `git commit` commands work in CI
+    // environments that lack a global git config (e.g. GitHub Actions runners).
+    std::process::Command::new("git")
+        .args(["-C"])
+        .arg(dir)
+        .args(["config", "user.name", "zoid-test"])
+        .status()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["-C"])
+        .arg(dir)
+        .args(["config", "user.email", "zoid-test@example.com"])
+        .status()
+        .unwrap();
     std::fs::write(dir.join("a.txt"), "hi").unwrap();
     let mut idx = repo.index().unwrap();
     idx.add_path(Path::new("a.txt")).unwrap();
@@ -366,7 +380,7 @@ fn exit_worktree_retains_branch_with_unmerged_commits() {
     );
 
     // The production code path: delete_branch = !has_unmerged = false → branch retained.
-    zoid::worktree::remove_worktree(tmp.path(), &name, !has_unmerged);
+    let _ = zoid::worktree::remove_worktree(tmp.path(), &name, !has_unmerged);
 
     // Verify: worktree dir removed, branch retained.
     assert!(!wt_path.exists(), "worktree dir removed");
