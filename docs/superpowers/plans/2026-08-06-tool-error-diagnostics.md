@@ -147,6 +147,20 @@ impl ToolOutput {
 }
 ```
 
+Also update `str_arg` to return `InvalidInput` instead of the `Internal`
+default (this fixes the missing-arg error kind for ALL tools at once —
+read, write, edit, shell, ls, glob, grep, web_search, web_fetch,
+subagent_diff all use `str_arg`):
+
+```rust
+pub(crate) fn str_arg(args: &Value, key: &str) -> Result<String, ToolOutput> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| ToolOutput::err_kind(ErrorKind::InvalidInput, format!("missing or non-string argument: {key}")))
+}
+```
+
 - [ ] **Step 4: Write unit tests for `ErrorKind` and `ToolOutput`**
 
 Add to the test module in `crates/zoid-tools/src/lib.rs`:
@@ -210,6 +224,7 @@ git commit -m "feat(error-kind): define ErrorKind enum and add error_kind to Too
 - Modify: `crates/zoid-core/src/eviction.rs` (update construction sites)
 - Modify: `crates/zoid-core/src/reassert.rs` (update construction sites)
 - Modify: `crates/zoid-core/src/context.rs` (update construction sites)
+- Modify: `crates/zoid-core/src/zoom.rs` (update `ChatMsg::ToolResult` construction sites)
 - Modify: `crates/zoid-core/src/store.rs` (update match arm)
 
 **Interfaces:**
@@ -287,7 +302,7 @@ For test construction sites, add `error_kind: None,`.
 
 Every `EventKind::ToolResult { ... }` construction in these files needs `error_kind: None,` added (for test/non-error sites) or `error_kind: out.error_kind,` (for the agent-loop sites — but those are in `agent.rs`, covered in Task 5). In `zoid-core`, all `ToolResult` constructions are in test code or event-replay code — add `error_kind: None,` to each.
 
-Use `grep -n "EventKind::ToolResult {" crates/zoid-core/src/compaction.rs crates/zoid-core/src/eviction.rs crates/zoid-core/src/reassert.rs crates/zoid-core/src/context.rs` to find all sites. Add `error_kind: None,` to each construction.
+Use `grep -rn "EventKind::ToolResult {" crates/zoid-core/src/` to find all sites in zoid-core (including compaction, eviction, reassert, context, zoom, event tests). Add `error_kind: None,` to each construction. Also run `grep -rn "ChatMsg::ToolResult {" crates/zoid-core/src/` to find all `ChatMsg::ToolResult` constructions (including projection, zoom) — add `error_kind: None,` (or pass-through `*error_kind` for the projection fold site) to each.
 
 - [ ] **Step 5: Update `store.rs` match arm**
 
@@ -338,26 +353,25 @@ For each, add `error_kind: out.error_kind,` if it has access to a `ToolOutput` n
 
 - [ ] **Step 2: Add `[error: <kind>]` prefix rendering in `map_msg`**
 
-In `crates/zoid/src/agent.rs`, find the `map_msg` function (search for `ChatMsg::ToolResult { id, name, output, .. }`). Update it to prepend the prefix when `is_error && error_kind.is_some()`:
+In `crates/zoid/src/agent.rs`, find the `map_msg` function (search for `ChatMsg::ToolResult { id, name, output, .. }`). The current code binds `id`, `name`, `output` by value (moved from `ChatMsg`). Update it to also bind `is_error` and `error_kind`, and prepend the prefix when both are set:
 
 ```rust
 ChatMsg::ToolResult {
     id, name, output, is_error, error_kind, ..
 } => {
-    let text = if *is_error {
-        if let Some(kind) = error_kind {
-            format!("[error: {}] {}", kind.as_str(), output)
-        } else {
-            output.clone()
-        }
+    let text = if is_error && error_kind.is_some() {
+        format!("[error: {}] {}", error_kind.unwrap().as_str(), output)
     } else {
-        output.clone()
+        output
     };
     Message::tool_with_call_id(name, id, &text)
 },
 ```
 
-Note: `output` in the pattern is `&String`, so use `.clone()` or `.as_str()` as needed. Check the current code's exact pattern — it may use `output` directly if it's already a reference.
+This moves `output` (no clone needed — `ChatMsg` is consumed by value in
+`map_msg`), uses `is_error` directly (it's a `bool` moved out of the
+struct, not a reference), and `error_kind.unwrap()` is safe inside the
+`is_some()` guard.
 
 - [ ] **Step 3: Update all `EventKind::ToolResult` and `ChatMsg::ToolResult` constructions in `main.rs`**
 
@@ -439,15 +453,16 @@ git commit -m "feat(error-kind): update zoid-tui ChatMsg::ToolResult constructio
 **Files:**
 - Modify: `crates/zoid/tests/*.rs` (any file with `EventKind::ToolResult` constructions)
 - Modify: `crates/zoid-core/tests/*.rs` (any file with `EventKind::ToolResult` constructions)
+- Modify: `crates/zoid-testkit/src/lib.rs` (two `EventKind::ToolResult` constructions at lines ~55 and ~94)
 
 **Interfaces:**
 - Consumes: `EventKind::ToolResult { error_kind }` from Task 2.
-- Produces: nothing — just makes integration tests compile.
+- Produces: nothing — just makes integration tests and testkit compile.
 
 - [ ] **Step 1: Find all construction sites**
 
 ```bash
-grep -rn "EventKind::ToolResult {" crates/zoid/tests/ crates/zoid-core/tests/ 2>/dev/null
+grep -rn "EventKind::ToolResult {" crates/zoid/tests/ crates/zoid-core/tests/ crates/zoid-testkit/src/ 2>/dev/null
 ```
 
 - [ ] **Step 2: Add `error_kind: None,` to each construction**
@@ -547,38 +562,30 @@ fn is_ddg_error_page_false_for_genuine_no_results() {
 }
 ```
 
-- [ ] **Step 5: Write a test for `search_with_client` with an error page**
+- [ ] **Step 5: Verify `search_with_client` integration by direct test**
 
-Add a test using the existing `spawn_html_server` pattern from `zoid-web/src/lib.rs` tests. Since `search_with_client` is in `search.rs` (pub(crate)), test it via a test in `search.rs` that constructs a `reqwest::Client` and a mock server:
+`search_with_client` POSTs to the hardcoded `DDG_URL` constant, so it can't
+be redirected to a local mock. Verify the integration by testing
+`parse_ddg_html` + `is_ddg_error_page` together — the same logic
+`search_with_client` uses in its empty-results branch:
 
 ```rust
-#[tokio::test]
-async fn search_with_client_error_page_returns_backend_unavailable() {
+#[test]
+fn search_error_page_detected_as_backend_unavailable() {
     let error_html = r#"<html><body><p>If this error persists, contact error-lite@duckduckgo.com</p></body></html>"#;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        if let Ok((mut sock, _)) = listener.accept().await {
-            let mut buf = [0u8; 4096];
-            let _ = sock.read(&mut buf).await;
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
-                error_html.len(), error_html
-            );
-            use tokio::io::AsyncWriteExt;
-            let _ = sock.write_all(resp.as_bytes()).await;
-        }
-    });
-    let client = reqwest::Client::new();
-    // We can't point at localhost via the DDG_URL constant, so test
-    // parse_ddg_html + is_ddg_error_page directly instead.
     let results = parse_ddg_html(error_html);
-    assert!(results.is_empty());
-    assert!(is_ddg_error_page(error_html));
+    assert!(results.is_empty(), "error page has no result links");
+    assert!(is_ddg_error_page(error_html), "error page detected");
+}
+
+#[test]
+fn search_genuine_no_results_not_detected_as_error() {
+    let no_results_html = r#"<html><body><div class="no-results">No results found</div></body></html>"#;
+    let results = parse_ddg_html(no_results_html);
+    assert!(results.is_empty(), "genuine no-results has no result links");
+    assert!(!is_ddg_error_page(no_results_html), "genuine no-results not flagged as error");
 }
 ```
-
-Note: `search_with_client` POSTs to the hardcoded `DDG_URL` constant, so it can't be redirected to a local mock. The test verifies the detection functions directly. The integration of `is_ddg_error_page` into `search_with_client` is verified by code review (the branch is a 3-line change).
 
 - [ ] **Step 6: Add 2xx empty-extraction check to `zoid_web::fetch`**
 
@@ -745,22 +752,14 @@ git commit -m "feat(error-kind): categorize read, ls, write error paths with io:
 
 - [ ] **Step 1: Categorize `edit` error paths**
 
-In `crates/zoid-tools/src/edit.rs`, update each `ToolOutput::err(...)` call:
+In `crates/zoid-tools/src/edit.rs`, update each `ToolOutput::err(...)` call.
+Note: `str_arg` was already fixed to `InvalidInput` in Task 1 Step 3 —
+missing-arg errors already return the correct kind. Focus on the remaining
+paths:
 
-- Missing arg (`str_arg` failure): already returns the `str_arg` error which uses `ToolOutput::err(...)` → defaults to `Internal`. Change `str_arg` in `lib.rs` to use `err_kind(ErrorKind::InvalidInput, ...)`:
-
-```rust
-pub(crate) fn str_arg(args: &Value, key: &str) -> Result<String, ToolOutput> {
-    args.get(key)
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| ToolOutput::err_kind(ErrorKind::InvalidInput, format!("missing or non-string argument: {key}")))
-}
-```
-
-This fixes `str_arg` for ALL tools at once (read, write, edit, shell, etc. all use `str_arg`).
-
-- `old_string` not found (in `apply_edit`): change `Err("\`old_string\` not found".into())` → the `apply_edit` function returns `Result<(), String>`. The caller in `run()` maps this to `ToolOutput::err(...)`. Update the caller:
+- `old_string` not found (in `apply_edit`): the function returns
+  `Result<(), String>`. The caller in `run()` maps this to `ToolOutput::err(...)`.
+  Update the caller:
 
 ```rust
 Err(msg) => {
@@ -782,7 +781,7 @@ Err(msg) => {
 
 In `crates/zoid-tools/src/shell.rs`:
 - Spawn failure: `ToolOutput::err_kind(ErrorKind::Internal, format!("shell({command}): {e}"))`
-- Missing command arg: already handled by `str_arg` (fixed in Step 1).
+- Missing command arg: already handled by `str_arg` (fixed in Task 1).
 
 - [ ] **Step 3: Categorize `git_context` error paths**
 
@@ -808,8 +807,8 @@ Expected: all tests pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/zoid-tools/src/lib.rs crates/zoid-tools/src/edit.rs crates/zoid-tools/src/shell.rs crates/zoid-tools/src/git_context.rs
-git commit -m "feat(error-kind): categorize edit, shell, git_context error paths; fix str_arg to InvalidInput"
+git add crates/zoid-tools/src/edit.rs crates/zoid-tools/src/shell.rs crates/zoid-tools/src/git_context.rs
+git commit -m "feat(error-kind): categorize edit, shell, git_context error paths"
 ```
 
 ---
@@ -913,6 +912,7 @@ git commit -m "feat(error-kind): categorize web_search and web_fetch error paths
 **Files:**
 - Modify: `crates/zoid-tools/src/subagent_diff.rs`
 - Modify: `crates/zoid/src/agent.rs` (Emitting tool error paths: `enter_worktree`, `exit_worktree`, `dispatch_subagent`, `recall`, `show`, `schedule_wake`, `cancel_wake`)
+- Modify: `crates/zoid/src/invoke_skill.rs` (two `ToolOutput::err` calls)
 
 **Interfaces:**
 - Consumes: `ErrorKind` from Task 1.
@@ -932,34 +932,32 @@ return ToolOutput::err_kind(ErrorKind::Internal, format!("subagent_diff: git rev
 
 - [ ] **Step 2: Categorize Emitting tool errors in `agent.rs`**
 
-Find each Emitting tool's error `ToolResult` construction in `agent.rs` and add the appropriate `error_kind`. The `ToolResult` constructions already have `error_kind` from Task 3 (defaulting to `None` or `out.error_kind`). For Emitting tools, the output is a string, not a `ToolOutput`, so set `error_kind` explicitly:
+Each Emitting tool arm in `agent.rs` constructs `EventKind::ToolResult` with
+`is_error: true` for validation/failure cases. Task 3 set these to
+`error_kind: None`. Now update each to the correct `ErrorKind`. Find each
+by searching for `is_error: true` in the Emitting arms and set
+`error_kind` per this exact mapping:
 
-For `enter_worktree` validation error ("'name' is required"):
-```rust
-error_kind: Some(ErrorKind::InvalidInput),
-```
+- `enter_worktree` — `'name' is required` (search for `"enter_worktree: 'name' is required"`): `error_kind: Some(ErrorKind::InvalidInput)`
+- `enter_worktree` — worktree switch failed (search for `"worktree switch failed"`): `error_kind: Some(ErrorKind::Internal)`
+- `exit_worktree` — error from `compute_worktree_switch` (search for the `other =>` arm in `exit_worktree`): `error_kind: Some(ErrorKind::Conflict)` if the message contains "not in a worktree" or "subagent running", else `error_kind: Some(ErrorKind::Internal)`
+- `dispatch_subagent` — `'task' is required` (search for `"dispatch_subagent: 'task' is required"`): `error_kind: Some(ErrorKind::InvalidInput)`
+- `dispatch_subagent` — pool/agent/profile failure (search for `is_error: true` in the `dispatch_subagent` arm): `error_kind: Some(ErrorKind::Internal)`
+- `recall` — error from recall handler (search for `is_error: true` in the `recall` arm): `error_kind: Some(ErrorKind::InvalidInput)`
+- `show` — error from show handler (search for `is_error: true` in the `show` arm): `error_kind: Some(ErrorKind::Internal)`
+- `schedule_wake` — validation error (search for `is_error: true` in the `schedule_wake` arm): `error_kind: Some(ErrorKind::InvalidInput)`
+- `cancel_wake` — validation error (search for `is_error: true` in the `cancel_wake` arm): `error_kind: Some(ErrorKind::InvalidInput)`
 
-For `exit_worktree` errors ("not in a worktree", "subagent running"):
-```rust
-error_kind: Some(ErrorKind::Conflict),
-```
+- [ ] **Step 3: Categorize `invoke_skill` error paths**
 
-For `dispatch_subagent` errors ("'task' is required"):
-```rust
-error_kind: Some(ErrorKind::InvalidInput),
-```
+In `crates/zoid/src/invoke_skill.rs`, there are two `ToolOutput::err(...)`
+calls:
+- Missing/empty skill name (search for `"invoke_skill: missing or empty"`):
+  change to `ToolOutput::err_kind(ErrorKind::InvalidInput, ...)`
+- Unknown skill (search for `"invoke_skill: unknown skill"`):
+  change to `ToolOutput::err_kind(ErrorKind::NotFound, ...)`
 
-For `dispatch_subagent` failure (profile/agent resolution):
-```rust
-error_kind: Some(ErrorKind::Internal),
-```
-
-For `recall`, `show`, `schedule_wake`, `cancel_wake` errors:
-```rust
-error_kind: Some(ErrorKind::InvalidInput),  // or Internal for show
-```
-
-Search for `is_error: true` in the Emitting tool arms and add the appropriate `error_kind` to each.
+Add `use zoid_core::ErrorKind;` if not already imported.
 
 - [ ] **Step 3: Run tests**
 
@@ -986,13 +984,21 @@ git commit -m "feat(error-kind): categorize subagent_diff and chat-only Emitting
 
 - [ ] **Step 1: Add the CWD-deleted pre-check to the Local tool-dispatch arm**
 
-In `crates/zoid/src/agent.rs`, in the Local tool-dispatch arm (search for `// Local tools (the default): run in the working directory`), before the `spawn_blocking` call, add:
+In `crates/zoid/src/agent.rs`, find the Local tool-dispatch arm — it's the
+`_ => { // Local tools (the default): run in the working directory` match
+arm (search for `// Local tools (the default)`). Place the check as the
+**first statement** inside that arm, after the `ToolStarted` UI send and
+before `let tools_for_exec = ...`.
+
+**Do NOT place this check above the `match` on `tool_kind`** — it must be
+inside the Local arm only, so Emitting tools (the recovery path) are exempt.
 
 ```rust
 // CWD-deleted pre-check (spec: CWD-deleted detection and recovery).
 // Emitting tools are exempt — they're the recovery path.
 if !cwd.exists() {
-    let msg = if /* is in worktree */ {
+    let in_worktree = cwd.iter().any(|c| c == ".zoid");
+    let msg = if in_worktree {
         format!(
             "You are in a worktree — the working directory \"{}\" no longer exists. \
              Call exit_worktree to return to the main checkout.",
@@ -1014,20 +1020,14 @@ if !cwd.exists() {
         is_error: out.is_error,
         error_kind: out.error_kind,
     }, session_id, now).await?;
-    // Skip to the next tool call — don't run the tool.
-    continue;  // continues the tool-processing loop
+    continue;  // skip to the next tool in the batch
 }
 ```
 
-The worktree check: the agent loop tracks `cwd_for_exec`. If it's under `.zoid/worktrees/` or `.worktrees/`, the agent is in a worktree. Use a simple path check:
-
-```rust
-let in_worktree = cwd.iter().any(|c| c == ".zoid" || c == ".worktrees")
-    || cwd.starts_with(".zoid/worktrees")
-    || cwd.starts_with(".worktrees");
-```
-
-Or check if `active_worktree` is set — but that's in `main.rs`'s `App` state, not directly accessible from the agent loop. The path heuristic is simpler and sufficient for the message.
+The `in_worktree` check uses `cwd.iter().any(|c| c == ".zoid")` — this
+covers the `.zoid/worktrees/<name>` convention used by zoid's worktree
+system. Git-linked worktrees (`.git/worktrees/...`) are not covered by
+this heuristic; v1 only needs to handle zoid's own worktree paths.
 
 - [ ] **Step 2: Add the same check to the Network tool-dispatch arm**
 
@@ -1082,15 +1082,16 @@ git commit -m "feat(cwd-check): add CWD-deleted pre-check with recovery instruct
 
 ## Definition of done
 
-- `cargo test --workspace` passes.
+- `cargo test --workspace` passes (including `zoid-testkit`, `zoid-tui`, and all integration tests).
 - `ErrorKind` is defined in `zoid-core`, re-exported, and derives `Serialize, Deserialize`.
 - `ToolOutput` has `error_kind: Option<ErrorKind>` with `ok()`, `err()`, `err_kind()` constructors.
+- `str_arg` returns `InvalidInput` for missing/non-string arguments (affects all tools using `str_arg`).
 - `EventKind::ToolResult` has `#[serde(default)] error_kind: Option<ErrorKind>`.
 - Legacy `ToolResult` JSON without `error_kind` deserializes to `None`.
-- `ChatMsg::ToolResult` has `error_kind`.
+- `ChatMsg::ToolResult` has `error_kind` (including `zoid-core/src/zoom.rs` and `zoid-tui` construction sites).
 - `[error: <kind>]` prefix appears in model-facing tool-result text when `is_error && error_kind.is_some()`.
 - `is_ddg_error_page` detects DDG error markers; `search_with_client` returns "backend unavailable" for error pages.
 - `zoid_web::fetch` returns `Err` for 2xx responses with no extractable content.
-- Every tool's error paths return the correct `ErrorKind` per the spec's audit table.
+- Every tool's error paths return the correct `ErrorKind` per the spec's audit table (including `subagent_diff`, `invoke_skill`, and Emitting tools).
 - CWD-deleted pre-check runs before Local and Network tool calls; Emitting tools are exempt.
-- Recovery message contains "exit_worktree" when in a worktree.
+- Recovery message contains "exit_worktree" when in a worktree (path contains `.zoid`).
