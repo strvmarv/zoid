@@ -428,7 +428,10 @@ mod tests {
 
     #[test]
     fn error_kind_as_str_returns_snake_case() {
-        assert_eq!(ErrorKind::BackendUnavailable.as_str(), "backend_unavailable");
+        assert_eq!(
+            ErrorKind::BackendUnavailable.as_str(),
+            "backend_unavailable"
+        );
         assert_eq!(ErrorKind::Timeout.as_str(), "timeout");
         assert_eq!(ErrorKind::NotFound.as_str(), "not_found");
         assert_eq!(ErrorKind::InvalidInput.as_str(), "invalid_input");

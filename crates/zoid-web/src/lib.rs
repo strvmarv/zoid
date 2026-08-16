@@ -207,7 +207,8 @@ ensure the article node wins the readability scoring against the nav.</p>
         // A page with no extractable article content — readability returns
         // empty/whitespace markdown, which extract_markdown (and the new
         // fetch guard) reject with "no extractable content".
-        let empty_html = r#"<!DOCTYPE html><html><head><title>Empty</title></head><body></body></html>"#;
+        let empty_html =
+            r#"<!DOCTYPE html><html><head><title>Empty</title></head><body></body></html>"#;
         let addr = spawn_html_server(empty_html).await;
         let r = fetch(&format!("http://{addr}"), 0, 100_000).await;
         assert!(r.is_err());

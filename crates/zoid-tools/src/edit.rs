@@ -307,7 +307,10 @@ mod tests {
 
     #[test]
     fn missing_path_is_error() {
-        let out = Edit.run(&json!({ "old_string": "a", "new_string": "b" }), std::path::Path::new("."));
+        let out = Edit.run(
+            &json!({ "old_string": "a", "new_string": "b" }),
+            std::path::Path::new("."),
+        );
         assert!(out.is_error);
         assert_eq!(out.error_kind, Some(ErrorKind::InvalidInput));
     }

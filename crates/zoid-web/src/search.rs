@@ -174,7 +174,9 @@ mod tests {
 
     #[test]
     fn is_ddg_error_page_detects_error_markers() {
-        assert!(is_ddg_error_page("contact error-lite@duckduckgo.com for help"));
+        assert!(is_ddg_error_page(
+            "contact error-lite@duckduckgo.com for help"
+        ));
         assert!(is_ddg_error_page("If this error persists, try again"));
         assert!(is_ddg_error_page("error@duckduckgo.com"));
     }
@@ -202,9 +204,13 @@ mod tests {
 
     #[test]
     fn search_genuine_no_results_not_detected_as_error() {
-        let no_results_html = r#"<html><body><div class="no-results">No results found</div></body></html>"#;
+        let no_results_html =
+            r#"<html><body><div class="no-results">No results found</div></body></html>"#;
         let results = parse_ddg_html(no_results_html);
         assert!(results.is_empty(), "genuine no-results has no result links");
-        assert!(!is_ddg_error_page(no_results_html), "genuine no-results not flagged as error");
+        assert!(
+            !is_ddg_error_page(no_results_html),
+            "genuine no-results not flagged as error"
+        );
     }
 }

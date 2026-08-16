@@ -62,7 +62,10 @@ impl Tool for Read {
             return ToolOutput::ok("(empty file)".to_string());
         }
         if limit == 0 {
-            return ToolOutput::err_kind(ErrorKind::InvalidInput, "read: limit must be >= 1".to_string());
+            return ToolOutput::err_kind(
+                ErrorKind::InvalidInput,
+                "read: limit must be >= 1".to_string(),
+            );
         }
         let start = offset.saturating_sub(1).min(total);
         if start >= total {

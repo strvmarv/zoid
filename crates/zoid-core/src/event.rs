@@ -576,8 +576,7 @@ mod tests {
             EventKind::ToolResult { id, error_kind, .. } => {
                 assert_eq!(id, "tc1");
                 assert_eq!(
-                    error_kind,
-                    None,
+                    error_kind, None,
                     "legacy ToolResult must deserialize error_kind as None"
                 );
             }

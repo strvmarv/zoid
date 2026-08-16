@@ -549,7 +549,12 @@ fn map_msg(m: ChatMsg) -> Message {
             tool_call_id: None,
         },
         ChatMsg::ToolResult {
-            id, name, output, is_error, error_kind, ..
+            id,
+            name,
+            output,
+            is_error,
+            error_kind,
+            ..
         } => {
             let text = if is_error {
                 if let Some(kind) = error_kind {
@@ -561,7 +566,7 @@ fn map_msg(m: ChatMsg) -> Message {
                 output
             };
             Message::tool_with_call_id(name, id, &text)
-        },
+        }
         ChatMsg::Delegated { summary, .. } => Message {
             role: zoid_provider::MsgRole::Assistant,
             content: format!("[delegated subagent] {summary}"),
@@ -2010,13 +2015,12 @@ async fn run_turn_inner(
                             //   "cannot exit worktree while a subagent is running"
                             // Match on "subagent" rather than the full phrase so
                             // a reworded refusal still categorizes correctly.
-                            let error_kind = if msg.contains("not in a worktree")
-                                || msg.contains("subagent")
-                            {
-                                Some(ErrorKind::Conflict)
-                            } else {
-                                Some(ErrorKind::Internal)
-                            };
+                            let error_kind =
+                                if msg.contains("not in a worktree") || msg.contains("subagent") {
+                                    Some(ErrorKind::Conflict)
+                                } else {
+                                    Some(ErrorKind::Internal)
+                                };
                             emit(
                                 &session,
                                 &mut events,
@@ -2626,14 +2630,23 @@ async fn run_turn_inner(
                             "tool skipped: cwd deleted"
                         );
                         log_turn_warn(&session, "warn", session_id, &out.text, Some(ctx)).await;
-                        emit(&session, &mut events, ui, &config.branch, EventKind::ToolResult {
-                            id: tc.id,
-                            name: tc.name,
-                            output: out.text,
-                            is_error: out.is_error,
-                            error_kind: out.error_kind,
-                        }, session_id, now).await?;
-                        continue;  // skip to the next tool in the batch
+                        emit(
+                            &session,
+                            &mut events,
+                            ui,
+                            &config.branch,
+                            EventKind::ToolResult {
+                                id: tc.id,
+                                name: tc.name,
+                                output: out.text,
+                                is_error: out.is_error,
+                                error_kind: out.error_kind,
+                            },
+                            session_id,
+                            now,
+                        )
+                        .await?;
+                        continue; // skip to the next tool in the batch
                     }
                     let tools_for_async = tools.clone();
                     let name = tc.name.clone();
@@ -2752,14 +2765,23 @@ async fn run_turn_inner(
                             "tool skipped: cwd deleted"
                         );
                         log_turn_warn(&session, "warn", session_id, &out.text, Some(ctx)).await;
-                        emit(&session, &mut events, ui, &config.branch, EventKind::ToolResult {
-                            id: tc.id,
-                            name: tc.name,
-                            output: out.text,
-                            is_error: out.is_error,
-                            error_kind: out.error_kind,
-                        }, session_id, now).await?;
-                        continue;  // skip to the next tool in the batch
+                        emit(
+                            &session,
+                            &mut events,
+                            ui,
+                            &config.branch,
+                            EventKind::ToolResult {
+                                id: tc.id,
+                                name: tc.name,
+                                output: out.text,
+                                is_error: out.is_error,
+                                error_kind: out.error_kind,
+                            },
+                            session_id,
+                            now,
+                        )
+                        .await?;
+                        continue; // skip to the next tool in the batch
                     }
                     let tools_for_exec = tools.clone();
                     let name = tc.name.clone();
@@ -5424,7 +5446,9 @@ mod tests {
             Ulid::from(1u128),
             None,
             1,
-            EventKind::UserMessage { text: "dispatch without a task".into() },
+            EventKind::UserMessage {
+                text: "dispatch without a task".into(),
+            },
         )];
         for e in &seed {
             session.append(e.clone()).await.unwrap();
@@ -5476,12 +5500,14 @@ mod tests {
             })
             .expect("dispatch_subagent tool result must be emitted");
         match &tool_result.kind {
-            EventKind::ToolResult { output, is_error, error_kind, .. } => {
+            EventKind::ToolResult {
+                output,
+                is_error,
+                error_kind,
+                ..
+            } => {
                 assert!(*is_error, "missing task must be an error");
-                assert!(
-                    output.contains("'task' is required"),
-                    "got: {output}"
-                );
+                assert!(output.contains("'task' is required"), "got: {output}");
                 assert_eq!(*error_kind, Some(ErrorKind::InvalidInput));
             }
             _ => panic!(),
@@ -5500,7 +5526,9 @@ mod tests {
             Ulid::from(1u128),
             None,
             1,
-            EventKind::UserMessage { text: "enter a worktree".into() },
+            EventKind::UserMessage {
+                text: "enter a worktree".into(),
+            },
         )];
         for e in &seed {
             session.append(e.clone()).await.unwrap();
@@ -5552,12 +5580,14 @@ mod tests {
             })
             .expect("enter_worktree tool result must be emitted");
         match &tool_result.kind {
-            EventKind::ToolResult { output, is_error, error_kind, .. } => {
+            EventKind::ToolResult {
+                output,
+                is_error,
+                error_kind,
+                ..
+            } => {
                 assert!(*is_error, "missing name must be an error");
-                assert!(
-                    output.contains("'name' is required"),
-                    "got: {output}"
-                );
+                assert!(output.contains("'name' is required"), "got: {output}");
                 assert_eq!(*error_kind, Some(ErrorKind::InvalidInput));
             }
             _ => panic!(),
@@ -5577,7 +5607,9 @@ mod tests {
             Ulid::from(1u128),
             None,
             1,
-            EventKind::UserMessage { text: "enter a worktree".into() },
+            EventKind::UserMessage {
+                text: "enter a worktree".into(),
+            },
         )];
         for e in &seed {
             session.append(e.clone()).await.unwrap();
@@ -5635,7 +5667,12 @@ mod tests {
             })
             .expect("enter_worktree tool result must be emitted");
         match &tool_result.kind {
-            EventKind::ToolResult { output, is_error, error_kind, .. } => {
+            EventKind::ToolResult {
+                output,
+                is_error,
+                error_kind,
+                ..
+            } => {
                 assert!(*is_error, "failed switch must be an error");
                 assert!(output.contains("simulated"), "got: {output}");
                 assert_eq!(*error_kind, Some(ErrorKind::Internal));
@@ -5657,7 +5694,9 @@ mod tests {
             Ulid::from(1u128),
             None,
             1,
-            EventKind::UserMessage { text: "exit the worktree".into() },
+            EventKind::UserMessage {
+                text: "exit the worktree".into(),
+            },
         )];
         for e in &seed {
             session.append(e.clone()).await.unwrap();
@@ -5715,7 +5754,12 @@ mod tests {
             })
             .expect("exit_worktree tool result must be emitted");
         match &tool_result.kind {
-            EventKind::ToolResult { output, is_error, error_kind, .. } => {
+            EventKind::ToolResult {
+                output,
+                is_error,
+                error_kind,
+                ..
+            } => {
                 assert!(*is_error, "not-in-a-worktree must be an error");
                 assert!(output.contains("not in a worktree"), "got: {output}");
                 assert_eq!(*error_kind, Some(ErrorKind::Conflict));
@@ -5738,7 +5782,9 @@ mod tests {
             Ulid::from(1u128),
             None,
             1,
-            EventKind::UserMessage { text: "exit the worktree".into() },
+            EventKind::UserMessage {
+                text: "exit the worktree".into(),
+            },
         )];
         for e in &seed {
             session.append(e.clone()).await.unwrap();
@@ -5796,7 +5842,12 @@ mod tests {
             })
             .expect("exit_worktree tool result must be emitted");
         match &tool_result.kind {
-            EventKind::ToolResult { output, is_error, error_kind, .. } => {
+            EventKind::ToolResult {
+                output,
+                is_error,
+                error_kind,
+                ..
+            } => {
                 assert!(*is_error, "unrecognized failure must be an error");
                 assert!(output.contains("fatal error"), "got: {output}");
                 assert_eq!(*error_kind, Some(ErrorKind::Internal));
@@ -5821,7 +5872,9 @@ mod tests {
             Ulid::from(1u128),
             None,
             1,
-            EventKind::UserMessage { text: "show a card".into() },
+            EventKind::UserMessage {
+                text: "show a card".into(),
+            },
         )];
         for e in &seed {
             session.append(e.clone()).await.unwrap();
@@ -5873,7 +5926,11 @@ mod tests {
             })
             .expect("show tool result must be emitted");
         match &tool_result.kind {
-            EventKind::ToolResult { is_error, error_kind, .. } => {
+            EventKind::ToolResult {
+                is_error,
+                error_kind,
+                ..
+            } => {
                 assert!(!*is_error);
                 assert_eq!(*error_kind, None);
             }
@@ -5894,7 +5951,9 @@ mod tests {
             Ulid::from(1u128),
             None,
             1,
-            EventKind::UserMessage { text: "schedule a wake".into() },
+            EventKind::UserMessage {
+                text: "schedule a wake".into(),
+            },
         )];
         for e in &seed {
             session.append(e.clone()).await.unwrap();
@@ -5952,7 +6011,12 @@ mod tests {
             })
             .expect("schedule_wake tool result must be emitted");
         match &tool_result.kind {
-            EventKind::ToolResult { output, is_error, error_kind, .. } => {
+            EventKind::ToolResult {
+                output,
+                is_error,
+                error_kind,
+                ..
+            } => {
                 assert!(*is_error, "rejected schedule must be an error");
                 assert!(output.contains("too many pending wakes"), "got: {output}");
                 assert_eq!(*error_kind, Some(ErrorKind::InvalidInput));
@@ -5974,7 +6038,9 @@ mod tests {
             Ulid::from(1u128),
             None,
             1,
-            EventKind::UserMessage { text: "cancel a wake".into() },
+            EventKind::UserMessage {
+                text: "cancel a wake".into(),
+            },
         )];
         for e in &seed {
             session.append(e.clone()).await.unwrap();
@@ -6032,7 +6098,12 @@ mod tests {
             })
             .expect("cancel_wake tool result must be emitted");
         match &tool_result.kind {
-            EventKind::ToolResult { output, is_error, error_kind, .. } => {
+            EventKind::ToolResult {
+                output,
+                is_error,
+                error_kind,
+                ..
+            } => {
                 assert!(*is_error, "rejected cancel must be an error");
                 assert!(output.contains("no such wake"), "got: {output}");
                 assert_eq!(*error_kind, Some(ErrorKind::InvalidInput));
@@ -6778,11 +6849,7 @@ mod tests {
             EventKind::ToolResult {
                 output, error_kind, ..
             } => {
-                assert_eq!(
-                    *error_kind,
-                    Some(ErrorKind::Internal),
-                    "got: {output}"
-                );
+                assert_eq!(*error_kind, Some(ErrorKind::Internal), "got: {output}");
             }
             _ => panic!("expected a ToolResult"),
         }
@@ -6994,5 +7061,4 @@ mod guardrail_types_tests {
             "empty output must not carry the reminder: {output}"
         );
     }
-
 }
