@@ -90,24 +90,28 @@ The `catalog.rs` constant `CATALOG_BASE` is updated in step 2 to point at
 
 ## 2. Update crates/*/src/ references
 
-Mechanical replacement: `strvmarv/zoid-releases` → `strvmarv/zoid` in these
-files:
+Replace every `zoid-releases` token — both qualified
+(`strvmarv/zoid-releases`) and bare (`zoid-releases` in doc comments) — with
+`strvmarv/zoid` / `zoid` respectively, in these files:
 
-| File | References | What it affects |
-|---|---|---|
-| `crates/zoid/src/update.rs:10` | `RELEASES_REPO` const | Self-updater checks `releases/latest` API |
-| `crates/zoid/src/catalog.rs:10` | `CATALOG_BASE` const | Plugin catalog fetch URL |
-| `crates/zoid-core/src/feedback.rs:89` | `REPO` const + doc comments + test URL assertions | Feedback/bug-report issue filing target |
-| `crates/zoid-core/src/skill.rs` | `FEEDBACK_SKILL_BODY` + `REFRESHING_PROVIDER_MODELS_BODY` consts | Built-in skill text mentions `zoid-releases` |
-| `crates/zoid-tools/src/feedback.rs:21` | Doc comment | Feedback tool description |
+| File | Lines | References | What it affects |
+|---|---|---|---|
+| `crates/zoid/src/update.rs` | L10 | `RELEASES_REPO` const | Self-updater checks `releases/latest` API |
+| `crates/zoid/src/catalog.rs` | L1, L10, L85, L209, L211 | `CATALOG_BASE` const + module doc + fn doc + `urls_are_raw_unauthenticated` test assertions | Plugin catalog fetch URL + test |
+| `crates/zoid-core/src/feedback.rs` | L1, L9, L89, L165, L398, L450, L458, L473 | `REPO` const + doc comments + test URL assertions | Feedback/bug-report issue filing target |
+| `crates/zoid-core/src/skill.rs` | L90, L95, L277, L384 | `FEEDBACK_SKILL_BODY` doc + body + feedback `Skill` description literal + test assertion | Built-in feedback skill text |
+| `crates/zoid-tools/src/feedback.rs` | L21 | Doc comment | Feedback tool description |
 
-The `feedback.rs` test assertions (lines ~398, 450, 458, 473) reference
-`zoid-releases` in expected URL strings — these must be updated to `zoid`
-too, or the tests fail.
-
-The `skill.rs` test `builtin_includes_feedback_skill` (line ~384) asserts
-`fb.body.contains("strvmarv/zoid-releases")` — must be updated to
-`strvmarv/zoid`.
+**Critical test assertions that will fail if missed:**
+- `catalog.rs` L209/211 — `urls_are_raw_unauthenticated` test asserts exact
+  `strvmarv/zoid-releases` URLs. Must be updated to `strvmarv/zoid`.
+- `feedback.rs` L398/450/458/473 — test assertions reference `zoid-releases`
+  in expected URL strings. Must be updated.
+- `skill.rs` L384 — `builtin_includes_feedback_skill` test asserts
+  `fb.body.contains("strvmarv/zoid-releases")`. Must be updated to
+  `strvmarv/zoid`.
+- `skill.rs` L277 — the feedback `Skill`'s `description` string literal (not a
+  const) contains `strvmarv/zoid-releases`. Must be updated.
 
 After replacement, the self-updater resolves against
 `https://api.github.com/repos/strvmarv/zoid/releases/latest`, the catalog
@@ -124,17 +128,12 @@ canonical — the warning is stale.
 
 ### public/index.html
 
-Fix 4 URLs from `strvmarv/zoid-releases` to `strvmarv/zoid`:
-- Line 313: install button `href`
-- Line 314: curl one-liner
-- Line 315: beta-note (update from "from the public releases repo" to "from
-  GitHub Releases")
-- Line 854: install button `href`
-
-The beta-note's "Evaluation builds expire 30 days after release" framing is
-commercial-era copy — update to a neutral OSS note (e.g. "Download the latest
-release or build from source."). Full OSS rewrite of the marketing copy is
-Phase 4.
+Fix 3 literal `strvmarv/zoid-releases` URLs (L313, L314, L854) to
+`strvmarv/zoid`. Update 2 betanotes:
+- L315: change "from the public releases repo" to "from GitHub Releases".
+- L855: change "Now in beta — evaluation builds expire 30 days after release"
+  to neutral OSS copy (e.g. "Download the latest release or build from
+  source."). Full OSS rewrite of marketing copy is Phase 4.
 
 ## 4. Cut v1.0.0
 
@@ -166,7 +165,20 @@ archived.
   all live on strvmarv/zoid.
 - **Contributing** — see `CONTRIBUTING.md` and `SECURITY.md`.
 
-### Fixes
+### Updating from v0.9.x
+
+If you're running v0.9.x, your self-updater still checks
+`strvmarv/zoid-releases` (the archived repo). It will report "already up to
+date" because v0.9.1 is the last release there. To migrate to v1.0.0,
+reinstall with the new installer:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/strvmarv/zoid/releases/latest/download/zoid-installer.sh | sh
+```
+
+After that, `zoid update` checks `strvmarv/zoid` going forward.
+
+### New
 
 - **Provider model registry skill** — a new built-in skill
   (`refreshing-provider-models`) guides refreshing the static provider/model
@@ -185,11 +197,24 @@ release is public, and install URLs resolve.
 
 ## 6. Branch protection on main
 
-After the flip (private repos on free GitHub can't set branch protection):
+After the flip (private repos on free GitHub can't set branch protection).
+Note: Phase 1 could not set branch protection (repo was private); this step is
+the actual setup, not a verification of a Phase 1 action.
+
+**Important:** the protection model must allow automated pushes from
+`catalog-index.yml` (Step 1's catalog regen bot) and the maintainer's release
+workflow (`docs/RELEASING.md`'s `git push origin main --tags`). Two approaches:
+
+**Option A (recommended): protect without PR requirement.** Use
+`required_status_checks` + `required_linear_history` + `enforce_admins` but
+omit `required_pull_request_reviews`. This allows direct pushes to `main`
+(including the catalog bot's automated commits and the maintainer's release
+commits) while preventing force-push and requiring linear history. PRs are
+encouraged by convention but not enforced by the branch rule — acceptable for
+a single-maintainer repo.
 
 ```bash
 gh api repos/strvmarv/zoid/branches/main/protection -X PUT \
-  -f required_pull_request_reviews.required_approving_review_count=0 \
   -f required_status_checks.strict=true \
   -f required_status_checks.contexts='[]' \
   -f enforce_admins=true \
@@ -197,10 +222,16 @@ gh api repos/strvmarv/zoid/branches/main/protection -X PUT \
   -f required_linear_history=true
 ```
 
-- `required_approving_review_count=0` — single maintainer; PRs are required
-  but self-merge is allowed (no other reviewers exist yet).
-- `required_linear_history=true` — no merge commits.
-- `enforce_admins=true` — the rules apply to everyone.
+**Option B: PR requirement with bot bypass.** Use
+`required_pull_request_reviews` but add `github-actions[bot]` to the bypass
+actors list so `catalog-index.yml` can push. The maintainer's release
+workflow must also change to PR-based (open PR with version bump, merge with
+0 approvals, then tag — tag pushes aren't branch-protected). Update
+`docs/RELEASING.md` to document the PR-based release flow. Heavier; defer
+until Phase 5 when a CI workflow exists to gate PRs on.
+
+The spec recommends **Option A** for Phase 3b. Migrate to Option B in Phase 5
+when CI (test/clippy/fmt) workflows exist to make PR gating meaningful.
 
 ## 7. Default GITHUB_TOKEN permissions
 
@@ -213,6 +244,11 @@ gh api repos/strvmarv/zoid/actions/permissions -X PUT \
 The `release.yml` workflow already declares `permissions: contents: write`
 per-workflow, so it still works. New workflows default to read-only, which is
 the safe pattern for a public repo with fork PRs.
+
+**Fork-PR safety:** `release.yml` triggers on `pull_request` (not
+`pull_request_target`), so fork PRs get a read-only token with no secret
+access — no pwn-request risk. `catalog-index.yml` triggers only on `push`,
+so it has no PR exposure at all. Both are safe under the read-only default.
 
 ## 8. Verify
 
@@ -232,10 +268,13 @@ After the flip and v1.0.0 release:
 
 ## 9. Archive zoid-releases
 
-After verification:
+After verification (step 8) **and after enabling Pages on `strvmarv/zoid`**
+(see Risks — the marketing site must not go dark):
 
-1. Update `zoid-releases` README to point at `strvmarv/zoid` as the new home.
-2. Archive the repo:
+1. Enable GitHub Pages on `strvmarv/zoid` serving from `main` / `/public`.
+   Verify `https://strvmarv.github.io/zoid` renders the marketing site.
+2. Update `zoid-releases` README to point at `strvmarv/zoid` as the new home.
+3. Archive the repo:
 
 ```bash
 gh api repos/strvmarv/zoid-releases -X PATCH -f archived=true
@@ -260,11 +299,30 @@ can still download their version. New installs and updates resolve against
   missing release), it's visible to anyone who finds the repo. Mitigation:
   everything is staged and verified before the flip; the v1.0.0 tag is pushed
   before the flip so the release exists the moment the repo goes public.
-- **Existing installs on v0.9.1** will check `strvmarv/zoid-releases` for
-  updates (their self-updater still has the old const). They'll see no new
-  release there (v0.9.1 is the last one). They must manually update to v1.0.0
-  (which points at `strvmarv/zoid`). This is a one-time migration step for
-  existing users — documented in the v1.0.0 CHANGELOG entry.
-- **The catalog-index workflow** already declares `permissions: contents: write`
-  in its own workflow file, so it works regardless of the repo default being
-  `read`. No fix needed — this was verified against the source workflow.
+
+- **Existing installs on v0.9.x are silently stranded.** The v0.9.x
+  self-updater checks `strvmarv/zoid-releases/releases/latest`, which still
+  serves v0.9.1 (archived repos keep their releases). `is_newer("0.9.1",
+  "0.9.1")` is false, so `zoid update` reports "already up to date" — the
+  user gets a false green checkmark, not an error. Existing users must
+  reinstall via the new installer (`strvmarv/zoid/releases/latest/download/
+  zoid-installer.sh`) to reach v1.0.0. This is a one-time migration cost of
+  the repo split; it's documented in the v1.0.0 CHANGELOG entry under
+  "Updating from v0.9.x." The archived `zoid-releases` keeps serving v0.9.1
+  indefinitely so nothing breaks — but nothing self-updates either.
+
+- **Marketing site goes dark when zoid-releases is archived.**
+  `strvmarv/zoid-releases` serves GitHub Pages from `main:/docs`
+  (strvmarv.github.io/zoid-releases). Archiving the repo freezes the Pages
+  site. `strvmarv/zoid` has no Pages configured. Either:
+  - **Before archiving:** enable Pages on `strvmarv/zoid` (publishing
+    `public/`), verify the site renders, then archive `zoid-releases`.
+  - **Or accept the downtime:** archive `zoid-releases`, go dark temporarily,
+    set up Pages on `strvmarv/zoid` as a Phase 4 item.
+
+  The spec recommends enabling Pages on `strvmarv/zoid` *before* archiving to
+  avoid a dark marketing site. This is a GitHub Settings action (Settings →
+  Pages → Source: `main` / `/public`), not a code change.
+
+- **`gh repo edit --visibility public` may prompt interactively.** Add
+  `--accept-visibility-change-consequences` for non-interactive use.
