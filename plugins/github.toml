@@ -1,0 +1,11 @@
+[plugin]
+id = "github"
+schema = 1
+kind = ["mcp"]
+name = "GitHub"
+description = "GitHub repositories, issues, and pull requests over MCP (stdio)."
+
+[mcp.servers.github]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env = { GITHUB_PERSONAL_ACCESS_TOKEN = "${GITHUB_PERSONAL_ACCESS_TOKEN}" }

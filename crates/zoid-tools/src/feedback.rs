@@ -18,7 +18,7 @@ impl Tool for SubmitFeedback {
         ToolSpec {
             name: "submit_feedback".into(),
             description: "Offer to submit user feedback or a bug report to the zoid \
-                maintainers (GitHub issues on strvmarv/zoid-releases). The user MUST \
+                maintainers (GitHub issues on strvmarv/zoid). The user MUST \
                 confirm/edit before it is submitted — never file silently. Use when \
                 the user asks to report a bug or give feedback, or when a reproducible \
                 error occurs and the user agrees to report it."
