@@ -1,6 +1,7 @@
 # zoid
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](./LICENSE-MIT)
+[![CI](https://github.com/strvmarv/zoid/actions/workflows/ci.yml/badge.svg)](https://github.com/strvmarv/zoid/actions/workflows/ci.yml)
 
 A terminal-native AI coding agent, built in Rust. Active context management,
 bring-your-own-tools via MCP, and your choice of model — Ollama, Anthropic,

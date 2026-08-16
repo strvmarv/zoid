@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - name: Build
+        run: cargo build --workspace --features zoid/local-embed
+      - name: Test
+        run: cargo nextest run --workspace --features zoid/local-embed --no-fail-fast
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --features zoid/local-embed -- -D warnings
+      - name: Rustfmt
+        run: cargo fmt --all -- --check
