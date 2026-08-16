@@ -11347,7 +11347,7 @@ mod tests {
     fn effective_base_url_prefers_override_then_registry() {
         use zoid_core::config::Config;
         // No override → registry default for the canonical id.
-        let c = Config {
+        let mut c = Config {
             provider: "ollama".into(), // pin to "ollama" (legacy) → ollama-cloud, base_url = None
             ..Config::default()
         };

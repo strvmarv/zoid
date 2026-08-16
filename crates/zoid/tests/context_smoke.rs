@@ -509,7 +509,7 @@ async fn smoke_over_eviction_calibration_mismatch() {
             Ulid::from(aid),
             None,
             aid as i64,
-            EventKind::AssistantMessage { text: big },
+            EventKind::AssistantMessage { text: big.clone() },
         ));
     }
 
