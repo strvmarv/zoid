@@ -88,6 +88,9 @@ pub async fn fetch(url: &str, offset: usize, limit: usize) -> anyhow::Result<Fet
     }
     let body = resp.text().await?;
     let (title, markdown) = extract::extract_markdown(&body, url)?;
+    if markdown.trim().is_empty() {
+        return Err(anyhow!("page returned no extractable content"));
+    }
     let total_chars = markdown.chars().count();
     let window = extract::page(&markdown, offset, limit)
         .ok_or_else(|| anyhow!("offset {offset} past end (total {total_chars})"))?;
@@ -190,6 +193,19 @@ ensure the article node wins the readability scoring against the nav.</p>
         assert!(r.is_err());
         let e = r.unwrap_err().to_string();
         assert!(e.contains("past end"), "got: {e}");
+    }
+
+    #[tokio::test]
+    async fn fetch_2xx_empty_extraction_returns_err() {
+        // A page with no extractable article content — readability returns
+        // empty/whitespace markdown, which extract_markdown (and the new
+        // fetch guard) reject with "no extractable content".
+        let empty_html = r#"<!DOCTYPE html><html><head><title>Empty</title></head><body></body></html>"#;
+        let addr = spawn_html_server(empty_html).await;
+        let r = fetch(&format!("http://{addr}"), 0, 100_000).await;
+        assert!(r.is_err());
+        let e = r.unwrap_err().to_string();
+        assert!(e.contains("no extractable content"), "got: {e}");
     }
 
     #[tokio::test]

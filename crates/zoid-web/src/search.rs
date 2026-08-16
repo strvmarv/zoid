@@ -77,6 +77,15 @@ fn extract_uddg_url(href: &str) -> Option<String> {
     None
 }
 
+/// Heuristic check for DDG error/diagnostic pages. When `parse_ddg_html`
+/// returns zero results, this distinguishes "DDG is broken" from "your query
+/// matched nothing." Conservative: only known error markers trigger it.
+pub(crate) fn is_ddg_error_page(body: &str) -> bool {
+    body.contains("error-lite@duckduckgo.com")
+        || body.contains("error@duckduckgo.com")
+        || body.contains("If this error persists")
+}
+
 pub(crate) async fn search_with_client(
     client: &reqwest::Client,
     query: &str,
@@ -96,6 +105,11 @@ pub(crate) async fn search_with_client(
     let body = resp.text().await?;
     let results = parse_ddg_html(&body);
     if results.is_empty() {
+        if is_ddg_error_page(&body) {
+            return Err(anyhow!(
+                "DuckDuckGo backend unavailable (error page returned, no result links parsed)"
+            ));
+        }
         return Err(anyhow!("no results found for: {q}"));
     }
     Ok(results)
@@ -156,5 +170,41 @@ mod tests {
     fn extract_uddg_url_returns_none_without_uddg() {
         assert!(extract_uddg_url("//duckduckgo.com/l/?rut=abc").is_none());
         assert!(extract_uddg_url("https://example.com").is_none());
+    }
+
+    #[test]
+    fn is_ddg_error_page_detects_error_markers() {
+        assert!(is_ddg_error_page("contact error-lite@duckduckgo.com for help"));
+        assert!(is_ddg_error_page("If this error persists, try again"));
+        assert!(is_ddg_error_page("error@duckduckgo.com"));
+    }
+
+    #[test]
+    fn is_ddg_error_page_false_for_normal_html() {
+        assert!(!is_ddg_error_page("<html><body>normal page</body></html>"));
+        assert!(!is_ddg_error_page(""));
+    }
+
+    #[test]
+    fn is_ddg_error_page_false_for_genuine_no_results() {
+        // A genuine "no results" page has no error markers.
+        let html = r#"<html><body><div class="no-results">No results found</div></body></html>"#;
+        assert!(!is_ddg_error_page(html));
+    }
+
+    #[test]
+    fn search_error_page_detected_as_backend_unavailable() {
+        let error_html = r#"<html><body><p>If this error persists, contact error-lite@duckduckgo.com</p></body></html>"#;
+        let results = parse_ddg_html(error_html);
+        assert!(results.is_empty(), "error page has no result links");
+        assert!(is_ddg_error_page(error_html), "error page detected");
+    }
+
+    #[test]
+    fn search_genuine_no_results_not_detected_as_error() {
+        let no_results_html = r#"<html><body><div class="no-results">No results found</div></body></html>"#;
+        let results = parse_ddg_html(no_results_html);
+        assert!(results.is_empty(), "genuine no-results has no result links");
+        assert!(!is_ddg_error_page(no_results_html), "genuine no-results not flagged as error");
     }
 }
