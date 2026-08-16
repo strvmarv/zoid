@@ -66,9 +66,10 @@ impl Tool for Read {
         }
         let start = offset.saturating_sub(1).min(total);
         if start >= total {
-            return ToolOutput::err(format!(
-                "read: offset {offset} is past the end of the file ({total} lines)"
-            ));
+            return ToolOutput::err_kind(
+                ErrorKind::InvalidInput,
+                format!("read: offset {offset} is past the end of the file ({total} lines)"),
+            );
         }
         let end = start.saturating_add(limit).min(total);
         let mut out = String::new();
@@ -239,6 +240,9 @@ mod tests {
         );
         assert!(out.is_error, "{}", out.text);
         assert!(out.text.contains("past the end"), "{}", out.text);
+        // A bad offset is a caller mistake, not an internal failure (spec
+        // audit table): the model must be told to retry with a valid offset.
+        assert_eq!(out.error_kind, Some(ErrorKind::InvalidInput));
     }
 
     #[test]

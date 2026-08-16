@@ -102,13 +102,9 @@ impl Tool for WebFetch {
                 Ok(r) => ToolOutput::ok(format_fetch(&r)),
                 Err(e) => {
                     let msg = e.to_string();
-                    let kind = if msg.contains("HTTP ") {
+                    let kind = if msg.contains("HTTP ") || msg.contains("no extractable content") {
                         ErrorKind::BackendUnavailable
-                    } else if msg.contains("no extractable content") {
-                        ErrorKind::BackendUnavailable
-                    } else if msg.contains("http/https only") {
-                        ErrorKind::InvalidInput
-                    } else if msg.contains("past end") {
+                    } else if msg.contains("http/https only") || msg.contains("past end") {
                         ErrorKind::InvalidInput
                     } else if msg.contains("timeout") || msg.contains("timed out") {
                         ErrorKind::Timeout

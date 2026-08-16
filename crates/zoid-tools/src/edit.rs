@@ -47,17 +47,19 @@ impl Tool for Edit {
                     let old = match e.get("old_string").and_then(|x| x.as_str()) {
                         Some(s) => s.to_string(),
                         None => {
-                            return ToolOutput::err(format!(
-                                "edit({path}): edits[{i}] missing old_string"
-                            ))
+                            return ToolOutput::err_kind(
+                                ErrorKind::InvalidInput,
+                                format!("edit({path}): edits[{i}] missing old_string"),
+                            )
                         }
                     };
                     let new = match e.get("new_string").and_then(|x| x.as_str()) {
                         Some(s) => s.to_string(),
                         None => {
-                            return ToolOutput::err(format!(
-                                "edit({path}): edits[{i}] missing new_string"
-                            ))
+                            return ToolOutput::err_kind(
+                                ErrorKind::InvalidInput,
+                                format!("edit({path}): edits[{i}] missing new_string"),
+                            )
                         }
                     };
                     let all = e
@@ -272,6 +274,35 @@ mod tests {
         assert!(out.is_error, "{}", out.text);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
         assert_eq!(out.error_kind, Some(ErrorKind::InvalidInput));
+    }
+
+    /// `edits[].old_string` / `edits[].new_string` bypass the `str_arg`
+    /// helper (they read from an array element, not the top-level args), so
+    /// they need their own categorization. Both are malformed input.
+    #[test]
+    fn edits_entry_missing_old_string_is_invalid_input() {
+        let (_d, path) = seed("hello");
+        let out = Edit.run(
+            &json!({ "path": path, "edits": [{ "new_string": "b" }] }),
+            std::path::Path::new("."),
+        );
+        assert!(out.is_error, "{}", out.text);
+        assert!(out.text.contains("missing old_string"), "{}", out.text);
+        assert_eq!(out.error_kind, Some(ErrorKind::InvalidInput));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
+    }
+
+    #[test]
+    fn edits_entry_missing_new_string_is_invalid_input() {
+        let (_d, path) = seed("hello");
+        let out = Edit.run(
+            &json!({ "path": path, "edits": [{ "old_string": "hello" }] }),
+            std::path::Path::new("."),
+        );
+        assert!(out.is_error, "{}", out.text);
+        assert!(out.text.contains("missing new_string"), "{}", out.text);
+        assert_eq!(out.error_kind, Some(ErrorKind::InvalidInput));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
     }
 
     #[test]
