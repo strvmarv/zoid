@@ -2225,7 +2225,7 @@ async fn run_turn_inner(
                                             bug|feature|general; title and body must be non-empty."
                                             .into(),
                                         is_error: true,
-                                        error_kind: None,
+                                        error_kind: Some(ErrorKind::InvalidInput),
                                     },
                                     session_id,
                                     now,
