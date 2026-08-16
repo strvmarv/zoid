@@ -4,6 +4,41 @@ All notable changes to zoid are documented here. Each `## X.Y.Z` section
 matches a released version tag; `cargo-dist` parses the section matching the
 tag being released and uses it as that release's announcement notes.
 
+## 1.0.0
+
+zoid is now open source under MIT OR Apache-2.0. The source repo
+(strvmarv/zoid) is the canonical home for releases, the self-updater, and the
+plugin catalog; the former strvmarv/zoid-releases distribution repo is
+archived.
+
+### Open source
+
+- **Dual-licensed MIT OR Apache-2.0** — see `LICENSE-MIT` and `LICENSE-APACHE`.
+- **Single repo** — source, releases, installer scripts, and plugin catalog
+  all live on strvmarv/zoid.
+- **Contributing** — see `CONTRIBUTING.md` and `SECURITY.md`.
+
+### Updating from v0.9.x
+
+If you're running v0.9.x, run `zoid update`. You'll get v0.9.2 (the bridge
+release on `strvmarv/zoid-releases`), which redirects the self-updater to
+`strvmarv/zoid`. Then run `zoid update` again to reach v1.0.0.
+
+If your self-updater reports "already up to date" (v0.9.2-bridge), reinstall
+with the new installer:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/strvmarv/zoid/releases/latest/download/zoid-installer.sh | sh
+```
+
+After that, `zoid update` checks `strvmarv/zoid` going forward.
+
+### New
+
+- **Provider model registry skill** — a new built-in skill
+  (`refreshing-provider-models`) guides refreshing the static provider/model
+  catalog against live endpoints.
+
 ## 0.9.1
 
 Subagent dispatch hardening, worktree branch-deletion fix, Windows home-dir
