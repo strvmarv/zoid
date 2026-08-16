@@ -1,4 +1,4 @@
-//! User feedback & bug-report submission to GitHub issues on strvmarv/zoid-releases.
+//! User feedback & bug-report submission to GitHub issues on strvmarv/zoid.
 //! Pure: no TUI deps, fully unit-testable. The HTTP seam (`FeedbackApi`) and
 //! `submit` live in this module (Task 2); this task establishes the data model
 //! and the markdown/URL rendering.
@@ -6,7 +6,7 @@
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
 
-/// What kind of feedback this is. Maps to a GitHub label on zoid-releases.
+/// What kind of feedback this is. Maps to a GitHub label on zoid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FeedbackKind {
     Bug,
@@ -86,7 +86,7 @@ impl Diagnostics {
 }
 
 /// The public repo feedback targets. Mirrors `update.rs`'s `RELEASES_REPO`.
-pub const REPO: &str = "strvmarv/zoid-releases";
+pub const REPO: &str = "strvmarv/zoid";
 
 /// A complete feedback submission, pre-submission.
 #[derive(Debug, Clone)]
@@ -162,7 +162,7 @@ use async_trait::async_trait;
 /// `GithubApi` trait pattern in `crates/zoid/src/github_fetch.rs`.
 #[async_trait]
 pub trait FeedbackApi: Send + Sync {
-    /// Create an issue on `repo` (e.g. "strvmarv/zoid-releases"). Returns
+    /// Create an issue on `repo` (e.g. "strvmarv/zoid"). Returns
     /// `(url, number)` on success. Returns `Err` for any HTTP/auth/network
     /// failure. If no token is available, the implementation returns
     /// `Err(NoToken)` so `submit_via` can fall back to the browser URL.
@@ -395,7 +395,7 @@ mod tests {
     fn browser_url_encodes_title_and_body_and_includes_label() {
         let url = sample_report().to_browser_url();
         assert!(url.starts_with(
-            "https://github.com/strvmarv/zoid-releases/issues/new?title="
+            "https://github.com/strvmarv/zoid/issues/new?title="
         ));
         assert!(url.contains("&body="));
         // The label line rides in the body (percent-encoded).
@@ -447,7 +447,7 @@ mod tests {
     #[tokio::test]
     async fn submit_via_with_token_creates_issue() {
         let api = FakeFeedbackApi::created(
-            "https://github.com/strvmarv/zoid-releases/issues/7",
+            "https://github.com/strvmarv/zoid/issues/7",
             7,
         );
         let outcome = sample_report().submit_via(&api).await.unwrap();
@@ -455,7 +455,7 @@ mod tests {
             SubmitOutcome::Created { url, number } => {
                 assert_eq!(
                     url,
-                    "https://github.com/strvmarv/zoid-releases/issues/7"
+                    "https://github.com/strvmarv/zoid/issues/7"
                 );
                 assert_eq!(number, 7);
             }
@@ -470,7 +470,7 @@ mod tests {
         match outcome {
             SubmitOutcome::BrowserFallback { url } => {
                 assert!(url.starts_with(
-                    "https://github.com/strvmarv/zoid-releases/issues/new?"
+                    "https://github.com/strvmarv/zoid/issues/new?"
                 ));
             }
             _ => panic!("expected BrowserFallback"),

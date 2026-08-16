@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 /// Public distribution repo that holds the GitHub Releases. Source stays private.
-const RELEASES_REPO: &str = "strvmarv/zoid-releases";
+const RELEASES_REPO: &str = "strvmarv/zoid";
 
 /// cargo-dist publishes its unified checksums file under this name (coreutils
 /// `<hex>  <filename>` format). NOT `SHA256SUMS`.

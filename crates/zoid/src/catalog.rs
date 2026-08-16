@@ -1,4 +1,4 @@
-//! Fetch + cache + parse the public zoid-releases plugin catalog.
+//! Fetch + cache + parse the public zoid plugin catalog.
 //! Unauthenticated raw.githubusercontent.com; see Spec 2 design.
 
 use std::path::{Path, PathBuf};
@@ -7,7 +7,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 
 const CATALOG_BASE: &str =
-    "https://raw.githubusercontent.com/strvmarv/zoid-releases/main/plugins";
+    "https://raw.githubusercontent.com/strvmarv/zoid/main/plugins";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogEntry {
@@ -82,7 +82,7 @@ pub fn catalog_manifest_url(id: &str) -> String {
     format!("{CATALOG_BASE}/{id}.toml")
 }
 
-/// One-shot async raw GET of a public zoid-releases text file (unauthenticated).
+/// One-shot async raw GET of a public zoid text file (unauthenticated).
 pub async fn fetch_text(url: &str) -> anyhow::Result<String> {
     let client = reqwest::Client::builder().user_agent("zoid").build()?;
     Ok(client.get(url).send().await?.error_for_status()?.text().await?)
@@ -206,9 +206,9 @@ mod tests {
     #[test]
     fn urls_are_raw_unauthenticated() {
         assert_eq!(catalog_index_url(),
-            "https://raw.githubusercontent.com/strvmarv/zoid-releases/main/plugins/index.json");
+            "https://raw.githubusercontent.com/strvmarv/zoid/main/plugins/index.json");
         assert_eq!(catalog_manifest_url("ok-skills"),
-            "https://raw.githubusercontent.com/strvmarv/zoid-releases/main/plugins/ok-skills.toml");
+            "https://raw.githubusercontent.com/strvmarv/zoid/main/plugins/ok-skills.toml");
     }
 }
 

@@ -87,12 +87,12 @@ pub struct SkillRegistry {
 }
 
 /// The body of the built-in `feedback` skill. References the `submit_feedback`
-/// tool and the `strvmarv/zoid-releases` repo.
+/// tool and the `strvmarv/zoid` repo.
 const FEEDBACK_SKILL_BODY: &str = "\
 # Submitting Feedback & Bug Reports
 
 zoid can file feedback or bug reports to the maintainers as GitHub issues on
-`strvmarv/zoid-releases`. The `submit_feedback` tool proposes a report; the
+`strvmarv/zoid`. The `submit_feedback` tool proposes a report; the
 user **always confirms and can edit** before it is submitted — never file
 silently.
 
@@ -274,7 +274,7 @@ impl SkillRegistry {
                 description: "Use when the user asks to report a bug or give feedback, \
                     or when a reproducible error occurs and the user agrees to report it — \
                     offers the submit_feedback tool to file a GitHub issue on \
-                    strvmarv/zoid-releases, with the user confirming before anything \
+                    strvmarv/zoid, with the user confirming before anything \
                     is submitted.".into(),
                 body: FEEDBACK_SKILL_BODY.into(),
                 base_dir: None,
@@ -381,7 +381,7 @@ mod tests {
             fb.body.contains("submit_feedback"),
             "feedback skill must reference the submit_feedback tool"
         );
-        assert!(fb.body.contains("strvmarv/zoid-releases"));
+        assert!(fb.body.contains("strvmarv/zoid"));
         assert!(fb.base_dir.is_none());
     }
 
