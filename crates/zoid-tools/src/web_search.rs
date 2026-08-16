@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use std::path::Path;
 use std::pin::Pin;
 use std::future::Future;
+use zoid_core::ErrorKind;
 use zoid_web::SearchResult;
 
 pub struct WebSearch;
@@ -69,7 +70,21 @@ impl Tool for WebSearch {
             };
             match zoid_web::search(&query).await {
                 Ok(results) => ToolOutput::ok(format_results(&results)),
-                Err(e) => ToolOutput::err(format!("web_search failed: {e}")),
+                Err(e) => {
+                    let msg = e.to_string();
+                    let kind = if msg.contains("backend unavailable") {
+                        ErrorKind::BackendUnavailable
+                    } else if msg.contains("no results found") {
+                        ErrorKind::NotFound
+                    } else if msg.contains("empty query") {
+                        ErrorKind::InvalidInput
+                    } else if msg.contains("timeout") || msg.contains("timed out") {
+                        ErrorKind::Timeout
+                    } else {
+                        ErrorKind::BackendUnavailable
+                    };
+                    ToolOutput::err_kind(kind, format!("web_search failed: {msg}"))
+                }
             }
         })
     }
