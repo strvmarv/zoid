@@ -15,6 +15,7 @@ use zoid_core::agent_profile::AgentProfile;
 use zoid_core::event::{BranchId, Event, EventKind};
 use zoid_core::projection::ChatMsg;
 use zoid_core::session::SessionHandle;
+use zoid_core::ErrorKind;
 use zoid_provider::{CompletionRequest, Message, Provider, ProviderEvent, ThinkingMode, ToolCall, ToolSpec};
 use zoid_tools::{Gate, Tool, ToolGate};
 
@@ -1598,7 +1599,11 @@ async fn run_turn_inner(
                             name: tc.name,
                             output,
                             is_error,
-                            error_kind: None,
+                            error_kind: if is_error {
+                                Some(ErrorKind::Internal)
+                            } else {
+                                None
+                            },
                         },
                         session_id,
                         now,
@@ -1634,7 +1639,7 @@ async fn run_turn_inner(
                                 name: tc.name,
                                 output: "dispatch_subagent: 'task' is required".into(),
                                 is_error: true,
-                                error_kind: None,
+                                error_kind: Some(ErrorKind::InvalidInput),
                             },
                             session_id,
                             now,
@@ -1662,7 +1667,7 @@ async fn run_turn_inner(
                                         name: tc.name,
                                         output: msg,
                                         is_error: true,
-                                        error_kind: None,
+                                        error_kind: Some(ErrorKind::Internal),
                                     },
                                     session_id,
                                     now,
@@ -1850,7 +1855,7 @@ async fn run_turn_inner(
                                 name: tc.name,
                                 output: "enter_worktree: 'name' is required".into(),
                                 is_error: true,
-                                error_kind: None,
+                                error_kind: Some(ErrorKind::InvalidInput),
                             },
                             session_id,
                             now,
@@ -1903,7 +1908,7 @@ async fn run_turn_inner(
                                     name: tc.name,
                                     output: msg,
                                     is_error: true,
-                                    error_kind: None,
+                                    error_kind: Some(ErrorKind::Internal),
                                 },
                                 session_id,
                                 now,
@@ -1953,6 +1958,13 @@ async fn run_turn_inner(
                                 Ok(Err(m)) => m,
                                 _ => "worktree exit failed (no reply)".to_string(),
                             };
+                            let error_kind = if msg.contains("not in a worktree")
+                                || msg.contains("subagent running")
+                            {
+                                Some(ErrorKind::Conflict)
+                            } else {
+                                Some(ErrorKind::Internal)
+                            };
                             emit(
                                 &session,
                                 &mut events,
@@ -1963,7 +1975,7 @@ async fn run_turn_inner(
                                     name: tc.name,
                                     output: msg,
                                     is_error: true,
-                                    error_kind: None,
+                                    error_kind,
                                 },
                                 session_id,
                                 now,
@@ -2019,7 +2031,11 @@ async fn run_turn_inner(
                             name: tc.name,
                             output,
                             is_error,
-                            error_kind: None,
+                            error_kind: if is_error {
+                                Some(ErrorKind::InvalidInput)
+                            } else {
+                                None
+                            },
                         },
                         session_id,
                         now,
@@ -2058,7 +2074,11 @@ async fn run_turn_inner(
                             name: tc.name,
                             output,
                             is_error,
-                            error_kind: None,
+                            error_kind: if is_error {
+                                Some(ErrorKind::InvalidInput)
+                            } else {
+                                None
+                            },
                         },
                         session_id,
                         now,
