@@ -153,6 +153,7 @@ mod tests {
         assert!(out.is_error);
         assert!(out.text.contains("unknown skill 'nope'"));
         assert!(out.text.contains("spike-plan"));
+        assert_eq!(out.error_kind, Some(ErrorKind::NotFound));
     }
 
     #[test]
@@ -160,6 +161,7 @@ mod tests {
         let out = tool().run(&json!({}), Path::new("."));
         assert!(out.is_error);
         assert!(out.text.contains("missing or empty 'name'"));
+        assert_eq!(out.error_kind, Some(ErrorKind::InvalidInput));
     }
 
     #[test]

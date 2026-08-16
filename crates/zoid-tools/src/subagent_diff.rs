@@ -136,5 +136,6 @@ mod tests {
         );
         assert!(out.is_error);
         assert!(out.text.contains("not found"));
+        assert_eq!(out.error_kind, Some(ErrorKind::NotFound));
     }
 }

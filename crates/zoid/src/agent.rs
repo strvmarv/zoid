@@ -5145,7 +5145,7 @@ mod tests {
             })
             .expect("dispatch_subagent tool result must be emitted");
         match &tool_result.kind {
-            EventKind::ToolResult { output, is_error, .. } => {
+            EventKind::ToolResult { output, is_error, error_kind, .. } => {
                 assert!(
                     *is_error,
                     "unknown agent must produce an error ToolResult"
@@ -5158,6 +5158,7 @@ mod tests {
                     output.contains("delegate"),
                     "error must list available agents (delegate): got {output}"
                 );
+                assert_eq!(*error_kind, Some(ErrorKind::Internal));
             }
             _ => panic!(),
         }
@@ -5273,6 +5274,636 @@ mod tests {
             "second dispatch tool result should announce it was queued: {:?}",
             results[1]
         );
+    }
+
+    /// `dispatch_subagent` with an empty/missing `task` is a validation
+    /// failure, not an execution failure — `error_kind` must be `InvalidInput`.
+    #[tokio::test]
+    async fn dispatch_subagent_missing_task_is_invalid_input() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage { text: "dispatch without a task".into() },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "d1".into(),
+                    name: "dispatch_subagent".into(),
+                    args: json!({}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let tool_result = out
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ToolResult { name, .. } if name == "dispatch_subagent"
+                )
+            })
+            .expect("dispatch_subagent tool result must be emitted");
+        match &tool_result.kind {
+            EventKind::ToolResult { output, is_error, error_kind, .. } => {
+                assert!(*is_error, "missing task must be an error");
+                assert!(
+                    output.contains("'task' is required"),
+                    "got: {output}"
+                );
+                assert_eq!(*error_kind, Some(ErrorKind::InvalidInput));
+            }
+            _ => panic!(),
+        }
+    }
+
+    /// `enter_worktree` with an empty/missing `name` is a validation failure.
+    #[tokio::test]
+    async fn enter_worktree_missing_name_is_invalid_input() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage { text: "enter a worktree".into() },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "w1".into(),
+                    name: "enter_worktree".into(),
+                    args: json!({}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let tool_result = out
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ToolResult { name, .. } if name == "enter_worktree"
+                )
+            })
+            .expect("enter_worktree tool result must be emitted");
+        match &tool_result.kind {
+            EventKind::ToolResult { output, is_error, error_kind, .. } => {
+                assert!(*is_error, "missing name must be an error");
+                assert!(
+                    output.contains("'name' is required"),
+                    "got: {output}"
+                );
+                assert_eq!(*error_kind, Some(ErrorKind::InvalidInput));
+            }
+            _ => panic!(),
+        }
+    }
+
+    /// `enter_worktree` whose relocation request comes back `Err` (or is
+    /// dropped without a reply) is an execution failure — `Internal`.
+    #[tokio::test]
+    async fn enter_worktree_switch_failure_is_internal() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage { text: "enter a worktree".into() },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "w1".into(),
+                    name: "enter_worktree".into(),
+                    args: json!({"name": "feature-x"}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move {
+            while let Some(upd) = rx.recv().await {
+                if let AgentUpdate::WorktreeRequested { reply, .. } = upd {
+                    let _ = reply.send(Err("worktree switch failed: simulated".into()));
+                }
+            }
+        });
+
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let tool_result = out
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ToolResult { name, .. } if name == "enter_worktree"
+                )
+            })
+            .expect("enter_worktree tool result must be emitted");
+        match &tool_result.kind {
+            EventKind::ToolResult { output, is_error, error_kind, .. } => {
+                assert!(*is_error, "failed switch must be an error");
+                assert!(output.contains("simulated"), "got: {output}");
+                assert_eq!(*error_kind, Some(ErrorKind::Internal));
+            }
+            _ => panic!(),
+        }
+    }
+
+    /// `exit_worktree` failing with a "not in a worktree" / "subagent
+    /// running" message is a state conflict, not an internal failure.
+    #[tokio::test]
+    async fn exit_worktree_not_in_worktree_is_conflict() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage { text: "exit the worktree".into() },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "w1".into(),
+                    name: "exit_worktree".into(),
+                    args: json!({}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move {
+            while let Some(upd) = rx.recv().await {
+                if let AgentUpdate::WorktreeRequested { reply, .. } = upd {
+                    let _ = reply.send(Err("not in a worktree".into()));
+                }
+            }
+        });
+
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let tool_result = out
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ToolResult { name, .. } if name == "exit_worktree"
+                )
+            })
+            .expect("exit_worktree tool result must be emitted");
+        match &tool_result.kind {
+            EventKind::ToolResult { output, is_error, error_kind, .. } => {
+                assert!(*is_error, "not-in-a-worktree must be an error");
+                assert!(output.contains("not in a worktree"), "got: {output}");
+                assert_eq!(*error_kind, Some(ErrorKind::Conflict));
+            }
+            _ => panic!(),
+        }
+    }
+
+    /// `exit_worktree` failing with an unrecognized message (not the
+    /// "not in a worktree" / "subagent running" conflict markers) falls
+    /// through to `Internal`.
+    #[tokio::test]
+    async fn exit_worktree_other_failure_is_internal() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage { text: "exit the worktree".into() },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "w1".into(),
+                    name: "exit_worktree".into(),
+                    args: json!({}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move {
+            while let Some(upd) = rx.recv().await {
+                if let AgentUpdate::WorktreeRequested { reply, .. } = upd {
+                    let _ = reply.send(Err("git worktree remove failed: fatal error".into()));
+                }
+            }
+        });
+
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let tool_result = out
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ToolResult { name, .. } if name == "exit_worktree"
+                )
+            })
+            .expect("exit_worktree tool result must be emitted");
+        match &tool_result.kind {
+            EventKind::ToolResult { output, is_error, error_kind, .. } => {
+                assert!(*is_error, "unrecognized failure must be an error");
+                assert!(output.contains("fatal error"), "got: {output}");
+                assert_eq!(*error_kind, Some(ErrorKind::Internal));
+            }
+            _ => panic!(),
+        }
+    }
+
+    /// `show` on the reachable (always non-error) `companion_show` path
+    /// carries no `error_kind`. `companion_show` currently has no failure
+    /// branch (see `zoid_companion::CompanionHub`), so the `Internal` arm in
+    /// the `show` match cannot be exercised without changing production
+    /// behavior; this test covers the only path currently reachable.
+    #[tokio::test]
+    async fn show_success_has_no_error_kind() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage { text: "show a card".into() },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "s1".into(),
+                    name: "show".into(),
+                    args: json!({"html": "<b>hi</b>"}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let tool_result = out
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ToolResult { name, .. } if name == "show"
+                )
+            })
+            .expect("show tool result must be emitted");
+        match &tool_result.kind {
+            EventKind::ToolResult { is_error, error_kind, .. } => {
+                assert!(!*is_error);
+                assert_eq!(*error_kind, None);
+            }
+            _ => panic!(),
+        }
+    }
+
+    /// `schedule_wake` validation failures (rejected by the main loop) are
+    /// `InvalidInput`.
+    #[tokio::test]
+    async fn schedule_wake_validation_error_is_invalid_input() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage { text: "schedule a wake".into() },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "sw1".into(),
+                    name: "schedule_wake".into(),
+                    args: json!({"delay_secs": 30, "note": "check back"}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move {
+            while let Some(upd) = rx.recv().await {
+                if let AgentUpdate::ScheduleWake { reply, .. } = upd {
+                    let _ = reply.send(Err("schedule_wake: too many pending wakes".into()));
+                }
+            }
+        });
+
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let tool_result = out
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ToolResult { name, .. } if name == "schedule_wake"
+                )
+            })
+            .expect("schedule_wake tool result must be emitted");
+        match &tool_result.kind {
+            EventKind::ToolResult { output, is_error, error_kind, .. } => {
+                assert!(*is_error, "rejected schedule must be an error");
+                assert!(output.contains("too many pending wakes"), "got: {output}");
+                assert_eq!(*error_kind, Some(ErrorKind::InvalidInput));
+            }
+            _ => panic!(),
+        }
+    }
+
+    /// `cancel_wake` validation failures (rejected by the main loop) are
+    /// `InvalidInput`.
+    #[tokio::test]
+    async fn cancel_wake_validation_error_is_invalid_input() {
+        use serde_json::json;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage { text: "cancel a wake".into() },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "cw1".into(),
+                    name: "cancel_wake".into(),
+                    args: json!({"id": "nope"}),
+                }),
+                ProviderEvent::Done,
+            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
+        ]));
+
+        let tools = std::sync::Arc::new(crate::invoke_skill::chat_tools(
+            std::sync::Arc::new(zoid_core::skill::SkillRegistry::builtin()),
+            std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin()),
+            zoid_tools::KillSlot::new(),
+        ));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move {
+            while let Some(upd) = rx.recv().await {
+                if let AgentUpdate::CancelWake { reply, .. } = upd {
+                    let _ = reply.send(Err("cancel_wake: no such wake 'nope'".into()));
+                }
+            }
+        });
+
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider,
+            tools,
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::from(0u128),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+
+        let tool_result = out
+            .iter()
+            .find(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::ToolResult { name, .. } if name == "cancel_wake"
+                )
+            })
+            .expect("cancel_wake tool result must be emitted");
+        match &tool_result.kind {
+            EventKind::ToolResult { output, is_error, error_kind, .. } => {
+                assert!(*is_error, "rejected cancel must be an error");
+                assert!(output.contains("no such wake"), "got: {output}");
+                assert_eq!(*error_kind, Some(ErrorKind::InvalidInput));
+            }
+            _ => panic!(),
+        }
     }
 
     #[tokio::test]
