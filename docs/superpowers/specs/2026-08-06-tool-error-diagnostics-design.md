@@ -45,12 +45,46 @@ Add a structured `ErrorKind` to `ToolOutput` so that:
 ## CWD-deleted detection and recovery
 
 A recurring failure mode: the agent's working directory is deleted out from
-under it (e.g., `git worktree remove` from another process, a subagent in a
-shared worktree exiting and cleaning up, or the agent itself running a command
-that removes the CWD). Every subsequent tool call fails with a confusing OS
-error (`No such file or directory`) that sends the model into a diagnostic
-spiral — it tries `ls`, `read`, `shell` to investigate, all of which fail the
-same way, wasting tokens and turns.
+under it. Every subsequent tool call fails with a confusing OS error (`No such
+file or directory`) that sends the model into a diagnostic spiral — it tries
+`ls`, `read`, `shell` to investigate, all of which fail the same way, wasting
+tokens and turns.
+
+### Worktree-flow audit (where does CWD deletion happen?)
+
+A review of the worktree lifecycle identified the paths where the working
+directory can be deleted:
+
+**Safe paths (no issue — already hardened):**
+- **`exit_worktree` (Chat agent):** `compute_worktree_switch` in `main.rs`
+  computes the new CWD (the main checkout root) *before* calling
+  `remove_worktree`, and updates `cwd_for_exec` to the new path. The worktree
+  directory is removed only after the CWD is repointed. This was an explicit
+  fix (labeled "WT-2" in the code: "computed BEFORE any removal, so tooling
+  never points at a deleted dir"). No hardening needed here.
+- **Subagent with `worktree: true` completes/fails:** The `WorktreeGuard` is
+  consumed (`into_kept_branch` on success, `drop` on failure) *after*
+  `run_subagent` returns — the subagent is no longer running tool calls when
+  its worktree is removed. The parent's CWD was never the subagent's worktree,
+  so the parent is unaffected. No hardening needed here.
+- **`enter_worktree` while already in a worktree:** `compute_worktree_switch`
+  returns an error ("already in a worktree — exit first"). Already guarded.
+
+**The actual risk — `worktree: false` subagents sharing the parent's CWD:**
+- A subagent dispatched with `worktree: false` (the default when the task
+  doesn't request isolation) inherits the parent's `cwd_for_exec` as its
+  working directory. If the subagent runs `shell rm -rf .` or a similar
+  destructive command, it deletes the parent's CWD. The parent's subsequent
+  tool calls all fail. Sibling subagents (also sharing the CWD) are likewise
+  broken.
+- This is the primary real-world cause of CWD deletion: not a worktree-flow
+  bug, but a subagent running a destructive shell command in a shared CWD.
+- The non-goal (no self-deletion guard) applies to the Chat agent itself, but
+  the subagent case is worth noting: a `worktree: false` subagent has the
+  *same* power to delete the CWD as the parent, and the parent has no defense.
+  The CWD-deleted pre-check is the safety net — it catches the aftermath and
+  gives the parent agent recovery instructions (`exit_worktree` if in a
+  worktree, or navigate to an existing directory).
 
 ### Design
 
@@ -81,9 +115,11 @@ deleted the directory intentionally, navigate to an existing directory first
 
 The message is intentionally prescriptive — it tells the model exactly what to
 do (call `exit_worktree`) rather than leaving it to diagnose the problem. The
-most common cause is a worktree being removed, so `exit_worktree` is the
-primary recovery path. The fallback ("navigate to an existing directory")
-covers non-worktree scenarios.
+most common causes are (1) a `worktree: false` subagent running a destructive
+shell command in the shared CWD, and (2) a worktree being removed by an
+external process. `exit_worktree` is the primary recovery path when in a
+worktree; the fallback ("navigate to an existing directory") covers non-worktree
+scenarios.
 
 **Where the check lives:** In the agent loop (`agent.rs`), in both the Local
 and Network tool-dispatch arms, before the tool is executed. The check is not
@@ -422,3 +458,8 @@ Each tool's error paths are categorized. Here is the complete mapping:
   loop-level guard.
 - **No self-deletion guard:** the agent is trusted not to `rm -rf` its own CWD;
   the pre-check catches the aftermath, not the cause.
+- **Worktree-flow audit:** the `exit_worktree` path is already hardened (WT-2:
+  CWD repointed before removal). The primary CWD-deletion risk is
+  `worktree: false` subagents sharing the parent's CWD and running destructive
+  shell commands. No worktree-flow changes are needed; the pre-check is the
+  safety net.
