@@ -2543,6 +2543,34 @@ async fn run_turn_inner(
                             name: tc.name.clone(),
                         })
                         .await;
+                    // CWD-deleted pre-check (spec: CWD-deleted detection and recovery).
+                    // Emitting tools are exempt — they're the recovery path.
+                    if !cwd_for_exec.exists() {
+                        let in_worktree = cwd_for_exec.iter().any(|c| c == ".zoid");
+                        let msg = if in_worktree {
+                            format!(
+                                "You are in a worktree — the working directory \"{}\" no longer exists. \
+                                 Call exit_worktree to return to the main checkout.",
+                                cwd_for_exec.display()
+                            )
+                        } else {
+                            format!(
+                                "The working directory \"{}\" no longer exists. \
+                                 Navigate to an existing directory (e.g., the repo root) \
+                                 before running another command.",
+                                cwd_for_exec.display()
+                            )
+                        };
+                        let out = zoid_tools::ToolOutput::err_kind(ErrorKind::CwdDeleted, msg);
+                        emit(&session, &mut events, ui, &config.branch, EventKind::ToolResult {
+                            id: tc.id,
+                            name: tc.name,
+                            output: out.text,
+                            is_error: out.is_error,
+                            error_kind: out.error_kind,
+                        }, session_id, now).await?;
+                        continue;  // skip to the next tool in the batch
+                    }
                     let tools_for_async = tools.clone();
                     let name = tc.name.clone();
                     let args = tc.args.clone();
@@ -2630,6 +2658,34 @@ async fn run_turn_inner(
                             name: tc.name.clone(),
                         })
                         .await;
+                    // CWD-deleted pre-check (spec: CWD-deleted detection and recovery).
+                    // Emitting tools are exempt — they're the recovery path.
+                    if !cwd_for_exec.exists() {
+                        let in_worktree = cwd_for_exec.iter().any(|c| c == ".zoid");
+                        let msg = if in_worktree {
+                            format!(
+                                "You are in a worktree — the working directory \"{}\" no longer exists. \
+                                 Call exit_worktree to return to the main checkout.",
+                                cwd_for_exec.display()
+                            )
+                        } else {
+                            format!(
+                                "The working directory \"{}\" no longer exists. \
+                                 Navigate to an existing directory (e.g., the repo root) \
+                                 before running another command.",
+                                cwd_for_exec.display()
+                            )
+                        };
+                        let out = zoid_tools::ToolOutput::err_kind(ErrorKind::CwdDeleted, msg);
+                        emit(&session, &mut events, ui, &config.branch, EventKind::ToolResult {
+                            id: tc.id,
+                            name: tc.name,
+                            output: out.text,
+                            is_error: out.is_error,
+                            error_kind: out.error_kind,
+                        }, session_id, now).await?;
+                        continue;  // skip to the next tool in the batch
+                    }
                     let tools_for_exec = tools.clone();
                     let name = tc.name.clone();
                     let args = tc.args.clone();
@@ -6368,5 +6424,32 @@ mod guardrail_types_tests {
             !output.contains("fire-and-forget"),
             "empty output must not carry the reminder: {output}"
         );
+    }
+
+    #[test]
+    fn cwd_deleted_message_contains_exit_worktree_when_in_worktree() {
+        let cwd = std::path::PathBuf::from("/repo/.zoid/worktrees/feature-x");
+        let in_worktree = cwd.iter().any(|c| c == ".zoid");
+        assert!(in_worktree);
+        let msg = format!(
+            "You are in a worktree — the working directory \"{}\" no longer exists. \
+             Call exit_worktree to return to the main checkout.",
+            cwd.display()
+        );
+        assert!(msg.contains("exit_worktree"));
+    }
+
+    #[test]
+    fn cwd_deleted_message_does_not_mention_worktree_when_not_in_worktree() {
+        let cwd = std::path::PathBuf::from("/home/user/project");
+        let in_worktree = cwd.iter().any(|c| c == ".zoid");
+        assert!(!in_worktree);
+        let msg = format!(
+            "The working directory \"{}\" no longer exists. \
+             Navigate to an existing directory (e.g., the repo root) \
+             before running another command.",
+            cwd.display()
+        );
+        assert!(!msg.contains("exit_worktree"));
     }
 }
