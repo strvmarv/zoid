@@ -51,6 +51,7 @@ impl Tool for Write {
             }
             Err(e) => {
                 let kind = match e.kind() {
+                    std::io::ErrorKind::NotFound => ErrorKind::NotFound,
                     std::io::ErrorKind::PermissionDenied => ErrorKind::PermissionDenied,
                     _ => ErrorKind::Internal,
                 };
