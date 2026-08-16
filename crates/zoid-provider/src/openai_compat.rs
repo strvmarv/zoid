@@ -9,7 +9,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -1043,8 +1043,13 @@ mod tests {
     #[test]
     fn reassert_pushes_trailing_system_message_openai() {
         let mut req = CompletionRequest {
-            model: "m".into(), system: None, messages: vec![Message::user("hi")],
-            max_tokens: 16, tools: vec![], thinking: crate::ThinkingMode::Off, reassert: None,
+            model: "m".into(),
+            system: None,
+            messages: vec![Message::user("hi")],
+            max_tokens: 16,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         req.reassert = Some("STANDING REMINDER".into());
         let body = request_body(&req);

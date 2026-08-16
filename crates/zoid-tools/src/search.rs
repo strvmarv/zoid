@@ -116,7 +116,9 @@ impl Tool for Grep {
         }
         let mut text = text_body;
         if truncated {
-            text.push_str(&format!("\n… (truncated at {MAX_RESULTS} matches; narrow the pattern or path)"));
+            text.push_str(&format!(
+                "\n… (truncated at {MAX_RESULTS} matches; narrow the pattern or path)"
+            ));
         }
         ToolOutput::ok(text)
     }
@@ -246,7 +248,10 @@ mod tests {
         );
         assert!(out.text.contains("a.rs"));
         assert!(!out.text.contains("b.txt"));
-        assert!(!out.text.contains(":1:"), "default mode lists files, not lines");
+        assert!(
+            !out.text.contains(":1:"),
+            "default mode lists files, not lines"
+        );
     }
 
     #[test]
@@ -339,7 +344,11 @@ mod tests {
             &json!({ "pattern": "fn", "path": file.to_str().unwrap() }),
             std::path::Path::new("."),
         );
-        assert!(out.is_error, "expected error for file path, got: {}", out.text);
+        assert!(
+            out.is_error,
+            "expected error for file path, got: {}",
+            out.text
+        );
         assert!(out.text.contains("not a directory"), "{}", out.text);
     }
 

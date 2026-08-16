@@ -114,7 +114,7 @@ mod tests {
             .spawn()
             .unwrap();
         slot.register(child.id()); // must kill immediately, not store
-        // The child should die within moments (SIGKILL), well under its 30s.
+                                   // The child should die within moments (SIGKILL), well under its 30s.
         let mut waited = 0;
         loop {
             match child.try_wait().unwrap() {

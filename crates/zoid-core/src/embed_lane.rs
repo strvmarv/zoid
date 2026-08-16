@@ -22,7 +22,9 @@ impl EmbedLane {
     /// persist. Embedding happens outside the index lock; only the append takes
     /// the write lock (briefly).
     pub fn tick(&self, batch: &[(Ulid, String)]) -> Vec<(Ulid, Vec<f32>)> {
-        if batch.is_empty() { return Vec::new(); }
+        if batch.is_empty() {
+            return Vec::new();
+        }
         let texts: Vec<&str> = batch.iter().map(|(_, t)| t.as_str()).collect();
         let embs = match self.embedder.embed(&texts) {
             Ok(e) => e,
@@ -41,7 +43,11 @@ impl EmbedLane {
 
 fn normalize(mut v: Vec<f32>) -> Vec<f32> {
     let n: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if n > 0.0 { for x in &mut v { *x /= n; } }
+    if n > 0.0 {
+        for x in &mut v {
+            *x /= n;
+        }
+    }
     v
 }
 
@@ -55,7 +61,10 @@ mod tests {
         let emb = Arc::new(FakeEmbedder::new(16));
         let idx = Arc::new(RwLock::new(EmbeddingIndex::new(16, 100)));
         let lane = EmbedLane::new(emb, idx.clone());
-        let batch = vec![(Ulid::from(1u128), "alpha".to_string()), (Ulid::from(2u128), "beta".to_string())];
+        let batch = vec![
+            (Ulid::from(1u128), "alpha".to_string()),
+            (Ulid::from(2u128), "beta".to_string()),
+        ];
         let rows = lane.tick(&batch);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].0, Ulid::from(1u128));
@@ -77,8 +86,12 @@ mod tests {
         fn embed(&self, _texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
             anyhow::bail!("embed failed")
         }
-        fn dim(&self) -> usize { 16 }
-        fn model_id(&self) -> &str { "failing" }
+        fn dim(&self) -> usize {
+            16
+        }
+        fn model_id(&self) -> &str {
+            "failing"
+        }
     }
 
     #[test]
@@ -89,6 +102,10 @@ mod tests {
         let batch = vec![(Ulid::from(1u128), "alpha".to_string())];
         let rows = lane.tick(&batch);
         assert!(rows.is_empty(), "embed error must yield no rows");
-        assert_eq!(idx.read().unwrap().len(), 0, "index must be untouched on embed error");
+        assert_eq!(
+            idx.read().unwrap().len(),
+            0,
+            "index must be untouched on embed error"
+        );
     }
 }

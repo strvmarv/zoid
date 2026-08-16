@@ -74,7 +74,10 @@ mod tests {
     fn resolve_rescue_weight_some_finite_passes_through_capped() {
         assert_eq!(resolve_rescue_weight(Some(8.0)), 8.0);
         assert_eq!(resolve_rescue_weight(Some(0.0)), 0.0);
-        assert_eq!(resolve_rescue_weight(Some(RESCUE_WEIGHT_MAX)), RESCUE_WEIGHT_MAX);
+        assert_eq!(
+            resolve_rescue_weight(Some(RESCUE_WEIGHT_MAX)),
+            RESCUE_WEIGHT_MAX
+        );
     }
 
     #[test]
@@ -164,7 +167,10 @@ mod directive_reasserted_test {
     #[test]
     fn directive_reasserted_is_inert() {
         let k = EventKind::DirectiveReasserted { at_cumulative: 123 };
-        assert!(is_inert(&k), "re-floor marker must not join evictable turn groups");
+        assert!(
+            is_inert(&k),
+            "re-floor marker must not join evictable turn groups"
+        );
         assert_eq!(event_tokens(&k), 0, "marker is weightless");
     }
 }
@@ -416,7 +422,10 @@ mod relevance_tests {
             topic_hint: String::new(),
             protected: false,
         };
-        assert!((turn_relevance(&turn, &ctx) - 1.0).abs() < 1e-6, "max, not mean");
+        assert!(
+            (turn_relevance(&turn, &ctx) - 1.0).abs() < 1e-6,
+            "max, not mean"
+        );
 
         let none = TurnView {
             ids: vec![Ulid::from(9u128)],
@@ -438,8 +447,14 @@ mod relevance_tests {
         // TIE GUARD (B1): the common case — one on-goal turn, the rest raw==0. All the
         // zeros MUST map to 0.0, not be spread by array position. A position-based
         // rank returns [1.0, 0.0, 0.25, 0.5] here and hands off-goal turns a bump.
-        assert_eq!(rank_normalize(&[0.9, 0.0, 0.0, 0.0]), vec![1.0, 0.0, 0.0, 0.0]);
-        assert_eq!(rank_normalize(&[0.0, 0.5, 0.0, 0.5]), vec![0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(
+            rank_normalize(&[0.9, 0.0, 0.0, 0.0]),
+            vec![1.0, 0.0, 0.0, 0.0]
+        );
+        assert_eq!(
+            rank_normalize(&[0.0, 0.5, 0.0, 0.5]),
+            vec![0.0, 1.0, 0.0, 1.0]
+        );
     }
 }
 #[derive(Debug, Clone)]
@@ -652,13 +667,7 @@ fn group_turns(
     let n = turns.len();
     // Three-layer protection (spec §3): hard floor, min count, budget ceiling,
     // capacity backstop. Computed in a backward pass over scaled token estimates.
-    let protection = compute_protection(
-        &turns,
-        min_protected_turns,
-        budget,
-        capacity_limit,
-        scale,
-    );
+    let protection = compute_protection(&turns, min_protected_turns, budget, capacity_limit, scale);
     for (i, t) in turns.iter_mut().enumerate() {
         let is_protected = protection[i];
         let is_evicted = t.ids.iter().any(|id| evicted.contains(id));
@@ -666,10 +675,11 @@ fn group_turns(
         // turns after the re-admission, so recall→evict→recall can't oscillate
         // but recalled content can never form a permanent unevictable floor
         // (final-review M10).
-        let in_readmit_cooldown = t
-            .ids
-            .iter()
-            .any(|id| readmit_mark.get(id).is_some_and(|mark| n - mark < min_protected_turns));
+        let in_readmit_cooldown = t.ids.iter().any(|id| {
+            readmit_mark
+                .get(id)
+                .is_some_and(|mark| n - mark < min_protected_turns)
+        });
         t.protected = is_protected || is_evicted || in_readmit_cooldown;
     }
     turns
@@ -713,9 +723,9 @@ pub fn plan_evictions<'a>(
     // capacity_limit = capacity − CAPACITY_SAFETY_MARGIN. The safety margin
     // (8192) also covers the typical ~7k system-prompt + tool-spec overhead;
     // the caller does not add system overhead separately (spec §3.2).
-    let capacity_limit = policy.capacity.saturating_sub(
-        crate::band::CAPACITY_SAFETY_MARGIN,
-    );
+    let capacity_limit = policy
+        .capacity
+        .saturating_sub(crate::band::CAPACITY_SAFETY_MARGIN);
     let turns = group_turns(
         &events,
         &evicted,
@@ -770,16 +780,15 @@ pub fn plan_evictions<'a>(
     let rescue = if ctx.goal.is_empty() {
         None
     } else {
-        let evicted_set: HashSet<Ulid> = plan.turns.iter()
+        let evicted_set: HashSet<Ulid> = plan
+            .turns
+            .iter()
             .flat_map(|t| t.ids.iter().copied())
             .collect();
         let survivors: Vec<RescuedTurn> = candidates
             .iter()
             .enumerate()
-            .filter(|(i, t)| {
-                bump[*i] > 0.0
-                    && !t.ids.iter().any(|id| evicted_set.contains(id))
-            })
+            .filter(|(i, t)| bump[*i] > 0.0 && !t.ids.iter().any(|id| evicted_set.contains(id)))
             .map(|(i, t)| {
                 let base = scorer.score(t, ctx);
                 RescuedTurn {
@@ -843,7 +852,14 @@ mod plan_tests {
     #[test]
     fn no_plan_below_high_water() {
         let events = vec![user(1, "a"), asst(2, "b")];
-        let plan = plan_evictions(&events, &policy(384_000, 4), 100, &RecencyScorer, &GoalContext::default(), 1.0);
+        let plan = plan_evictions(
+            &events,
+            &policy(384_000, 4),
+            100,
+            &RecencyScorer,
+            &GoalContext::default(),
+            1.0,
+        );
         assert!(plan.turns.is_empty());
     }
 
@@ -857,7 +873,14 @@ mod plan_tests {
             events.push(asst(i * 2 + 2, "ok"));
         }
         // current well over high_water forces a wave; low_water = target - 20%.
-        let plan = plan_evictions(&events, &policy(3_000, 2), 6_000, &RecencyScorer, &GoalContext::default(), 1.0);
+        let plan = plan_evictions(
+            &events,
+            &policy(3_000, 2),
+            6_000,
+            &RecencyScorer,
+            &GoalContext::default(),
+            1.0,
+        );
         assert!(!plan.turns.is_empty());
         // never evicts the protected (newest) turns
         let evicted_ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
@@ -889,7 +912,14 @@ mod plan_tests {
             },
         ));
         // turn 1 already evicted → not re-selected
-        let plan = plan_evictions(&events, &policy(1_000, 2), 5_000, &RecencyScorer, &GoalContext::default(), 1.0);
+        let plan = plan_evictions(
+            &events,
+            &policy(1_000, 2),
+            5_000,
+            &RecencyScorer,
+            &GoalContext::default(),
+            1.0,
+        );
         let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
         assert!(!ids.contains(&Ulid::from(1u128)));
     }
@@ -899,7 +929,14 @@ mod plan_tests {
         // all turns are recent (recent_n huge) → empty plan even over high_water
         let big = "x".repeat(3000);
         let events = vec![user(1, &big), asst(2, "ok")];
-        let plan = plan_evictions(&events, &policy(100, 10), 100_000, &RecencyScorer, &GoalContext::default(), 1.0);
+        let plan = plan_evictions(
+            &events,
+            &policy(100, 10),
+            100_000,
+            &RecencyScorer,
+            &GoalContext::default(),
+            1.0,
+        );
         assert!(plan.turns.is_empty());
     }
 
@@ -939,8 +976,11 @@ mod plan_tests {
         //   Turn 1: reclaimed += 1600. 5000-3200=1800 ≤ 2400 → stop. 2 turns.
         // So with scale=1.6: 2 turns evicted. Without scale: 3 turns.
         let plan = plan_evictions(
-            &events, &p, current_scaled,
-            &RecencyScorer, &GoalContext::default(),
+            &events,
+            &p,
+            current_scaled,
+            &RecencyScorer,
+            &GoalContext::default(),
             scale,
         );
         let n_evicted = plan.turns.len();
@@ -952,7 +992,10 @@ mod plan_tests {
         // The oldest turns (0, 1) should be the victims.
         let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
         assert!(ids.contains(&Ulid::from(1u128)), "oldest turn evicted");
-        assert!(ids.contains(&Ulid::from(3u128)), "second-oldest turn evicted");
+        assert!(
+            ids.contains(&Ulid::from(3u128)),
+            "second-oldest turn evicted"
+        );
     }
 
     #[test]
@@ -988,7 +1031,14 @@ mod plan_tests {
                 ids: vec![Ulid::from(1u128), Ulid::from(2u128)],
             },
         ));
-        let plan = plan_evictions(&events, &policy(1_000, 2), 5_000, &RecencyScorer, &GoalContext::default(), 1.0);
+        let plan = plan_evictions(
+            &events,
+            &policy(1_000, 2),
+            5_000,
+            &RecencyScorer,
+            &GoalContext::default(),
+            1.0,
+        );
         let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
         assert!(
             !ids.contains(&Ulid::from(1u128)),
@@ -1028,7 +1078,14 @@ mod plan_tests {
             events.push(user(i * 2 + 1, &big));
             events.push(asst(i * 2 + 2, "ok"));
         }
-        let plan = plan_evictions(&events, &policy(3_000, 2), 6_000, &RecencyScorer, &GoalContext::default(), 1.0);
+        let plan = plan_evictions(
+            &events,
+            &policy(3_000, 2),
+            6_000,
+            &RecencyScorer,
+            &GoalContext::default(),
+            1.0,
+        );
         let ids: Vec<Ulid> = plan.turns.iter().flat_map(|t| t.ids.clone()).collect();
         assert!(
             ids.contains(&Ulid::from(1u128)),
@@ -1128,7 +1185,11 @@ mod plan_tests {
     fn rescue_is_none_when_goal_empty() {
         let events = turns8();
         let plan = plan_evictions(
-            &events, &policy(5_000, 2), 8_000, &RecencyScorer, &GoalContext::default(),
+            &events,
+            &policy(5_000, 2),
+            8_000,
+            &RecencyScorer,
+            &GoalContext::default(),
             1.0,
         );
         assert!(plan.rescue.is_none(), "empty goal ⇒ no rescue rationale");
@@ -1175,13 +1236,18 @@ mod plan_tests {
         assert_eq!(rescue.goal_text, ctx.goal_text);
         assert_eq!(rescue.weight, ctx.weight);
         // The rescued turn (id 1) should be in survivors with bump > 0.
-        let survivor = rescue.survivors.iter().find(|s| s.ids.contains(&Ulid::from(1u128)));
+        let survivor = rescue
+            .survivors
+            .iter()
+            .find(|s| s.ids.contains(&Ulid::from(1u128)));
         assert!(survivor.is_some(), "rescued turn id 1 in survivors");
         let survivor = survivor.unwrap();
         assert!(survivor.rescue_bump > 0.0, "rescue bump > 0");
         // Score arithmetic: keep_score == base_score + rescue_bump.
-        assert!((survivor.keep_score - (survivor.base_score + survivor.rescue_bump)).abs() < 1e-6,
-            "keep_score == base_score + rescue_bump");
+        assert!(
+            (survivor.keep_score - (survivor.base_score + survivor.rescue_bump)).abs() < 1e-6,
+            "keep_score == base_score + rescue_bump"
+        );
     }
 
     #[test]
@@ -1304,7 +1370,10 @@ mod protection_tests {
         let count = p.iter().filter(|&&x| x).count();
         assert_eq!(count, 5, "3 min + 2 bonus = 5");
         // turn 4 (6th from end) is the first beyond budget → not protected
-        assert!(!p[0] && !p[4], "turn 4 (6th from end) beyond budget not protected");
+        assert!(
+            !p[0] && !p[4],
+            "turn 4 (6th from end) beyond budget not protected"
+        );
     }
 
     /// Capacity backstop: when the protected floor exceeds capacity, shrink
@@ -1331,7 +1400,10 @@ mod protection_tests {
         let turns: Vec<TurnView> = (0..10).map(|_| tv(100)).collect();
         let p = compute_protection(&turns, 3, 800, 1_000_000, 2.0);
         let count = p.iter().filter(|&&x| x).count();
-        assert_eq!(count, 4, "scale=2.0: 3 min + 1 bonus (cumulative 800 ≤ budget 800) = 4");
+        assert_eq!(
+            count, 4,
+            "scale=2.0: 3 min + 1 bonus (cumulative 800 ≤ budget 800) = 4"
+        );
     }
 
     /// Empty turns → empty protection vector (no panic).
@@ -1399,7 +1471,14 @@ mod steady_state_tests {
                 EventKind::AssistantMessage { text: "ok".into() },
             ));
             let live = context_window_with(&events, overhead.clone()).total_tokens;
-            let plan = plan_evictions(&events, &policy, live, &RecencyScorer, &GoalContext::default(), 1.0);
+            let plan = plan_evictions(
+                &events,
+                &policy,
+                live,
+                &RecencyScorer,
+                &GoalContext::default(),
+                1.0,
+            );
             apply(&mut events, &plan, &mut seq);
             let after = context_window_with(&events, overhead.clone()).total_tokens;
             // HARD: never exceeds capacity.

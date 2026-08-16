@@ -36,7 +36,9 @@ impl Provider for ParkingProvider {
         _req: &CompletionRequest,
         sink: mpsc::Sender<ProviderEvent>,
     ) -> anyhow::Result<()> {
-        let _ = sink.send(ProviderEvent::TextDelta("parked...".into())).await;
+        let _ = sink
+            .send(ProviderEvent::TextDelta("parked...".into()))
+            .await;
         // Never returns, never sends Done, keeps `sink` alive.
         std::future::pending::<()>().await;
         unreachable!()

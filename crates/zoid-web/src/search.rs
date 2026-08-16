@@ -52,7 +52,11 @@ pub(crate) fn parse_ddg_html(html: &str) -> Vec<SearchResult> {
             .map(|s| s.text().collect::<String>().trim().to_string())
             .unwrap_or_default();
         if !title.is_empty() && !url.is_empty() {
-            out.push(SearchResult { title, url, snippet });
+            out.push(SearchResult {
+                title,
+                url,
+                snippet,
+            });
         }
     }
     out
@@ -94,11 +98,7 @@ pub(crate) async fn search_with_client(
     if q.is_empty() {
         return Err(anyhow!("empty query"));
     }
-    let resp = client
-        .post(DDG_URL)
-        .form(&[("q", q)])
-        .send()
-        .await?;
+    let resp = client.post(DDG_URL).form(&[("q", q)]).send().await?;
     if !resp.status().is_success() {
         return Err(anyhow!("DuckDuckGo returned HTTP {}", resp.status()));
     }

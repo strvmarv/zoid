@@ -71,7 +71,10 @@ pub fn build_plan(manifest: &PluginManifest, scan: &UpstreamScan) -> Result<Inst
     })
 }
 
-fn build_skills_plan(manifest: &PluginManifest, scan: &UpstreamScan) -> Result<InstallPlan, String> {
+fn build_skills_plan(
+    manifest: &PluginManifest,
+    scan: &UpstreamScan,
+) -> Result<InstallPlan, String> {
     // Skills packs have no loader/overlay: every `<skill>/SKILL.md` (plus its
     // sibling files) is materialized under its canonical (stripped) path.
     let strip = scan_strip_prefix(manifest, scan);
@@ -189,9 +192,21 @@ pub(crate) mod tests {
             resolved_ref: "SHA".into(),
             subtree_path: "skills".into(),
             files: vec![
-                ScannedFile { upstream_path: "skills/using-superpowers/SKILL.md".into(), sha: "a".into(), content: skill_md("using-superpowers", "loader") },
-                ScannedFile { upstream_path: "skills/brainstorming/SKILL.md".into(), sha: "c".into(), content: skill_md("brainstorming", "Use before creative work") },
-                ScannedFile { upstream_path: "skills/brainstorming/visual-companion.md".into(), sha: "d".into(), content: "vc".into() },
+                ScannedFile {
+                    upstream_path: "skills/using-superpowers/SKILL.md".into(),
+                    sha: "a".into(),
+                    content: skill_md("using-superpowers", "loader"),
+                },
+                ScannedFile {
+                    upstream_path: "skills/brainstorming/SKILL.md".into(),
+                    sha: "c".into(),
+                    content: skill_md("brainstorming", "Use before creative work"),
+                },
+                ScannedFile {
+                    upstream_path: "skills/brainstorming/visual-companion.md".into(),
+                    sha: "d".into(),
+                    content: "vc".into(),
+                },
             ],
         }
     }
@@ -225,24 +240,36 @@ pub(crate) mod tests {
         let pairs: Vec<(&str, &str)> = plan.mapping.materialize_entries();
         assert!(pairs.contains(&("mode.md", "skills/using-superpowers/SKILL.md")));
         assert!(pairs.contains(&("brainstorming/SKILL.md", "skills/brainstorming/SKILL.md")));
-        assert!(pairs.contains(&("brainstorming/visual-companion.md", "skills/brainstorming/visual-companion.md")));
+        assert!(pairs.contains(&(
+            "brainstorming/visual-companion.md",
+            "skills/brainstorming/visual-companion.md"
+        )));
         // loader is NOT emitted as its own canonical file.
-        assert!(!pairs.iter().any(|(c, _)| *c == "using-superpowers/SKILL.md"));
+        assert!(!pairs
+            .iter()
+            .any(|(c, _)| *c == "using-superpowers/SKILL.md"));
         assert_eq!(plan.effects, vec![Effect::Activate]);
     }
 
     #[test]
     fn build_plan_body_lists_skills_alphabetically_excluding_loader() {
         let plan = build_plan(&manifest(), &scan()).unwrap();
-        assert!(plan.mapping.mode_body.contains("- brainstorming: Use before creative work"));
+        assert!(plan
+            .mapping
+            .mode_body
+            .contains("- brainstorming: Use before creative work"));
         assert!(!plan.mapping.mode_body.contains("- using-superpowers:"));
-        assert!(plan.mapping.mode_body.contains("verification-before-completion before claiming success"));
+        assert!(plan
+            .mapping
+            .mode_body
+            .contains("verification-before-completion before claiming success"));
     }
 
     #[test]
     fn build_plan_errors_when_loader_absent() {
         let mut s = scan();
-        s.files.retain(|f| f.upstream_path != "skills/using-superpowers/SKILL.md");
+        s.files
+            .retain(|f| f.upstream_path != "skills/using-superpowers/SKILL.md");
         assert!(build_plan(&manifest(), &s).is_err());
     }
 
@@ -270,8 +297,10 @@ pub(crate) mod tests {
     fn mode_body_matches_golden_snapshot() {
         let plan = build_plan(&manifest(), &scan()).unwrap();
         let golden = include_str!("../tests/superpowers_body_golden.txt");
-        assert_eq!(plan.mapping.mode_body, golden,
-            "body generator drifted; if intentional, regenerate the golden file");
+        assert_eq!(
+            plan.mapping.mode_body, golden,
+            "body generator drifted; if intentional, regenerate the golden file"
+        );
     }
 
     #[test]
@@ -282,7 +311,10 @@ pub(crate) mod tests {
         mode.body_outro = Some("\nCUSTOM OUTRO\n".to_string());
         let plan = build_plan(&m, &scan()).unwrap();
         assert!(plan.mapping.mode_body.starts_with("CUSTOM INTRO"));
-        assert!(plan.mapping.mode_body.contains("- brainstorming: Use before creative work"));
+        assert!(plan
+            .mapping
+            .mode_body
+            .contains("- brainstorming: Use before creative work"));
         assert!(plan.mapping.mode_body.trim_end().ends_with("CUSTOM OUTRO"));
     }
 
@@ -300,10 +332,19 @@ pub(crate) mod tests {
         mode.body_intro = None;
         mode.body_outro = None;
         let plan = build_plan(&m, &scan()).unwrap();
-        assert!(plan.mapping.mode_body.contains("operating in \"Robotics\" mode"));
-        assert!(plan.mapping.mode_body.contains("imported from arpitg1304/robotics-agent-skills"));
+        assert!(plan
+            .mapping
+            .mode_body
+            .contains("operating in \"Robotics\" mode"));
+        assert!(plan
+            .mapping
+            .mode_body
+            .contains("imported from arpitg1304/robotics-agent-skills"));
         assert!(plan.mapping.mode_body.contains("invoke_skill"));
         // The generic default must NOT carry Superpowers-specific text.
-        assert!(!plan.mapping.mode_body.contains("verification-before-completion"));
+        assert!(!plan
+            .mapping
+            .mode_body
+            .contains("verification-before-completion"));
     }
 }

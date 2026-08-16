@@ -385,10 +385,9 @@ mod tests {
     #[test]
     fn model_options_list_registry_models() {
         let opts = model_options("anthropic-api", "claude-opus-4-8");
-        assert!(
-            opts.iter()
-                .any(|o| o.id == "claude-sonnet-4-6" && o.selectable)
-        );
+        assert!(opts
+            .iter()
+            .any(|o| o.id == "claude-sonnet-4-6" && o.selectable));
         let cur = opts.iter().find(|o| o.id == "claude-opus-4-8").unwrap();
         assert!(cur.is_current);
     }

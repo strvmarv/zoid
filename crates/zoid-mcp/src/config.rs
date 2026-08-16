@@ -141,7 +141,13 @@ pub fn merge_server(
         Ok(text) => serde_json::from_str(&text)
             .map_err(|e| anyhow::anyhow!("{} is not valid JSON: {e}", path.display()))?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Value::Object(Map::new()),
-        Err(e) => return Err(anyhow::anyhow!("cannot read {}: {}", path.display(), e.kind())),
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "cannot read {}: {}",
+                path.display(),
+                e.kind()
+            ))
+        }
     };
 
     let obj = root
@@ -206,7 +212,10 @@ mod tests {
         let (name, cfg) = &servers[0];
         assert_eq!(name, "filesystem");
         assert_eq!(cfg.command, "npx");
-        assert_eq!(cfg.args, vec!["-y", "@modelcontextprotocol/server-filesystem", "/src"]);
+        assert_eq!(
+            cfg.args,
+            vec!["-y", "@modelcontextprotocol/server-filesystem", "/src"]
+        );
         assert_eq!(cfg.env.get("TOKEN").unwrap(), "abc");
     }
 
@@ -244,10 +253,16 @@ mod tests {
         let proj = dir.path().join("proj");
         std::fs::create_dir_all(&user).unwrap();
         std::fs::create_dir_all(&proj).unwrap();
-        std::fs::write(user.join("mcp.json"),
-            r#"{"mcpServers": {"git": {"command": "user-git"}, "fs": {"command": "fs"}}}"#).unwrap();
-        std::fs::write(proj.join(".mcp.json"),
-            r#"{"mcpServers": {"git": {"command": "proj-git"}}}"#).unwrap();
+        std::fs::write(
+            user.join("mcp.json"),
+            r#"{"mcpServers": {"git": {"command": "user-git"}, "fs": {"command": "fs"}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            proj.join(".mcp.json"),
+            r#"{"mcpServers": {"git": {"command": "proj-git"}}}"#,
+        )
+        .unwrap();
         let get = |_: &str| None;
         let servers = discover(&user, &proj, &get);
         let git = servers.iter().find(|(n, _)| n == "git").unwrap();
@@ -300,11 +315,19 @@ mod merge_tests {
     fn skips_existing_name_without_writing() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".mcp.json");
-        std::fs::write(&path, "{ \"mcpServers\": { \"github\": { \"command\": \"mine\" } } }").unwrap();
+        std::fs::write(
+            &path,
+            "{ \"mcpServers\": { \"github\": { \"command\": \"mine\" } } }",
+        )
+        .unwrap();
         let before = std::fs::read_to_string(&path).unwrap();
         let out = merge_server(&path, "github", &cfg("npx")).unwrap();
         assert!(matches!(out, MergeOutcome::SkippedExisting));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), before, "must not rewrite on skip");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            before,
+            "must not rewrite on skip"
+        );
     }
 
     #[test]
@@ -313,6 +336,10 @@ mod merge_tests {
         let path = dir.path().join(".mcp.json");
         std::fs::write(&path, "not json at all").unwrap();
         assert!(merge_server(&path, "github", &cfg("npx")).is_err());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "not json at all", "must not clobber");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "not json at all",
+            "must not clobber"
+        );
     }
 }

@@ -22,9 +22,7 @@ pub fn route_feedback_key(state: &FeedbackState, key: KeyEvent) -> Action {
         KeyCode::Up if state.focus == FeedbackField::Kind => Action::FeedbackCycleKind(-1),
         KeyCode::Down if state.focus == FeedbackField::Kind => Action::FeedbackCycleKind(1),
         KeyCode::Backspace => Action::FeedbackBackspace,
-        KeyCode::Char(c) if ctrl && (c == 'm' || c == '\n' || c == '\r') => {
-            Action::FeedbackSubmit
-        }
+        KeyCode::Char(c) if ctrl && (c == 'm' || c == '\n' || c == '\r') => Action::FeedbackSubmit,
         KeyCode::Char(c) => Action::FeedbackChar(c),
         _ => Action::Noop,
     }

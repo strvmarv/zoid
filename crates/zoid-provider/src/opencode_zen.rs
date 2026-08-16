@@ -249,7 +249,10 @@ mod tests {
         let (tx, _rx) = mpsc::channel::<ProviderEvent>(16);
         let _ = provider.stream(&zen_req("glm-5.2"), tx).await;
         let first = recorded.lock().await.clone().unwrap_or_default();
-        assert!(first.contains("/v1/chat/completions"), "expected /v1/chat/completions, got: {first}");
+        assert!(
+            first.contains("/v1/chat/completions"),
+            "expected /v1/chat/completions, got: {first}"
+        );
     }
 
     #[tokio::test]
@@ -261,7 +264,10 @@ mod tests {
         let (tx, _rx) = mpsc::channel::<ProviderEvent>(16);
         let _ = provider.stream(&zen_req("claude-sonnet-4-5"), tx).await;
         let first = recorded.lock().await.clone().unwrap_or_default();
-        assert!(first.contains("/v1/messages"), "expected /v1/messages, got: {first}");
+        assert!(
+            first.contains("/v1/messages"),
+            "expected /v1/messages, got: {first}"
+        );
     }
 
     #[tokio::test]
@@ -273,7 +279,10 @@ mod tests {
         let (tx, _rx) = mpsc::channel::<ProviderEvent>(16);
         let _ = provider.stream(&zen_req("gpt-5.4"), tx).await;
         let first = recorded.lock().await.clone().unwrap_or_default();
-        assert!(first.contains("/v1/responses"), "expected /v1/responses, got: {first}");
+        assert!(
+            first.contains("/v1/responses"),
+            "expected /v1/responses, got: {first}"
+        );
     }
 
     #[tokio::test]

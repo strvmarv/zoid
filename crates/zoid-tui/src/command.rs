@@ -343,10 +343,7 @@ mod tests {
 
     #[test]
     fn worktree_no_arg_is_empty() {
-        assert_eq!(
-            parse_command(":worktree"),
-            Command::Worktree(String::new())
-        );
+        assert_eq!(parse_command(":worktree"), Command::Worktree(String::new()));
     }
 
     #[test]

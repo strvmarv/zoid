@@ -9,7 +9,10 @@ fn client() -> anyhow::Result<reqwest::Client> {
     if let Ok(tok) = std::env::var("GITHUB_TOKEN") {
         use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
         let mut h = HeaderMap::new();
-        h.insert(AUTHORIZATION, HeaderValue::from_str(&format!("Bearer {tok}"))?);
+        h.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {tok}"))?,
+        );
         b = b.default_headers(h);
     }
     Ok(b.build()?)
@@ -24,22 +27,41 @@ fn parse_tree(v: &serde_json::Value) -> anyhow::Result<Vec<String>> {
         "GitHub truncated the recursive tree listing (repo too large); \
          partial results would corrupt the conversion"
     );
-    let tree = v.get("tree").and_then(|t| t.as_array()).context("no tree array")?;
-    Ok(tree.iter()
+    let tree = v
+        .get("tree")
+        .and_then(|t| t.as_array())
+        .context("no tree array")?;
+    Ok(tree
+        .iter()
         .filter(|e| e.get("type").and_then(|t| t.as_str()) == Some("blob"))
-        .filter_map(|e| e.get("path").and_then(|p| p.as_str()).map(|s| s.to_string()))
+        .filter_map(|e| {
+            e.get("path")
+                .and_then(|p| p.as_str())
+                .map(|s| s.to_string())
+        })
         .collect())
 }
 
 pub async fn fetch_tree_paths(repo: &str, sha: &str) -> anyhow::Result<Vec<String>> {
-    let v: serde_json::Value = client()?.get(tree_url(repo, sha)).send().await?
-        .error_for_status()?.json().await?;
+    let v: serde_json::Value = client()?
+        .get(tree_url(repo, sha))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
     parse_tree(&v)
 }
 
 pub async fn fetch_blob(repo: &str, sha: &str, path: &str) -> anyhow::Result<String> {
     let url = format!("https://raw.githubusercontent.com/{repo}/{sha}/{path}");
-    Ok(client()?.get(url).send().await?.error_for_status()?.text().await?)
+    Ok(client()?
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?)
 }
 
 pub fn resolve_head_sha(repo: &str, branch: &str) -> anyhow::Result<String> {
@@ -53,11 +75,22 @@ pub fn resolve_head_sha(repo: &str, branch: &str) -> anyhow::Result<String> {
     );
     anyhow::ensure!(!branch.starts_with('-'), "invalid branch '{branch}'");
     let out = std::process::Command::new("git")
-        .args(["ls-remote", "--", &format!("https://github.com/{repo}"), branch])
+        .args([
+            "ls-remote",
+            "--",
+            &format!("https://github.com/{repo}"),
+            branch,
+        ])
         .output()?;
-    anyhow::ensure!(out.status.success(), "git ls-remote failed for {repo} {branch}");
+    anyhow::ensure!(
+        out.status.success(),
+        "git ls-remote failed for {repo} {branch}"
+    );
     let line = String::from_utf8(out.stdout)?;
-    let sha = line.split_whitespace().next().context("empty ls-remote output")?;
+    let sha = line
+        .split_whitespace()
+        .next()
+        .context("empty ls-remote output")?;
     Ok(sha.to_string())
 }
 
@@ -83,7 +116,10 @@ mod tests {
                 {"type": "blob", "path": "README.md"},
             ]
         });
-        assert_eq!(parse_tree(&v).unwrap(), vec!["skills/a/SKILL.md", "README.md"]);
+        assert_eq!(
+            parse_tree(&v).unwrap(),
+            vec!["skills/a/SKILL.md", "README.md"]
+        );
     }
 
     #[test]

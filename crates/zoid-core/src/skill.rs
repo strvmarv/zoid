@@ -469,7 +469,8 @@ mod tests {
     #[test]
     fn builtin_includes_refreshing_provider_models_skill() {
         let r = SkillRegistry::builtin();
-        let s = r.get("refreshing-provider-models")
+        let s = r
+            .get("refreshing-provider-models")
             .expect("refreshing-provider-models must be a built-in skill");
         assert!(
             s.description.starts_with("Use when"),

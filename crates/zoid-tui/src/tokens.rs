@@ -53,17 +53,17 @@ pub mod glyph {
     pub const COMPACT_SPINNER: [char; 6] = ['⊟', '⊞', '⊟', '⊕', '⊞', '⊕'];
 
     // GFM table box-drawing borders (§3.5 tables reuse the box-drawing set).
-    pub const TABLE_H: char = '─';   // horizontal border
-    pub const TABLE_V: char = '│';   // vertical separator
-    pub const TABLE_TL: char = '┌';  // top-left corner
-    pub const TABLE_TR: char = '┐';  // top-right corner
-    pub const TABLE_BL: char = '└';  // bottom-left corner
-    pub const TABLE_BR: char = '┘';  // bottom-right corner
-    pub const TABLE_LT: char = '├';  // left tee
-    pub const TABLE_RT: char = '┤';  // right tee
-    pub const TABLE_TT: char = '┬';  // top tee
-    pub const TABLE_BT: char = '┴';  // bottom tee
-    pub const TABLE_CR: char = '┼';  // cross
+    pub const TABLE_H: char = '─'; // horizontal border
+    pub const TABLE_V: char = '│'; // vertical separator
+    pub const TABLE_TL: char = '┌'; // top-left corner
+    pub const TABLE_TR: char = '┐'; // top-right corner
+    pub const TABLE_BL: char = '└'; // bottom-left corner
+    pub const TABLE_BR: char = '┘'; // bottom-right corner
+    pub const TABLE_LT: char = '├'; // left tee
+    pub const TABLE_RT: char = '┤'; // right tee
+    pub const TABLE_TT: char = '┬'; // top tee
+    pub const TABLE_BT: char = '┴'; // bottom tee
+    pub const TABLE_CR: char = '┼'; // cross
 
     // Repo drawer line-prefix emojis (§16) — visual markers for at-a-glance scanning.
     pub const REPO_NAME: char = '📦';

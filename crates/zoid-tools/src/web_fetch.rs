@@ -5,9 +5,9 @@
 
 use crate::{Tool, ToolKind, ToolOutput, ToolSpec};
 use serde_json::{json, Value};
+use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
-use std::future::Future;
 use zoid_core::ErrorKind;
 use zoid_web::FetchResult;
 
@@ -136,7 +136,11 @@ mod tests {
             offset,
             limit: 20_000,
             outline: if offset == 0 {
-                vec![HeadingMark { level: 1, text: "Intro".into(), char_offset: 0 }]
+                vec![HeadingMark {
+                    level: 1,
+                    text: "Intro".into(),
+                    char_offset: 0,
+                }]
             } else {
                 Vec::new()
             },
@@ -174,7 +178,10 @@ mod tests {
     fn format_fetch_omits_outline_on_nonzero_offset() {
         let r = sample(500);
         let out = format_fetch(&r);
-        assert!(!out.contains("## Outline"), "non-zero offset omits outline: {out}");
+        assert!(
+            !out.contains("## Outline"),
+            "non-zero offset omits outline: {out}"
+        );
     }
 
     #[test]
@@ -186,7 +193,10 @@ mod tests {
             ..sample(0)
         };
         let out = format_fetch(&r);
-        assert!(out.contains("call web_fetch with offset="), "truncated note present: {out}");
+        assert!(
+            out.contains("call web_fetch with offset="),
+            "truncated note present: {out}"
+        );
     }
 
     #[test]

@@ -426,9 +426,7 @@ fn route_sessions_key(state: &ShellState, key: KeyEvent) -> Action {
                 Action::SessionPick
             }
         }
-        KeyCode::Delete | KeyCode::Backspace if !state.sessions.is_empty() => {
-            Action::SessionDelete
-        }
+        KeyCode::Delete | KeyCode::Backspace if !state.sessions.is_empty() => Action::SessionDelete,
         KeyCode::Up | KeyCode::Char('k') => Action::SessionMove(-1),
         KeyCode::Down | KeyCode::Char('j') => Action::SessionMove(1),
         _ => Action::Noop,
@@ -715,9 +713,9 @@ mod tests {
     use super::*;
     use crate::layout::compute;
     use crate::state::ShellState;
-    use ulid::Ulid;
     use crate::state::{SessionConfirm, SessionConfirmKind};
     use ratatui::layout::Rect;
+    use ulid::Ulid;
 
     fn key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, mods)
@@ -758,8 +756,12 @@ mod tests {
         s.overlay = Overlay::PluginCatalog;
         let mut catalog = PluginCatalogState::loading_read_only();
         catalog.rows = vec![PluginCatalogRow {
-            id: "github".into(), name: "GitHub".into(), kind_label: "mcp".into(),
-            description: "d".into(), source_label: String::new(), license: None,
+            id: "github".into(),
+            name: "GitHub".into(),
+            kind_label: "mcp".into(),
+            description: "d".into(),
+            source_label: String::new(),
+            license: None,
         }];
         s.plugin_catalog = Some(catalog);
         assert_eq!(
@@ -784,8 +786,12 @@ mod tests {
         s.overlay = Overlay::PluginCatalog;
         let mut catalog = PluginCatalogState::loading();
         catalog.rows = vec![PluginCatalogRow {
-            id: "github".into(), name: "GitHub".into(), kind_label: "mcp".into(),
-            description: "d".into(), source_label: String::new(), license: None,
+            id: "github".into(),
+            name: "GitHub".into(),
+            kind_label: "mcp".into(),
+            description: "d".into(),
+            source_label: String::new(),
+            license: None,
         }];
         s.plugin_catalog = Some(catalog);
         assert_eq!(

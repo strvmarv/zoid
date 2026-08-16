@@ -59,8 +59,12 @@ impl McpTransport for StdioTransport {
         // Writer: outbound lines -> child stdin (append newline framing).
         tokio::spawn(async move {
             while let Some(line) = out_rx.recv().await {
-                if stdin.write_all(line.as_bytes()).await.is_err() { break; }
-                if stdin.write_all(b"\n").await.is_err() { break; }
+                if stdin.write_all(line.as_bytes()).await.is_err() {
+                    break;
+                }
+                if stdin.write_all(b"\n").await.is_err() {
+                    break;
+                }
                 let _ = stdin.flush().await;
             }
         });
@@ -69,7 +73,9 @@ impl McpTransport for StdioTransport {
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                if in_tx.send(line).await.is_err() { break; }
+                if in_tx.send(line).await.is_err() {
+                    break;
+                }
             }
             // in_tx dropped here => inbound closes.
         });
@@ -85,7 +91,11 @@ impl McpTransport for StdioTransport {
         // The child is owned by the handle so `kill_on_drop` fires when the
         // client drops it. Do NOT move it into a `wait()` task — that would
         // park the only owner forever and defeat kill_on_drop.
-        Ok(TransportHandle { outbound: out_tx, inbound: in_rx, _child: Some(child) })
+        Ok(TransportHandle {
+            outbound: out_tx,
+            inbound: in_rx,
+            _child: Some(child),
+        })
     }
 }
 
@@ -126,18 +136,25 @@ mod tests {
     // stdin, so only kill_on_drop can end it.
     #[tokio::test]
     async fn stdin_ignoring_child_is_reaped_on_handle_drop() {
-        let cfg = McpServerConfig { command: "sleep".into(), args: vec!["30".into()], env: BTreeMap::new() };
+        let cfg = McpServerConfig {
+            command: "sleep".into(),
+            args: vec!["30".into()],
+            env: BTreeMap::new(),
+        };
         let h = StdioTransport.connect(&cfg).unwrap();
         let pid = h.child_pid().expect("a pid");
         drop(h); // kill_on_drop should terminate the child
-        // Poll `kill -0 <pid>` until it reports the process is gone.
+                 // Poll `kill -0 <pid>` until it reports the process is gone.
         let mut gone = false;
         for _ in 0..50 {
             let status = std::process::Command::new("kill")
                 .args(["-0", &pid.to_string()])
                 .status()
                 .unwrap();
-            if !status.success() { gone = true; break; }
+            if !status.success() {
+                gone = true;
+                break;
+            }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         assert!(gone, "child {pid} still alive after handle drop");

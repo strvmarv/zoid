@@ -15,7 +15,9 @@ impl Tool for Edit {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: self.name().to_string(),
-            description: "Edit a file: replace an exact unique string, or apply a batch of edits atomically.".to_string(),
+            description:
+                "Edit a file: replace an exact unique string, or apply a batch of edits atomically."
+                    .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -38,33 +40,48 @@ impl Tool for Edit {
             Err(e) => return e,
         };
         // Normalize to a list of edits: either `edits: [...]` or a single triple.
-        let edits: Vec<(String, String, bool)> = if let Some(arr) = args.get("edits").and_then(|v| v.as_array()) {
-            let mut v = Vec::new();
-            for (i, e) in arr.iter().enumerate() {
-                let old = match e.get("old_string").and_then(|x| x.as_str()) {
-                    Some(s) => s.to_string(),
-                    None => return ToolOutput::err(format!("edit({path}): edits[{i}] missing old_string")),
+        let edits: Vec<(String, String, bool)> =
+            if let Some(arr) = args.get("edits").and_then(|v| v.as_array()) {
+                let mut v = Vec::new();
+                for (i, e) in arr.iter().enumerate() {
+                    let old = match e.get("old_string").and_then(|x| x.as_str()) {
+                        Some(s) => s.to_string(),
+                        None => {
+                            return ToolOutput::err(format!(
+                                "edit({path}): edits[{i}] missing old_string"
+                            ))
+                        }
+                    };
+                    let new = match e.get("new_string").and_then(|x| x.as_str()) {
+                        Some(s) => s.to_string(),
+                        None => {
+                            return ToolOutput::err(format!(
+                                "edit({path}): edits[{i}] missing new_string"
+                            ))
+                        }
+                    };
+                    let all = e
+                        .get("replace_all")
+                        .and_then(|x| x.as_bool())
+                        .unwrap_or(false);
+                    v.push((old, new, all));
+                }
+                v
+            } else {
+                let old = match str_arg(args, "old_string") {
+                    Ok(o) => o,
+                    Err(e) => return e,
                 };
-                let new = match e.get("new_string").and_then(|x| x.as_str()) {
-                    Some(s) => s.to_string(),
-                    None => return ToolOutput::err(format!("edit({path}): edits[{i}] missing new_string")),
+                let new = match str_arg(args, "new_string") {
+                    Ok(n) => n,
+                    Err(e) => return e,
                 };
-                let all = e.get("replace_all").and_then(|x| x.as_bool()).unwrap_or(false);
-                v.push((old, new, all));
-            }
-            v
-        } else {
-            let old = match str_arg(args, "old_string") {
-                Ok(o) => o,
-                Err(e) => return e,
+                let all = args
+                    .get("replace_all")
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false);
+                vec![(old, new, all)]
             };
-            let new = match str_arg(args, "new_string") {
-                Ok(n) => n,
-                Err(e) => return e,
-            };
-            let all = args.get("replace_all").and_then(|x| x.as_bool()).unwrap_or(false);
-            vec![(old, new, all)]
-        };
 
         if edits.is_empty() {
             return ToolOutput::err_kind(
@@ -108,7 +125,12 @@ impl Tool for Edit {
         }
         match std::fs::write(&full, contents.as_bytes()) {
             Ok(()) => {
-                let fd = crate::compute_file_diff(&path, &before, &contents, crate::diff::INLINE_LINE_CAP);
+                let fd = crate::compute_file_diff(
+                    &path,
+                    &before,
+                    &contents,
+                    crate::diff::INLINE_LINE_CAP,
+                );
                 ToolOutput::ok(format!("edited {path} ({} change(s))", edits.len())).with_diff(fd)
             }
             Err(e) => {

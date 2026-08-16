@@ -451,7 +451,13 @@ fn onboarding_body(state: &ShellState, w: u16, h: u16) -> Vec<Line<'static>> {
 
 /// Per-frame pre-rendered body, if the scene/frame supplies one. Only the
 /// extensibility scene's first-run frame (index 0) does.
-fn scene_frame_body(name: &str, idx: usize, state: &ShellState, w: u16, h: u16) -> Option<Vec<Line<'static>>> {
+fn scene_frame_body(
+    name: &str,
+    idx: usize,
+    state: &ShellState,
+    w: u16,
+    h: u16,
+) -> Option<Vec<Line<'static>>> {
     match (name, idx) {
         ("extensibility", 0) => Some(onboarding_body(state, w, h)),
         _ => None,
@@ -668,8 +674,14 @@ mod tests {
         assert_eq!(seq.len(), 2, "expected a 2-frame extensibility sequence");
 
         // F0 — first run: empty session (onboarding body injected at render), Chat floor.
-        assert!(seq[0].1.is_empty(), "frame 0 is the empty-state (onboarding)");
-        assert_eq!(seq[0].0.active_mode, "Chat", "frame 0 mode is the Chat floor");
+        assert!(
+            seq[0].1.is_empty(),
+            "frame 0 is the empty-state (onboarding)"
+        );
+        assert_eq!(
+            seq[0].0.active_mode, "Chat",
+            "frame 0 mode is the Chat floor"
+        );
 
         // F1 — Superpowers mode active with the brainstorming turn.
         assert_eq!(

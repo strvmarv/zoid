@@ -16,8 +16,9 @@ impl Tool for GlobTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: self.name().to_string(),
-            description: "Find files by glob pattern (e.g. '**/*.rs'), sorted by modification time."
-                .to_string(),
+            description:
+                "Find files by glob pattern (e.g. '**/*.rs'), sorted by modification time."
+                    .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -90,7 +91,11 @@ mod tests {
         );
         assert!(!out.is_error, "{}", out.text);
         assert!(out.text.contains("a.rs"));
-        assert!(out.text.contains("b.rs") || out.text.contains("sub/b.rs") || out.text.contains("sub\\b.rs"));
+        assert!(
+            out.text.contains("b.rs")
+                || out.text.contains("sub/b.rs")
+                || out.text.contains("sub\\b.rs")
+        );
         assert!(!out.text.contains("c.txt"));
     }
 
@@ -114,7 +119,11 @@ mod tests {
             &json!({ "pattern": "*.rs", "path": file.to_str().unwrap() }),
             std::path::Path::new("."),
         );
-        assert!(out.is_error, "expected error for file path, got: {}", out.text);
+        assert!(
+            out.is_error,
+            "expected error for file path, got: {}",
+            out.text
+        );
         assert!(out.text.contains("not a directory"), "{}", out.text);
     }
 }

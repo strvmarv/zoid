@@ -9,7 +9,12 @@ use zoid_provider::ToolSpec;
 use zoid_tools::{Tool, ToolKind, ToolOutput};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ServerState { Connecting, Ready, Failed, Disconnected }
+pub enum ServerState {
+    Connecting,
+    Ready,
+    Failed,
+    Disconnected,
+}
 
 #[derive(Debug, Clone)]
 pub struct ServerStatus {
@@ -84,14 +89,19 @@ fn effective_state(entry: &ServerEntry) -> ServerState {
 
 impl McpManager {
     pub fn new() -> McpManager {
-        McpManager { inner: Mutex::new(ManagerState::default()) }
+        McpManager {
+            inner: Mutex::new(ManagerState::default()),
+        }
     }
 
     #[cfg(test)]
     pub(crate) fn insert_for_test(&self, name: &str, entry: ServerEntry) {
         let mut st = self.inner.lock().unwrap();
         for t in &entry.tools {
-            st.routes.insert(namespaced(name, &t.name), (name.to_string(), t.name.clone()));
+            st.routes.insert(
+                namespaced(name, &t.name),
+                (name.to_string(), t.name.clone()),
+            );
         }
         st.servers.insert(name.to_string(), entry);
     }
@@ -102,11 +112,14 @@ impl McpManager {
         for (name, cfg) in servers {
             {
                 let mut st = self.inner.lock().unwrap();
-                st.servers.insert(name.clone(), ServerEntry {
-                    state: ServerState::Connecting,
-                    client: None,
-                    tools: Vec::new(),
-                });
+                st.servers.insert(
+                    name.clone(),
+                    ServerEntry {
+                        state: ServerState::Connecting,
+                        client: None,
+                        tools: Vec::new(),
+                    },
+                );
             }
             let this = Arc::clone(self);
             tokio::spawn(async move {
@@ -122,18 +135,24 @@ impl McpManager {
                     Ok((client, tools)) => {
                         let mut st = this.inner.lock().unwrap();
                         for t in &tools {
-                            st.routes.insert(namespaced(&name, &t.name), (name.clone(), t.name.clone()));
+                            st.routes
+                                .insert(namespaced(&name, &t.name), (name.clone(), t.name.clone()));
                         }
                         if let Some(e) = st.servers.get_mut(&name) {
                             e.state = ServerState::Ready;
                             e.client = Some(Arc::new(client));
                             e.tools = tools;
                         }
-                        tracing::info!("zoid-mcp: server '{name}' ready ({} tools)", st.servers[&name].tools.len());
+                        tracing::info!(
+                            "zoid-mcp: server '{name}' ready ({} tools)",
+                            st.servers[&name].tools.len()
+                        );
                     }
                     Err(e) => {
                         let mut st = this.inner.lock().unwrap();
-                        if let Some(entry) = st.servers.get_mut(&name) { entry.state = ServerState::Failed; }
+                        if let Some(entry) = st.servers.get_mut(&name) {
+                            entry.state = ServerState::Failed;
+                        }
                         tracing::warn!("zoid-mcp: server '{name}' failed to start: {e}");
                     }
                 }
@@ -141,7 +160,9 @@ impl McpManager {
         }
     }
 
-    async fn connect_one(cfg: &McpServerConfig) -> anyhow::Result<(McpClient, Vec<DiscoveredTool>)> {
+    async fn connect_one(
+        cfg: &McpServerConfig,
+    ) -> anyhow::Result<(McpClient, Vec<DiscoveredTool>)> {
         use crate::transport::McpTransport;
         let handle = StdioTransport.connect(cfg)?;
         let client = McpClient::connect(handle).await;
@@ -155,7 +176,9 @@ impl McpManager {
         let st = self.inner.lock().unwrap();
         let mut out: Vec<Box<dyn Tool>> = Vec::new();
         for (name, entry) in &st.servers {
-            if effective_state(entry) != ServerState::Ready { continue; }
+            if effective_state(entry) != ServerState::Ready {
+                continue;
+            }
             for t in &entry.tools {
                 out.push(Box::new(McpTool {
                     namespaced: namespaced(name, &t.name),
@@ -189,8 +212,20 @@ impl McpManager {
     /// Test-only: call an arbitrary tool name on a named server, bypassing the
     /// discovered-route table (used to exercise the crash path).
     #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn call_tool_direct_for_test(&self, server: &str, tool: &str, args: &Value) -> ToolOutput {
-        let client = { self.inner.lock().unwrap().servers.get(server).and_then(|e| e.client.clone()) };
+    pub async fn call_tool_direct_for_test(
+        &self,
+        server: &str,
+        tool: &str,
+        args: &Value,
+    ) -> ToolOutput {
+        let client = {
+            self.inner
+                .lock()
+                .unwrap()
+                .servers
+                .get(server)
+                .and_then(|e| e.client.clone())
+        };
         match client {
             Some(c) => c.call_tool(tool, args).await,
             None => ToolOutput::err("server not connected"),
@@ -201,7 +236,11 @@ impl McpManager {
         let st = self.inner.lock().unwrap();
         st.servers
             .iter()
-            .map(|(name, e)| ServerStatus { name: name.clone(), state: effective_state(e), tool_count: e.tools.len() })
+            .map(|(name, e)| ServerStatus {
+                name: name.clone(),
+                state: effective_state(e),
+                tool_count: e.tools.len(),
+            })
             .collect()
     }
 }
@@ -219,12 +258,18 @@ impl McpTool {
     /// Construct a spec-carrier for a discovered tool. Public so the agent-loop
     /// test (Task 6) can build one without a live server.
     pub fn new(namespaced: String, description: String, parameters: Value) -> McpTool {
-        McpTool { namespaced, description, parameters }
+        McpTool {
+            namespaced,
+            description,
+            parameters,
+        }
     }
 }
 
 impl Tool for McpTool {
-    fn name(&self) -> &str { &self.namespaced }
+    fn name(&self) -> &str {
+        &self.namespaced
+    }
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: self.namespaced.clone(),
@@ -236,7 +281,9 @@ impl Tool for McpTool {
         // Unreachable: Mcp-kind tools are intercepted before the sync path.
         ToolOutput::err("internal: MCP tool run() called directly")
     }
-    fn kind(&self) -> ToolKind { ToolKind::Mcp }
+    fn kind(&self) -> ToolKind {
+        ToolKind::Mcp
+    }
 }
 
 #[cfg(test)]

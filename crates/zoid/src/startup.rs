@@ -172,7 +172,10 @@ mod tests {
             !out.replace("\r\n", "").contains('\n'),
             "bare LF (staircase) present: {out:?}"
         );
-        assert!(out.contains("launching…\r\n"), "banner must end CRLF: {out:?}");
+        assert!(
+            out.contains("launching…\r\n"),
+            "banner must end CRLF: {out:?}"
+        );
     }
 
     #[test]

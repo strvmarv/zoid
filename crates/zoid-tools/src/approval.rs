@@ -9,11 +9,17 @@ enum Pattern {
     LeadingProgram { prog: String },
     /// Leading program `prog` with any of `trigger_flags` present in the
     /// token stream (e.g. curl with -X POST, -d, --data).
-    ProgramWithAnyFlag { prog: String, trigger_flags: Vec<String> },
+    ProgramWithAnyFlag {
+        prog: String,
+        trigger_flags: Vec<String>,
+    },
     /// Leading program `prog` with at least one flag from each of `flag_groups`
     /// present. Used when two independent flag dimensions must both be
     /// satisfied (e.g. rm needs recursive AND force).
-    ProgramWithAllGroups { prog: String, flag_groups: Vec<Vec<String>> },
+    ProgramWithAllGroups {
+        prog: String,
+        flag_groups: Vec<Vec<String>>,
+    },
     /// Free-form substring match against the segment's raw text
     /// (e.g. "terraform apply", "kubectl delete").
     Substring { pattern: String },
@@ -64,25 +70,47 @@ fn builtin_defaults() -> Vec<Pattern> {
             trigger_flags: vec!["--post-data".into(), "--post-file".into()],
         },
         // Privilege escalation
-        Pattern::LeadingProgram { prog: "sudo".into() },
+        Pattern::LeadingProgram {
+            prog: "sudo".into(),
+        },
         Pattern::LeadingProgram { prog: "su".into() },
-        Pattern::LeadingProgram { prog: "doas".into() },
+        Pattern::LeadingProgram {
+            prog: "doas".into(),
+        },
         // System mutation
-        Pattern::LeadingProgram { prog: "systemctl".into() },
+        Pattern::LeadingProgram {
+            prog: "systemctl".into(),
+        },
         Pattern::LeadingProgram { prog: "apt".into() },
-        Pattern::LeadingProgram { prog: "brew".into() },
+        Pattern::LeadingProgram {
+            prog: "brew".into(),
+        },
         Pattern::ProgramWithAllGroups {
             prog: "pip".into(),
             flag_groups: vec![vec!["install".into()], vec!["--user".into()]],
         },
-        Pattern::Substring { pattern: "chmod -R".into() },
-        Pattern::Substring { pattern: "/etc/".into() },
+        Pattern::Substring {
+            pattern: "chmod -R".into(),
+        },
+        Pattern::Substring {
+            pattern: "/etc/".into(),
+        },
         // Deploy / irrecoverable
-        Pattern::Substring { pattern: "terraform apply".into() },
-        Pattern::Substring { pattern: "kubectl delete".into() },
-        Pattern::Substring { pattern: "fly deploy".into() },
-        Pattern::Substring { pattern: "scp".into() },
-        Pattern::Substring { pattern: "rsync".into() },
+        Pattern::Substring {
+            pattern: "terraform apply".into(),
+        },
+        Pattern::Substring {
+            pattern: "kubectl delete".into(),
+        },
+        Pattern::Substring {
+            pattern: "fly deploy".into(),
+        },
+        Pattern::Substring {
+            pattern: "scp".into(),
+        },
+        Pattern::Substring {
+            pattern: "rsync".into(),
+        },
     ]
 }
 
@@ -203,7 +231,10 @@ fn pattern_matches(pattern: &Pattern, leading: &str, tokens: &[String], segment:
     match pattern {
         Pattern::LeadingProgram { prog } => leading == prog,
 
-        Pattern::ProgramWithAnyFlag { prog, trigger_flags } => {
+        Pattern::ProgramWithAnyFlag {
+            prog,
+            trigger_flags,
+        } => {
             if leading != prog {
                 return false;
             }
@@ -305,7 +336,10 @@ fn is_exempted(pattern: &Pattern, shell_allow: &[String]) -> bool {
 fn pattern_canonical(pattern: &Pattern) -> String {
     match pattern {
         Pattern::LeadingProgram { prog } => prog.clone(),
-        Pattern::ProgramWithAnyFlag { prog, trigger_flags } => {
+        Pattern::ProgramWithAnyFlag {
+            prog,
+            trigger_flags,
+        } => {
             format!("{} {}", prog, trigger_flags.join(" "))
         }
         Pattern::ProgramWithAllGroups { prog, flag_groups } => format!(
@@ -545,8 +579,22 @@ mod tests {
     #[test]
     fn gate_never_prompt_tier_always_allows() {
         let g = BlacklistGate::new(vec![], vec![], true);
-        for name in ["read", "grep", "glob", "ls", "recall", "show", "update_tasks", "ask_user"] {
-            assert_eq!(g.check(&tool_call(name)), crate::Gate::Allow, "{} must allow", name);
+        for name in [
+            "read",
+            "grep",
+            "glob",
+            "ls",
+            "recall",
+            "show",
+            "update_tasks",
+            "ask_user",
+        ] {
+            assert_eq!(
+                g.check(&tool_call(name)),
+                crate::Gate::Allow,
+                "{} must allow",
+                name
+            );
         }
     }
 
@@ -574,7 +622,9 @@ mod tests {
     fn gate_dangerous_shell_denies_when_not_interactive() {
         let g = BlacklistGate::new(vec![], vec![], false);
         let result = g.check(&shell_call("rm -rf /"));
-        assert!(matches!(result, crate::Gate::Deny(ref r) if r.contains("blocked by safety blacklist")));
+        assert!(
+            matches!(result, crate::Gate::Deny(ref r) if r.contains("blocked by safety blacklist"))
+        );
     }
 
     #[test]

@@ -4,11 +4,11 @@
 //! (no dependency on `zoid-core`) so the provider/plugin surface stays decoupled.
 
 pub mod anthropic;
+pub mod google_gemini;
 pub mod ollama;
 pub mod openai_compat;
-pub mod opencode_go;
 pub mod openai_responses;
-pub mod google_gemini;
+pub mod opencode_go;
 pub mod opencode_zen;
 pub mod zai;
 

@@ -153,7 +153,9 @@ pub fn finish_skills_install(
     // Same v1 effect gate as finish_plugin_install.
     for e in &plan.effects {
         if e.risk() == RiskTier::Dangerous {
-            return Err(format!("effect requires confirmation, not yet supported: {e:?}"));
+            return Err(format!(
+                "effect requires confirmation, not yet supported: {e:?}"
+            ));
         }
         if matches!(e, Effect::SetConfig { .. }) {
             return Err(format!("config effects are not yet supported: {e:?}"));
@@ -182,8 +184,17 @@ pub fn finish_skills_install(
         .collect();
     let sidecar = PluginProvenance {
         schema: 1,
-        plugin: PluginStamp { id: plugin_id.to_string(), manifest_ref: manifest_ref.to_string(), installed_at: fetched_at.clone() },
-        source: PluginProvSource { repo: scan.repo.clone(), ref_: scan.resolved_ref.clone(), subtree: scan.subtree_path.clone(), origin: origin.to_string() },
+        plugin: PluginStamp {
+            id: plugin_id.to_string(),
+            manifest_ref: manifest_ref.to_string(),
+            installed_at: fetched_at.clone(),
+        },
+        source: PluginProvSource {
+            repo: scan.repo.clone(),
+            ref_: scan.resolved_ref.clone(),
+            subtree: scan.subtree_path.clone(),
+            origin: origin.to_string(),
+        },
         // C2: PluginProvenance.files is Vec<ProvenanceEntry>. The per-file
         // list already lives in the pack dir's .zoid-provenance.json (written
         // by materialize); mirror finish_plugin_install and leave this empty
@@ -191,12 +202,21 @@ pub fn finish_skills_install(
         files: Vec::new(),
         effects_applied: applied,
     };
-    let json = serde_json::to_string_pretty(&sidecar).map_err(|e| format!("serialize sidecar: {e}"))?;
+    let json =
+        serde_json::to_string_pretty(&sidecar).map_err(|e| format!("serialize sidecar: {e}"))?;
     std::fs::write(pack_dir.join(".zoid-plugin.json"), json)
         .map_err(|e| format!("write sidecar: {e}"))?;
 
-    let safe_effects: Vec<Effect> = plan.effects.iter().filter(|e| e.risk() == RiskTier::Safe).cloned().collect();
-    Ok(InstalledPlugin { dest: pack_dir, safe_effects })
+    let safe_effects: Vec<Effect> = plan
+        .effects
+        .iter()
+        .filter(|e| e.risk() == RiskTier::Safe)
+        .cloned()
+        .collect();
+    Ok(InstalledPlugin {
+        dest: pack_dir,
+        safe_effects,
+    })
 }
 
 #[cfg(test)]
@@ -233,19 +253,40 @@ mod tests {
     }
     fn scan() -> UpstreamScan {
         UpstreamScan {
-            url: "u".into(), repo: "obra/superpowers".into(), resolved_ref: "SHA".into(),
+            url: "u".into(),
+            repo: "obra/superpowers".into(),
+            resolved_ref: "SHA".into(),
             subtree_path: "skills".into(),
             files: vec![
-                ScannedFile { upstream_path: "skills/using-superpowers/SKILL.md".into(), sha: "a".into(), content: skill_md("using-superpowers", "loader") },
-                ScannedFile { upstream_path: "skills/brainstorming/SKILL.md".into(), sha: "c".into(), content: skill_md("brainstorming", "creative") },
+                ScannedFile {
+                    upstream_path: "skills/using-superpowers/SKILL.md".into(),
+                    sha: "a".into(),
+                    content: skill_md("using-superpowers", "loader"),
+                },
+                ScannedFile {
+                    upstream_path: "skills/brainstorming/SKILL.md".into(),
+                    sha: "c".into(),
+                    content: skill_md("brainstorming", "creative"),
+                },
             ],
         }
     }
     fn manifest(effects: Vec<Effect>) -> PluginManifest {
         PluginManifest {
-            id: "superpowers".into(), schema: 1, kind: vec!["mode".into()],
-            name: "Superpowers".into(), description: "d".into(), source: None,
-            mode: Some(ModeRecipe { loader: "using-superpowers/SKILL.md".into(), strip_prefix: "skills/".into(), body: BodyStrategy::FromSkillFrontmatter, description: "desc".into(), body_intro: None, body_outro: None }),
+            id: "superpowers".into(),
+            schema: 1,
+            kind: vec!["mode".into()],
+            name: "Superpowers".into(),
+            description: "d".into(),
+            source: None,
+            mode: Some(ModeRecipe {
+                loader: "using-superpowers/SKILL.md".into(),
+                strip_prefix: "skills/".into(),
+                body: BodyStrategy::FromSkillFrontmatter,
+                description: "desc".into(),
+                body_intro: None,
+                body_outro: None,
+            }),
             mcp: None,
             install: effects,
         }
@@ -257,7 +298,8 @@ mod tests {
         let plan = build_plan(&manifest(vec![Effect::Activate]), &scan).unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("modes").join("superpowers");
-        let out = finish_plugin_install(&plan, &scan, &dest, "superpowers", "d884ae0", "bundled").unwrap();
+        let out = finish_plugin_install(&plan, &scan, &dest, "superpowers", "d884ae0", "bundled")
+            .unwrap();
         assert_eq!(out.dest, dest);
         assert!(dest.join("mode.md").is_file());
         assert!(dest.join("brainstorming/SKILL.md").is_file());
@@ -274,11 +316,22 @@ mod tests {
     #[test]
     fn rejects_dangerous_effect_in_v1() {
         let scan = scan();
-        let plan = build_plan(&manifest(vec![Effect::SetConfig { key: "provider".into(), value: toml::Value::String("x".into()) }]), &scan).unwrap();
+        let plan = build_plan(
+            &manifest(vec![Effect::SetConfig {
+                key: "provider".into(),
+                value: toml::Value::String("x".into()),
+            }]),
+            &scan,
+        )
+        .unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("modes").join("superpowers");
-        let err = finish_plugin_install(&plan, &scan, &dest, "superpowers", "d884ae0", "bundled").unwrap_err();
-        assert!(err.contains("requires confirmation") || err.contains("not yet supported"), "got: {err}");
+        let err = finish_plugin_install(&plan, &scan, &dest, "superpowers", "d884ae0", "bundled")
+            .unwrap_err();
+        assert!(
+            err.contains("requires confirmation") || err.contains("not yet supported"),
+            "got: {err}"
+        );
         // Nothing materialized on rejection.
         assert!(!dest.exists());
     }
@@ -300,7 +353,8 @@ mod tests {
         .unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("modes").join("superpowers");
-        let err = finish_plugin_install(&plan, &scan, &dest, "superpowers", "d884ae0", "bundled").unwrap_err();
+        let err = finish_plugin_install(&plan, &scan, &dest, "superpowers", "d884ae0", "bundled")
+            .unwrap_err();
         assert!(err.contains("not yet supported"), "got: {err}");
         // Nothing materialized on rejection.
         assert!(!dest.exists());
@@ -321,10 +375,19 @@ mod tests {
     fn skills_manifest(id: &str) -> zoid_plugin::manifest::PluginManifest {
         use zoid_plugin::manifest::{PluginManifest, PluginSource};
         PluginManifest {
-            id: id.into(), schema: 1, kind: vec!["skills".into()],
-            name: id.into(), description: "d".into(),
-            source: Some(PluginSource { repo: "o/r".into(), ref_: "SHA".into(), subtree: "skills".into() }),
-            mode: None, mcp: None, install: vec![Effect::Activate],
+            id: id.into(),
+            schema: 1,
+            kind: vec!["skills".into()],
+            name: id.into(),
+            description: "d".into(),
+            source: Some(PluginSource {
+                repo: "o/r".into(),
+                ref_: "SHA".into(),
+                subtree: "skills".into(),
+            }),
+            mode: None,
+            mcp: None,
+            install: vec![Effect::Activate],
         }
     }
 
@@ -334,12 +397,20 @@ mod tests {
         let plan = zoid_plugin::plan::build_plan(&skills_manifest("doctools"), &scan).unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let skills_root = tmp.path().join("skills");
-        let out = finish_skills_install(&plan, &scan, &skills_root, "doctools", "SHA", "url").unwrap();
+        let out =
+            finish_skills_install(&plan, &scan, &skills_root, "doctools", "SHA", "url").unwrap();
         // Skill landed under the PRIVATE pack dir: <skills_root>/doctools/brainstorming/SKILL.md
-        assert!(skills_root.join("doctools").join("brainstorming").join("SKILL.md").is_file());
+        assert!(skills_root
+            .join("doctools")
+            .join("brainstorming")
+            .join("SKILL.md")
+            .is_file());
         assert!(!skills_root.join("doctools").join("mode.md").exists());
         // Per-pack sidecar lives inside the pack dir.
-        assert!(skills_root.join("doctools").join(".zoid-plugin.json").is_file());
+        assert!(skills_root
+            .join("doctools")
+            .join(".zoid-plugin.json")
+            .is_file());
         assert!(out.safe_effects.contains(&Effect::Activate));
     }
 
@@ -353,7 +424,15 @@ mod tests {
         let plan_b = zoid_plugin::plan::build_plan(&skills_manifest("packB"), &scan).unwrap();
         finish_skills_install(&plan_b, &scan, &skills_root, "packB", "SHA", "url").unwrap();
         // Pack A survived installing Pack B (the C3 regression guard).
-        assert!(skills_root.join("packA").join("brainstorming").join("SKILL.md").is_file());
-        assert!(skills_root.join("packB").join("brainstorming").join("SKILL.md").is_file());
+        assert!(skills_root
+            .join("packA")
+            .join("brainstorming")
+            .join("SKILL.md")
+            .is_file());
+        assert!(skills_root
+            .join("packB")
+            .join("brainstorming")
+            .join("SKILL.md")
+            .is_file());
     }
 }

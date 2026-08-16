@@ -22,8 +22,14 @@ pub struct DiscoveredTool {
 }
 
 enum Cmd {
-    Request { line: String, id: u64, reply: oneshot::Sender<Result<Value, jsonrpc::RpcError>> },
-    Notify { line: String },
+    Request {
+        line: String,
+        id: u64,
+        reply: oneshot::Sender<Result<Value, jsonrpc::RpcError>>,
+    },
+    Notify {
+        line: String,
+    },
 }
 
 pub struct McpClient {
@@ -40,7 +46,11 @@ impl McpClient {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>(64);
         let alive = Arc::new(AtomicBool::new(true));
         tokio::spawn(actor(handle, cmd_rx, alive.clone()));
-        McpClient { cmd_tx, next_id: AtomicU64::new(1), alive }
+        McpClient {
+            cmd_tx,
+            next_id: AtomicU64::new(1),
+            alive,
+        }
     }
 
     /// False once the connection has ended (EOF / crash / drop).
@@ -53,7 +63,11 @@ impl McpClient {
         let line = jsonrpc::encode_request(id, method, params);
         let (reply_tx, reply_rx) = oneshot::channel();
         self.cmd_tx
-            .send(Cmd::Request { line, id, reply: reply_tx })
+            .send(Cmd::Request {
+                line,
+                id,
+                reply: reply_tx,
+            })
             .await
             .map_err(|_| anyhow::anyhow!("mcp connection closed"))?;
         let result = tokio::time::timeout(REQUEST_TIMEOUT, reply_rx)
@@ -80,7 +94,10 @@ impl McpClient {
             "clientInfo": { "name": "zoid", "version": env!("CARGO_PKG_VERSION") }
         });
         let result = self.request("initialize", Some(params)).await?;
-        let negotiated = result.get("protocolVersion").and_then(|v| v.as_str()).unwrap_or("");
+        let negotiated = result
+            .get("protocolVersion")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         // Accept any non-empty version the server negotiates; only warn on ones
         // we haven't explicitly validated. Real servers commonly reply
         // 2024-11-05 / 2025-03-26 — refusing them would defeat the whole point.
@@ -104,9 +121,20 @@ impl McpClient {
             if let Some(arr) = result.get("tools").and_then(|t| t.as_array()) {
                 for t in arr {
                     out.push(DiscoveredTool {
-                        name: t.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                        description: t.get("description").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                        input_schema: t.get("inputSchema").cloned().unwrap_or_else(|| json!({"type":"object"})),
+                        name: t
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        description: t
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        input_schema: t
+                            .get("inputSchema")
+                            .cloned()
+                            .unwrap_or_else(|| json!({"type":"object"})),
                     });
                 }
             }
@@ -135,8 +163,15 @@ impl McpClient {
                             .join("\n")
                     })
                     .unwrap_or_default();
-                let is_error = result.get("isError").and_then(|v| v.as_bool()).unwrap_or(false);
-                if is_error { ToolOutput::err(text) } else { ToolOutput::ok(text) }
+                let is_error = result
+                    .get("isError")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if is_error {
+                    ToolOutput::err(text)
+                } else {
+                    ToolOutput::ok(text)
+                }
             }
             Err(e) => ToolOutput::err(format!("mcp tool '{tool}' failed: {e}")),
         }
@@ -144,8 +179,13 @@ impl McpClient {
 }
 
 /// The connection actor: owns the transport halves and the pending-request map.
-async fn actor(mut handle: TransportHandle, mut cmd_rx: mpsc::Receiver<Cmd>, alive: Arc<AtomicBool>) {
-    let mut pending: HashMap<u64, oneshot::Sender<Result<Value, jsonrpc::RpcError>>> = HashMap::new();
+async fn actor(
+    mut handle: TransportHandle,
+    mut cmd_rx: mpsc::Receiver<Cmd>,
+    alive: Arc<AtomicBool>,
+) {
+    let mut pending: HashMap<u64, oneshot::Sender<Result<Value, jsonrpc::RpcError>>> =
+        HashMap::new();
     loop {
         tokio::select! {
             cmd = cmd_rx.recv() => match cmd {
@@ -180,7 +220,10 @@ async fn actor(mut handle: TransportHandle, mut cmd_rx: mpsc::Receiver<Cmd>, ali
     // awaiters don't hang forever.
     alive.store(false, Ordering::Relaxed);
     for (_, tx) in pending.drain() {
-        let _ = tx.send(Err(jsonrpc::RpcError { code: 0, message: "mcp server disconnected".into() }));
+        let _ = tx.send(Err(jsonrpc::RpcError {
+            code: 0,
+            message: "mcp server disconnected".into(),
+        }));
     }
 }
 
@@ -200,31 +243,52 @@ mod tests {
     async fn initialize_then_list_tools_paginates() {
         let (srv_out, cli_in) = mpsc::channel::<String>(16);
         let (cli_out, mut srv_in) = mpsc::channel::<String>(16);
-        let client = McpClient::connect(TransportHandle { outbound: cli_out, inbound: cli_in, _child: None }).await;
+        let client = McpClient::connect(TransportHandle {
+            outbound: cli_out,
+            inbound: cli_in,
+            _child: None,
+        })
+        .await;
 
         // Drive the server side concurrently.
-        let server = tokio::spawn(async move {
-            // initialize
-            let line = srv_in.recv().await.unwrap();
-            srv_out.send(reply_to(&line, json!({"protocolVersion":"2025-06-18","capabilities":{}}))).await.unwrap();
-            // the client sends notifications/initialized (no reply expected)
-            let _initialized = srv_in.recv().await.unwrap();
-            // tools/list page 1
-            let line = srv_in.recv().await.unwrap();
-            srv_out.send(reply_to(&line, json!({
+        let server =
+            tokio::spawn(async move {
+                // initialize
+                let line = srv_in.recv().await.unwrap();
+                srv_out
+                    .send(reply_to(
+                        &line,
+                        json!({"protocolVersion":"2025-06-18","capabilities":{}}),
+                    ))
+                    .await
+                    .unwrap();
+                // the client sends notifications/initialized (no reply expected)
+                let _initialized = srv_in.recv().await.unwrap();
+                // tools/list page 1
+                let line = srv_in.recv().await.unwrap();
+                srv_out.send(reply_to(&line, json!({
                 "tools":[{"name":"a","description":"A","inputSchema":{"type":"object"}}],
                 "nextCursor":"p2"
             }))).await.unwrap();
-            // tools/list page 2
-            let line = srv_in.recv().await.unwrap();
-            srv_out.send(reply_to(&line, json!({
-                "tools":[{"name":"b","description":"B","inputSchema":{"type":"object"}}]
-            }))).await.unwrap();
-        });
+                // tools/list page 2
+                let line = srv_in.recv().await.unwrap();
+                srv_out
+                    .send(reply_to(
+                        &line,
+                        json!({
+                            "tools":[{"name":"b","description":"B","inputSchema":{"type":"object"}}]
+                        }),
+                    ))
+                    .await
+                    .unwrap();
+            });
 
         client.initialize().await.unwrap();
         let tools = client.list_tools().await.unwrap();
-        assert_eq!(tools.iter().map(|t| t.name.clone()).collect::<Vec<_>>(), vec!["a", "b"]);
+        assert_eq!(
+            tools.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
         server.await.unwrap();
     }
 
@@ -232,18 +296,37 @@ mod tests {
     async fn call_tool_maps_is_error_and_tolerates_inbound_noise() {
         let (srv_out, cli_in) = mpsc::channel::<String>(16);
         let (cli_out, mut srv_in) = mpsc::channel::<String>(16);
-        let client = McpClient::connect(TransportHandle { outbound: cli_out, inbound: cli_in, _child: None }).await;
+        let client = McpClient::connect(TransportHandle {
+            outbound: cli_out,
+            inbound: cli_in,
+            _child: None,
+        })
+        .await;
 
         let server = tokio::spawn(async move {
             let line = srv_in.recv().await.unwrap();
             // Before replying, inject a notification and a server->client request:
             // neither must stall the pending call.
-            srv_out.send(r#"{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}"#.to_string()).await.unwrap();
-            srv_out.send(r#"{"jsonrpc":"2.0","id":"srv1","method":"ping"}"#.to_string()).await.unwrap();
-            srv_out.send(reply_to(&line, json!({
-                "content":[{"type":"text","text":"boom"}],
-                "isError": true
-            }))).await.unwrap();
+            srv_out
+                .send(
+                    r#"{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}"#.to_string(),
+                )
+                .await
+                .unwrap();
+            srv_out
+                .send(r#"{"jsonrpc":"2.0","id":"srv1","method":"ping"}"#.to_string())
+                .await
+                .unwrap();
+            srv_out
+                .send(reply_to(
+                    &line,
+                    json!({
+                        "content":[{"type":"text","text":"boom"}],
+                        "isError": true
+                    }),
+                ))
+                .await
+                .unwrap();
         });
 
         let out = client.call_tool("do", &json!({"x":1})).await;
@@ -257,7 +340,12 @@ mod tests {
         use std::time::Duration;
         let (srv_out, cli_in) = mpsc::channel::<String>(16);
         let (cli_out, mut srv_in) = mpsc::channel::<String>(16);
-        let client = McpClient::connect(TransportHandle { outbound: cli_out, inbound: cli_in, _child: None }).await;
+        let client = McpClient::connect(TransportHandle {
+            outbound: cli_out,
+            inbound: cli_in,
+            _child: None,
+        })
+        .await;
 
         // The server receives the request line (so it is registered as pending
         // in the actor) then disconnects WITHOUT replying by dropping its
@@ -272,11 +360,17 @@ mod tests {
         let out = tokio::time::timeout(Duration::from_secs(5), client.call_tool("do", &json!({})))
             .await
             .expect("disconnect mid-call must resolve well before the 30s request timeout");
-        assert!(out.is_error, "disconnect mid-call must surface an error, not a success");
+        assert!(
+            out.is_error,
+            "disconnect mid-call must surface an error, not a success"
+        );
         server.await.unwrap();
 
         // The actor sets alive=false before draining pending, so the client
         // observes the connection as dead once the call has returned.
-        assert!(!client.is_alive(), "client must report not-alive after server EOF");
+        assert!(
+            !client.is_alive(),
+            "client must report not-alive after server EOF"
+        );
     }
 }

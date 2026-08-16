@@ -2,9 +2,18 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginSourceRef {
-    InRepo { path: String },
-    GitSubdir { url: String, path: String, sha: String },
-    Github { repo: String, sha: String },
+    InRepo {
+        path: String,
+    },
+    GitSubdir {
+        url: String,
+        path: String,
+        sha: String,
+    },
+    Github {
+        repo: String,
+        sha: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -50,7 +59,13 @@ pub fn parse_marketplace(json: &str) -> anyhow::Result<Vec<MarketplaceEntry>> {
     for e in raw.plugins {
         let source = match e.source {
             RawSource::Str(p) => PluginSourceRef::InRepo { path: p },
-            RawSource::Obj { source, url, path, repo, sha } => match source.as_str() {
+            RawSource::Obj {
+                source,
+                url,
+                path,
+                repo,
+                sha,
+            } => match source.as_str() {
                 "git-subdir" => PluginSourceRef::GitSubdir {
                     url: url.ok_or_else(|| anyhow::anyhow!("git-subdir missing url"))?,
                     path: path.unwrap_or_default(),
@@ -63,7 +78,11 @@ pub fn parse_marketplace(json: &str) -> anyhow::Result<Vec<MarketplaceEntry>> {
                 other => anyhow::bail!("unknown source kind '{other}'"),
             },
         };
-        out.push(MarketplaceEntry { name: e.name, description: e.description, source });
+        out.push(MarketplaceEntry {
+            name: e.name,
+            description: e.description,
+            source,
+        });
     }
     Ok(out)
 }
@@ -88,9 +107,15 @@ mod tests {
         let json = include_str!("../tests/fixtures/marketplace_snippet.json");
         let entries = parse_marketplace(json).unwrap();
         assert_eq!(entries.len(), 3);
-        assert!(matches!(&entries[0].source, PluginSourceRef::GitSubdir { sha, .. } if sha.len() == 40));
-        assert!(matches!(&entries[1].source, PluginSourceRef::InRepo { path } if path == "./plugins/b"));
-        assert!(matches!(&entries[2].source, PluginSourceRef::Github { repo, .. } if repo == "o2/r2"));
+        assert!(
+            matches!(&entries[0].source, PluginSourceRef::GitSubdir { sha, .. } if sha.len() == 40)
+        );
+        assert!(
+            matches!(&entries[1].source, PluginSourceRef::InRepo { path } if path == "./plugins/b")
+        );
+        assert!(
+            matches!(&entries[2].source, PluginSourceRef::Github { repo, .. } if repo == "o2/r2")
+        );
     }
 
     #[test]

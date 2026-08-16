@@ -50,7 +50,14 @@ pub fn conversation_lines(
     question: Option<&crate::question::QuestionState>,
 ) -> Vec<Line<'static>> {
     conversation_lines_with_diffs(
-        msgs, streaming, caret_on, tz_offset_secs, width, question, &[], 0,
+        msgs,
+        streaming,
+        caret_on,
+        tz_offset_secs,
+        width,
+        question,
+        &[],
+        0,
     )
 }
 
@@ -193,7 +200,13 @@ fn build_conversation(
     let inline_ids: std::collections::HashSet<&str> = {
         let mut cached: Vec<&str> = Vec::new();
         for m in msgs {
-            if let ChatMsg::ToolResult { id, name, is_error: false, .. } = m {
+            if let ChatMsg::ToolResult {
+                id,
+                name,
+                is_error: false,
+                ..
+            } = m
+            {
                 if (name == "edit" || name == "write")
                     && ctx.edit_diffs.iter().any(|(k, _)| k == id)
                 {
@@ -320,17 +333,17 @@ fn build_conversation(
                         Style::new().fg(color::REMOVED),
                     ));
                 } else {
-                        let name_w = display_width(name);
-                        let mut overhead = 7 + name_w;
-                        if *compacted {
-                            overhead += 12; // approximate width of "{glyph} compacted "
-                        }
-                        let result_budget = ctx.width.saturating_sub(overhead).min(120);
-                        spans.push(Span::styled(
-                            format!(" → {}", first_line(output, result_budget)),
-                            Style::new().fg(color::DIM),
-                        ));
+                    let name_w = display_width(name);
+                    let mut overhead = 7 + name_w;
+                    if *compacted {
+                        overhead += 12; // approximate width of "{glyph} compacted "
                     }
+                    let result_budget = ctx.width.saturating_sub(overhead).min(120);
+                    spans.push(Span::styled(
+                        format!(" → {}", first_line(output, result_budget)),
+                        Style::new().fg(color::DIM),
+                    ));
+                }
                 lines.push(Line::from(spans));
 
                 // … and an inline snippet for the last-K cached edits.
@@ -343,9 +356,13 @@ fn build_conversation(
                             // setting any bg on context lines would paint a visible
                             // band that contradicts "no highlight on context").
                             let (sign, fg, bg) = match dl.kind {
-                                crate::state::RenderDiffKind::Add => ("+", color::ADDED,   Some(color::ADDED_BG)),
-                                crate::state::RenderDiffKind::Del => ("−", color::REMOVED, Some(color::REMOVED_BG)),
-                                crate::state::RenderDiffKind::Ctx => (" ", color::DIM,     None),
+                                crate::state::RenderDiffKind::Add => {
+                                    ("+", color::ADDED, Some(color::ADDED_BG))
+                                }
+                                crate::state::RenderDiffKind::Del => {
+                                    ("−", color::REMOVED, Some(color::REMOVED_BG))
+                                }
+                                crate::state::RenderDiffKind::Ctx => (" ", color::DIM, None),
                             };
                             let no = dl.new_no.or(dl.old_no).unwrap_or(0);
                             let content = format!("{sign} {}", dl.text);
@@ -357,8 +374,12 @@ fn build_conversation(
                             // decouples them.
                             let pad = ctx.width.saturating_sub(GUTTER_W + display_width(&content));
                             let pad_str = " ".repeat(pad);
-                            let gutter = Span::styled(format!("      {no:>5} "), Style::new().fg(color::DIM));
-                            let content_span = Span::styled(format!("{content}{pad_str}"), Style::new().fg(fg));
+                            let gutter = Span::styled(
+                                format!("      {no:>5} "),
+                                Style::new().fg(color::DIM),
+                            );
+                            let content_span =
+                                Span::styled(format!("{content}{pad_str}"), Style::new().fg(fg));
                             let (gutter, content_span) = match bg {
                                 Some(bg) => (gutter.bg(bg), content_span.bg(bg)),
                                 None => (gutter, content_span),
@@ -385,7 +406,11 @@ fn build_conversation(
                 lines.push(Line::from(vec![
                     // Purple label with the card background = the collapsed chip.
                     Span::styled(
-                        format!("{} delegated · {}", glyph::COLLAPSED, first_line(summary, summary_budget)),
+                        format!(
+                            "{} delegated · {}",
+                            glyph::COLLAPSED,
+                            first_line(summary, summary_budget)
+                        ),
                         Style::new().fg(color::BRANCH).bg(color::DELEGATE_BG),
                     ),
                     Span::styled(format!("  {mark} "), Style::new().fg(mark_color)),
@@ -1008,9 +1033,10 @@ fn detail_lines(
                     ]));
                     // rescued turns (with bump values formatted as +N.N)
                     if !r.rescued.is_empty() {
-                        out.push(Line::from(vec![
-                            Span::styled("    rescued:", Style::new().fg(color::OK)),
-                        ]));
+                        out.push(Line::from(vec![Span::styled(
+                            "    rescued:",
+                            Style::new().fg(color::OK),
+                        )]));
                         for s in &r.rescued {
                             // bump_milli == rescue_bump * 1000; render as +N.N.
                             let bump = format!("{:+.1}", s.bump_milli as f64 / 1000.0);
@@ -1027,9 +1053,10 @@ fn detail_lines(
                 }
                 // evicted turns (with topic hints)
                 if !evicted_topics.is_empty() {
-                    out.push(Line::from(vec![
-                        Span::styled("    evicted:", Style::new().fg(color::WARN)),
-                    ]));
+                    out.push(Line::from(vec![Span::styled(
+                        "    evicted:",
+                        Style::new().fg(color::WARN),
+                    )]));
                     for t in evicted_topics {
                         out.push(Line::from(vec![
                             Span::styled("      ", Style::new()),
@@ -1038,21 +1065,18 @@ fn detail_lines(
                     }
                 }
             }
-            ChatMsg::Assistant {
-                thinking,
-                ..
-            } => {
+            ChatMsg::Assistant { thinking, .. } => {
                 // Thinking section (full text at Detail zoom).
                 if let Some(thinking_text) = thinking {
                     if !thinking_text.is_empty() {
                         blank_between_turns(&mut out);
-                        out.push(Line::from(vec![
-                            Span::styled(
-                                "─ Thinking ─────────────────────",
-                                Style::new().fg(color::DIM),
-                            ),
-                        ]));
-                        for line in crate::markdown::render_markdown(thinking_text, width.saturating_sub(4)) {
+                        out.push(Line::from(vec![Span::styled(
+                            "─ Thinking ─────────────────────",
+                            Style::new().fg(color::DIM),
+                        )]));
+                        for line in
+                            crate::markdown::render_markdown(thinking_text, width.saturating_sub(4))
+                        {
                             let mut spans = vec![Span::styled("    ", Style::new())];
                             spans.extend(line.spans);
                             out.push(Line::from(spans));
@@ -1276,7 +1300,7 @@ mod tests {
                 ts: 0,
             },
             ChatMsg::Assistant {
-                    thinking: None,
+                thinking: None,
                 text: "on it".into(),
                 tool_calls: vec![ToolCallRef {
                     id: "c1".into(),
@@ -1624,15 +1648,32 @@ mod tests {
             removed: 1,
             truncated_by: 0,
             lines: vec![
-                RenderDiffLine { old_no: Some(2), new_no: None, kind: RenderDiffKind::Del, text: "b".into() },
-                RenderDiffLine { old_no: None, new_no: Some(2), kind: RenderDiffKind::Add, text: "B".into() },
+                RenderDiffLine {
+                    old_no: Some(2),
+                    new_no: None,
+                    kind: RenderDiffKind::Del,
+                    text: "b".into(),
+                },
+                RenderDiffLine {
+                    old_no: None,
+                    new_no: Some(2),
+                    kind: RenderDiffKind::Add,
+                    text: "B".into(),
+                },
             ],
         };
         let cache = vec![("tc1".to_string(), diff)];
         let lines = conversation_lines_with_diffs(&msgs, false, false, 0, 80, None, &cache, 5);
-        let text: String = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.content.as_ref()).collect();
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
         assert!(text.contains("+2"), "shows added count");
-        assert!(text.contains("-1") || text.contains("−1"), "shows removed count");
+        assert!(
+            text.contains("-1") || text.contains("−1"),
+            "shows removed count"
+        );
         assert!(text.contains("B"), "shows the added line inline");
         assert!(text.contains('b'), "shows the removed line inline");
     }
@@ -1658,9 +1699,24 @@ mod tests {
             removed: 1,
             truncated_by: 0,
             lines: vec![
-                RenderDiffLine { old_no: Some(2), new_no: Some(2), kind: RenderDiffKind::Ctx, text: "ctx-line".into() },
-                RenderDiffLine { old_no: Some(1), new_no: None, kind: RenderDiffKind::Del, text: "del-line".into() },
-                RenderDiffLine { old_no: None, new_no: Some(1), kind: RenderDiffKind::Add, text: "add-line".into() },
+                RenderDiffLine {
+                    old_no: Some(2),
+                    new_no: Some(2),
+                    kind: RenderDiffKind::Ctx,
+                    text: "ctx-line".into(),
+                },
+                RenderDiffLine {
+                    old_no: Some(1),
+                    new_no: None,
+                    kind: RenderDiffKind::Del,
+                    text: "del-line".into(),
+                },
+                RenderDiffLine {
+                    old_no: None,
+                    new_no: Some(1),
+                    kind: RenderDiffKind::Add,
+                    text: "add-line".into(),
+                },
             ],
         };
         let cache = vec![("tc1".to_string(), diff)];
@@ -1668,38 +1724,83 @@ mod tests {
 
         // Structural selection: find diff lines by their gutter pattern (2 spans,
         // first starts with 6 leading spaces) rather than substring-probing content.
-        let diff_lines: Vec<_> = lines.iter()
+        let diff_lines: Vec<_> = lines
+            .iter()
             .filter(|l| l.spans.len() == 2)
             .filter(|l| l.spans[0].content.starts_with("      "))
             .collect();
 
         // Context line: no background on either span, DIM foreground.
-        let ctx_line = diff_lines.iter().find(|l| l.spans[1].content.contains("ctx-line"))
+        let ctx_line = diff_lines
+            .iter()
+            .find(|l| l.spans[1].content.contains("ctx-line"))
             .expect("ctx line present");
-        assert_eq!(ctx_line.spans[0].style.bg, None, "gutter has no bg on context");
-        assert_eq!(ctx_line.spans[1].style.bg, None, "content has no bg on context");
-        assert_eq!(ctx_line.spans[1].style.fg, Some(color::DIM), "content has DIM fg on context");
+        assert_eq!(
+            ctx_line.spans[0].style.bg, None,
+            "gutter has no bg on context"
+        );
+        assert_eq!(
+            ctx_line.spans[1].style.bg, None,
+            "content has no bg on context"
+        );
+        assert_eq!(
+            ctx_line.spans[1].style.fg,
+            Some(color::DIM),
+            "content has DIM fg on context"
+        );
 
         // Del line: both spans have REMOVED_BG, content has REMOVED fg.
-        let del_line = diff_lines.iter().find(|l| l.spans[1].content.contains("del-line"))
+        let del_line = diff_lines
+            .iter()
+            .find(|l| l.spans[1].content.contains("del-line"))
             .expect("del line present");
-        assert_eq!(del_line.spans[0].style.bg, Some(color::REMOVED_BG), "gutter has del bg");
-        assert_eq!(del_line.spans[1].style.bg, Some(color::REMOVED_BG), "content has del bg");
-        assert_eq!(del_line.spans[1].style.fg, Some(color::REMOVED), "content has REMOVED fg on del");
+        assert_eq!(
+            del_line.spans[0].style.bg,
+            Some(color::REMOVED_BG),
+            "gutter has del bg"
+        );
+        assert_eq!(
+            del_line.spans[1].style.bg,
+            Some(color::REMOVED_BG),
+            "content has del bg"
+        );
+        assert_eq!(
+            del_line.spans[1].style.fg,
+            Some(color::REMOVED),
+            "content has REMOVED fg on del"
+        );
 
         // Add line: both spans have ADDED_BG, content has ADDED fg.
-        let add_line = diff_lines.iter().find(|l| l.spans[1].content.contains("add-line"))
+        let add_line = diff_lines
+            .iter()
+            .find(|l| l.spans[1].content.contains("add-line"))
             .expect("add line present");
-        assert_eq!(add_line.spans[0].style.bg, Some(color::ADDED_BG), "gutter has add bg");
-        assert_eq!(add_line.spans[1].style.bg, Some(color::ADDED_BG), "content has add bg");
-        assert_eq!(add_line.spans[1].style.fg, Some(color::ADDED), "content has ADDED fg on add");
+        assert_eq!(
+            add_line.spans[0].style.bg,
+            Some(color::ADDED_BG),
+            "gutter has add bg"
+        );
+        assert_eq!(
+            add_line.spans[1].style.bg,
+            Some(color::ADDED_BG),
+            "content has add bg"
+        );
+        assert_eq!(
+            add_line.spans[1].style.fg,
+            Some(color::ADDED),
+            "content has ADDED fg on add"
+        );
     }
 
     #[test]
     fn gutter_width_matches_format_string() {
         // The gutter literal "      {no:>5} " is 12 chars; GUTTER_W must match.
         let sample = format!("      {:>5} ", 42);
-        assert_eq!(GUTTER_W, sample.len(), "GUTTER_W must match the gutter format string");
+        assert_eq!(
+            GUTTER_W,
+            sample.len(),
+            "GUTTER_W must match the gutter format string"
+        );
     }
 
     #[test]
@@ -1722,17 +1823,25 @@ mod tests {
             added: 1,
             removed: 0,
             truncated_by: 0,
-            lines: vec![
-                RenderDiffLine { old_no: None, new_no: Some(1), kind: RenderDiffKind::Add, text: "short".into() },
-            ],
+            lines: vec![RenderDiffLine {
+                old_no: None,
+                new_no: Some(1),
+                kind: RenderDiffKind::Add,
+                text: "short".into(),
+            }],
         };
         let cache = vec![("tc1".to_string(), diff)];
         let lines = conversation_lines_with_diffs(&msgs, false, false, 0, width, None, &cache, 5);
 
         // Find the add line (2 spans, first starts with 6 leading spaces, content
         // starts with "+").
-        let add_line = lines.iter()
-            .find(|l| l.spans.len() == 2 && l.spans[0].content.starts_with("      ") && l.spans[1].content.starts_with('+'))
+        let add_line = lines
+            .iter()
+            .find(|l| {
+                l.spans.len() == 2
+                    && l.spans[0].content.starts_with("      ")
+                    && l.spans[1].content.starts_with('+')
+            })
             .expect("add line present");
 
         // Total visual width = gutter span width + content span width.
@@ -1741,7 +1850,11 @@ mod tests {
         let gutter_w = display_width(add_line.spans[0].content.as_ref());
         let content_w = display_width(add_line.spans[1].content.as_ref());
         assert_eq!(gutter_w, GUTTER_W, "gutter width matches GUTTER_W");
-        assert_eq!(gutter_w + content_w, width, "total band width fills to ctx.width");
+        assert_eq!(
+            gutter_w + content_w,
+            width,
+            "total band width fills to ctx.width"
+        );
     }
 
     #[test]
@@ -1765,20 +1878,36 @@ mod tests {
             added: 1,
             removed: 0,
             truncated_by: 0,
-            lines: vec![
-                RenderDiffLine { old_no: None, new_no: Some(1), kind: RenderDiffKind::Add, text: "a very long line that exceeds the narrow width".into() },
-            ],
+            lines: vec![RenderDiffLine {
+                old_no: None,
+                new_no: Some(1),
+                kind: RenderDiffKind::Add,
+                text: "a very long line that exceeds the narrow width".into(),
+            }],
         };
         let cache = vec![("tc1".to_string(), diff)];
         // Must not panic — saturating_sub clamps pad to 0.
         let lines = conversation_lines_with_diffs(&msgs, false, false, 0, width, None, &cache, 5);
 
         // The add line should still render with the correct background.
-        let add_line = lines.iter()
-            .find(|l| l.spans.len() == 2 && l.spans[0].content.starts_with("      ") && l.spans[1].content.starts_with('+'))
+        let add_line = lines
+            .iter()
+            .find(|l| {
+                l.spans.len() == 2
+                    && l.spans[0].content.starts_with("      ")
+                    && l.spans[1].content.starts_with('+')
+            })
             .expect("add line present");
-        assert_eq!(add_line.spans[0].style.bg, Some(color::ADDED_BG), "gutter has add bg even when clamped");
-        assert_eq!(add_line.spans[1].style.bg, Some(color::ADDED_BG), "content has add bg even when clamped");
+        assert_eq!(
+            add_line.spans[0].style.bg,
+            Some(color::ADDED_BG),
+            "gutter has add bg even when clamped"
+        );
+        assert_eq!(
+            add_line.spans[1].style.bg,
+            Some(color::ADDED_BG),
+            "content has add bg even when clamped"
+        );
     }
 
     #[test]
@@ -1787,20 +1916,43 @@ mod tests {
         use zoid_core::projection::ChatMsg;
 
         let mk_res = |id: &str| ChatMsg::ToolResult {
-            id: id.into(), name: "edit".into(), output: "edited".into(),
-            is_error: false, error_kind: None, compacted: false, ts: 0,
+            id: id.into(),
+            name: "edit".into(),
+            output: "edited".into(),
+            is_error: false,
+            error_kind: None,
+            compacted: false,
+            ts: 0,
         };
         let mk_diff = |marker: &str| RenderDiff {
-            path: "f".into(), added: 1, removed: 0, truncated_by: 0,
-            lines: vec![RenderDiffLine { old_no: None, new_no: Some(1), kind: RenderDiffKind::Add, text: marker.into() }],
+            path: "f".into(),
+            added: 1,
+            removed: 0,
+            truncated_by: 0,
+            lines: vec![RenderDiffLine {
+                old_no: None,
+                new_no: Some(1),
+                kind: RenderDiffKind::Add,
+                text: marker.into(),
+            }],
         };
         // Two edits; K=1 → only the LAST is inline.
         let msgs = vec![mk_res("old"), mk_res("new")];
-        let cache = vec![("old".to_string(), mk_diff("OLDLINE")), ("new".to_string(), mk_diff("NEWLINE"))];
+        let cache = vec![
+            ("old".to_string(), mk_diff("OLDLINE")),
+            ("new".to_string(), mk_diff("NEWLINE")),
+        ];
         let lines = conversation_lines_with_diffs(&msgs, false, false, 0, 80, None, &cache, 1);
-        let text: String = lines.iter().flat_map(|l| l.spans.iter()).map(|s| s.content.as_ref()).collect();
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
         assert!(text.contains("NEWLINE"), "last edit is inline");
-        assert!(!text.contains("OLDLINE"), "older edit is counts-only, no snippet");
+        assert!(
+            !text.contains("OLDLINE"),
+            "older edit is counts-only, no snippet"
+        );
     }
 
     #[test]
@@ -1834,10 +1986,7 @@ mod tests {
     fn scalar_returns_full_string_no_truncation() {
         let long = "a".repeat(100);
         assert_eq!(scalar(&serde_json::Value::String(long.clone())), long);
-        assert_eq!(
-            scalar(&serde_json::json!(42)),
-            "42"
-        );
+        assert_eq!(scalar(&serde_json::json!(42)), "42");
     }
 
     #[test]
@@ -1852,9 +2001,15 @@ mod tests {
         let long = "a".repeat(200);
         let json = format!(r#"{{"command": "{long}"}}"#);
         let result = arg_summary(&json, 60);
-        assert!(UnicodeWidthStr::width(result.as_str()) <= 60,
-            "result must fit in 60 display cols: got {}", UnicodeWidthStr::width(result.as_str()));
-        assert!(result.starts_with("command: a"), "must start with the key and value: {result}");
+        assert!(
+            UnicodeWidthStr::width(result.as_str()) <= 60,
+            "result must fit in 60 display cols: got {}",
+            UnicodeWidthStr::width(result.as_str())
+        );
+        assert!(
+            result.starts_with("command: a"),
+            "must start with the key and value: {result}"
+        );
         assert!(result.ends_with('…'), "must end with ellipsis: {result}");
     }
 
@@ -1866,10 +2021,19 @@ mod tests {
         let result = arg_summary(json, 40);
         // The whole joined string is truncated as a unit to 40.
         assert!(result.ends_with('…'), "must end with ellipsis: {result}");
-        assert!(UnicodeWidthStr::width(result.as_str()) <= 40, "must fit in 40 cols: {result}");
-        assert!(result.starts_with("aaaa: short"), "first arg (alphabetical) visible: {result}");
+        assert!(
+            UnicodeWidthStr::width(result.as_str()) <= 40,
+            "must fit in 40 cols: {result}"
+        );
+        assert!(
+            result.starts_with("aaaa: short"),
+            "first arg (alphabetical) visible: {result}"
+        );
         // The last arg should be cut off — at 40 chars, not all 3 args fit.
-        assert!(!result.contains("even more text here"), "later args truncated: {result}");
+        assert!(
+            !result.contains("even more text here"),
+            "later args truncated: {result}"
+        );
     }
 
     #[test]
@@ -1879,7 +2043,10 @@ mod tests {
         // multiple terminal rows, breaking line mapping.
         let json = r#"{"command": "cd /foo &&\nls -la"}"#;
         let result = arg_summary(json, 120);
-        assert!(!result.contains('\n'), "newlines must be collapsed: {result:?}");
+        assert!(
+            !result.contains('\n'),
+            "newlines must be collapsed: {result:?}"
+        );
         assert!(result.contains("cd /foo"), "content preserved: {result}");
     }
 
@@ -1900,8 +2067,11 @@ mod tests {
     fn first_line_long_output_budget_80_truncates() {
         let long = "a".repeat(200);
         let result = first_line(&long, 80);
-        assert!(UnicodeWidthStr::width(result.as_str()) <= 80,
-            "result must fit in 80 display cols: got {}", UnicodeWidthStr::width(result.as_str()));
+        assert!(
+            UnicodeWidthStr::width(result.as_str()) <= 80,
+            "result must fit in 80 display cols: got {}",
+            UnicodeWidthStr::width(result.as_str())
+        );
         assert!(result.ends_with('…'), "must end with ellipsis: {result}");
     }
 
@@ -2072,19 +2242,14 @@ mod tests {
         }];
         let lines = conversation_lines(&msgs, false, true, 0, 80, None);
         let joined = join_spans(&lines);
-        assert!(
-            joined.contains("·thinking"),
-            "badge must appear: {joined}"
-        );
+        assert!(joined.contains("·thinking"), "badge must appear: {joined}");
         // Search for the tool glyph (●) which only appears on tool-call lines,
         // not in the assistant text "Let me read the file."
-        let tool_line = lines.iter().find(|l| {
-            l.spans.iter().any(|s| s.content.contains('●'))
-        });
+        let tool_line = lines
+            .iter()
+            .find(|l| l.spans.iter().any(|s| s.content.contains('●')));
         assert!(
-            tool_line.is_some_and(|l| {
-                l.spans.iter().any(|s| s.content.contains("·thinking"))
-            }),
+            tool_line.is_some_and(|l| { l.spans.iter().any(|s| s.content.contains("·thinking")) }),
             "badge must be on the tool-call line: {joined}"
         );
     }

@@ -320,7 +320,10 @@ mod tests {
         let rows = wrap_content(&[Span::raw("abcdefghijklmnopqrst")], 8);
         assert!(rows.len() >= 3, "a 20-char word at width 8 needs >=3 rows");
         // total content preserved
-        let total: String = rows.iter().flat_map(|r| r.iter().map(|s| s.content.to_string())).collect();
+        let total: String = rows
+            .iter()
+            .flat_map(|r| r.iter().map(|s| s.content.to_string()))
+            .collect();
         assert_eq!(total, "abcdefghijklmnopqrst");
     }
 }

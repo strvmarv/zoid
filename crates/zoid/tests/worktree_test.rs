@@ -83,7 +83,8 @@ fn into_kept_branch_removes_dir_but_retains_branch() {
     assert!(!path.exists(), "worktree dir must be removed");
     let repo = git2::Repository::open(tmp.path()).unwrap();
     assert!(
-        repo.find_branch("sub-keep1", git2::BranchType::Local).is_ok(),
+        repo.find_branch("sub-keep1", git2::BranchType::Local)
+            .is_ok(),
         "branch must survive into_kept_branch"
     );
     // Cleanup: delete the retained branch manually.
@@ -110,12 +111,16 @@ fn into_kept_preserves_dir_and_branch_on_disk() {
 
     // Dir still exists (NOT removed by Drop).
     assert!(path.exists(), "worktree dir must survive into_kept");
-    assert!(path.join("new.txt").exists(), "file in worktree must survive");
+    assert!(
+        path.join("new.txt").exists(),
+        "file in worktree must survive"
+    );
 
     // Branch still exists (NOT deleted by Drop).
     let repo = git2::Repository::open(tmp.path()).unwrap();
     assert!(
-        repo.find_branch("wt-keep1", git2::BranchType::Local).is_ok(),
+        repo.find_branch("wt-keep1", git2::BranchType::Local)
+            .is_ok(),
         "branch must survive into_kept"
     );
 
@@ -247,12 +252,11 @@ fn name_collision_enters_existing_worktree() {
     // Second entry with same name: create_worktree will fail (worktree
     // already exists), but the handler should enter the existing one.
     // Simulate the fallback path in handle_worktree_request.
-    let existing_path = tmp
-        .path()
-        .join(".zoid")
-        .join("worktrees")
-        .join("collide-1");
-    assert!(existing_path.exists(), "existing worktree found on collision");
+    let existing_path = tmp.path().join(".zoid").join("worktrees").join("collide-1");
+    assert!(
+        existing_path.exists(),
+        "existing worktree found on collision"
+    );
 
     // The handler would set active_worktree to the existing path.
     // No error, no duplicate created.
