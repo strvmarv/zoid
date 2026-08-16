@@ -154,7 +154,15 @@ fn cached_body_window_matches_uncached_paragraph() {
 
     for msgs in [&tall, &short] {
         // `full` is what the bin caches: built reveal-None.
-        let full = conversation_view(msgs, &normal_view(), false, conv.width as usize, None, &[], 0);
+        let full = conversation_view(
+            msgs,
+            &normal_view(),
+            false,
+            conv.width as usize,
+            None,
+            &[],
+            0,
+        );
         let raw_lines = full.len().saturating_sub(1); // reveal-None appends one blank
 
         // reveal == None at several scrolls × spinner off/on, plus a reveal case
@@ -598,7 +606,7 @@ fn seeded_detail() -> Vec<ChatMsg> {
             ts: 0,
         },
         ChatMsg::Assistant {
-                thinking: None,
+            thinking: None,
             text: "reading it".into(),
             tool_calls: vec![ToolCallRef {
                 id: "c1".into(),
@@ -612,7 +620,6 @@ fn seeded_detail() -> Vec<ChatMsg> {
             name: "read_file".into(),
             output: "fn parse(s: &str) -> u32 {\n    let n = 42;\n    n\n}\n".into(),
             is_error: false,
-                error_kind: None,
             compacted: false,
             ts: 0,
         },
@@ -677,7 +684,7 @@ fn zoom_detail_wide_frame() {
 fn seeded_objects() -> Vec<ChatMsg> {
     vec![
         ChatMsg::Assistant {
-                thinking: None,
+            thinking: None,
             text: String::new(),
             tool_calls: vec![ToolCallRef {
                 id: "c1".into(),
@@ -691,7 +698,6 @@ fn seeded_objects() -> Vec<ChatMsg> {
             name: "read_file".into(),
             output: "fn parse() {}\nstruct Ast {}\n".into(),
             is_error: false,
-                error_kind: None,
             compacted: false,
             ts: 0,
         },
@@ -700,7 +706,6 @@ fn seeded_objects() -> Vec<ChatMsg> {
             name: "shell".into(),
             output: "FAILED\n".into(),
             is_error: true,
-                error_kind: None,
             compacted: false,
             ts: 0,
         },
@@ -764,7 +769,10 @@ fn help_overlay_frame_dispatches_from_render_shell() {
         frame.contains("keyboard shortcuts"),
         "help overlay must render via render_shell's overlay dispatch: {frame}"
     );
-    assert!(frame.contains("Ctrl+P"), "help overlay must list shortcuts: {frame}");
+    assert!(
+        frame.contains("Ctrl+P"),
+        "help overlay must list shortcuts: {frame}"
+    );
 }
 
 /// The message box grows with its content (spec §2.2). A 3-line input yields a
@@ -922,7 +930,7 @@ fn config_overlay_frame() {
 
     let mut s = ShellState::new();
     s.overlay = Overlay::Config;
-    let mut cfg = Config {
+    let cfg = Config {
         provider: "ollama".into(), // pin a configured provider (default is now the empty unconfigured sentinel)
         ..Config::default()
     };
@@ -943,8 +951,14 @@ fn config_overlay_frame() {
         reassert_interval_tokens: Source::Default,
         num_ctx: Source::Default,
         reduced_motion: Source::Default,
-            thinking_enabled: Source::Default,
-            thinking_effort: Source::Default, approval: Source::Default, ui_edit_diff: Source::Default, ui_edit_diff_inline: Source::Default, wake_enabled: Source::Default, companion_enabled: Source::Default, eviction_enabled: Source::Default,
+        thinking_enabled: Source::Default,
+        thinking_effort: Source::Default,
+        approval: Source::Default,
+        ui_edit_diff: Source::Default,
+        ui_edit_diff_inline: Source::Default,
+        wake_enabled: Source::Default,
+        companion_enabled: Source::Default,
+        eviction_enabled: Source::Default,
     };
     let ks = [
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
@@ -985,8 +999,14 @@ fn config_key_prompt_masks_entry() {
         reassert_interval_tokens: Source::Default,
         num_ctx: Source::Default,
         reduced_motion: Source::Default,
-            thinking_enabled: Source::Default,
-            thinking_effort: Source::Default, approval: Source::Default, ui_edit_diff: Source::Default, ui_edit_diff_inline: Source::Default, wake_enabled: Source::Default, companion_enabled: Source::Default, eviction_enabled: Source::Default,
+        thinking_enabled: Source::Default,
+        thinking_effort: Source::Default,
+        approval: Source::Default,
+        ui_edit_diff: Source::Default,
+        ui_edit_diff_inline: Source::Default,
+        wake_enabled: Source::Default,
+        companion_enabled: Source::Default,
+        eviction_enabled: Source::Default,
     };
     let ks = [
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
@@ -1016,7 +1036,7 @@ fn config_overlay_provider_picker() {
     s.config_section = 0;
     s.config_field = 0; // "provider" row
     s.config_col = ConfigCol::Picker;
-    let mut cfg = Config {
+    let cfg = Config {
         provider: "ollama".into(), // pin a configured provider (default is now the empty unconfigured sentinel)
         ..Config::default()
     };
@@ -1036,8 +1056,14 @@ fn config_overlay_provider_picker() {
         reassert_interval_tokens: Source::Default,
         num_ctx: Source::Default,
         reduced_motion: Source::Default,
-            thinking_enabled: Source::Default,
-            thinking_effort: Source::Default, approval: Source::Default, ui_edit_diff: Source::Default, ui_edit_diff_inline: Source::Default, wake_enabled: Source::Default, companion_enabled: Source::Default, eviction_enabled: Source::Default,
+        thinking_enabled: Source::Default,
+        thinking_effort: Source::Default,
+        approval: Source::Default,
+        ui_edit_diff: Source::Default,
+        ui_edit_diff_inline: Source::Default,
+        wake_enabled: Source::Default,
+        companion_enabled: Source::Default,
+        eviction_enabled: Source::Default,
     };
     let ks = [
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
@@ -1096,8 +1122,14 @@ fn config_overlay_provider_picker_selection_styles() {
         reassert_interval_tokens: Source::Default,
         num_ctx: Source::Default,
         reduced_motion: Source::Default,
-            thinking_enabled: Source::Default,
-            thinking_effort: Source::Default, approval: Source::Default, ui_edit_diff: Source::Default, ui_edit_diff_inline: Source::Default, wake_enabled: Source::Default, companion_enabled: Source::Default, eviction_enabled: Source::Default,
+        thinking_enabled: Source::Default,
+        thinking_effort: Source::Default,
+        approval: Source::Default,
+        ui_edit_diff: Source::Default,
+        ui_edit_diff_inline: Source::Default,
+        wake_enabled: Source::Default,
+        companion_enabled: Source::Default,
+        eviction_enabled: Source::Default,
     };
     let ks = [
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
@@ -1158,7 +1190,7 @@ fn config_overlay_narrow_degrades() {
     s.config_section = 0;
     s.config_field = 0; // "provider" row
     s.config_col = ConfigCol::Picker;
-    let mut cfg = Config {
+    let cfg = Config {
         provider: "ollama".into(), // pin a configured provider (default is now the empty unconfigured sentinel)
         ..Config::default()
     };
@@ -1178,8 +1210,14 @@ fn config_overlay_narrow_degrades() {
         reassert_interval_tokens: Source::Default,
         num_ctx: Source::Default,
         reduced_motion: Source::Default,
-            thinking_enabled: Source::Default,
-            thinking_effort: Source::Default, approval: Source::Default, ui_edit_diff: Source::Default, ui_edit_diff_inline: Source::Default, wake_enabled: Source::Default, companion_enabled: Source::Default, eviction_enabled: Source::Default,
+        thinking_enabled: Source::Default,
+        thinking_effort: Source::Default,
+        approval: Source::Default,
+        ui_edit_diff: Source::Default,
+        ui_edit_diff_inline: Source::Default,
+        wake_enabled: Source::Default,
+        companion_enabled: Source::Default,
+        eviction_enabled: Source::Default,
     };
     let ks = [
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
@@ -1227,8 +1265,14 @@ fn config_overlay_narrow_degrades_respects_focus() {
         reassert_interval_tokens: Source::Default,
         num_ctx: Source::Default,
         reduced_motion: Source::Default,
-            thinking_enabled: Source::Default,
-            thinking_effort: Source::Default, approval: Source::Default, ui_edit_diff: Source::Default, ui_edit_diff_inline: Source::Default, wake_enabled: Source::Default, companion_enabled: Source::Default, eviction_enabled: Source::Default,
+        thinking_enabled: Source::Default,
+        thinking_effort: Source::Default,
+        approval: Source::Default,
+        ui_edit_diff: Source::Default,
+        ui_edit_diff_inline: Source::Default,
+        wake_enabled: Source::Default,
+        companion_enabled: Source::Default,
+        eviction_enabled: Source::Default,
     };
     let ks = [
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),

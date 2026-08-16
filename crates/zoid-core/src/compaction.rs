@@ -286,7 +286,13 @@ pub fn plan_compactions_for_overflow<'a>(
     // Latest non-error output per tool-result id.
     let mut output_of: HashMap<&str, &str> = HashMap::new();
     for e in visible {
-        if let EventKind::ToolResult { id, output, is_error, .. } = &e.kind {
+        if let EventKind::ToolResult {
+            id,
+            output,
+            is_error,
+            ..
+        } = &e.kind
+        {
             if !*is_error {
                 output_of.insert(id.as_str(), output.as_str());
             }
@@ -768,6 +774,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::useless_vec)]
     fn plan_compactions_for_overflow_compacts_largest_first() {
         // Three tool results: tc1 small, tc2 medium, tc3 large.
         // big_tool_result(n) ≈ n * 5.3 tokens. Compaction saves ~95%.
@@ -776,23 +783,41 @@ mod tests {
         // Ceiling = 350 → still over, must compact tc2 too.
         // After compacting tc2: savings ~300t → running ~111t. Under 350.
         let log = vec![
-            ev(EventKind::ToolCall { id: "tc1".into(), name: "shell".into(), args: "{}".into() }),
+            ev(EventKind::ToolCall {
+                id: "tc1".into(),
+                name: "shell".into(),
+                args: "{}".into(),
+            }),
             big_tool_result("tc1", "shell", 10),
-            ev(EventKind::ToolCall { id: "tc2".into(), name: "shell".into(), args: "{}".into() }),
+            ev(EventKind::ToolCall {
+                id: "tc2".into(),
+                name: "shell".into(),
+                args: "{}".into(),
+            }),
             big_tool_result("tc2", "shell", 60),
-            ev(EventKind::ToolCall { id: "tc3".into(), name: "read".into(), args: "{}".into() }),
+            ev(EventKind::ToolCall {
+                id: "tc3".into(),
+                name: "read".into(),
+                args: "{}".into(),
+            }),
             big_tool_result("tc3", "read", 200),
         ];
         let plan = plan_compactions_for_overflow(
             log.iter(),
-            350,  // low enough that both tc3 and tc2 must be compacted
+            350, // low enough that both tc3 and tc2 must be compacted
             &ContextOverhead::default(),
             None,
         );
         let ids: Vec<&str> = plan.compactions.iter().map(|c| c.id.as_str()).collect();
         assert!(ids.contains(&"tc3"), "largest must be compacted: {ids:?}");
-        assert!(ids.contains(&"tc2"), "second largest must be compacted: {ids:?}");
-        assert!(!ids.contains(&"tc1"), "smallest should not be compacted: {ids:?}");
+        assert!(
+            ids.contains(&"tc2"),
+            "second largest must be compacted: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"tc1"),
+            "smallest should not be compacted: {ids:?}"
+        );
         for c in &plan.compactions {
             assert!(!c.summary.is_empty(), "summary must be computed");
             assert!(c.original_tokens > 0, "original_tokens must be set");
@@ -800,24 +825,30 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::useless_vec)]
     fn plan_compactions_for_overflow_noop_when_under_ceiling() {
         let log = vec![
-            ev(EventKind::ToolCall { id: "tc1".into(), name: "shell".into(), args: "{}".into() }),
+            ev(EventKind::ToolCall {
+                id: "tc1".into(),
+                name: "shell".into(),
+                args: "{}".into(),
+            }),
             big_tool_result("tc1", "shell", 5),
         ];
-        let plan = plan_compactions_for_overflow(
-            log.iter(),
-            50000,
-            &ContextOverhead::default(),
-            None,
-        );
+        let plan =
+            plan_compactions_for_overflow(log.iter(), 50000, &ContextOverhead::default(), None);
         assert!(plan.compactions.is_empty());
     }
 
     #[test]
+    #[allow(clippy::useless_vec)]
     fn plan_compactions_for_overflow_skips_already_compacted() {
         let log = vec![
-            ev(EventKind::ToolCall { id: "tc1".into(), name: "read".into(), args: "{}".into() }),
+            ev(EventKind::ToolCall {
+                id: "tc1".into(),
+                name: "read".into(),
+                args: "{}".into(),
+            }),
             big_tool_result("tc1", "read", 200),
             ev(EventKind::ToolResultCompacted {
                 id: "tc1".into(),
@@ -825,12 +856,11 @@ mod tests {
                 original_tokens: 1060,
             }),
         ];
-        let plan = plan_compactions_for_overflow(
-            log.iter(),
-            100,
-            &ContextOverhead::default(),
-            None,
+        let plan =
+            plan_compactions_for_overflow(log.iter(), 100, &ContextOverhead::default(), None);
+        assert!(
+            plan.compactions.is_empty(),
+            "already-compacted should be skipped"
         );
-        assert!(plan.compactions.is_empty(), "already-compacted should be skipped");
     }
 }

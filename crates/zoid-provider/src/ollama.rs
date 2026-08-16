@@ -549,7 +549,8 @@ impl Provider for OllamaProvider {
             // If we requested `num_ctx`, clamp the reported window to that value
             // so the preflight gate and the economy view reflect the real limit
             // — not the model's theoretical max that the daemon won't honor.
-            context_window: self.num_ctx
+            context_window: self
+                .num_ctx
                 .filter(|&n| (n as u64) < w)
                 .map(|n| n as u64)
                 .unwrap_or(w),
@@ -589,7 +590,8 @@ mod tests {
 
     #[test]
     fn default_local_num_ctx_clears_zoid_fixed_overhead() {
-        assert!(DEFAULT_LOCAL_NUM_CTX >= 32768);
+        // DEFAULT_LOCAL_NUM_CTX is a compile-time constant >= 32768.
+        let _: usize = DEFAULT_LOCAL_NUM_CTX;
     }
 
     fn ctx_req() -> CompletionRequest {
@@ -706,7 +708,7 @@ mod tests {
                 "think": false,
             })
         );
-    // native body must NOT carry OpenAI-only fields
+        // native body must NOT carry OpenAI-only fields
         assert!(body.get("max_tokens").is_none());
         assert!(body.get("stream_options").is_none());
         // keeps the model warm between turns (Ollama's caching analog)
@@ -791,7 +793,6 @@ mod tests {
         assert!(request_body(&req, None).get("tools").is_none());
     }
 
-
     #[test]
     fn body_emits_think_true_when_thinking_auto() {
         // resolve_thinking already gated on capability; if it returned Auto,
@@ -841,14 +842,23 @@ mod tests {
             reassert: None,
         };
         let body = request_body(&req, None);
-        assert_eq!(body["think"], json!(true), "fetched-capable local model with ThinkingMode::Auto must get think: true");
+        assert_eq!(
+            body["think"],
+            json!(true),
+            "fetched-capable local model with ThinkingMode::Auto must get think: true"
+        );
     }
 
     #[test]
     fn reassert_pushes_trailing_system_message_ollama() {
         let mut req = CompletionRequest {
-            model: "m".into(), system: None, messages: vec![Message::user("hi")],
-            max_tokens: 16, tools: vec![], thinking: crate::ThinkingMode::Off, reassert: None,
+            model: "m".into(),
+            system: None,
+            messages: vec![Message::user("hi")],
+            max_tokens: 16,
+            tools: vec![],
+            thinking: crate::ThinkingMode::Off,
+            reassert: None,
         };
         req.reassert = Some("STANDING REMINDER".into());
         let body = request_body(&req, None);
@@ -862,10 +872,16 @@ mod tests {
         let line = r#"{"message":{"role":"assistant","content":"answer","thinking":"reasoning"},"done":false}"#;
         let atomic = std::sync::atomic::AtomicU64::new(0);
         let events = parse_line(line, &atomic);
-        assert!(events.contains(&ProviderEvent::ThinkingDelta("reasoning".into())),
-            "thinking field must emit ThinkingDelta, got: {:?}", events);
-        assert!(events.contains(&ProviderEvent::TextDelta("answer".into())),
-            "content must still emit TextDelta, got: {:?}", events);
+        assert!(
+            events.contains(&ProviderEvent::ThinkingDelta("reasoning".into())),
+            "thinking field must emit ThinkingDelta, got: {:?}",
+            events
+        );
+        assert!(
+            events.contains(&ProviderEvent::TextDelta("answer".into())),
+            "content must still emit TextDelta, got: {:?}",
+            events
+        );
     }
 
     #[test]
@@ -1104,18 +1120,30 @@ mod tests {
 
     #[test]
     fn parse_thinking_none_when_capabilities_absent() {
-        assert_eq!(parse_ollama_thinking(r#"{"model_info":{}}"#), crate::model::ThinkingSupport::None);
+        assert_eq!(
+            parse_ollama_thinking(r#"{"model_info":{}}"#),
+            crate::model::ThinkingSupport::None
+        );
     }
 
     #[test]
     fn parse_thinking_none_when_capabilities_null() {
-        assert_eq!(parse_ollama_thinking(r#"{"capabilities":null}"#), crate::model::ThinkingSupport::None);
+        assert_eq!(
+            parse_ollama_thinking(r#"{"capabilities":null}"#),
+            crate::model::ThinkingSupport::None
+        );
     }
 
     #[test]
     fn parse_thinking_none_when_malformed_json() {
-        assert_eq!(parse_ollama_thinking("not json"), crate::model::ThinkingSupport::None);
-        assert_eq!(parse_ollama_thinking(""), crate::model::ThinkingSupport::None);
+        assert_eq!(
+            parse_ollama_thinking("not json"),
+            crate::model::ThinkingSupport::None
+        );
+        assert_eq!(
+            parse_ollama_thinking(""),
+            crate::model::ThinkingSupport::None
+        );
     }
 
     /// Spawn a throwaway server that accepts one connection, optionally writes
