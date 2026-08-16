@@ -99,6 +99,7 @@ mod tests {
                 name: "bash".to_string(),
                 output: output.to_string(),
                 is_error: false,
+                error_kind: None,
             },
         )
     }

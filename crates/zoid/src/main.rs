@@ -1734,6 +1734,7 @@ impl ProjectionCache {
                 name,
                 output,
                 is_error,
+                ..
             } => {
                 self.flush_pending_assistant();
                 if self.question_ids.contains(id.as_str()) {
@@ -1745,6 +1746,7 @@ impl ProjectionCache {
                     name: name.clone(),
                     output: output.clone(),
                     is_error: *is_error,
+                    error_kind: None,
                     compacted: false,
                     ts: ev.ts,
                 });
@@ -8748,7 +8750,7 @@ mod tests {
         events.push(mk(EventKind::ModelThinking { text: "hmm".into() }));
         events.push(mk(EventKind::ToolCall { id: "t1".into(), name: "read".into(), args: r#"{"path":"f.rs"}"#.into() }));
         // ToolResult with tokens
-        let mut tr = mk(EventKind::ToolResult { id: "t1".into(), name: "read".into(), output: "file contents".into(), is_error: false });
+        let mut tr = mk(EventKind::ToolResult { id: "t1".into(), name: "read".into(), output: "file contents".into(), is_error: false, error_kind: None });
         tr.tokens = Some(TokenStat { input: 100, output: 50, cached: 20, thinking: 5 });
         events.push(tr);
         events.push(mk(EventKind::Usage));
@@ -8916,7 +8918,7 @@ mod tests {
         cache.apply_event(&q);
         assert_eq!(cache.msgs.len(), 1, "question card pushed");
         let tr = Event::new(Ulid::new(), None, 1, EventKind::ToolResult {
-            id: "q1".into(), name: "ask_user".into(), output: "answer".into(), is_error: false,
+            id: "q1".into(), name: "ask_user".into(), output: "answer".into(), is_error: false, error_kind: None,
         });
         let impact = cache.apply_event(&tr);
         assert_eq!(cache.msgs.len(), 1, "ToolResult suppressed — no new msg");
@@ -8933,7 +8935,7 @@ mod tests {
         });
         cache.apply_event(&q);
         let tr = Event::new(Ulid::new(), None, 1, EventKind::ToolResult {
-            id: "q2".into(), name: "shell".into(), output: "done".into(), is_error: false,
+            id: "q2".into(), name: "shell".into(), output: "done".into(), is_error: false, error_kind: None,
         });
         let impact = cache.apply_event(&tr);
         assert_eq!(cache.msgs.len(), 2, "ToolResult NOT suppressed for Approval");
@@ -8946,7 +8948,7 @@ mod tests {
         let mut cache = ProjectionCache::default();
         // Push a ToolResult, then an AssistantMessage, then compact the result.
         let tr = Event::new(Ulid::new(), None, 0, EventKind::ToolResult {
-            id: "t1".into(), name: "read".into(), output: "full output".into(), is_error: false,
+            id: "t1".into(), name: "read".into(), output: "full output".into(), is_error: false, error_kind: None,
         });
         cache.apply_event(&tr);
         let am = Event::new(Ulid::new(), None, 1, EventKind::AssistantMessage { text: "ok".into() });
@@ -9021,7 +9023,7 @@ mod tests {
         let tc = Event::new(Ulid::new(), None, 1, EventKind::ToolCall { id: "t1".into(), name: "read".into(), args: "{}".into() });
         cache.apply_event(&tc);
         assert!(cache.msgs.is_empty(), "tool call accumulates in pending");
-        let tr = Event::new(Ulid::new(), None, 2, EventKind::ToolResult { id: "t1".into(), name: "read".into(), output: "ok".into(), is_error: false });
+        let tr = Event::new(Ulid::new(), None, 2, EventKind::ToolResult { id: "t1".into(), name: "read".into(), output: "ok".into(), is_error: false, error_kind: None });
         let impact = cache.apply_event(&tr);
         assert_eq!(impact, ProjectionImpact::MsgsAppended);
         assert_eq!(cache.msgs.len(), 2, "flushed Assistant + ToolResult");
@@ -9040,7 +9042,7 @@ mod tests {
         use zoid_core::event::{Event, EventKind};
         let mut cache = ProjectionCache::default();
         let tr = Event::new(Ulid::new(), None, 0, EventKind::ToolResult {
-            id: "t1".into(), name: "read".into(), output: "full output".into(), is_error: false,
+            id: "t1".into(), name: "read".into(), output: "full output".into(), is_error: false, error_kind: None,
         });
         cache.apply_event(&tr);
         assert_eq!(cache.msgs.len(), 1);
@@ -10512,6 +10514,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n"),
             is_error: false,
+            error_kind: None,
         })
         .await
         .unwrap();
