@@ -57,7 +57,7 @@ mod tests {
     fn ev(kind: EventKind) -> Event { Event::new(Ulid::new(), None, 0, kind) }
     fn user(t: &str) -> Event { ev(EventKind::UserMessage { text: t.into() }) }
     fn tool(id: &str, out: &str) -> Event {
-        ev(EventKind::ToolResult { id: id.into(), name: "shell".into(), output: out.into(), is_error: false })
+        ev(EventKind::ToolResult { id: id.into(), name: "shell".into(), output: out.into(), is_error: false, error_kind: None })
     }
     fn compacted(id: &str, original_tokens: u64) -> Event {
         ev(EventKind::ToolResultCompacted { id: id.into(), summary: "sum".into(), original_tokens })

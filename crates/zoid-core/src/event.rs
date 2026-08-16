@@ -144,6 +144,8 @@ pub enum EventKind {
         name: String,
         output: String,
         is_error: bool,
+        #[serde(default)]
+        error_kind: Option<ErrorKind>,
     },
     /// A turn's token usage. The numbers live in `Event.tokens`; this variant
     /// is the carrier so the economy projections can sum real counts. Ignored
@@ -373,6 +375,7 @@ mod tests {
                 name: "read_file".into(),
                 output: "data".into(),
                 is_error: false,
+                error_kind: None,
             },
         );
         for ev in [call, res] {
@@ -558,5 +561,23 @@ mod tests {
         let json = serde_json::to_string(&ev).unwrap();
         let back: Event = serde_json::from_str(&json).unwrap();
         assert_eq!(back.kind, k);
+    }
+
+    #[test]
+    fn tool_result_deserializes_without_error_kind() {
+        // Legacy JSON from before error_kind was added — must still load.
+        let json = r#"{"ToolResult":{"id":"tc1","name":"read","output":"ok","is_error":false}}"#;
+        let kind: EventKind = serde_json::from_str(json).unwrap();
+        match kind {
+            EventKind::ToolResult { id, error_kind, .. } => {
+                assert_eq!(id, "tc1");
+                assert_eq!(
+                    error_kind,
+                    None,
+                    "legacy ToolResult must deserialize error_kind as None"
+                );
+            }
+            _ => panic!("expected ToolResult"),
+        }
     }
 }

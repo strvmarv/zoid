@@ -56,6 +56,7 @@ pub enum ChatMsg {
         name: String,
         output: String,
         is_error: bool,
+        error_kind: Option<crate::ErrorKind>,
         /// Set when a `ToolResultCompacted` event replaced this result's body
         /// with a summary. The transcript marks it; the live request carries it.
         compacted: bool,
@@ -238,6 +239,7 @@ pub fn conversation_for_branch<'a>(
                 name,
                 output,
                 is_error,
+                error_kind,
             } => {
                 // Suppress the tool-result line when a QuestionAsked owns this
                 // id — the card is the human-facing record.
@@ -256,6 +258,7 @@ pub fn conversation_for_branch<'a>(
                     name: name.clone(),
                     output,
                     is_error: *is_error,
+                    error_kind: *error_kind,
                     compacted: was_compacted,
                     ts: e.ts,
                 });
@@ -401,6 +404,7 @@ mod tests {
                 name: name.into(),
                 output: output.into(),
                 is_error: false,
+                error_kind: None,
             },
         )
     }
@@ -438,6 +442,7 @@ mod tests {
                     name: "read_file".into(),
                     output: "data".into(),
                     is_error: false,
+                    error_kind: None,
                     compacted: false,
                     ts: 0
                 },
@@ -499,6 +504,7 @@ mod tests {
                     name: "shell".into(),
                     output: "boom\n[exit 1]".into(),
                     is_error: true,
+                    error_kind: None,
                 },
             ),
         ];
@@ -523,6 +529,7 @@ mod tests {
                 name: "shell".into(),
                 output: "boom\n[exit 1]".into(),
                 is_error: true,
+                error_kind: None,
                 compacted: false,
                 ts: 0,
             }
@@ -594,6 +601,7 @@ mod tests {
                     name: "shell".into(),
                     output: "ok".into(),
                     is_error: false,
+                    error_kind: None,
                 },
             ),
         ];
@@ -689,6 +697,7 @@ mod tests {
                     name: "search".into(),
                     output: "HUGE ORIGINAL OUTPUT".into(),
                     is_error: false,
+                    error_kind: None,
                 },
             ),
             Event::new(
@@ -955,6 +964,7 @@ mod tests {
                     name: "ask_user".into(),
                     output: "Skip".into(),
                     is_error: false,
+                    error_kind: None,
                 },
             ),
         ];
@@ -1000,6 +1010,7 @@ mod tests {
                     name: "submit_feedback".into(),
                     output: "Created issue #7".into(),
                     is_error: false,
+                    error_kind: None,
                 },
             ),
         ];
@@ -1027,6 +1038,7 @@ mod tests {
                     name: "read_file".into(),
                     output: "data".into(),
                     is_error: false,
+                    error_kind: None,
                 },
             ),
         ];
