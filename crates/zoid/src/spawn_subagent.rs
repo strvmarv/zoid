@@ -43,6 +43,28 @@ pub(crate) fn abort_summary(reason: Option<crate::agent::AbortReason>) -> String
     }
 }
 
+/// Reconcile a subagent's own result with the supervisor's hard-cancellation
+/// signal. There is an inherent TOCTOU here: `run_subagent()` returning and
+/// the idle/ceiling supervisor firing `hard` are two independent observers of
+/// completion, and can race. An `Ok` result must always win — the
+/// supervisor's job is to force-stop a STUCK subagent, not to retroactively
+/// erase a real completion that beat it to the finish line (the call site
+/// drops the worktree's commits on the `Err` path, so clobbering `Ok` is
+/// data loss, not just a mislabel). Only an `Err` result gets relabeled with
+/// the clean abort reason when `hard` fired — replacing whatever raw error
+/// surfaced (e.g. a cancelled in-flight request) with a summary the user can
+/// actually act on.
+fn reconcile_hard_cancel(
+    res: anyhow::Result<crate::subagent::SubagentResult>,
+    hard_cancelled: bool,
+    abort_reason: Option<crate::agent::AbortReason>,
+) -> anyhow::Result<crate::subagent::SubagentResult> {
+    match res {
+        Err(_) if hard_cancelled => Err(anyhow::anyhow!(abort_summary(abort_reason))),
+        other => other,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_subagent(
     task: String,
@@ -105,18 +127,14 @@ pub fn spawn_subagent(
         // Stop the supervisor now that the run has returned.
         done.cancel();
 
-        // If a firer tripped `hard`, force the failure branch regardless of what
-        // the drained turn returned: label it with the abort reason and discard
-        // the worktree (partial work is not kept). Note: there's an accepted
-        // ~250ms ceiling-boundary race where a late progress tick lands just
-        // after `hard` fires but before the turn observes it — charitable, not
-        // a correctness bug.
-        let res = if hard.is_cancelled() {
-            let reason = *abort_reason.lock().unwrap();
-            Err(anyhow::anyhow!(abort_summary(reason)))
-        } else {
-            res
-        };
+        // If a firer tripped `hard` AND the turn itself came back as an error,
+        // relabel it with the clean abort reason (see `reconcile_hard_cancel`
+        // doc comment for why an `Ok` must never be overwritten here — that
+        // was the 2026-07-12-diagnosed TOCTOU bug). Note: there's a separate,
+        // accepted ~250ms ceiling-boundary race where a late progress tick
+        // lands just after `hard` fires but before the turn observes it —
+        // charitable, not a correctness bug.
+        let res = reconcile_hard_cancel(res, hard.is_cancelled(), *abort_reason.lock().unwrap());
 
         // Commit the subagent's working-tree changes on the success path,
         // then retain the branch (with commits) for subagent_diff retrieval.
@@ -200,5 +218,64 @@ mod tests {
         );
         let s2 = super::abort_summary(None);
         assert!(!s2.is_empty(), "a reasonless abort still has a summary");
+    }
+
+    fn sample_ok() -> anyhow::Result<crate::subagent::SubagentResult> {
+        Ok(crate::subagent::SubagentResult {
+            id: "sub-01ABC".into(),
+            branch: "subagent:sub-01ABC".into(),
+            summary: "did the thing".into(),
+            ok: true,
+        })
+    }
+
+    #[test]
+    fn reconcile_hard_cancel_does_not_clobber_a_real_success() {
+        // TOCTOU regression: run_subagent() can return Ok(_) in the same
+        // window the idle/ceiling supervisor fires `hard` (both observe
+        // completion independently). A successful result must win — the
+        // supervisor's job is to force-stop STUCK subagents, not to
+        // retroactively erase a real completion that beat it to the finish
+        // line. Before this fix, `hard.is_cancelled()` alone unconditionally
+        // overwrote Ok with an abort Err, discarding the summary and (at the
+        // call site) dropping the worktree's commits.
+        let res =
+            reconcile_hard_cancel(sample_ok(), true, Some(crate::agent::AbortReason::Ceiling));
+        let r = res.expect("a real Ok must survive a racing hard-cancellation");
+        assert_eq!(r.id, "sub-01ABC");
+        assert!(r.ok);
+    }
+
+    #[test]
+    fn reconcile_hard_cancel_passes_through_ok_when_not_cancelled() {
+        let res = reconcile_hard_cancel(sample_ok(), false, None);
+        assert!(res.is_ok(), "no cancellation, no interference");
+    }
+
+    #[test]
+    fn reconcile_hard_cancel_relabels_error_when_cancelled() {
+        // The supervisor DID fire and the subagent's own result was already
+        // an error (e.g. a cancelled in-flight request) — relabel with the
+        // clean abort reason rather than surfacing a confusing raw error.
+        let res = reconcile_hard_cancel(
+            Err(anyhow::anyhow!("stream ended unexpectedly")),
+            true,
+            Some(crate::agent::AbortReason::IdleTimeout),
+        );
+        let msg = res.unwrap_err().to_string();
+        assert!(
+            msg.contains("idle timeout"),
+            "error is relabeled with the abort reason: {msg}"
+        );
+    }
+
+    #[test]
+    fn reconcile_hard_cancel_leaves_error_unchanged_when_not_cancelled() {
+        let res = reconcile_hard_cancel(Err(anyhow::anyhow!("provider 400")), false, None);
+        let msg = res.unwrap_err().to_string();
+        assert!(
+            msg.contains("provider 400"),
+            "no cancellation happened, so the original error is preserved: {msg}"
+        );
     }
 }
