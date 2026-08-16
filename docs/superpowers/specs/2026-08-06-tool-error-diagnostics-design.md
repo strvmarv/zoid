@@ -37,6 +37,73 @@ Add a structured `ErrorKind` to `ToolOutput` so that:
 - No changes to the shell tool's nonzero-exit handling — it already has a rich
   signal (`[exit N]` + stdout/stderr); only its spawn-failure path gets an
   `ErrorKind`.
+- No guarding against self-deletion (e.g., `shell` running `rm -rf` on the CWD).
+  The agent is trusted not to delete its own working directory; the pre-check
+  catches the aftermath and provides recovery, not prevention of the deletion
+  itself.
+
+## CWD-deleted detection and recovery
+
+A recurring failure mode: the agent's working directory is deleted out from
+under it (e.g., `git worktree remove` from another process, a subagent in a
+shared worktree exiting and cleaning up, or the agent itself running a command
+that removes the CWD). Every subsequent tool call fails with a confusing OS
+error (`No such file or directory`) that sends the model into a diagnostic
+spiral — it tries `ls`, `read`, `shell` to investigate, all of which fail the
+same way, wasting tokens and turns.
+
+### Design
+
+**Pre-check in the agent loop:** Before dispatching any tool call (both Local
+and Network arms), the agent loop checks `cwd.exists()`. If the CWD no longer
+exists, it short-circuits: instead of running the tool, it returns a
+`ToolOutput::err_kind(ErrorKind::CwdDeleted, ...)` with a recovery message.
+
+The check is a single `Path::exists()` syscall — negligible overhead per tool
+call.
+
+**New ErrorKind variant:**
+
+```rust
+/// The working directory was deleted out from under the agent. Recovery:
+/// call exit_worktree (if in a worktree) or navigate to an existing directory.
+CwdDeleted,
+```
+
+**Recovery message format:**
+
+```
+[error: cwd_deleted] The working directory "{cwd}" no longer exists. If you
+are in a worktree, call exit_worktree to return to the main checkout. If you
+deleted the directory intentionally, navigate to an existing directory first
+(e.g., cd to the repo root before running another command).
+```
+
+The message is intentionally prescriptive — it tells the model exactly what to
+do (call `exit_worktree`) rather than leaving it to diagnose the problem. The
+most common cause is a worktree being removed, so `exit_worktree` is the
+primary recovery path. The fallback ("navigate to an existing directory")
+covers non-worktree scenarios.
+
+**Where the check lives:** In the agent loop (`agent.rs`), in both the Local
+and Network tool-dispatch arms, before the tool is executed. The check is not
+in the tools themselves — it's a loop-level guard, not a per-tool concern,
+because every tool that uses `cwd` is affected and the check only needs to
+happen once per tool call.
+
+**Interaction with the `ToolOutput`/`ErrorKind` changes:** The CWD-deleted
+check produces a `ToolOutput` with `ErrorKind::CwdDeleted` before the tool is
+ever called, so the tool's own error paths are never reached. The
+`EventKind::ToolResult` for a CWD-deleted short-circuit carries
+`error_kind: Some(CwdDeleted)` like any other error.
+
+### Testing
+
+- Agent loop test: when `cwd` is deleted before a tool call, the tool is not
+  executed and the `ToolResult` has `error_kind: CwdDeleted` with the
+  recovery message.
+- The recovery message contains "exit_worktree" (so the model can discover the
+  recovery action from the text alone).
 
 ## Architecture
 
@@ -68,6 +135,10 @@ pub enum ErrorKind {
     /// Ambiguous or precondition failure (edit: `old_string` ambiguous or not
     /// found, write: path exists and can't overwrite).
     Conflict,
+    /// The working directory was deleted out from under the agent. Recovery:
+    /// call exit_worktree (if in a worktree) or navigate to an existing
+    /// directory.
+    CwdDeleted,
     /// Unexpected internal error (serialization failure, spawn failure,
     /// anything that doesn't fit above).
     Internal,
@@ -281,6 +352,14 @@ Each tool's error paths are categorized. Here is the complete mapping:
 - `fetch`: when the mock server returns a 2xx with no extractable content, the
   tool returns `BackendUnavailable`.
 
+#### CWD-deleted detection tests
+
+- Agent loop: when `cwd` is deleted before a Local tool call, the tool is not
+  executed and the `ToolResult` has `error_kind: CwdDeleted` with the recovery
+  message containing "exit_worktree".
+- Agent loop: same for the Network tool-dispatch arm.
+- The recovery message is prescriptive (names `exit_worktree` explicitly).
+
 #### Integration tests
 
 - The `[error: <kind>]` prefix appears in the model-facing tool result text (tested
@@ -288,14 +367,15 @@ Each tool's error paths are categorized. Here is the complete mapping:
 
 ### Migration path
 
-1. Add `ErrorKind` enum and update `ToolOutput` (constructors, field).
+1. Add `ErrorKind` enum (including `CwdDeleted`) and update `ToolOutput` (constructors, field).
 2. Update `EventKind::ToolResult` and `ChatMsg::ToolResult` with `error_kind`.
-3. Add `[error: <kind>]` prefix rendering in the request builder.
-4. Add `is_ddg_error_page` to `zoid-web/src/search.rs`.
-5. Add 2xx-empty-extraction check to `zoid-web/src/lib.rs` (`fetch`).
-6. Audit and categorize every tool's error paths (one tool file at a time).
-7. Update all existing tests to assert `error_kind` where applicable.
-8. Add new tests for the DDG error-page detection and the prefix rendering.
+3. Add `[error: <kind>]` prefix rendering in the agent loop's `ChatMsg` → `Message` conversion.
+4. Add CWD-deleted pre-check in the agent loop (Local and Network arms).
+5. Add `is_ddg_error_page` to `zoid-web/src/search.rs`.
+6. Add 2xx-empty-extraction check to `zoid-web/src/lib.rs` (`fetch`).
+7. Audit and categorize every tool's error paths (one tool file at a time).
+8. Update all existing tests to assert `error_kind` where applicable.
+9. Add new tests for DDG error-page detection, prefix rendering, and CWD-deleted detection.
 
 ### Files touched
 
@@ -316,12 +396,13 @@ Each tool's error paths are categorized. Here is the complete mapping:
 - `crates/zoid-core/src/compaction.rs` — propagate `error_kind` through compaction
 - `crates/zoid-core/src/eviction.rs` — propagate `error_kind` (if needed for ranking)
 - `crates/zoid-core/src/reassert.rs` — propagate `error_kind` through reassert
+- `crates/zoid/src/agent.rs` — CWD-deleted pre-check in Local and Network tool-dispatch arms; `[error: <kind>]` prefix rendering in `ChatMsg` → `Message` conversion
 - `crates/zoid/src/zoom.rs` — `ChatMsg::ToolResult` display (if it reads `error_kind`)
 
 ### Locked decisions
 
-- **ErrorKind taxonomy:** 7 variants (BackendUnavailable, Timeout, NotFound,
-  InvalidInput, PermissionDenied, Conflict, Internal).
+- **ErrorKind taxonomy:** 8 variants (BackendUnavailable, Timeout, NotFound,
+  InvalidInput, PermissionDenied, Conflict, CwdDeleted, Internal).
 - **Model sees the kind:** `[error: <kind>]` prefix rendered in the tool-result
   text that goes to the provider.
 - **Loop gets the enum:** `error_kind` is a field on `ToolOutput` and
@@ -335,3 +416,9 @@ Each tool's error paths are categorized. Here is the complete mapping:
   errors. No `ErrorKind` applies.
 - **shell nonzero exit is not an error:** it already has `[exit N]` + stderr; only
   spawn failures get an `ErrorKind`.
+- **CWD-deleted pre-check:** the agent loop checks `cwd.exists()` before every
+  tool call; if false, short-circuits with `ErrorKind::CwdDeleted` and a
+  recovery message pointing to `exit_worktree`. Not a per-tool check — it's a
+  loop-level guard.
+- **No self-deletion guard:** the agent is trusted not to `rm -rf` its own CWD;
+  the pre-check catches the aftermath, not the cause.
