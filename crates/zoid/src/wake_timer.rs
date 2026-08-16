@@ -185,7 +185,10 @@ mod tests {
         // Only 500ms of "idle" — under the 1s window.
         CLOCK_NOBREACH.store(500, Ordering::Relaxed);
         tokio::time::advance(Duration::from_millis(300)).await;
-        assert!(!fire.is_cancelled(), "must not fire before the window elapses");
+        assert!(
+            !fire.is_cancelled(),
+            "must not fire before the window elapses"
+        );
         assert!(reason.lock().unwrap().is_none());
     }
 
@@ -210,6 +213,9 @@ mod tests {
         done.cancel(); // normal completion signalled before any breach
         tokio::time::advance(Duration::from_millis(300)).await;
         h.await.expect("supervisor task should exit on done");
-        assert!(!fire.is_cancelled(), "done must stop the timer without firing");
+        assert!(
+            !fire.is_cancelled(),
+            "done must stop the timer without firing"
+        );
     }
 }

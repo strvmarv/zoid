@@ -15,7 +15,9 @@ use zoid_core::agent_profile::AgentProfile;
 use zoid_core::event::{BranchId, Event, EventKind};
 use zoid_core::projection::ChatMsg;
 use zoid_core::session::SessionHandle;
-use zoid_provider::{CompletionRequest, Message, Provider, ProviderEvent, ThinkingMode, ToolCall, ToolSpec};
+use zoid_provider::{
+    CompletionRequest, Message, Provider, ProviderEvent, ThinkingMode, ToolCall, ToolSpec,
+};
 use zoid_tools::{Gate, Tool, ToolGate};
 
 /// Warning glyph used in agent-generated error messages; avoids a TUI-layer dep.
@@ -160,7 +162,11 @@ fn format_subagent_list(map: &std::collections::HashMap<String, SubagentHandle>)
     }
     let mut lines = format!("Running subagents ({}):\n", map.len());
     for (id, handle) in map.iter() {
-        let agent = if handle.agent.is_empty() { "delegate" } else { &handle.agent };
+        let agent = if handle.agent.is_empty() {
+            "delegate"
+        } else {
+            &handle.agent
+        };
         lines.push_str(&format!("- {id} [{agent}]: {}\n", handle.task));
     }
     lines.push_str(
@@ -370,7 +376,8 @@ pub enum Answer {
 /// Reply payload for a worktree relocation: the new absolute cwd + optional
 /// warning (or an error string). Shared by `WorktreeRequested` and
 /// `handle_worktree_request`.
-pub type WorktreeReply = tokio::sync::oneshot::Sender<Result<(std::path::PathBuf, Option<String>), String>>;
+pub type WorktreeReply =
+    tokio::sync::oneshot::Sender<Result<(std::path::PathBuf, Option<String>), String>>;
 
 /// A request from the `enter_worktree` / `exit_worktree` Emitting tools (or
 /// the `:worktree` user commands) to relocate the session cwd. Ephemeral —
@@ -379,9 +386,7 @@ pub type WorktreeReply = tokio::sync::oneshot::Sender<Result<(std::path::PathBuf
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorktreeAction {
     /// Create and enter a worktree named `name`.
-    Enter {
-        name: String,
-    },
+    Enter { name: String },
     /// Exit the current worktree, restoring the prior cwd.
     Exit,
 }
@@ -402,7 +407,11 @@ pub enum AgentUpdate {
     },
     /// A subagent was dispatched (via the dispatch_subagent tool). The UI tracks
     /// it as in-flight until its DelegationResult arrives.
-    SubagentStarted { id: String, task: String, agent: String },
+    SubagentStarted {
+        id: String,
+        task: String,
+        agent: String,
+    },
     /// A `dispatch_subagent` call was queued because the global pool is full.
     /// Carries everything the main loop needs to spawn the subagent once a
     /// slot opens (the resolved profile, the parent's cwd for worktree
@@ -467,7 +476,13 @@ pub enum AgentUpdate {
         /// task, so a manifest-stage failure must be representable as
         /// `Err(String)` and travel back through the SAME message that
         /// clears the `installing_plugin` guard.
-        res: Result<(zoid_plugin::manifest::PluginManifest, zoid_core::wizard::UpstreamScan), String>,
+        res: Result<
+            (
+                zoid_plugin::manifest::PluginManifest,
+                zoid_core::wizard::UpstreamScan,
+            ),
+            String,
+        >,
     },
     /// The agent (or user via `:worktree`) requested a worktree relocation.
     /// `reply` carries the new absolute cwd + optional warning (or an error)
@@ -1128,7 +1143,9 @@ async fn run_turn_inner(
                     &mut events,
                     ui,
                     &config.branch,
-                    EventKind::ModelThinking { text: std::mem::take(&mut thinking_buf) },
+                    EventKind::ModelThinking {
+                        text: std::mem::take(&mut thinking_buf),
+                    },
                     session_id,
                     now,
                 )
@@ -1486,7 +1503,8 @@ async fn run_turn_inner(
                     let vec_ids: Vec<Ulid> = match (&config.embed, &config.embedder) {
                         (Some(index), Some(emb)) => {
                             use zoid_core::retrieval::CandidateSource;
-                            let vs = zoid_core::retrieval::VectorSource::new(emb.clone(), index.clone());
+                            let vs =
+                                zoid_core::retrieval::VectorSource::new(emb.clone(), index.clone());
                             let q = query.clone();
                             tokio::task::spawn_blocking(move || vs.candidates(&q, vfetch))
                                 .await
@@ -1507,7 +1525,12 @@ async fn run_turn_inner(
                             .events_by_ids(merged.clone(), session_id)
                             .await
                             .unwrap_or_default();
-                        evs.sort_by_key(|e| merged.iter().position(|id| *id == e.id).unwrap_or(usize::MAX));
+                        evs.sort_by_key(|e| {
+                            merged
+                                .iter()
+                                .position(|id| *id == e.id)
+                                .unwrap_or(usize::MAX)
+                        });
                         // Session filter may have dropped cross-session vector hits;
                         // trim the session-present survivors back to the requested limit.
                         evs.truncate(limit);
@@ -1970,12 +1993,15 @@ async fn run_turn_inner(
                         })
                         .await;
                     let (output, is_error) = match rx.await {
-                        Ok(Ok(id)) => (format!(
-                            "scheduled (id {id}) — do not schedule additional \
+                        Ok(Ok(id)) => (
+                            format!(
+                                "scheduled (id {id}) — do not schedule additional \
                              wakes for the same event. This wake will re-invoke \
                              you; cancel it with cancel_wake if you no longer \
                              need it."
-                        ), false),
+                            ),
+                            false,
+                        ),
                         Ok(Err(e)) => (e, true),
                         Err(_) => ("schedule_wake failed (no reply)".to_string(), true),
                     };
@@ -2009,9 +2035,7 @@ async fn run_turn_inner(
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
                     let (tx, rx) = tokio::sync::oneshot::channel();
-                    let _ = ui
-                        .send(AgentUpdate::CancelWake { id, reply: tx })
-                        .await;
+                    let _ = ui.send(AgentUpdate::CancelWake { id, reply: tx }).await;
                     let (output, is_error) = match rx.await {
                         Ok(Ok(msg)) => (msg, false),
                         Ok(Err(e)) => (e, true),
@@ -2610,7 +2634,10 @@ async fn run_turn_inner(
                     if config.branch == BranchId::default() {
                         if let Some(diff) = out.diff.take() {
                             let _ = ui
-                                .send(AgentUpdate::EditDiff { id: tc.id.clone(), diff })
+                                .send(AgentUpdate::EditDiff {
+                                    id: tc.id.clone(),
+                                    diff,
+                                })
                                 .await;
                         }
                     }
@@ -3027,10 +3054,7 @@ async fn preflight_gate(
                     Default::default()
                 } else {
                     let ids = embeddable_event_ids(events);
-                    let vecs = session
-                        .vectors_by_ids(model, ids)
-                        .await
-                        .unwrap_or_default();
+                    let vecs = session.vectors_by_ids(model, ids).await.unwrap_or_default();
                     zoid_core::eviction::GoalContext {
                         goal,
                         vecs,
@@ -3252,8 +3276,7 @@ mod tests {
     fn submit_feedback_parse_validates_kind_title_body() {
         let ok = parse_feedback_args(&serde_json::json!({"kind":"bug","title":"t","body":"b"}));
         assert!(ok.is_some());
-        let bad_kind =
-            parse_feedback_args(&serde_json::json!({"kind":"x","title":"t","body":"b"}));
+        let bad_kind = parse_feedback_args(&serde_json::json!({"kind":"x","title":"t","body":"b"}));
         assert!(bad_kind.is_none());
         let empty_title =
             parse_feedback_args(&serde_json::json!({"kind":"bug","title":"","body":"b"}));
@@ -3267,21 +3290,14 @@ mod tests {
     async fn call_or_abandon_yields_none_when_cancel_wins() {
         let cancel = CancellationToken::new();
         cancel.cancel(); // already cancelled → abandon immediately
-        let out = call_or_abandon(
-            &cancel,
-            std::future::pending::<zoid_tools::ToolOutput>(),
-        )
-        .await;
+        let out = call_or_abandon(&cancel, std::future::pending::<zoid_tools::ToolOutput>()).await;
         assert!(out.is_none(), "a cancelled token must abandon the call");
     }
 
     #[tokio::test]
     async fn call_or_abandon_yields_result_when_future_completes() {
         let cancel = CancellationToken::new(); // never fired
-        let out = call_or_abandon(&cancel, async {
-            zoid_tools::ToolOutput::ok("done")
-        })
-        .await;
+        let out = call_or_abandon(&cancel, async { zoid_tools::ToolOutput::ok("done") }).await;
         assert_eq!(out.expect("future should win").text, "done");
     }
 
@@ -3579,9 +3595,7 @@ mod tests {
             ProviderEvent::Done,
         ]));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
-        tokio::spawn(async move {
-            while rx.recv().await.is_some() {}
-        });
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
         run_agent_turn(
             cfg,
             provider,
@@ -3606,8 +3620,8 @@ mod tests {
         use zoid_core::retrieval::{Embedder, FakeEmbedder};
 
         let fat = "x".repeat(3000); // ~1000 est tokens, on the assistant side
-        // user ids 1,3,5,7,9,11,13,15. recent_n=2 → 13,15 protected; goal (3 recent
-        // user msgs) = ids 15,13,11. On-goal set {1,11,13,15}; off-goal {3,5,7,9}.
+                                    // user ids 1,3,5,7,9,11,13,15. recent_n=2 → 13,15 protected; goal (3 recent
+                                    // user msgs) = ids 15,13,11. On-goal set {1,11,13,15}; off-goal {3,5,7,9}.
         let goalish = "alpha beta gamma delta";
         let offgoal = "zulu yankee xray whiskey";
         let utext = |uid: u128| -> String {
@@ -3624,9 +3638,7 @@ mod tests {
                 Ulid::from(uid),
                 None,
                 uid as i64,
-                EventKind::UserMessage {
-                    text: utext(uid),
-                },
+                EventKind::UserMessage { text: utext(uid) },
             ));
             seed.push(Event::new(
                 Ulid::from(i * 2 + 2),
@@ -3715,9 +3727,7 @@ mod tests {
                 Ulid::from(uid),
                 None,
                 uid as i64,
-                EventKind::UserMessage {
-                    text: utext(uid),
-                },
+                EventKind::UserMessage { text: utext(uid) },
             ));
             seed.push(Event::new(
                 Ulid::from(i * 2 + 2),
@@ -3840,14 +3850,15 @@ mod tests {
             Ulid::from(1u128),
             None,
             1,
-            EventKind::UserMessage { text: "are you there?".into() },
+            EventKind::UserMessage {
+                text: "are you there?".into(),
+            },
         )];
         for e in &seed {
             session.append(e.clone()).await.unwrap();
         }
-        let provider = std::sync::Arc::new(zoid_provider::FakeProvider::new(vec![
-            ProviderEvent::Done,
-        ]));
+        let provider =
+            std::sync::Arc::new(zoid_provider::FakeProvider::new(vec![ProviderEvent::Done]));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
         let out = run_agent_turn(
@@ -3925,7 +3936,10 @@ mod tests {
             req: &zoid_provider::CompletionRequest,
             sink: tokio::sync::mpsc::Sender<zoid_provider::ProviderEvent>,
         ) -> anyhow::Result<()> {
-            self.seen_reassert.lock().unwrap().push(req.reassert.clone());
+            self.seen_reassert
+                .lock()
+                .unwrap()
+                .push(req.reassert.clone());
             for ev in &self.scripted {
                 if sink.send(ev.clone()).await.is_err() {
                     break;
@@ -4111,8 +4125,8 @@ mod tests {
                 .count();
             fires += turn_fires;
 
-            let over_target = zoid_core::reassert::cumulative_appended(out.iter())
-                >= cfg.eviction.context_target;
+            let over_target =
+                zoid_core::reassert::cumulative_appended(out.iter()) >= cfg.eviction.context_target;
             if over_target {
                 past_target_seen = true;
             }
@@ -4139,9 +4153,11 @@ mod tests {
                         _ => None,
                     })
                     .collect();
-                events.iter().any(|e| matches!(&e.kind,
+                events.iter().any(|e| {
+                    matches!(&e.kind,
                     EventKind::ToolResult { id, output, .. }
-                        if compacted.contains(id.as_str()) && !output.is_empty()))
+                        if compacted.contains(id.as_str()) && !output.is_empty())
+                })
             };
             // Simulate a mid-session resume (main.rs's #6b path): body-clear
             // every compacted tool result, not just leave the eviction/compaction
@@ -4531,7 +4547,9 @@ mod tests {
                     Ulid::from(i),
                     None,
                     1,
-                    EventKind::UserMessage { text: format!("foreign {i}") },
+                    EventKind::UserMessage {
+                        text: format!("foreign {i}"),
+                    },
                 )
                 .with_session(sid_b)
             })
@@ -4577,7 +4595,9 @@ mod tests {
         ));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
-        let seed = std::iter::once(target.clone()).chain(foreign.clone()).collect();
+        let seed = std::iter::once(target.clone())
+            .chain(foreign.clone())
+            .collect();
         let out = run_agent_turn(
             cfg,
             provider,
@@ -4924,7 +4944,9 @@ mod tests {
             Ulid::from(1u128),
             None,
             1,
-            EventKind::UserMessage { text: "dispatch a subagent".into() },
+            EventKind::UserMessage {
+                text: "dispatch a subagent".into(),
+            },
         )];
         for e in &seed {
             session.append(e.clone()).await.unwrap();
@@ -4979,7 +5001,9 @@ mod tests {
             })
             .expect("dispatch_subagent tool result must be emitted");
         match &tool_result.kind {
-            EventKind::ToolResult { output, is_error, .. } => {
+            EventKind::ToolResult {
+                output, is_error, ..
+            } => {
                 assert!(!*is_error, "dispatch should not error");
                 assert!(
                     output.contains("sub-"),
@@ -5010,7 +5034,9 @@ mod tests {
             Ulid::from(1u128),
             None,
             1,
-            EventKind::UserMessage { text: "dispatch a subagent".into() },
+            EventKind::UserMessage {
+                text: "dispatch a subagent".into(),
+            },
         )];
         for e in &seed {
             session.append(e.clone()).await.unwrap();
@@ -5025,10 +5051,7 @@ mod tests {
                 }),
                 ProviderEvent::Done,
             ],
-            vec![
-                ProviderEvent::TextDelta("ok".into()),
-                ProviderEvent::Done,
-            ],
+            vec![ProviderEvent::TextDelta("ok".into()), ProviderEvent::Done],
         ]));
 
         let reg = std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin());
@@ -5077,11 +5100,10 @@ mod tests {
             })
             .expect("dispatch_subagent tool result must be emitted");
         match &tool_result.kind {
-            EventKind::ToolResult { output, is_error, .. } => {
-                assert!(
-                    *is_error,
-                    "unknown agent must produce an error ToolResult"
-                );
+            EventKind::ToolResult {
+                output, is_error, ..
+            } => {
+                assert!(*is_error, "unknown agent must produce an error ToolResult");
                 assert!(
                     output.contains("unknown agent 'nope'"),
                     "error must name the unknown agent: got {output}"
@@ -5112,7 +5134,9 @@ mod tests {
             Ulid::from(1u128),
             None,
             1,
-            EventKind::UserMessage { text: "dispatch two subagents".into() },
+            EventKind::UserMessage {
+                text: "dispatch two subagents".into(),
+            },
         )];
         for e in &seed {
             session.append(e.clone()).await.unwrap();
@@ -5149,9 +5173,7 @@ mod tests {
         let mut config = chat_turn_config();
         let shared: std::sync::Arc<
             std::sync::Mutex<std::collections::HashMap<String, SubagentHandle>>,
-        > = std::sync::Arc::new(std::sync::Mutex::new(
-            std::collections::HashMap::new(),
-        ));
+        > = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
         config.in_flight = Some(shared.clone());
         // Concurrency: with the default pool size (3), two dispatches both
         // succeed — the single-in-flight guard is gone. The pool now bounds
@@ -5180,7 +5202,10 @@ mod tests {
             .iter()
             .filter_map(|e| match &e.kind {
                 EventKind::ToolResult {
-                    name, output, is_error, ..
+                    name,
+                    output,
+                    is_error,
+                    ..
                 } if name == "dispatch_subagent" => Some((output.clone(), *is_error)),
                 _ => None,
             })
@@ -5275,7 +5300,10 @@ mod tests {
 
         let result = out.iter().find_map(|e| match &e.kind {
             EventKind::ToolResult {
-                name, output, is_error, ..
+                name,
+                output,
+                is_error,
+                ..
             } if name == "srv__missing" => Some((output.clone(), *is_error)),
             _ => None,
         });
@@ -5341,12 +5369,17 @@ mod tests {
             "hard-stop must not wait for the shell command"
         );
         // The tool call is answered with a killed result (balance preserved).
-        let killed = out.iter().any(|e| matches!(
-            &e.kind,
-            EventKind::ToolResult { id, output, .. }
-                if id == "call-1" && output.contains("[killed")
-        ));
-        assert!(killed, "the interrupted shell call must get a [killed] result");
+        let killed = out.iter().any(|e| {
+            matches!(
+                &e.kind,
+                EventKind::ToolResult { id, output, .. }
+                    if id == "call-1" && output.contains("[killed")
+            )
+        });
+        assert!(
+            killed,
+            "the interrupted shell call must get a [killed] result"
+        );
     }
 
     #[tokio::test]
@@ -5408,29 +5441,36 @@ mod tests {
             "hard-stop must not wait for the shell command"
         );
         // (b) The running shell call is answered with a killed result.
-        let killed = out.iter().any(|e| matches!(
-            &e.kind,
-            EventKind::ToolResult { id, output, .. }
-                if id == "call-1" && output.contains("[killed")
-        ));
-        assert!(killed, "the interrupted shell call must get a [killed] result");
+        let killed = out.iter().any(|e| {
+            matches!(
+                &e.kind,
+                EventKind::ToolResult { id, output, .. }
+                    if id == "call-1" && output.contains("[killed")
+            )
+        });
+        assert!(
+            killed,
+            "the interrupted shell call must get a [killed] result"
+        );
         // (c) The un-run second call is drained (this is the mid-batch drain path).
-        let skipped = out.iter().any(|e| matches!(
-            &e.kind,
-            EventKind::ToolResult { id, output, .. }
-                if id == "call-2" && output.contains("[skipped")
-        ));
-        assert!(skipped, "the remaining batched call must get a [skipped] result");
+        let skipped = out.iter().any(|e| {
+            matches!(
+                &e.kind,
+                EventKind::ToolResult { id, output, .. }
+                    if id == "call-2" && output.contains("[skipped")
+            )
+        });
+        assert!(
+            skipped,
+            "the remaining batched call must get a [skipped] result"
+        );
     }
 
     #[test]
     fn resolve_agent_name_defaults_to_delegate_when_absent() {
         let reg = std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin());
         // No "agent" key → default "delegate".
-        let resolved = resolve_agent_for_dispatch(
-            &serde_json::json!({}),
-            reg.clone(),
-        );
+        let resolved = resolve_agent_for_dispatch(&serde_json::json!({}), reg.clone());
         let (profile, name) = resolved.expect("absent agent should resolve to delegate");
         assert_eq!(name, "delegate");
         assert_eq!(profile.name, "delegate");
@@ -5440,10 +5480,8 @@ mod tests {
     fn resolve_agent_name_known_returns_that_profile() {
         let reg = std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin());
         // "delegate" is always known.
-        let resolved = resolve_agent_for_dispatch(
-            &serde_json::json!({ "agent": "delegate" }),
-            reg.clone(),
-        );
+        let resolved =
+            resolve_agent_for_dispatch(&serde_json::json!({ "agent": "delegate" }), reg.clone());
         let (profile, name) = resolved.unwrap();
         assert_eq!(name, "delegate");
         assert_eq!(profile.name, "delegate");
@@ -5452,22 +5490,20 @@ mod tests {
     #[test]
     fn resolve_agent_name_unknown_returns_err_listing_available() {
         let reg = std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin());
-        let resolved = resolve_agent_for_dispatch(
-            &serde_json::json!({ "agent": "typo-name" }),
-            reg.clone(),
-        );
+        let resolved =
+            resolve_agent_for_dispatch(&serde_json::json!({ "agent": "typo-name" }), reg.clone());
         let err = resolved.expect_err("unknown agent should be Err");
         assert!(err.contains("unknown agent 'typo-name'"));
-        assert!(err.contains("delegate"), "error should list available agents");
+        assert!(
+            err.contains("delegate"),
+            "error should list available agents"
+        );
     }
 
     #[test]
     fn resolve_agent_name_empty_string_defaults_to_delegate() {
         let reg = std::sync::Arc::new(zoid_core::agent_profile::AgentRegistry::builtin());
-        let resolved = resolve_agent_for_dispatch(
-            &serde_json::json!({ "agent": "" }),
-            reg.clone(),
-        );
+        let resolved = resolve_agent_for_dispatch(&serde_json::json!({ "agent": "" }), reg.clone());
         let (profile, name) = resolved.expect("empty agent string should resolve to delegate");
         assert_eq!(name, "delegate");
         assert_eq!(profile.name, "delegate");
@@ -5538,7 +5574,7 @@ mod tool_call_id_threading_tests {
 
 #[cfg(test)]
 mod guardrail_types_tests {
-    use super::{AbortReason, SubagentHandle, format_subagent_list};
+    use super::{format_subagent_list, AbortReason, SubagentHandle};
     use std::sync::atomic::AtomicI64;
     use std::sync::{Arc, Mutex};
     use tokio_util::sync::CancellationToken;
@@ -5589,7 +5625,10 @@ mod guardrail_types_tests {
         let n = fire_subagent_kill(&reg, Some("sub-a"));
         assert_eq!(n, 1);
         assert!(a.hard.is_cancelled());
-        assert_eq!(*a.abort_reason.lock().unwrap(), Some(super::AbortReason::Killed));
+        assert_eq!(
+            *a.abort_reason.lock().unwrap(),
+            Some(super::AbortReason::Killed)
+        );
         assert!(!b.hard.is_cancelled(), "untargeted subagent untouched");
 
         // Target all.
@@ -5629,22 +5668,28 @@ mod guardrail_types_tests {
         use tokio_util::sync::CancellationToken;
 
         let mut map: HashMap<String, SubagentHandle> = HashMap::new();
-        map.insert("sub-001".into(), SubagentHandle {
-            cancel: CancellationToken::new(),
-            hard: CancellationToken::new(),
-            progress: Arc::new(AtomicI64::new(0)),
-            abort_reason: Arc::new(Mutex::new(None)),
-            task: "implement the resolver".into(),
-            agent: "delegate".into(),
-        });
-        map.insert("sub-002".into(), SubagentHandle {
-            cancel: CancellationToken::new(),
-            hard: CancellationToken::new(),
-            progress: Arc::new(AtomicI64::new(0)),
-            abort_reason: Arc::new(Mutex::new(None)),
-            task: "review the spec".into(),
-            agent: "reviewer".into(),
-        });
+        map.insert(
+            "sub-001".into(),
+            SubagentHandle {
+                cancel: CancellationToken::new(),
+                hard: CancellationToken::new(),
+                progress: Arc::new(AtomicI64::new(0)),
+                abort_reason: Arc::new(Mutex::new(None)),
+                task: "implement the resolver".into(),
+                agent: "delegate".into(),
+            },
+        );
+        map.insert(
+            "sub-002".into(),
+            SubagentHandle {
+                cancel: CancellationToken::new(),
+                hard: CancellationToken::new(),
+                progress: Arc::new(AtomicI64::new(0)),
+                abort_reason: Arc::new(Mutex::new(None)),
+                task: "review the spec".into(),
+                agent: "reviewer".into(),
+            },
+        );
 
         // Non-empty: data + reminder
         let output = format_subagent_list(&map);

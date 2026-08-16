@@ -9,9 +9,17 @@ pub struct RpcError {
 
 #[derive(Debug)]
 pub enum Inbound {
-    Response { id: u64, result: Result<Value, RpcError> },
-    ServerRequest { id: Value, method: String },
-    Notification { method: String },
+    Response {
+        id: u64,
+        result: Result<Value, RpcError>,
+    },
+    ServerRequest {
+        id: Value,
+        method: String,
+    },
+    Notification {
+        method: String,
+    },
 }
 
 pub fn encode_request(id: u64, method: &str, params: Option<Value>) -> String {
@@ -68,7 +76,10 @@ pub fn classify(line: &str) -> anyhow::Result<Inbound> {
                 Ok(Inbound::Response { id, result: Err(e) })
             } else {
                 let result = v.get("result").cloned().unwrap_or(Value::Null);
-                Ok(Inbound::Response { id, result: Ok(result) })
+                Ok(Inbound::Response {
+                    id,
+                    result: Ok(result),
+                })
             }
         }
         (None, false) => Err(anyhow::anyhow!("malformed JSON-RPC line: {line}")),
@@ -95,17 +106,28 @@ mod tests {
     fn classify_distinguishes_response_notification_and_server_request() {
         // A successful response to our request id 7.
         match classify(r#"{"jsonrpc":"2.0","id":7,"result":{"ok":true}}"#).unwrap() {
-            Inbound::Response { id: 7, result: Ok(v) } => assert_eq!(v["ok"], true),
+            Inbound::Response {
+                id: 7,
+                result: Ok(v),
+            } => assert_eq!(v["ok"], true),
             other => panic!("expected response, got {other:?}"),
         }
         // An error response.
-        match classify(r#"{"jsonrpc":"2.0","id":8,"error":{"code":-32601,"message":"nope"}}"#).unwrap() {
-            Inbound::Response { id: 8, result: Err(e) } => assert_eq!(e.code, -32601),
+        match classify(r#"{"jsonrpc":"2.0","id":8,"error":{"code":-32601,"message":"nope"}}"#)
+            .unwrap()
+        {
+            Inbound::Response {
+                id: 8,
+                result: Err(e),
+            } => assert_eq!(e.code, -32601),
             other => panic!("expected error response, got {other:?}"),
         }
         // A notification (no id).
-        match classify(r#"{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}"#).unwrap() {
-            Inbound::Notification { method } => assert_eq!(method, "notifications/tools/list_changed"),
+        match classify(r#"{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}"#).unwrap()
+        {
+            Inbound::Notification { method } => {
+                assert_eq!(method, "notifications/tools/list_changed")
+            }
             other => panic!("expected notification, got {other:?}"),
         }
         // A server->client request (id + method).

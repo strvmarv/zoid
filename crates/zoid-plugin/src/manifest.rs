@@ -185,7 +185,11 @@ pub fn parse_manifest(toml_src: &str) -> Result<PluginManifest, String> {
                 .map(|(name, s)| {
                     (
                         name,
-                        McpServerSpec { command: s.command, args: s.args, env: s.env },
+                        McpServerSpec {
+                            command: s.command,
+                            args: s.args,
+                            env: s.env,
+                        },
                     )
                 })
                 .collect(),
@@ -305,7 +309,9 @@ text = "Superpowers installed."
         assert_eq!(m.install[0], Effect::Activate);
         assert_eq!(
             m.install[1],
-            Effect::OnboardingHint { text: "Superpowers installed.".into() }
+            Effect::OnboardingHint {
+                text: "Superpowers installed.".into()
+            }
         );
         m.validate().unwrap();
     }
@@ -322,7 +328,10 @@ text = "Superpowers installed."
     fn rejects_unknown_effect() {
         let src = GOOD.replace(r#"effect = "activate""#, r#"effect = "rm_rf""#);
         let err = parse_manifest(&src).unwrap_err();
-        assert!(err.contains("rm_rf") || err.contains("effect"), "got: {err}");
+        assert!(
+            err.contains("rm_rf") || err.contains("effect"),
+            "got: {err}"
+        );
     }
 
     #[test]

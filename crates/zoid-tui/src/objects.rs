@@ -152,7 +152,7 @@ mod tests {
                 ts: 0,
             },
             ChatMsg::Assistant {
-                    thinking: None,
+                thinking: None,
                 text: String::new(),
                 tool_calls: vec![ToolCallRef {
                     id: "c2".into(),
@@ -199,7 +199,7 @@ mod tests {
     fn non_file_tool_results_make_no_file_object() {
         let msgs = vec![
             ChatMsg::Assistant {
-                    thinking: None,
+                thinking: None,
                 text: String::new(),
                 tool_calls: vec![ToolCallRef {
                     id: "c1".into(),

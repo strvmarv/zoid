@@ -168,7 +168,10 @@ pub fn render_body(source: &str, content_w: usize) -> Vec<BodyLine> {
     let promoted = promote_nested_fences(source);
     let mut b = Builder::default();
     b.content_w = content_w;
-    for ev in Parser::new_ext(&promoted, Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES) {
+    for ev in Parser::new_ext(
+        &promoted,
+        Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES,
+    ) {
         b.event(ev);
         if b.bail {
             return plain_lines(source);
@@ -179,7 +182,10 @@ pub fn render_body(source: &str, content_w: usize) -> Vec<BodyLine> {
 
 /// Flatten [`render_body`] to plain `Line`s (drops the per-line kind).
 pub fn render_markdown(source: &str, content_w: usize) -> Vec<Line<'static>> {
-    render_body(source, content_w).into_iter().map(|b| b.line).collect()
+    render_body(source, content_w)
+        .into_iter()
+        .map(|b| b.line)
+        .collect()
 }
 
 /// One TXT-styled prose `Line` per source row — the parse-issue / over-nesting fallback.
@@ -214,8 +220,7 @@ fn border_line(widths: &[usize], kind: BorderKind) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     spans.push(Span::styled(left.to_string(), dim));
     for (i, &w) in widths.iter().enumerate() {
-        let seg = std::iter::repeat_n(glyph::TABLE_H, w + 2)
-            .collect::<String>();
+        let seg = std::iter::repeat_n(glyph::TABLE_H, w + 2).collect::<String>();
         spans.push(Span::styled(seg, dim));
         if i + 1 < widths.len() {
             spans.push(Span::styled(cross.to_string(), dim));
@@ -872,7 +877,10 @@ impl Builder {
             // Insert the header separator after the LAST header row, before the
             // first body row. Detect: this row is header, and the next is body.
             let is_last_header = wrapped_rows[ri].1
-                && wrapped_rows.get(ri + 1).map(|(_, ih)| !*ih).unwrap_or(false);
+                && wrapped_rows
+                    .get(ri + 1)
+                    .map(|(_, ih)| !*ih)
+                    .unwrap_or(false);
             if is_last_header {
                 self.lines.push(BodyLine {
                     line: Line::from(border_mid.clone()),
@@ -1133,8 +1141,14 @@ mod tests {
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
             .collect();
-        assert!(!joined.contains('|'), "raw pipe chars must not leak: {joined:?}");
-        assert!(!joined.contains("---"), "separator must not leak: {joined:?}");
+        assert!(
+            !joined.contains('|'),
+            "raw pipe chars must not leak: {joined:?}"
+        );
+        assert!(
+            !joined.contains("---"),
+            "separator must not leak: {joined:?}"
+        );
     }
 
     #[test]
@@ -1146,15 +1160,25 @@ mod tests {
         // invariant is "captured as Table, NOT leaked as Prose."
         let body = render_body("| H1 | H2 |\n| --- | --- |\n", TEST_W);
         let (in_table, in_prose) = body.iter().fold((false, false), |(tbl, prose), b| {
-            let has_h = b.line.spans.iter().any(|s| s.content.contains("H1") || s.content.contains("H2"));
+            let has_h = b
+                .line
+                .spans
+                .iter()
+                .any(|s| s.content.contains("H1") || s.content.contains("H2"));
             match b.kind {
                 BodyKind::Table => (tbl || has_h, prose),
                 BodyKind::Prose => (tbl, prose || has_h),
                 _ => (tbl, prose),
             }
         });
-        assert!(in_table, "cell text must appear in a Table line (rendered): captured+emitted");
-        assert!(!in_prose, "cell text must NOT leak into a Prose line: bad routing");
+        assert!(
+            in_table,
+            "cell text must appear in a Table line (rendered): captured+emitted"
+        );
+        assert!(
+            !in_prose,
+            "cell text must NOT leak into a Prose line: bad routing"
+        );
     }
 
     #[test]
@@ -1166,8 +1190,14 @@ mod tests {
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
             .collect::<String>();
-        assert!(joined.contains("before"), "prose before table lost: {joined:?}");
-        assert!(joined.contains("after"), "prose after table lost: {joined:?}");
+        assert!(
+            joined.contains("before"),
+            "prose before table lost: {joined:?}"
+        );
+        assert!(
+            joined.contains("after"),
+            "prose after table lost: {joined:?}"
+        );
     }
 
     #[test]
@@ -1182,8 +1212,14 @@ mod tests {
         assert!(joined.contains('└'), "missing bottom border: {joined}");
         assert!(joined.contains('├'), "missing header separator: {joined}");
         assert!(joined.contains('│'), "missing vertical border: {joined}");
-        assert!(joined.contains("H1") && joined.contains("H2"), "header text lost: {joined}");
-        assert!(joined.contains('a') && joined.contains('b'), "body text lost: {joined}");
+        assert!(
+            joined.contains("H1") && joined.contains("H2"),
+            "header text lost: {joined}"
+        );
+        assert!(
+            joined.contains('a') && joined.contains('b'),
+            "body text lost: {joined}"
+        );
     }
 
     #[test]
@@ -1193,12 +1229,11 @@ mod tests {
         // A header cell span: fg == TABLE_HEADER AND bold. Filter by the style
         // invariant directly (not span ordering) so the test doesn't rely on
         // "the first H-containing span happens to be the cell text."
-        let header_ok = body
-            .iter()
-            .flat_map(|b| b.line.spans.iter())
-            .any(|s| s.content.contains('H')
+        let header_ok = body.iter().flat_map(|b| b.line.spans.iter()).any(|s| {
+            s.content.contains('H')
                 && s.style.fg == Some(color::TABLE_HEADER)
-                && s.style.add_modifier.contains(Modifier::BOLD));
+                && s.style.add_modifier.contains(Modifier::BOLD)
+        });
         assert!(header_ok, "header cell text must be TABLE_HEADER + bold");
         // A body cell with "x" must be TXT, not accent.
         let body_span = body
@@ -1216,14 +1251,16 @@ mod tests {
         let spans: Vec<&Span> = body.iter().flat_map(|b| b.line.spans.iter()).collect();
         // "k" must be bold (in a body cell).
         assert!(
-            spans.iter().any(|s| s.content.contains('k')
-                && s.style.add_modifier.contains(Modifier::BOLD)),
+            spans
+                .iter()
+                .any(|s| s.content.contains('k') && s.style.add_modifier.contains(Modifier::BOLD)),
             "bold not applied in cell: {spans:?}"
         );
         // "v" must be MD_CODE.
         assert!(
-            spans.iter().any(|s| s.content.contains('v')
-                && s.style.fg == Some(color::MD_CODE)),
+            spans
+                .iter()
+                .any(|s| s.content.contains('v') && s.style.fg == Some(color::MD_CODE)),
             "inline code color not applied in cell: {spans:?}"
         );
     }
@@ -1238,7 +1275,11 @@ mod tests {
             .iter()
             .filter(|l| l.spans.iter().any(|s| s.content.contains('x')))
             .collect();
-        assert!(x_rows.len() >= 2, "expected wrapping (>=2 x-rows), got {}", x_rows.len());
+        assert!(
+            x_rows.len() >= 2,
+            "expected wrapping (>=2 x-rows), got {}",
+            x_rows.len()
+        );
     }
 
     #[test]
@@ -1250,11 +1291,16 @@ mod tests {
         let max_content_w = body
             .iter()
             .flat_map(|b| b.line.spans.iter())
-            .filter(|s| !s.content.chars().all(|c| c == '─') && !s.content.chars().all(|c| c == '│'))
+            .filter(|s| {
+                !s.content.chars().all(|c| c == '─') && !s.content.chars().all(|c| c == '│')
+            })
             .map(|s| s.content.width())
             .max()
             .unwrap_or(0);
-        assert_eq!(max_content_w, 40, "wide pane must not wrap the 40-char cell");
+        assert_eq!(
+            max_content_w, 40,
+            "wide pane must not wrap the 40-char cell"
+        );
     }
 
     #[test]
@@ -1294,10 +1340,20 @@ mod tests {
         let cell_line = body
             .iter()
             .find(|b| {
-                b.line.spans.iter().filter(|s| s.content.contains('x')).count() == 3
+                b.line
+                    .spans
+                    .iter()
+                    .filter(|s| s.content.contains('x'))
+                    .count()
+                    == 3
             })
             .expect("body cell line with 3 x's not found");
-        let joined: String = cell_line.line.spans.iter().map(|s| s.content.to_string()).collect();
+        let joined: String = cell_line
+            .line
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
         // Each "x" should be present. Left-aligned: "x" then spaces. Right: spaces then "x".
         // We just assert all three are present and the line has borders.
         assert!(joined.contains('x'));
@@ -1339,7 +1395,10 @@ mod tests {
             "\n| --- | --- |\n| c | d |\n",
         ] {
             let lines = render_markdown(md, TEST_W);
-            assert!(!lines.is_empty(), "malformed table {md:?} produced no lines");
+            assert!(
+                !lines.is_empty(),
+                "malformed table {md:?} produced no lines"
+            );
         }
     }
 
@@ -1353,13 +1412,21 @@ mod tests {
         // the deep case's "no borders" assertion would pass for the wrong
         // reason (parser never made a table). Both halves together pin the
         // bail behavior specifically.
-        let deep = format!("{}| H |\n{}| --- |\n{}| x |\n", "> ".repeat(9), "> ".repeat(9), "> ".repeat(9));
+        let deep = format!(
+            "{}| H |\n{}| --- |\n{}| x |\n",
+            "> ".repeat(9),
+            "> ".repeat(9),
+            "> ".repeat(9)
+        );
         let deep_lines = render_markdown(&deep, TEST_W);
         let deep_joined: String = deep_lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
             .collect();
-        assert!(!deep_joined.contains('┌'), "deep-nested table must bail (no borders): {deep_joined:?}");
+        assert!(
+            !deep_joined.contains('┌'),
+            "deep-nested table must bail (no borders): {deep_joined:?}"
+        );
 
         // Shallow control: a 1-level quote table renders borders (proves the
         // parser emits tables under quotes, so the deep assertion is meaningful).
@@ -1368,7 +1435,10 @@ mod tests {
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
             .collect();
-        assert!(shallow_joined.contains('┌'), "shallow-nested table must render borders (control): {shallow_joined:?}");
+        assert!(
+            shallow_joined.contains('┌'),
+            "shallow-nested table must render borders (control): {shallow_joined:?}"
+        );
     }
 
     #[test]
@@ -1376,7 +1446,10 @@ mod tests {
         let md = "| H |\n| --- |\n| x |\n";
         let body = render_body(md, TEST_W);
         let has_table_kind = body.iter().any(|b| b.kind == BodyKind::Table);
-        assert!(has_table_kind, "table lines must be BodyKind::Table: {body:?}");
+        assert!(
+            has_table_kind,
+            "table lines must be BodyKind::Table: {body:?}"
+        );
     }
 
     // --- nested fence promotion tests ---
@@ -1393,9 +1466,18 @@ mod tests {
         // Outer bare ``` contains a ```rust inner block.
         let input = "```\nhere is a codeblock:\n\n```rust\nlet x = 1;\n```\n\ndone\n```";
         let out = super::promote_nested_fences(input);
-        assert!(out.starts_with("````\n"), "outer open promoted to 4 backticks: {out:?}");
-        assert!(out.ends_with("````"), "outer close promoted to 4 backticks: {out:?}");
-        assert!(out.contains("```rust\nlet x = 1;\n```"), "inner fence preserved: {out:?}");
+        assert!(
+            out.starts_with("````\n"),
+            "outer open promoted to 4 backticks: {out:?}"
+        );
+        assert!(
+            out.ends_with("````"),
+            "outer close promoted to 4 backticks: {out:?}"
+        );
+        assert!(
+            out.contains("```rust\nlet x = 1;\n```"),
+            "inner fence preserved: {out:?}"
+        );
     }
 
     #[test]
@@ -1403,7 +1485,10 @@ mod tests {
         // Outer ```text containing inner ```rust.
         let input = "```text\n```rust\nlet x = 1;\n```\n```";
         let out = super::promote_nested_fences(input);
-        assert!(out.starts_with("````text\n"), "language tag preserved: {out:?}");
+        assert!(
+            out.starts_with("````text\n"),
+            "language tag preserved: {out:?}"
+        );
         assert!(out.ends_with("````"), "outer close promoted: {out:?}");
     }
 
@@ -1425,7 +1510,7 @@ mod tests {
 
     #[test]
     fn promote_unterminated_fence_unchanged() {
-        let input = "```rust\nlet x = 1;\n";  // no closing fence
+        let input = "```rust\nlet x = 1;\n"; // no closing fence
         let out = super::promote_nested_fences(input);
         assert_eq!(out, input, "unterminated fence -> unchanged");
     }
@@ -1455,7 +1540,8 @@ mod tests {
         let input = "```\n```rust\nlet x = 1;\n```\n```";
         let promoted = super::promote_nested_fences(input);
         let body = super::render_body(&promoted, 80);
-        let code_heads: Vec<_> = body.iter()
+        let code_heads: Vec<_> = body
+            .iter()
             .filter(|b| b.kind == super::BodyKind::CodeHead)
             .collect();
         assert_eq!(code_heads.len(), 1, "one code block, not multiple");

@@ -63,16 +63,12 @@ pub fn compute_file_diff(path: &str, before: &str, after: &str, line_cap: usize)
         for op in group {
             for ch in diff.iter_changes(op) {
                 let (kind, old_no, new_no) = match ch.tag() {
-                    ChangeTag::Insert => (
-                        DiffKind::Add,
-                        None,
-                        ch.new_index().map(|i| i as u32 + 1),
-                    ),
-                    ChangeTag::Delete => (
-                        DiffKind::Del,
-                        ch.old_index().map(|i| i as u32 + 1),
-                        None,
-                    ),
+                    ChangeTag::Insert => {
+                        (DiffKind::Add, None, ch.new_index().map(|i| i as u32 + 1))
+                    }
+                    ChangeTag::Delete => {
+                        (DiffKind::Del, ch.old_index().map(|i| i as u32 + 1), None)
+                    }
                     ChangeTag::Equal => (
                         DiffKind::Ctx,
                         ch.old_index().map(|i| i as u32 + 1),
@@ -82,8 +78,17 @@ pub fn compute_file_diff(path: &str, before: &str, after: &str, line_cap: usize)
                 total_changed_or_ctx += 1;
                 if lines.len() < line_cap {
                     // `ch.value()` keeps the trailing newline; strip it for display.
-                    let text = ch.value().strip_suffix('\n').unwrap_or(ch.value()).to_string();
-                    lines.push(DiffLine { old_no, new_no, kind, text });
+                    let text = ch
+                        .value()
+                        .strip_suffix('\n')
+                        .unwrap_or(ch.value())
+                        .to_string();
+                    lines.push(DiffLine {
+                        old_no,
+                        new_no,
+                        kind,
+                        text,
+                    });
                 }
                 // No `else break`: we must keep counting past the cap so
                 // `truncated_by` reflects EVERY dropped line, not just the first.
@@ -117,8 +122,14 @@ mod tests {
         assert_eq!(d.path, "f.rs");
         assert_eq!(d.truncated_by, 0);
         // Add/Del lines carry the changed text.
-        assert!(d.lines.iter().any(|l| l.kind == DiffKind::Add && l.text == "B"));
-        assert!(d.lines.iter().any(|l| l.kind == DiffKind::Del && l.text == "b"));
+        assert!(d
+            .lines
+            .iter()
+            .any(|l| l.kind == DiffKind::Add && l.text == "B"));
+        assert!(d
+            .lines
+            .iter()
+            .any(|l| l.kind == DiffKind::Del && l.text == "b"));
     }
 
     #[test]
@@ -146,8 +157,14 @@ mod tests {
         let after = "a\nb\nC\nd\ne\n";
         let d = compute_file_diff("f.rs", before, after, 100);
         // The changed hunk is around line 3; context radius 1 keeps b and d.
-        assert!(d.lines.iter().any(|l| l.kind == DiffKind::Ctx && l.text == "b"));
-        assert!(d.lines.iter().any(|l| l.kind == DiffKind::Ctx && l.text == "d"));
+        assert!(d
+            .lines
+            .iter()
+            .any(|l| l.kind == DiffKind::Ctx && l.text == "b"));
+        assert!(d
+            .lines
+            .iter()
+            .any(|l| l.kind == DiffKind::Ctx && l.text == "d"));
         // But far-away lines (a, e) are NOT included.
         assert!(!d.lines.iter().any(|l| l.text == "a"));
         assert!(!d.lines.iter().any(|l| l.text == "e"));

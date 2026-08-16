@@ -122,8 +122,18 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
     // Hard minimum: below 160×40, render only the "too small" message.
     if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
         return ShellLayout {
-            title: Rect { x: area.x, y: area.y, width: area.width, height: 1 },
-            body: Rect { x: area.x, y: area.y + 1, width: area.width, height: area.height.saturating_sub(1) },
+            title: Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: 1,
+            },
+            body: Rect {
+                x: area.x,
+                y: area.y + 1,
+                width: area.width,
+                height: area.height.saturating_sub(1),
+            },
             conversation: Rect::default(),
             rail: None,
             drawer_headers: Vec::new(),
@@ -171,7 +181,12 @@ pub fn compute(area: Rect, state: &ShellState) -> ShellLayout {
         // Resolve each open drawer's body rows: every open drawer gets its
         // full body height (no collapse/fill — the 160×40 minimum guarantees
         // the rail has room for all drawers).
-        let bodies = allocate_drawer_bodies(&state.drawers, inner.height, state.tasks_len, state.subagent_rows.len() as u16);
+        let bodies = allocate_drawer_bodies(
+            &state.drawers,
+            inner.height,
+            state.tasks_len,
+            state.subagent_rows.len() as u16,
+        );
         let mut y = inner.y;
         let bottom = inner.y.saturating_add(inner.height);
         for (d, &body) in state.drawers.iter().zip(bodies.iter()) {
@@ -312,7 +327,10 @@ mod tests {
     #[test]
     fn alloc_tasks_grows_beyond_base() {
         let body = allocate_drawer_bodies(&all_open(), 35, 12, 0);
-        assert_eq!(body[TASKS], 12, "12 tasks => 12 rows (grows past base of 5)");
+        assert_eq!(
+            body[TASKS], 12,
+            "12 tasks => 12 rows (grows past base of 5)"
+        );
     }
 
     #[test]
@@ -330,7 +348,10 @@ mod tests {
     #[test]
     fn alloc_subagents_grows_beyond_base() {
         let body = allocate_drawer_bodies(&all_open(), 35, 0, 7);
-        assert_eq!(body[SUBAGENTS], 7, "7 subagents => 7 rows (grows past base of 5)");
+        assert_eq!(
+            body[SUBAGENTS], 7,
+            "7 subagents => 7 rows (grows past base of 5)"
+        );
     }
 
     #[test]
@@ -476,5 +497,4 @@ mod tests {
         assert!(l.drawer_headers.is_empty());
         assert!(l.drawer_bodies.is_empty());
     }
-
 }

@@ -172,7 +172,10 @@ mod tests {
         assert!(names.contains(&"invoke_skill"));
         assert!(names.contains(&"write"));
         assert!(names.contains(&"read"));
-        assert!(names.contains(&"list_agents"), "chat_tools includes list_agents");
+        assert!(
+            names.contains(&"list_agents"),
+            "chat_tools includes list_agents"
+        );
         // recall is a chat-only tool; it must be registered here (and never in the
         // subagent registry — see chat_tools).
         assert!(names.contains(&"recall"));
@@ -219,8 +222,17 @@ mod tests {
             "subagent_diff must be in chat_tools"
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        assert!(names.contains(&"schedule_wake"), "chat_tools includes schedule_wake");
-        assert!(names.contains(&"cancel_wake"), "chat_tools includes cancel_wake");
-        assert!(names.contains(&"list_subagents"), "chat_tools includes list_subagents");
+        assert!(
+            names.contains(&"schedule_wake"),
+            "chat_tools includes schedule_wake"
+        );
+        assert!(
+            names.contains(&"cancel_wake"),
+            "chat_tools includes cancel_wake"
+        );
+        assert!(
+            names.contains(&"list_subagents"),
+            "chat_tools includes list_subagents"
+        );
     }
 }

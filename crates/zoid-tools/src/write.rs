@@ -40,7 +40,12 @@ impl Tool for Write {
         let before = std::fs::read_to_string(&full).unwrap_or_default();
         match std::fs::write(&full, content.as_bytes()) {
             Ok(()) => {
-                let fd = crate::compute_file_diff(&path, &before, &content, crate::diff::INLINE_LINE_CAP);
+                let fd = crate::compute_file_diff(
+                    &path,
+                    &before,
+                    &content,
+                    crate::diff::INLINE_LINE_CAP,
+                );
                 ToolOutput::ok(format!("wrote {} bytes to {path}", content.len())).with_diff(fd)
             }
             Err(e) => ToolOutput::err(format!("write({path}): {e}")),

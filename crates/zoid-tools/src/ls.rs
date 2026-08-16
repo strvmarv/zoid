@@ -52,7 +52,11 @@ impl Tool for Ls {
         paths.sort();
         let mut rows: Vec<String> = Vec::new();
         for p in paths {
-            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            let name = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
             if crate::skip_entry(&name) {
                 continue;
             }

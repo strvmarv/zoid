@@ -904,7 +904,10 @@ impl ShellState {
 
     /// Look up a cached diff by tool-call id.
     pub fn edit_diff(&self, id: &str) -> Option<&RenderDiff> {
-        self.edit_diffs.iter().find(|(k, _)| k == id).map(|(_, d)| d)
+        self.edit_diffs
+            .iter()
+            .find(|(k, _)| k == id)
+            .map(|(_, d)| d)
     }
 }
 
@@ -1075,7 +1078,10 @@ mod tests {
         let mut s = ShellState::new();
         assert!(s.tool_started_at.is_none(), "default: no timestamp");
         s.set_active_tool("shell");
-        assert!(s.tool_started_at.is_some(), "set_active_tool must stamp tool_started_at");
+        assert!(
+            s.tool_started_at.is_some(),
+            "set_active_tool must stamp tool_started_at"
+        );
         s.clear_active_tool();
         assert!(s.tool_started_at.is_none(), "clear must null the timestamp");
     }
@@ -1256,18 +1262,34 @@ mod tests {
         for i in 0..(EDIT_DIFF_CACHE_CAP + 3) {
             s.push_edit_diff(
                 format!("id{i}"),
-                RenderDiff { path: "f".into(), added: 1, removed: 0, lines: vec![], truncated_by: 0 },
+                RenderDiff {
+                    path: "f".into(),
+                    added: 1,
+                    removed: 0,
+                    lines: vec![],
+                    truncated_by: 0,
+                },
             );
         }
         assert_eq!(s.edit_diffs.len(), EDIT_DIFF_CACHE_CAP, "cache is capped");
         assert!(s.edit_diff("id0").is_none(), "oldest evicted");
-        assert!(s.edit_diff(&format!("id{}", EDIT_DIFF_CACHE_CAP + 2)).is_some(), "newest kept");
+        assert!(
+            s.edit_diff(&format!("id{}", EDIT_DIFF_CACHE_CAP + 2))
+                .is_some(),
+            "newest kept"
+        );
     }
 
     #[test]
     fn edit_diff_reinsert_updates_in_place_without_growth() {
         let mut s = ShellState::default();
-        let mk = |a| RenderDiff { path: "f".into(), added: a, removed: 0, lines: vec![], truncated_by: 0 };
+        let mk = |a| RenderDiff {
+            path: "f".into(),
+            added: a,
+            removed: 0,
+            lines: vec![],
+            truncated_by: 0,
+        };
         s.push_edit_diff("x".into(), mk(1));
         s.push_edit_diff("x".into(), mk(9));
         assert_eq!(s.edit_diffs.len(), 1, "same id updates, does not duplicate");
@@ -1317,8 +1339,12 @@ mod tests {
     fn mcp_confirm_flow_and_target_toggle() {
         let mut s = PluginCatalogState::loading();
         s.rows = vec![PluginCatalogRow {
-            id: "github".into(), name: "GitHub".into(), kind_label: "mcp".into(),
-            description: "d".into(), source_label: String::new(), license: None,
+            id: "github".into(),
+            name: "GitHub".into(),
+            kind_label: "mcp".into(),
+            description: "d".into(),
+            source_label: String::new(),
+            license: None,
         }];
         s.status = CatalogStatus::Ready;
         s.begin_confirm_loading();
@@ -1326,9 +1352,14 @@ mod tests {
         assert!(s.mcp.is_none() && s.confirm_error.is_none());
 
         s.set_mcp_confirm(McpConfirm {
-            server_name: "github".into(), command: "npx".into(),
+            server_name: "github".into(),
+            command: "npx".into(),
             args: vec!["-y".into()],
-            env: vec![McpEnvEntry { key: "TOKEN".into(), value: "${TOKEN}".into(), unset: true }],
+            env: vec![McpEnvEntry {
+                key: "TOKEN".into(),
+                value: "${TOKEN}".into(),
+                unset: true,
+            }],
             target: McpTarget::User,
         });
         assert_eq!(s.mode, CatalogMode::Confirm);
@@ -1350,12 +1381,20 @@ mod tests {
         let mut s = PluginCatalogState::loading_read_only();
         assert!(s.read_only);
         s.rows = vec![PluginCatalogRow {
-            id: "github".into(), name: "GitHub".into(), kind_label: "mcp".into(),
-            description: "d".into(), source_label: String::new(), license: None,
+            id: "github".into(),
+            name: "GitHub".into(),
+            kind_label: "mcp".into(),
+            description: "d".into(),
+            source_label: String::new(),
+            license: None,
         }];
         s.status = CatalogStatus::Ready;
         s.enter_confirm();
-        assert_eq!(s.mode, CatalogMode::List, "read-only catalog must stay in List mode");
+        assert_eq!(
+            s.mode,
+            CatalogMode::List,
+            "read-only catalog must stay in List mode"
+        );
     }
 
     #[test]
@@ -1371,8 +1410,12 @@ mod tests {
     fn read_only_catalog_refuses_begin_confirm_loading() {
         let mut s = PluginCatalogState::loading_read_only();
         s.rows = vec![PluginCatalogRow {
-            id: "github".into(), name: "GitHub".into(), kind_label: "mcp".into(),
-            description: "d".into(), source_label: String::new(), license: None,
+            id: "github".into(),
+            name: "GitHub".into(),
+            kind_label: "mcp".into(),
+            description: "d".into(),
+            source_label: String::new(),
+            license: None,
         }];
         s.status = CatalogStatus::Ready;
         s.begin_confirm_loading();
@@ -1423,7 +1466,9 @@ mod tests {
         });
         s.close_overlay();
         assert_eq!(s.overlay, Overlay::None);
-        assert!(s.onboarding.is_none(), "close_overlay must clear onboarding");
+        assert!(
+            s.onboarding.is_none(),
+            "close_overlay must clear onboarding"
+        );
     }
-
 }

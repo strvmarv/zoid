@@ -19,17 +19,32 @@ pub struct EmbeddingIndex {
 impl EmbeddingIndex {
     pub fn new(dim: usize, cap: usize) -> Self {
         let cap = cap.max(1);
-        Self { dim, cap, vectors: Vec::with_capacity(cap * dim), ids: Vec::with_capacity(cap), write: 0, len: 0 }
+        Self {
+            dim,
+            cap,
+            vectors: Vec::with_capacity(cap * dim),
+            ids: Vec::with_capacity(cap),
+            write: 0,
+            len: 0,
+        }
     }
 
-    pub fn dim(&self) -> usize { self.dim }
-    pub fn len(&self) -> usize { self.len }
-    pub fn is_empty(&self) -> bool { self.len == 0 }
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
+    pub fn len(&self) -> usize {
+        self.len
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
 
     /// Append (overwriting the oldest slot once full). `vec.len()` must == dim;
     /// mismatched vectors are ignored (defensive).
     pub fn append(&mut self, id: Ulid, vec: &[f32]) {
-        if vec.len() != self.dim { return; }
+        if vec.len() != self.dim {
+            return;
+        }
         if self.len < self.cap {
             self.vectors.extend_from_slice(vec);
             self.ids.push(id);
@@ -45,20 +60,27 @@ impl EmbeddingIndex {
     /// Top-K by dot product (== cosine for unit vectors). Query need not be
     /// pre-truncated; only the first `dim` values are used.
     pub fn scan_topk(&self, query: &[f32], k: usize) -> Vec<(Ulid, f32)> {
-        if query.len() < self.dim || k == 0 { return Vec::new(); }
+        if query.len() < self.dim || k == 0 {
+            return Vec::new();
+        }
         let q = &query[..self.dim];
         let mut top: Vec<(Ulid, f32)> = Vec::with_capacity(k + 1);
         for r in 0..self.len {
             let row = &self.vectors[r * self.dim..(r + 1) * self.dim];
             let mut s = 0.0f32;
-            for i in 0..self.dim { s += q[i] * row[i]; }
+            for i in 0..self.dim {
+                s += q[i] * row[i];
+            }
             if top.len() < k {
                 top.push((self.ids[r], s));
                 top.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
             } else if s > top[0].1 {
                 top[0] = (self.ids[r], s);
                 let mut j = 0;
-                while j + 1 < top.len() && top[j].1 > top[j + 1].1 { top.swap(j, j + 1); j += 1; }
+                while j + 1 < top.len() && top[j].1 > top[j + 1].1 {
+                    top.swap(j, j + 1);
+                    j += 1;
+                }
             }
         }
         top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap()); // best first
@@ -73,7 +95,9 @@ mod tests {
     fn unit(seed: f32, dim: usize) -> Vec<f32> {
         let mut v: Vec<f32> = (0..dim).map(|i| (seed + i as f32).sin()).collect();
         let n: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-        for x in &mut v { *x /= n; }
+        for x in &mut v {
+            *x /= n;
+        }
         v
     }
 

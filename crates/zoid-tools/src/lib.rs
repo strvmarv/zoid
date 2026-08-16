@@ -15,18 +15,18 @@ pub mod ls;
 pub mod read;
 pub mod recall;
 pub mod search;
-pub mod subagent_dispatch;
-pub mod subagent_kill;
-pub mod subagent_list;
-pub mod wake;
-pub mod worktree_enter;
-pub mod worktree_exit;
 pub mod shell;
 pub mod show;
 pub mod subagent_diff;
+pub mod subagent_dispatch;
+pub mod subagent_kill;
+pub mod subagent_list;
 pub mod tasks;
+pub mod wake;
 pub mod web_fetch;
 pub mod web_search;
+pub mod worktree_enter;
+pub mod worktree_exit;
 pub mod write;
 
 use serde_json::Value;
@@ -68,8 +68,8 @@ impl ToolOutput {
     }
 }
 
-pub use kill::KillSlot;
 pub use diff::{compute_file_diff, DiffKind, DiffLine, FileDiff};
+pub use kill::KillSlot;
 
 /// How the agent loop must execute a tool. `Local` tools run synchronously in
 /// the working directory (the v1 default). `Emitting` tools append a domain
@@ -375,7 +375,10 @@ mod tests {
             "subagent_diff must not be in base registry"
         );
         let names: Vec<&str> = reg.iter().map(|t| t.name()).collect();
-        assert!(!names.contains(&"schedule_wake"), "schedule_wake is chat-only");
+        assert!(
+            !names.contains(&"schedule_wake"),
+            "schedule_wake is chat-only"
+        );
         assert!(!names.contains(&"cancel_wake"), "cancel_wake is chat-only");
     }
 

@@ -136,7 +136,11 @@ fn stream_verify<R: Read>(
     }
     f.flush()?;
     progress(label, downloaded, total);
-    let got: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    let got: String = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     if got != want_sha256 {
         let _ = std::fs::remove_file(&part);
         bail!("sha256 mismatch for {label}: got {got}, want {want_sha256}");

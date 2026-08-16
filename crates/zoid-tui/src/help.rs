@@ -19,50 +19,68 @@ pub const HELP_RECT_H: u16 = 26;
 pub fn help_lines() -> Vec<Line<'static>> {
     // (section header, then (keys, description) rows). Keep descriptions short.
     let sections: &[(&str, &[(&str, &str)])] = &[
-        ("Global", &[
-            ("Ctrl+P", "command palette"),
-            ("Ctrl+O", "object / action picker"),
-            ("Ctrl+Q", "quit zoid"),
-            ("Esc / Ctrl+C", "cancel turn (Esc again forces)"),
-            ("Shift+Tab", "switch mode"),
-            ("Tab", "change focus"),
-            ("Alt+P", "switch provider / model"),
-            ("Alt+Left / Right", "semantic zoom"),
-            ("Alt+M", "select mode (native copy)"),
-            ("?", "this help (conversation)"),
-        ]),
-        ("Input", &[
-            ("Enter", "send message"),
-            ("Shift+Enter", "newline (or Alt+Enter)"),
-            (":", "command palette (empty box)"),
-            ("Shift+Del", "delete line"),
-            ("Shift+Home / End", "cursor to start / end"),
-        ]),
-        ("Conversation", &[
-            ("j / Down", "scroll down"),
-            ("k / Up", "scroll up"),
-            ("= / -", "zoom in / out"),
-            ("Shift+Home / End", "scroll to top / bottom"),
-            ("Esc", "return to input"),
-        ]),
-        ("Overlays", &[
-            ("Up / Down", "move selection"),
-            ("Enter", "choose"),
-            ("Esc / q", "close"),
-        ]),
-        ("Commands", &[
-            (":help", "this help"),
-            (":compact", "condense the session"),
-            (":config", "settings"),
-            (":feedback", "send feedback"),
-            (":select", "toggle select mode"),
-            (":mode install superpowers", "install skills"),
-            (":q", "quit"),
-        ]),
-        ("Mouse", &[
-            ("scroll", "scroll conversation"),
-            ("Ctrl+scroll", "semantic zoom"),
-        ]),
+        (
+            "Global",
+            &[
+                ("Ctrl+P", "command palette"),
+                ("Ctrl+O", "object / action picker"),
+                ("Ctrl+Q", "quit zoid"),
+                ("Esc / Ctrl+C", "cancel turn (Esc again forces)"),
+                ("Shift+Tab", "switch mode"),
+                ("Tab", "change focus"),
+                ("Alt+P", "switch provider / model"),
+                ("Alt+Left / Right", "semantic zoom"),
+                ("Alt+M", "select mode (native copy)"),
+                ("?", "this help (conversation)"),
+            ],
+        ),
+        (
+            "Input",
+            &[
+                ("Enter", "send message"),
+                ("Shift+Enter", "newline (or Alt+Enter)"),
+                (":", "command palette (empty box)"),
+                ("Shift+Del", "delete line"),
+                ("Shift+Home / End", "cursor to start / end"),
+            ],
+        ),
+        (
+            "Conversation",
+            &[
+                ("j / Down", "scroll down"),
+                ("k / Up", "scroll up"),
+                ("= / -", "zoom in / out"),
+                ("Shift+Home / End", "scroll to top / bottom"),
+                ("Esc", "return to input"),
+            ],
+        ),
+        (
+            "Overlays",
+            &[
+                ("Up / Down", "move selection"),
+                ("Enter", "choose"),
+                ("Esc / q", "close"),
+            ],
+        ),
+        (
+            "Commands",
+            &[
+                (":help", "this help"),
+                (":compact", "condense the session"),
+                (":config", "settings"),
+                (":feedback", "send feedback"),
+                (":select", "toggle select mode"),
+                (":mode install superpowers", "install skills"),
+                (":q", "quit"),
+            ],
+        ),
+        (
+            "Mouse",
+            &[
+                ("scroll", "scroll conversation"),
+                ("Ctrl+scroll", "semantic zoom"),
+            ],
+        ),
     ];
 
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -100,9 +118,20 @@ mod tests {
     fn lists_core_shortcuts_and_sections() {
         let s = joined();
         for token in [
-            "Global", "Input", "Conversation", "Overlays", "Commands",
-            "Ctrl+P", "Ctrl+Q", "Shift+Tab", "Alt+P", "Esc", "?", ":help",
-            "Alt+M", ":select",
+            "Global",
+            "Input",
+            "Conversation",
+            "Overlays",
+            "Commands",
+            "Ctrl+P",
+            "Ctrl+Q",
+            "Shift+Tab",
+            "Alt+P",
+            "Esc",
+            "?",
+            ":help",
+            "Alt+M",
+            ":select",
         ] {
             assert!(s.contains(token), "help must mention {token:?}: {s:?}");
         }

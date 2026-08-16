@@ -57,7 +57,9 @@ mod tests {
     fn not_in_base_registry() {
         // Subagents must NOT be able to list subagents (they can't dispatch).
         assert!(
-            !crate::registry().iter().any(|t| t.name() == "list_subagents"),
+            !crate::registry()
+                .iter()
+                .any(|t| t.name() == "list_subagents"),
             "list_subagents must be chat-only, never in the subagent registry"
         );
     }

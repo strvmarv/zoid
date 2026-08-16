@@ -734,7 +734,13 @@ mod tests {
         // Subcommands first, then mode-name rows (excluding the active mode Chat).
         assert_eq!(
             labels,
-            vec!["reload", "import", "update", "plugin install superpowers", "Build"]
+            vec![
+                "reload",
+                "import",
+                "update",
+                "plugin install superpowers",
+                "Build"
+            ]
         );
     }
 

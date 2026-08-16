@@ -21,9 +21,7 @@ pub enum Cli {
     Update,
     /// Remove zoid's data (sessions, config, cache, secrets); with `purge`,
     /// also delete the binary. Exits after running.
-    Uninstall {
-        purge: bool,
-    },
+    Uninstall { purge: bool },
     /// Unrecognised argument; carries the offending token.
     Unknown(String),
 }
@@ -121,11 +119,21 @@ mod tests {
     fn parses_companion_flag() {
         assert_eq!(
             super::parse_args(vec!["--companion".to_string()]),
-            super::Cli::Run { companion: true, new: false, resume: None, yolo: false }
+            super::Cli::Run {
+                companion: true,
+                new: false,
+                resume: None,
+                yolo: false
+            }
         );
         assert_eq!(
             super::parse_args(Vec::<String>::new()),
-            super::Cli::Run { companion: false, new: false, resume: None, yolo: false }
+            super::Cli::Run {
+                companion: false,
+                new: false,
+                resume: None,
+                yolo: false
+            }
         );
         assert_eq!(
             super::parse_args(vec!["--version".to_string()]),
@@ -137,7 +145,12 @@ mod tests {
     fn parses_new_flag() {
         assert_eq!(
             super::parse_args(vec!["--new".to_string()]),
-            super::Cli::Run { companion: false, new: true, resume: None, yolo: false }
+            super::Cli::Run {
+                companion: false,
+                new: true,
+                resume: None,
+                yolo: false
+            }
         );
     }
 
@@ -145,7 +158,12 @@ mod tests {
     fn parses_resume_with_id() {
         assert_eq!(
             super::parse_args(vec!["--resume".to_string(), "01AB".to_string()]),
-            super::Cli::Run { companion: false, new: false, resume: Some("01AB".to_string()), yolo: false }
+            super::Cli::Run {
+                companion: false,
+                new: false,
+                resume: Some("01AB".to_string()),
+                yolo: false
+            }
         );
     }
 
@@ -153,36 +171,65 @@ mod tests {
     fn parses_companion_and_new_together() {
         assert_eq!(
             super::parse_args(vec!["--companion".to_string(), "--new".to_string()]),
-            super::Cli::Run { companion: true, new: true, resume: None, yolo: false }
+            super::Cli::Run {
+                companion: true,
+                new: true,
+                resume: None,
+                yolo: false
+            }
         );
     }
 
     #[test]
     fn parses_companion_and_resume_together() {
         assert_eq!(
-            super::parse_args(vec!["--companion".to_string(), "--resume".to_string(), "XYZW".to_string()]),
-            super::Cli::Run { companion: true, new: false, resume: Some("XYZW".to_string()), yolo: false }
+            super::parse_args(vec![
+                "--companion".to_string(),
+                "--resume".to_string(),
+                "XYZW".to_string()
+            ]),
+            super::Cli::Run {
+                companion: true,
+                new: false,
+                resume: Some("XYZW".to_string()),
+                yolo: false
+            }
         );
     }
 
     #[test]
     fn new_and_resume_together_is_unknown() {
         // Mutually exclusive — both flags together must be an error.
-        let result = super::parse_args(vec!["--new".to_string(), "--resume".to_string(), "01AB".to_string()]);
-        assert!(matches!(result, super::Cli::Unknown(_)), "--new + --resume together must be an error");
+        let result = super::parse_args(vec![
+            "--new".to_string(),
+            "--resume".to_string(),
+            "01AB".to_string(),
+        ]);
+        assert!(
+            matches!(result, super::Cli::Unknown(_)),
+            "--new + --resume together must be an error"
+        );
     }
 
     #[test]
     fn resume_without_id_is_unknown() {
         let result = super::parse_args(vec!["--resume".to_string()]);
-        assert!(matches!(result, super::Cli::Unknown(_)), "--resume without an id must be an error");
+        assert!(
+            matches!(result, super::Cli::Unknown(_)),
+            "--resume without an id must be an error"
+        );
     }
 
     #[test]
     fn parses_yolo_flag() {
         assert_eq!(
             super::parse_args(vec!["--yolo".to_string()]),
-            super::Cli::Run { companion: false, new: false, resume: None, yolo: true }
+            super::Cli::Run {
+                companion: false,
+                new: false,
+                resume: None,
+                yolo: true
+            }
         );
     }
 
@@ -190,7 +237,12 @@ mod tests {
     fn yolo_combines_with_companion() {
         assert_eq!(
             super::parse_args(vec!["--companion".to_string(), "--yolo".to_string()]),
-            super::Cli::Run { companion: true, new: false, resume: None, yolo: true }
+            super::Cli::Run {
+                companion: true,
+                new: false,
+                resume: None,
+                yolo: true
+            }
         );
     }
 
@@ -209,6 +261,9 @@ mod tests {
     #[test]
     fn uninstall_with_unknown_flag_is_unknown() {
         let r = super::parse_args(vec!["uninstall".to_string(), "--everything".to_string()]);
-        assert!(matches!(r, super::Cli::Unknown(_)), "unknown uninstall flag must error");
+        assert!(
+            matches!(r, super::Cli::Unknown(_)),
+            "unknown uninstall flag must error"
+        );
     }
 }

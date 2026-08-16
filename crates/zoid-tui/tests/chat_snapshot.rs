@@ -61,7 +61,7 @@ fn tool_call_and_result_frame() {
             ts: 0,
         },
         ChatMsg::Assistant {
-                thinking: None,
+            thinking: None,
             text: "reading it".into(),
             tool_calls: vec![ToolCallRef {
                 id: "".into(),
@@ -96,7 +96,7 @@ fn tool_error_result_frame() {
             ts: 0,
         },
         ChatMsg::Assistant {
-                thinking: None,
+            thinking: None,
             text: "".into(),
             tool_calls: vec![ToolCallRef {
                 id: "".into(),
@@ -133,7 +133,7 @@ fn compacted_msgs() -> Vec<ChatMsg> {
             ts: 0,
         },
         ChatMsg::Assistant {
-                thinking: None,
+            thinking: None,
             text: "searching".into(),
             tool_calls: vec![ToolCallRef {
                 id: "c1".into(),

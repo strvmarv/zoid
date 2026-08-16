@@ -37,7 +37,9 @@ fn is_loader_name(name: &str) -> bool {
 fn find_loader(files: &[String]) -> Option<String> {
     // A loader is a skills/<name>/SKILL.md whose <name> is a loader name.
     for f in files {
-        let Some(rel) = f.strip_prefix("skills/") else { continue };
+        let Some(rel) = f.strip_prefix("skills/") else {
+            continue;
+        };
         let segs: Vec<&str> = rel.split('/').collect();
         if segs.len() != 2 || segs[1] != "SKILL.md" {
             continue;
@@ -102,14 +104,24 @@ pub fn classify(tree: &PluginTree, pref: KindPref) -> Classification {
             dropped.push(format!("hooks: {f}"));
         }
     }
-    let mcp_skipped_http = tree.mcp_json.as_deref().map(http_servers).unwrap_or_default();
-    let has_stdio = tree.mcp_json.as_deref().map(has_stdio_server).unwrap_or(false);
+    let mcp_skipped_http = tree
+        .mcp_json
+        .as_deref()
+        .map(http_servers)
+        .unwrap_or_default();
+    let has_stdio = tree
+        .mcp_json
+        .as_deref()
+        .map(has_stdio_server)
+        .unwrap_or(false);
 
     let kind = if has_skills(&tree.files) {
         let loader = find_loader(&tree.files);
         match pref {
             KindPref::Skills => TargetKind::Skills,
-            KindPref::Mode => TargetKind::Mode { loader: loader.unwrap_or_default() },
+            KindPref::Mode => TargetKind::Mode {
+                loader: loader.unwrap_or_default(),
+            },
             KindPref::Auto => match loader {
                 Some(l) => TargetKind::Mode { loader: l },
                 None => TargetKind::Skills,
@@ -120,7 +132,11 @@ pub fn classify(tree: &PluginTree, pref: KindPref) -> Classification {
     } else {
         TargetKind::Unsupported
     };
-    Classification { kind, dropped, mcp_skipped_http }
+    Classification {
+        kind,
+        dropped,
+        mcp_skipped_http,
+    }
 }
 
 #[cfg(test)]
@@ -131,7 +147,10 @@ mod tests {
         PluginTree {
             files: files.iter().map(|s| s.to_string()).collect(),
             mcp_json: None,
-            plugin_json: crate::claude::PluginJson { name: "p".into(), description: "d".into() },
+            plugin_json: crate::claude::PluginJson {
+                name: "p".into(),
+                description: "d".into(),
+            },
         }
     }
 
@@ -139,28 +158,42 @@ mod tests {
     fn loader_present_defaults_to_mode() {
         let t = tree(&["skills/using-p/SKILL.md", "skills/foo/SKILL.md"]);
         let c = classify(&t, KindPref::Auto);
-        assert!(matches!(c.kind, TargetKind::Mode { ref loader } if loader == "skills/using-p/SKILL.md"));
+        assert!(
+            matches!(c.kind, TargetKind::Mode { ref loader } if loader == "skills/using-p/SKILL.md")
+        );
     }
 
     #[test]
     fn no_loader_defaults_to_skills() {
         let t = tree(&["skills/foo/SKILL.md", "skills/bar/SKILL.md"]);
-        assert!(matches!(classify(&t, KindPref::Auto).kind, TargetKind::Skills));
+        assert!(matches!(
+            classify(&t, KindPref::Auto).kind,
+            TargetKind::Skills
+        ));
     }
 
     #[test]
     fn loader_match_is_anchored_not_substring() {
         // S2: `reusing-context` contains "using-" but is NOT a loader.
         let t = tree(&["skills/reusing-context/SKILL.md", "skills/foo/SKILL.md"]);
-        assert!(matches!(classify(&t, KindPref::Auto).kind, TargetKind::Skills));
+        assert!(matches!(
+            classify(&t, KindPref::Auto).kind,
+            TargetKind::Skills
+        ));
     }
 
     #[test]
     fn pref_overrides_default() {
         let t = tree(&["skills/using-p/SKILL.md"]);
-        assert!(matches!(classify(&t, KindPref::Skills).kind, TargetKind::Skills));
+        assert!(matches!(
+            classify(&t, KindPref::Skills).kind,
+            TargetKind::Skills
+        ));
         let t2 = tree(&["skills/foo/SKILL.md"]);
-        assert!(matches!(classify(&t2, KindPref::Mode).kind, TargetKind::Mode { .. }));
+        assert!(matches!(
+            classify(&t2, KindPref::Mode).kind,
+            TargetKind::Mode { .. }
+        ));
     }
 
     #[test]

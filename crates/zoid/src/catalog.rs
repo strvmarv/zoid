@@ -6,8 +6,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 
-const CATALOG_BASE: &str =
-    "https://raw.githubusercontent.com/strvmarv/zoid/main/plugins";
+const CATALOG_BASE: &str = "https://raw.githubusercontent.com/strvmarv/zoid/main/plugins";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogEntry {
@@ -56,22 +55,30 @@ struct RawSource {
 pub fn parse_index(json: &str) -> anyhow::Result<Vec<CatalogEntry>> {
     let raw: RawIndex = serde_json::from_str(json)
         .map_err(|e| anyhow::anyhow!("catalog index parse error: {e}"))?;
-    anyhow::ensure!(raw.schema == 1, "unsupported catalog index schema {}", raw.schema);
-    Ok(raw.plugins.into_iter().map(|e| {
-        let (source_repo, source_ref) = match e.source {
-            Some(s) => (s.repo, s.ref_),
-            None => (String::new(), String::new()),
-        };
-        CatalogEntry {
-            id: e.id,
-            name: e.name,
-            kind: e.kind,
-            description: e.description,
-            license: e.license,
-            source_repo,
-            source_ref,
-        }
-    }).collect())
+    anyhow::ensure!(
+        raw.schema == 1,
+        "unsupported catalog index schema {}",
+        raw.schema
+    );
+    Ok(raw
+        .plugins
+        .into_iter()
+        .map(|e| {
+            let (source_repo, source_ref) = match e.source {
+                Some(s) => (s.repo, s.ref_),
+                None => (String::new(), String::new()),
+            };
+            CatalogEntry {
+                id: e.id,
+                name: e.name,
+                kind: e.kind,
+                description: e.description,
+                license: e.license,
+                source_repo,
+                source_ref,
+            }
+        })
+        .collect())
 }
 
 pub fn catalog_index_url() -> String {
@@ -85,32 +92,56 @@ pub fn catalog_manifest_url(id: &str) -> String {
 /// One-shot async raw GET of a public zoid text file (unauthenticated).
 pub async fn fetch_text(url: &str) -> anyhow::Result<String> {
     let client = reqwest::Client::builder().user_agent("zoid").build()?;
-    Ok(client.get(url).send().await?.error_for_status()?.text().await?)
+    Ok(client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?)
 }
 
 pub trait IndexFetcher {
     fn get(&self, url: &str) -> anyhow::Result<String>;
 }
 
-fn cache_file(dir: &Path) -> PathBuf { dir.join("index.json") }
-fn stamp_file(dir: &Path) -> PathBuf { dir.join("index.json.fetched") }
+fn cache_file(dir: &Path) -> PathBuf {
+    dir.join("index.json")
+}
+fn stamp_file(dir: &Path) -> PathBuf {
+    dir.join("index.json.fetched")
+}
 
 fn read_stamp(dir: &Path) -> Option<DateTime<Utc>> {
     let s = std::fs::read_to_string(stamp_file(dir)).ok()?;
-    DateTime::parse_from_rfc3339(s.trim()).ok().map(|d| d.with_timezone(&Utc))
+    DateTime::parse_from_rfc3339(s.trim())
+        .ok()
+        .map(|d| d.with_timezone(&Utc))
 }
 
 /// Cached, parseable index iff the stamp is younger than `ttl`.
-pub fn cache_if_fresh(now: DateTime<Utc>, ttl: Duration, cache_dir: &Path) -> Option<Vec<CatalogEntry>> {
-    let fresh = read_stamp(cache_dir).map(|t| now - t < ttl).unwrap_or(false);
-    if !fresh { return None; }
+pub fn cache_if_fresh(
+    now: DateTime<Utc>,
+    ttl: Duration,
+    cache_dir: &Path,
+) -> Option<Vec<CatalogEntry>> {
+    let fresh = read_stamp(cache_dir)
+        .map(|t| now - t < ttl)
+        .unwrap_or(false);
+    if !fresh {
+        return None;
+    }
     let cached = std::fs::read_to_string(cache_file(cache_dir)).ok()?;
     parse_index(&cached).ok()
 }
 
 /// Parse a freshly-fetched body FIRST (so garbage never clobbers a good cache),
 /// then write index + stamp, and return the entries.
-pub fn store_and_parse(now: DateTime<Utc>, cache_dir: &Path, body: &str) -> anyhow::Result<Vec<CatalogEntry>> {
+pub fn store_and_parse(
+    now: DateTime<Utc>,
+    cache_dir: &Path,
+    body: &str,
+) -> anyhow::Result<Vec<CatalogEntry>> {
     let v = parse_index(body)?;
     std::fs::create_dir_all(cache_dir).ok();
     std::fs::write(cache_file(cache_dir), body).ok();
@@ -191,24 +222,38 @@ mod tests {
     fn parse_index_reads_fixture_catalog() {
         let fixture = include_str!("../tests/fixtures/catalog/index.json");
         let v = parse_index(fixture).unwrap();
-        assert!(!v.is_empty(), "fixture catalog must have at least one entry");
-        let superpowers = v.iter().find(|e| e.id == "superpowers")
+        assert!(
+            !v.is_empty(),
+            "fixture catalog must have at least one entry"
+        );
+        let superpowers = v
+            .iter()
+            .find(|e| e.id == "superpowers")
             .expect("fixture catalog must contain the superpowers entry");
         assert_eq!(superpowers.name, "Superpowers");
         assert_eq!(superpowers.kind, vec!["mode".to_string()]);
         assert_eq!(superpowers.source_repo, "obra/superpowers");
-        assert_eq!(superpowers.source_ref, "d884ae04edebef577e82ff7c4e143debd0bbec99");
-        let ok_skills = v.iter().find(|e| e.id == "ok-skills")
+        assert_eq!(
+            superpowers.source_ref,
+            "d884ae04edebef577e82ff7c4e143debd0bbec99"
+        );
+        let ok_skills = v
+            .iter()
+            .find(|e| e.id == "ok-skills")
             .expect("fixture catalog must contain the ok-skills entry");
         assert_eq!(ok_skills.license.as_deref(), Some("MIT"));
     }
 
     #[test]
     fn urls_are_raw_unauthenticated() {
-        assert_eq!(catalog_index_url(),
-            "https://raw.githubusercontent.com/strvmarv/zoid/main/plugins/index.json");
-        assert_eq!(catalog_manifest_url("ok-skills"),
-            "https://raw.githubusercontent.com/strvmarv/zoid/main/plugins/ok-skills.toml");
+        assert_eq!(
+            catalog_index_url(),
+            "https://raw.githubusercontent.com/strvmarv/zoid/main/plugins/index.json"
+        );
+        assert_eq!(
+            catalog_manifest_url("ok-skills"),
+            "https://raw.githubusercontent.com/strvmarv/zoid/main/plugins/ok-skills.toml"
+        );
     }
 }
 
@@ -217,13 +262,25 @@ mod cache_tests {
     use super::*;
     use chrono::{Duration, TimeZone, Utc};
 
-    struct FakeFetcher { body: std::cell::RefCell<Option<String>>, calls: std::cell::Cell<u32> }
-    impl FakeFetcher { fn new(body: Option<&str>) -> Self {
-        Self { body: std::cell::RefCell::new(body.map(str::to_string)), calls: std::cell::Cell::new(0) } } }
+    struct FakeFetcher {
+        body: std::cell::RefCell<Option<String>>,
+        calls: std::cell::Cell<u32>,
+    }
+    impl FakeFetcher {
+        fn new(body: Option<&str>) -> Self {
+            Self {
+                body: std::cell::RefCell::new(body.map(str::to_string)),
+                calls: std::cell::Cell::new(0),
+            }
+        }
+    }
     impl IndexFetcher for FakeFetcher {
         fn get(&self, _url: &str) -> anyhow::Result<String> {
             self.calls.set(self.calls.get() + 1);
-            self.body.borrow().clone().ok_or_else(|| anyhow::anyhow!("network down"))
+            self.body
+                .borrow()
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("network down"))
         }
     }
 
@@ -245,10 +302,22 @@ mod cache_tests {
         let tmp = tempfile::tempdir().unwrap();
         let now = Utc.timestamp_opt(1_000_000, 0).unwrap();
         // Prime the cache via a first fetch.
-        load_catalog(now, Duration::hours(24), tmp.path(), &FakeFetcher::new(Some(IDX))).unwrap();
+        load_catalog(
+            now,
+            Duration::hours(24),
+            tmp.path(),
+            &FakeFetcher::new(Some(IDX)),
+        )
+        .unwrap();
         // A fetcher that would ERROR if called; fresh cache must avoid it.
         let f2 = FakeFetcher::new(None);
-        let v = load_catalog(now + Duration::hours(1), Duration::hours(24), tmp.path(), &f2).unwrap();
+        let v = load_catalog(
+            now + Duration::hours(1),
+            Duration::hours(24),
+            tmp.path(),
+            &f2,
+        )
+        .unwrap();
         assert_eq!(v.len(), 1);
         assert_eq!(f2.calls.get(), 0, "fresh cache must not fetch");
     }
@@ -257,9 +326,21 @@ mod cache_tests {
     fn refetches_when_stale() {
         let tmp = tempfile::tempdir().unwrap();
         let now = Utc.timestamp_opt(1_000_000, 0).unwrap();
-        load_catalog(now, Duration::hours(24), tmp.path(), &FakeFetcher::new(Some(IDX))).unwrap();
+        load_catalog(
+            now,
+            Duration::hours(24),
+            tmp.path(),
+            &FakeFetcher::new(Some(IDX)),
+        )
+        .unwrap();
         let f2 = FakeFetcher::new(Some(IDX));
-        load_catalog(now + Duration::hours(25), Duration::hours(24), tmp.path(), &f2).unwrap();
+        load_catalog(
+            now + Duration::hours(25),
+            Duration::hours(24),
+            tmp.path(),
+            &f2,
+        )
+        .unwrap();
         assert_eq!(f2.calls.get(), 1, "stale cache must refetch");
     }
 
@@ -267,9 +348,20 @@ mod cache_tests {
     fn falls_back_to_stale_cache_on_network_error() {
         let tmp = tempfile::tempdir().unwrap();
         let now = Utc.timestamp_opt(1_000_000, 0).unwrap();
-        load_catalog(now, Duration::hours(24), tmp.path(), &FakeFetcher::new(Some(IDX))).unwrap();
-        let v = load_catalog(now + Duration::hours(25), Duration::hours(24), tmp.path(),
-            &FakeFetcher::new(None)).unwrap();
+        load_catalog(
+            now,
+            Duration::hours(24),
+            tmp.path(),
+            &FakeFetcher::new(Some(IDX)),
+        )
+        .unwrap();
+        let v = load_catalog(
+            now + Duration::hours(25),
+            Duration::hours(24),
+            tmp.path(),
+            &FakeFetcher::new(None),
+        )
+        .unwrap();
         assert_eq!(v.len(), 1, "network down but stale cache serves");
     }
 
@@ -277,6 +369,12 @@ mod cache_tests {
     fn errors_when_no_cache_and_network_down() {
         let tmp = tempfile::tempdir().unwrap();
         let now = Utc.timestamp_opt(1_000_000, 0).unwrap();
-        assert!(load_catalog(now, Duration::hours(24), tmp.path(), &FakeFetcher::new(None)).is_err());
+        assert!(load_catalog(
+            now,
+            Duration::hours(24),
+            tmp.path(),
+            &FakeFetcher::new(None)
+        )
+        .is_err());
     }
 }

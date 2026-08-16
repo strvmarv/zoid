@@ -11,9 +11,11 @@ pub fn cumulative_appended<'a>(events: impl IntoIterator<Item = &'a Event> + Clo
         .clone()
         .into_iter()
         .filter_map(|e| match &e.kind {
-            EventKind::ToolResultCompacted { id, original_tokens, .. } => {
-                Some((id.as_str(), *original_tokens))
-            }
+            EventKind::ToolResultCompacted {
+                id,
+                original_tokens,
+                ..
+            } => Some((id.as_str(), *original_tokens)),
             _ => None,
         })
         .collect();
@@ -32,7 +34,10 @@ pub fn cumulative_appended<'a>(events: impl IntoIterator<Item = &'a Event> + Clo
         .sum()
 }
 
-pub fn reassertion_due<'a>(events: impl IntoIterator<Item = &'a Event> + Clone, interval: u64) -> bool {
+pub fn reassertion_due<'a>(
+    events: impl IntoIterator<Item = &'a Event> + Clone,
+    interval: u64,
+) -> bool {
     if interval == 0 {
         return false;
     }
@@ -54,13 +59,26 @@ mod tests {
     use crate::event::{Event, EventKind, EvictionMarker};
     use ulid::Ulid;
 
-    fn ev(kind: EventKind) -> Event { Event::new(Ulid::new(), None, 0, kind) }
-    fn user(t: &str) -> Event { ev(EventKind::UserMessage { text: t.into() }) }
+    fn ev(kind: EventKind) -> Event {
+        Event::new(Ulid::new(), None, 0, kind)
+    }
+    fn user(t: &str) -> Event {
+        ev(EventKind::UserMessage { text: t.into() })
+    }
     fn tool(id: &str, out: &str) -> Event {
-        ev(EventKind::ToolResult { id: id.into(), name: "shell".into(), output: out.into(), is_error: false })
+        ev(EventKind::ToolResult {
+            id: id.into(),
+            name: "shell".into(),
+            output: out.into(),
+            is_error: false,
+        })
     }
     fn compacted(id: &str, original_tokens: u64) -> Event {
-        ev(EventKind::ToolResultCompacted { id: id.into(), summary: "sum".into(), original_tokens })
+        ev(EventKind::ToolResultCompacted {
+            id: id.into(),
+            summary: "sum".into(),
+            original_tokens,
+        })
     }
 
     #[test]
@@ -75,7 +93,9 @@ mod tests {
         assert!(reassertion_due(&log, 1000));
         assert!(!reassertion_due(&log, 1001));
         let mut log2 = log.clone();
-        log2.push(ev(EventKind::DirectiveReasserted { at_cumulative: 1000 }));
+        log2.push(ev(EventKind::DirectiveReasserted {
+            at_cumulative: 1000,
+        }));
         assert!(!reassertion_due(&log2, 1000));
         log2.push(user(&"y".repeat(3000)));
         assert!(reassertion_due(&log2, 1000));
@@ -87,8 +107,11 @@ mod tests {
         assert_eq!(cumulative_appended(&before), 1000);
         // Simulate #6b: body emptied; ToolResultCompacted preserves original_tokens.
         let after = vec![tool("t1", ""), compacted("t1", 1000)];
-        assert_eq!(cumulative_appended(&after), 1000,
-            "compacted+cleared result must still count at original_tokens (monotonic)");
+        assert_eq!(
+            cumulative_appended(&after),
+            1000,
+            "compacted+cleared result must still count at original_tokens (monotonic)"
+        );
     }
 
     #[test]
@@ -101,6 +124,10 @@ mod tests {
             marker: EvictionMarker { spans: vec![] },
             rescue: None,
         }));
-        assert_eq!(cumulative_appended(&log), before, "evicted events still counted");
+        assert_eq!(
+            cumulative_appended(&log),
+            before,
+            "evicted events still counted"
+        );
     }
 }

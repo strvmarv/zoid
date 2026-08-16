@@ -189,9 +189,13 @@ pub enum EventKind {
     },
     /// A scheduled wake actually fired (injected its note + spawned a turn).
     /// Written ONLY at injection, so a crash before injection re-fires on reload.
-    WakeFired { wake_id: String },
+    WakeFired {
+        wake_id: String,
+    },
     /// A scheduled wake was cancelled before firing (`cancel_wake` tool).
-    WakeCancelled { wake_id: String },
+    WakeCancelled {
+        wake_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

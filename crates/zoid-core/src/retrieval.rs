@@ -40,28 +40,48 @@ pub trait CandidateSource: Send + Sync {
 
 fn l2_normalize(mut v: Vec<f32>) -> Vec<f32> {
     let n: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if n > 0.0 { for x in &mut v { *x /= n; } }
+    if n > 0.0 {
+        for x in &mut v {
+            *x /= n;
+        }
+    }
     v
 }
 
 /// Deterministic test/dev embedder: hashes tokens into a fixed-dim unit vector.
 /// Not semantic — only for tests and the candle-free build path.
-pub struct FakeEmbedder { dim: usize }
-impl FakeEmbedder { pub fn new(dim: usize) -> Self { Self { dim } } }
+pub struct FakeEmbedder {
+    dim: usize,
+}
+impl FakeEmbedder {
+    pub fn new(dim: usize) -> Self {
+        Self { dim }
+    }
+}
 impl Embedder for FakeEmbedder {
     fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
-        Ok(texts.iter().map(|t| {
-            let mut v = vec![0f32; self.dim];
-            for tok in t.split_whitespace() {
-                let mut h: u64 = 1469598103934665603;
-                for b in tok.bytes() { h ^= b as u64; h = h.wrapping_mul(1099511628211); }
-                v[(h as usize) % self.dim] += 1.0;
-            }
-            l2_normalize(v)
-        }).collect())
+        Ok(texts
+            .iter()
+            .map(|t| {
+                let mut v = vec![0f32; self.dim];
+                for tok in t.split_whitespace() {
+                    let mut h: u64 = 1469598103934665603;
+                    for b in tok.bytes() {
+                        h ^= b as u64;
+                        h = h.wrapping_mul(1099511628211);
+                    }
+                    v[(h as usize) % self.dim] += 1.0;
+                }
+                l2_normalize(v)
+            })
+            .collect())
     }
-    fn dim(&self) -> usize { self.dim }
-    fn model_id(&self) -> &str { "fake" }
+    fn dim(&self) -> usize {
+        self.dim
+    }
+    fn model_id(&self) -> &str {
+        "fake"
+    }
 }
 
 /// Semantic recall stage: embeds the query and scans the in-memory index.
@@ -75,16 +95,27 @@ impl VectorSource {
     }
     /// Embed one text to a unit vector (reused by the lane to fill the index).
     pub fn embed_unit(&self, text: &str) -> Option<Vec<f32>> {
-        self.embedder.embed(&[text]).ok().and_then(|mut v| v.pop()).map(l2_normalize)
+        self.embedder
+            .embed(&[text])
+            .ok()
+            .and_then(|mut v| v.pop())
+            .map(l2_normalize)
     }
 }
 impl CandidateSource for VectorSource {
     fn candidates(&self, query: &str, k: usize) -> Vec<RecallCandidate> {
-        let Some(q) = self.embed_unit(query) else { return Vec::new() };
+        let Some(q) = self.embed_unit(query) else {
+            return Vec::new();
+        };
         let idx = self.index.read().unwrap();
-        idx.scan_topk(&q, k).into_iter().map(|(event_id, score)| RecallCandidate {
-            event_id, content: String::new(), lexical_score: score,
-        }).collect()
+        idx.scan_topk(&q, k)
+            .into_iter()
+            .map(|(event_id, score)| RecallCandidate {
+                event_id,
+                content: String::new(),
+                lexical_score: score,
+            })
+            .collect()
     }
 }
 

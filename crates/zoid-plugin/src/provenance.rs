@@ -36,7 +36,9 @@ pub struct PluginProvSource {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AppliedEffect {
     Activate,
-    OnboardingHint { text: String },
+    OnboardingHint {
+        text: String,
+    },
     SetConfig {
         key: String,
         prev: serde_json::Value,

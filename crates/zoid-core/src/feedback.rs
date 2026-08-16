@@ -263,11 +263,9 @@ impl FeedbackReport {
             .await
         {
             Ok((url, number)) => Ok(SubmitOutcome::Created { url, number }),
-            Err(e) if e.downcast_ref::<NoToken>().is_some() => {
-                Ok(SubmitOutcome::BrowserFallback {
-                    url: self.to_browser_url(),
-                })
-            }
+            Err(e) if e.downcast_ref::<NoToken>().is_some() => Ok(SubmitOutcome::BrowserFallback {
+                url: self.to_browser_url(),
+            }),
             Err(e) => Err(e),
         }
     }
@@ -301,10 +299,7 @@ mod tests {
         assert_eq!(FeedbackKind::Bug.label(), "bug");
         assert_eq!(FeedbackKind::Bug.display(), "Bug");
         assert_eq!(FeedbackKind::FeatureRequest.label(), "enhancement");
-        assert_eq!(
-            FeedbackKind::FeatureRequest.display(),
-            "Feature Request"
-        );
+        assert_eq!(FeedbackKind::FeatureRequest.display(), "Feature Request");
         assert_eq!(FeedbackKind::General.label(), "feedback");
         assert_eq!(FeedbackKind::General.display(), "General");
     }
@@ -348,10 +343,7 @@ mod tests {
 
     #[test]
     fn issue_title_is_prefixed_with_kind() {
-        assert_eq!(
-            sample_report().to_issue_title(),
-            "[Bug] Crash on :config"
-        );
+        assert_eq!(sample_report().to_issue_title(), "[Bug] Crash on :config");
     }
 
     #[test]
@@ -384,9 +376,7 @@ mod tests {
             .find(|l| l.starts_with("- recent_error:"))
             .unwrap();
         // "x"*499 + "…" = 500 chars after the prefix.
-        let value = line
-            .trim_start_matches("- recent_error: ")
-            .trim_end();
+        let value = line.trim_start_matches("- recent_error: ").trim_end();
         assert_eq!(value.chars().count(), 500);
         assert!(value.ends_with('…'));
     }
@@ -394,9 +384,7 @@ mod tests {
     #[test]
     fn browser_url_encodes_title_and_body_and_includes_label() {
         let url = sample_report().to_browser_url();
-        assert!(url.starts_with(
-            "https://github.com/strvmarv/zoid/issues/new?title="
-        ));
+        assert!(url.starts_with("https://github.com/strvmarv/zoid/issues/new?title="));
         assert!(url.contains("&body="));
         // The label line rides in the body (percent-encoded).
         assert!(url.contains("%3E%20Label%3A%20bug"));
@@ -446,17 +434,11 @@ mod tests {
 
     #[tokio::test]
     async fn submit_via_with_token_creates_issue() {
-        let api = FakeFeedbackApi::created(
-            "https://github.com/strvmarv/zoid/issues/7",
-            7,
-        );
+        let api = FakeFeedbackApi::created("https://github.com/strvmarv/zoid/issues/7", 7);
         let outcome = sample_report().submit_via(&api).await.unwrap();
         match outcome {
             SubmitOutcome::Created { url, number } => {
-                assert_eq!(
-                    url,
-                    "https://github.com/strvmarv/zoid/issues/7"
-                );
+                assert_eq!(url, "https://github.com/strvmarv/zoid/issues/7");
                 assert_eq!(number, 7);
             }
             _ => panic!("expected Created"),
@@ -469,9 +451,7 @@ mod tests {
         let outcome = sample_report().submit_via(&api).await.unwrap();
         match outcome {
             SubmitOutcome::BrowserFallback { url } => {
-                assert!(url.starts_with(
-                    "https://github.com/strvmarv/zoid/issues/new?"
-                ));
+                assert!(url.starts_with("https://github.com/strvmarv/zoid/issues/new?"));
             }
             _ => panic!("expected BrowserFallback"),
         }

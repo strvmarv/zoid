@@ -4,54 +4,81 @@
 //! the protected floor as a fraction of the band. Run with:
 //!   cargo test --test recent_n_analysis -- --nocapture --ignored
 
+use ulid::Ulid;
 use zoid_core::band::derive_band;
 use zoid_core::context::{context_window_with, ContextOverhead};
-use zoid_core::eviction::{plan_evictions, EvictionPolicy, GoalContext, RecencyScorer};
 use zoid_core::event::{Event, EventKind};
-use ulid::Ulid;
+use zoid_core::eviction::{plan_evictions, EvictionPolicy, GoalContext, RecencyScorer};
 
 /// Build N turns where each turn has a user msg + assistant msg + M tool calls
 /// with tool results of `tool_result_chars` chars each. This simulates a
 /// multi-step coding turn (read files, run commands, etc).
-fn build_session(n_turns: u128, tool_calls_per_turn: usize, tool_result_chars: usize) -> Vec<Event> {
+fn build_session(
+    n_turns: u128,
+    tool_calls_per_turn: usize,
+    tool_result_chars: usize,
+) -> Vec<Event> {
     let mut events = Vec::new();
     let mut id = 1u128;
     for t in 0..n_turns {
         // User message
-        events.push(Event::new(Ulid::from(id), None, id as i64, EventKind::UserMessage {
-            text: format!("implement feature {t} with tests and docs"),
-        }));
+        events.push(Event::new(
+            Ulid::from(id),
+            None,
+            id as i64,
+            EventKind::UserMessage {
+                text: format!("implement feature {t} with tests and docs"),
+            },
+        ));
         id += 1;
         // Tool calls + results — each turn reads DIFFERENT files so they
         // accumulate (File items are keyed by path; latest-wins per path).
         for c in 0..tool_calls_per_turn {
             let call_id = format!("call-{t}-{c}");
-            events.push(Event::new(Ulid::from(id), None, id as i64, EventKind::ToolCall {
-                id: call_id.clone(),
-                name: "read_file".into(),
-                args: format!(r#"{{"path":"src/module_{t}_{c}.rs"}}"#),
-            }));
+            events.push(Event::new(
+                Ulid::from(id),
+                None,
+                id as i64,
+                EventKind::ToolCall {
+                    id: call_id.clone(),
+                    name: "read_file".into(),
+                    args: format!(r#"{{"path":"src/module_{t}_{c}.rs"}}"#),
+                },
+            ));
             id += 1;
             let output = "line of code\n".repeat(tool_result_chars / 14);
-            events.push(Event::new(Ulid::from(id), None, id as i64, EventKind::ToolResult {
-                id: call_id,
-                name: "read_file".into(),
-                output,
-                is_error: false,
-            }));
+            events.push(Event::new(
+                Ulid::from(id),
+                None,
+                id as i64,
+                EventKind::ToolResult {
+                    id: call_id,
+                    name: "read_file".into(),
+                    output,
+                    is_error: false,
+                },
+            ));
             id += 1;
         }
         // Assistant message
-        events.push(Event::new(Ulid::from(id), None, id as i64, EventKind::AssistantMessage {
-            text: format!("I've implemented feature {t}. Here's what I did..."),
-        }));
+        events.push(Event::new(
+            Ulid::from(id),
+            None,
+            id as i64,
+            EventKind::AssistantMessage {
+                text: format!("I've implemented feature {t}. Here's what I did..."),
+            },
+        ));
         id += 1;
     }
     events
 }
 
 fn overhead() -> ContextOverhead {
-    ContextOverhead { system_tokens: 4_000, tools_tokens: 3_000 }
+    ContextOverhead {
+        system_tokens: 4_000,
+        tools_tokens: 3_000,
+    }
 }
 
 #[tokio::test]
@@ -62,7 +89,10 @@ async fn recent_n_protected_floor_analysis() {
     let headroom = 20u8;
     let band = derive_band(capacity, target, None, headroom);
 
-    eprintln!("Band: high_water={} low_water={}", band.high_water, band.low_water);
+    eprintln!(
+        "Band: high_water={} low_water={}",
+        band.high_water, band.low_water
+    );
     eprintln!();
 
     // Simulate 3 session profiles: light, medium, heavy turns.
@@ -70,9 +100,9 @@ async fn recent_n_protected_floor_analysis() {
     // A real file read of 500 lines ≈ 15k chars ≈ 5k tokens.
     let profiles: &[(&str, usize, usize)] = &[
         // (name, tool_calls_per_turn, tool_result_chars)
-        ("light (2 small reads)",  2,   3_000),  // ~2k tokens/turn
-        ("medium (5 file reads)",  5,   9_000),  // ~15k tokens/turn
-        ("heavy (8 big reads+subagent)", 8, 30_000),  // ~80k tokens/turn
+        ("light (2 small reads)", 2, 3_000), // ~2k tokens/turn
+        ("medium (5 file reads)", 5, 9_000), // ~15k tokens/turn
+        ("heavy (8 big reads+subagent)", 8, 30_000), // ~80k tokens/turn
     ];
 
     for &(name, tcpt, trc) in profiles {
@@ -116,12 +146,18 @@ async fn recent_n_protected_floor_analysis() {
             };
             // Only run if raw_total > high_water (enough turns)
             if raw_total < band.high_water {
-                eprintln!("    recent_n={recent_n:>2}: (raw_total < high_water, no eviction needed)");
+                eprintln!(
+                    "    recent_n={recent_n:>2}: (raw_total < high_water, no eviction needed)"
+                );
                 continue;
             }
             let plan = plan_evictions(
-                events.iter(), &policy, raw_total,
-                &RecencyScorer, &GoalContext::default(), 1.0,
+                events.iter(),
+                &policy,
+                raw_total,
+                &RecencyScorer,
+                &GoalContext::default(),
+                1.0,
             );
             let n_evicted = plan.turns.len();
             let reclaimed: u64 = plan.turns.iter().map(|t| t.token_estimate).sum();

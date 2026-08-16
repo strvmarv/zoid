@@ -165,7 +165,10 @@ mod tests {
             std::path::Path::new("."),
         );
         assert!(out.text.contains("(line truncated)"));
-        assert!(out.text.len() < 4000, "a 5000-char line must not pass through whole");
+        assert!(
+            out.text.len() < 4000,
+            "a 5000-char line must not pass through whole"
+        );
     }
 
     #[test]

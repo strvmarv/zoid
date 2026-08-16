@@ -13,7 +13,7 @@ use crate::palette::{
     Phase,
 };
 use crate::state::{
-    DrawerId, Focus, OnboardingStep, Overlay, PaletteStage, ShellState, SessionConfirmKind, Zoom,
+    DrawerId, Focus, OnboardingStep, Overlay, PaletteStage, SessionConfirmKind, ShellState, Zoom,
 };
 use crate::tokens::{color, glyph};
 use ratatui::{
@@ -307,7 +307,10 @@ fn title_line(w: usize) -> Line<'static> {
     } else {
         spans.push(Span::styled(" ".repeat(pad), Style::new()));
     }
-    spans.push(Span::styled(wordmark.to_string(), Style::new().fg(color::DIM)));
+    spans.push(Span::styled(
+        wordmark.to_string(),
+        Style::new().fg(color::DIM),
+    ));
 
     let used = pad + wm_w;
     let right_pad = w.saturating_sub(used).saturating_sub(palette_hint.width());
@@ -619,7 +622,9 @@ fn render_rail(
                 DrawerId::Repo => render_repo_body(frame, state, body_rect),
                 DrawerId::Session => render_session_body(frame, state, body_rect), // Task 13
                 DrawerId::Tasks => render_tasks_body(frame, body_rect, tasks),
-                DrawerId::Subagents => render_subagents_body(frame, body_rect, &state.subagent_rows, state.spinner),
+                DrawerId::Subagents => {
+                    render_subagents_body(frame, body_rect, &state.subagent_rows, state.spinner)
+                }
             }
         }
     }
@@ -789,10 +794,7 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
                 Style::new().fg(color::DIM),
             ),
             if let Some(label) = &state.thinking_label {
-                Span::styled(
-                    format!(" · {}", label),
-                    Style::new().fg(color::CHAT_ACCENT),
-                )
+                Span::styled(format!(" · {}", label), Style::new().fg(color::CHAT_ACCENT))
             } else {
                 Span::styled("", Style::new())
             },
@@ -821,10 +823,7 @@ fn render_session_body(frame: &mut Frame, state: &ShellState, area: Rect) {
                 Span::styled("", Style::new())
             },
             Span::styled("  tps ", Style::new().fg(color::DIM)),
-            Span::styled(
-                format!("{}", state.tps),
-                Style::new().fg(color::TXT),
-            ),
+            Span::styled(format!("{}", state.tps), Style::new().fg(color::TXT)),
         ]),
         {
             let mut spans = vec![
@@ -900,7 +899,12 @@ fn render_tasks_body(frame: &mut Frame, area: Rect, items: &[zoid_core::tasks::T
 /// The subagents drawer body: one compact row per in-flight subagent — a
 /// running glyph + truncated id. Empty → dim "none". Capped to the body rows
 /// the allocator gave the drawer.
-fn render_subagents_body(frame: &mut Frame, area: Rect, rows: &[crate::state::SubagentRow], spinner: char) {
+fn render_subagents_body(
+    frame: &mut Frame,
+    area: Rect,
+    rows: &[crate::state::SubagentRow],
+    spinner: char,
+) {
     use crate::text::truncate;
     if rows.is_empty() {
         let line = Line::from(Span::styled("none", Style::new().fg(color::DIM)));
@@ -914,7 +918,11 @@ fn render_subagents_body(frame: &mut Frame, area: Rect, rows: &[crate::state::Su
             // Format: "● agent · truncated task" (no subagent ID — the ID is
             // a ULID that wastes the narrow rail. The model gets the full ID
             // via the list_subagents tool; the human just needs agent + task.)
-            let agent = if r.agent.is_empty() { "delegate" } else { &r.agent };
+            let agent = if r.agent.is_empty() {
+                "delegate"
+            } else {
+                &r.agent
+            };
             let remaining = (area.width as usize).saturating_sub(agent.len() + 5);
             let task = truncate(&r.task, remaining);
             Line::from(vec![
@@ -1171,14 +1179,10 @@ fn render_sessions_overlay(frame: &mut Frame, state: &ShellState, area: Rect) {
             sel,
         );
         let prompt = match c.kind {
-            SessionConfirmKind::Delete => format!(
-                " Delete \"{}\"? [y]es / [n]o",
-                c.name
-            ),
-            SessionConfirmKind::Takeover => format!(
-                " \"{}\" is in use. Take over? [y]es / [n]o",
-                c.name
-            ),
+            SessionConfirmKind::Delete => format!(" Delete \"{}\"? [y]es / [n]o", c.name),
+            SessionConfirmKind::Takeover => {
+                format!(" \"{}\" is in use. Take over? [y]es / [n]o", c.name)
+            }
         };
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
@@ -1305,8 +1309,7 @@ fn render_plugin_catalog_overlay(
         }
         CatalogMode::ConfirmLoading => {
             frame.render_widget(
-                Paragraph::new("Fetching manifest…")
-                    .alignment(ratatui::layout::Alignment::Center),
+                Paragraph::new("Fetching manifest…").alignment(ratatui::layout::Alignment::Center),
                 inner,
             );
         }
@@ -1324,7 +1327,10 @@ fn render_plugin_catalog_overlay(
                     format!("{} {}", mcp.command, mcp.args.join(" "))
                 };
                 let mut lines = vec![
-                    Line::from(Span::styled(mcp.server_name.clone(), Style::new().fg(color::TXT))),
+                    Line::from(Span::styled(
+                        mcp.server_name.clone(),
+                        Style::new().fg(color::TXT),
+                    )),
                     Line::from(Span::styled(cmd, Style::new().fg(color::DIM))),
                 ];
                 for e in &mcp.env {
@@ -1355,7 +1361,10 @@ fn render_plugin_catalog_overlay(
                 let license = row.license.as_deref().unwrap_or("(none)");
                 let lines = vec![
                     Line::from(Span::styled(row.name.clone(), Style::new().fg(color::TXT))),
-                    Line::from(Span::styled(row.source_label.clone(), Style::new().fg(color::DIM))),
+                    Line::from(Span::styled(
+                        row.source_label.clone(),
+                        Style::new().fg(color::DIM),
+                    )),
                     Line::from(Span::styled(
                         format!("kind: {}", row.kind_label),
                         Style::new().fg(color::DIM),
@@ -1659,7 +1668,7 @@ fn picker_lines(
 /// active step is expanded; inactive steps are collapsed to dim lines.
 pub fn render_onboarding(frame: &mut Frame, state: &ShellState, area: Rect) {
     use ratatui::layout::{Constraint, Direction, Layout};
-    use ratatui::widgets::{Block, Borders, BorderType, Clear};
+    use ratatui::widgets::{Block, BorderType, Borders, Clear};
 
     if state.onboarding.is_none() {
         return;
@@ -1696,12 +1705,21 @@ pub fn render_onboarding(frame: &mut Frame, state: &ShellState, area: Rect) {
     // Render the body lines (clamped to the body height — extra lines clip).
     let body_height = body.height as usize;
     for (i, line) in lines.iter().enumerate().take(body_height) {
-        frame.render_widget(line.clone(), Rect { y: body.y + i as u16, ..body });
+        frame.render_widget(
+            line.clone(),
+            Rect {
+                y: body.y + i as u16,
+                ..body
+            },
+        );
     }
 
     // Footer.
     frame.render_widget(
-        Line::from(Span::styled(footer_text.to_string(), Style::new().fg(color::DIM))),
+        Line::from(Span::styled(
+            footer_text.to_string(),
+            Style::new().fg(color::DIM),
+        )),
         foot,
     );
 }
@@ -1747,7 +1765,10 @@ fn onboarding_lines(state: &ShellState, width: usize) -> Vec<Line<'static>> {
             let warn2 = format!(
                 "{indent}    here writes to TOML but won't take effect until you unset it."
             );
-            lines.push(Line::from(Span::styled(warn1, Style::new().fg(color::WARN))));
+            lines.push(Line::from(Span::styled(
+                warn1,
+                Style::new().fg(color::WARN),
+            )));
             lines.push(Line::from(Span::styled(warn2, Style::new().fg(color::DIM))));
         }
         render_pick_list(&mut lines, &onb.options, onb.list_sel, indent, width);
@@ -1853,7 +1874,9 @@ fn render_pick_list(
             // splits on whitespace and would strip leading spaces), then re-apply
             // the indent to each wrapped line so the endpoint stays aligned under
             // its option row.
-            for w in crate::render::wrap_plain(&opt.detail, width.saturating_sub(detail_indent.width())) {
+            for w in
+                crate::render::wrap_plain(&opt.detail, width.saturating_sub(detail_indent.width()))
+            {
                 lines.push(Line::from(Span::styled(
                     format!("{detail_indent}{w}"),
                     Style::new().fg(color::DIM),
@@ -1899,12 +1922,12 @@ fn render_api_key_input(
     lines.push(Line::from(vec![
         Span::styled(
             format!("{indent}  {v} ", v = glyph::TABLE_V),
-            Style::new().fg(color::DIM)
+            Style::new().fg(color::DIM),
         ),
         Span::styled(masked, Style::new().fg(color::TXT)),
         Span::styled(
             format!(" {v}", v = glyph::TABLE_V),
-            Style::new().fg(color::DIM)
+            Style::new().fg(color::DIM),
         ),
     ]));
     lines.push(Line::from(Span::styled(
@@ -2166,14 +2189,20 @@ fn render_feedback_modal(frame: &mut Frame, area: Rect, fs: &crate::state::Feedb
     let title_focused = fs.focus == FeedbackField::Title;
     let title_block = Block::default()
         .borders(Borders::ALL)
-        .title(if title_focused { " Title * " } else { " Title " });
+        .title(if title_focused {
+            " Title * "
+        } else {
+            " Title "
+        });
     frame.render_widget(
         Paragraph::new(fs.title.as_str()).block(title_block),
         chunks[1],
     );
 
     // 3. Body (plain paragraph for v1; multi-line editing via the bin's buffer).
-    let body_block = Block::default().borders(Borders::ALL).title(" Description ");
+    let body_block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Description ");
     frame.render_widget(
         Paragraph::new(fs.body.as_str()).block(body_block),
         chunks[2],
@@ -2190,9 +2219,10 @@ fn render_feedback_modal(frame: &mut Frame, area: Rect, fs: &crate::state::Feedb
     let status = match &fs.status {
         crate::state::FeedbackStatus::Idle => String::new(),
         crate::state::FeedbackStatus::Submitting => "Submitting…".to_string(),
-        crate::state::FeedbackStatus::Done(
-            zoid_core::feedback::SubmitOutcome::Created { url, number },
-        ) => format!("Created issue #{}: {}", number, url),
+        crate::state::FeedbackStatus::Done(zoid_core::feedback::SubmitOutcome::Created {
+            url,
+            number,
+        }) => format!("Created issue #{}: {}", number, url),
         crate::state::FeedbackStatus::Done(
             zoid_core::feedback::SubmitOutcome::BrowserFallback { url },
         ) => format!("No token — opened your browser: {}", url),
@@ -2282,11 +2312,7 @@ mod tests {
     fn select_pill_off_is_recessive_no_fill() {
         let buf = status_buffer(160, false, false);
         let (_, style) = find_word(&buf, "SELECT").expect("SELECT pill must be present");
-        assert_eq!(
-            style.fg,
-            Some(color::DIM),
-            "OFF pill glyph must be DIM"
-        );
+        assert_eq!(style.fg, Some(color::DIM), "OFF pill glyph must be DIM");
         assert_ne!(
             style.bg,
             Some(color::SELECT_BG),
@@ -2296,10 +2322,7 @@ mod tests {
             .content()
             .iter()
             .any(|c| c.style().bg == Some(color::SELECT_BG));
-        assert!(
-            !any_fill,
-            "OFF pill must not fill any cell with SELECT_BG"
-        );
+        assert!(!any_fill, "OFF pill must not fill any cell with SELECT_BG");
     }
 
     /// When `compacting: false`, the compaction segment must NOT appear.
@@ -2514,13 +2537,19 @@ mod tests {
     /// must not advertise an install key it does not route.
     #[test]
     fn read_only_catalog_footer_omits_install() {
-        use crate::state::{CatalogStatus, Overlay, PluginCatalogRow, PluginCatalogState, ShellState};
+        use crate::state::{
+            CatalogStatus, Overlay, PluginCatalogRow, PluginCatalogState, ShellState,
+        };
         let mut s = ShellState::new();
         s.overlay = Overlay::PluginCatalog;
         let mut cat = PluginCatalogState::loading_read_only();
         cat.rows = vec![PluginCatalogRow {
-            id: "github".into(), name: "GitHub".into(), kind_label: "mcp".into(),
-            description: "GitHub over MCP".into(), source_label: String::new(), license: None,
+            id: "github".into(),
+            name: "GitHub".into(),
+            kind_label: "mcp".into(),
+            description: "GitHub over MCP".into(),
+            source_label: String::new(),
+            license: None,
         }];
         cat.status = CatalogStatus::Ready;
         let backend = TestBackend::new(72, 18);
@@ -2647,7 +2676,10 @@ mod tests {
             find_word(&buf, VERSION).is_none(),
             "version must be dropped on narrow width"
         );
-        assert!(find_word(&buf, "zoid").is_some(), "zoid must still be present");
+        assert!(
+            find_word(&buf, "zoid").is_some(),
+            "zoid must still be present"
+        );
     }
 
     #[test]
@@ -2668,7 +2700,11 @@ mod tests {
         let (col, style) = find_word(&buf, "SELECT").expect("SELECT must be present");
         assert!(col > 0, "SELECT must not be flush-left: col={col}");
         assert_eq!(style.fg, Some(color::DIM), "OFF: fg must be DIM");
-        assert_ne!(style.bg, Some(color::SELECT_BG), "OFF: bg must not be SELECT_BG");
+        assert_ne!(
+            style.bg,
+            Some(color::SELECT_BG),
+            "OFF: bg must not be SELECT_BG"
+        );
     }
 
     #[test]
@@ -2682,7 +2718,10 @@ mod tests {
     #[test]
     fn status_yolo_hidden_when_disabled() {
         let buf = status_buffer(160, true, false);
-        assert!(find_word(&buf, "YOLO").is_none(), "YOLO must not appear when yolo=false");
+        assert!(
+            find_word(&buf, "YOLO").is_none(),
+            "YOLO must not appear when yolo=false"
+        );
     }
 
     #[test]
@@ -2690,7 +2729,11 @@ mod tests {
         let buf = status_buffer(160, false, false);
         let (_, style) = find_word(&buf, "Normal").expect("zoom label must be present");
         assert_eq!(style.fg, Some(color::OK), "zoom pill fg must be OK (green)");
-        assert_eq!(style.bg, Some(color::ZOOM_BG), "zoom pill bg must be ZOOM_BG");
+        assert_eq!(
+            style.bg,
+            Some(color::ZOOM_BG),
+            "zoom pill bg must be ZOOM_BG"
+        );
     }
 
     #[test]
@@ -2699,8 +2742,14 @@ mod tests {
         let (zoom_col, _) = find_word(&buf, "Normal").expect("zoom label");
         let (sel_col, _) = find_word(&buf, "SELECT").expect("SELECT");
         let (yolo_col, _) = find_word(&buf, "YOLO").expect("YOLO");
-        assert!(zoom_col > sel_col, "zoom must be rightmost: zoom={zoom_col} select={sel_col}");
-        assert!(sel_col > yolo_col, "select must be right of yolo: select={sel_col} yolo={yolo_col}");
+        assert!(
+            zoom_col > sel_col,
+            "zoom must be rightmost: zoom={zoom_col} select={sel_col}"
+        );
+        assert!(
+            sel_col > yolo_col,
+            "select must be right of yolo: select={sel_col} yolo={yolo_col}"
+        );
     }
 
     #[test]
@@ -2731,9 +2780,20 @@ mod tests {
         });
         let backend = TestBackend::new(80, 10);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|f| render_sessions_overlay(f, &s, f.area())).unwrap();
-        let content: String = terminal.backend().buffer().content().iter().map(|c| c.symbol().to_string()).collect();
-        assert!(content.contains("Delete"), "confirm line must contain 'Delete': {content}");
+        terminal
+            .draw(|f| render_sessions_overlay(f, &s, f.area()))
+            .unwrap();
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
+        assert!(
+            content.contains("Delete"),
+            "confirm line must contain 'Delete': {content}"
+        );
     }
 
     #[test]

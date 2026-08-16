@@ -346,9 +346,7 @@ mod tests {
     }
     // Helper: an assistant text event (canonical assistant-text variant).
     fn assistant(text: &str) -> Event {
-        ev(EventKind::AssistantMessage {
-            text: text.into(),
-        })
+        ev(EventKind::AssistantMessage { text: text.into() })
     }
 
     #[test]
@@ -464,18 +462,22 @@ mod tests {
     #[test]
     fn distill_empty_summary_is_failure() {
         // No non-empty assistant text → summary has warn glyph, ok = false.
-        let evs = vec![
-            ev(EventKind::ToolResult {
-                id: "t1".into(),
-                name: "read".into(),
-                output: "some output".into(),
-                is_error: false,
-            }),
-        ];
+        let evs = vec![ev(EventKind::ToolResult {
+            id: "t1".into(),
+            name: "read".into(),
+            output: "some output".into(),
+            is_error: false,
+        })];
         let (summary, ok) = distill(&evs);
         assert!(!ok, "empty summary must be failure");
-        assert!(summary.starts_with(WARN_GLYPH), "summary must have warn glyph");
-        assert!(summary.contains("no output"), "summary must explain: {summary}");
+        assert!(
+            summary.starts_with(WARN_GLYPH),
+            "summary must have warn glyph"
+        );
+        assert!(
+            summary.contains("no output"),
+            "summary must explain: {summary}"
+        );
     }
 
     #[test]
@@ -494,16 +496,17 @@ mod tests {
         ];
         let (summary, ok) = distill(&evs);
         assert!(!ok, "errored tool must be failure");
-        assert!(summary.contains("errored"), "summary must note the error: {summary}");
+        assert!(
+            summary.contains("errored"),
+            "summary must note the error: {summary}"
+        );
     }
 
     #[test]
     fn distill_normal_output_is_success() {
-        let evs = vec![
-            ev(EventKind::AssistantMessage {
-                text: "refactored successfully".into(),
-            }),
-        ];
+        let evs = vec![ev(EventKind::AssistantMessage {
+            text: "refactored successfully".into(),
+        })];
         let (summary, ok) = distill(&evs);
         assert!(ok, "normal output must be success");
         assert!(summary.contains("refactored successfully"));
@@ -525,7 +528,10 @@ mod tests {
         // KEY false-positive-safety test: a legitimate text-only subagent.
         let evs = vec![assistant("here is your summary")];
         let (summary, ok) = distill(&evs);
-        assert!(ok, "zero tool calls must NOT flip ok for a text-only subagent");
+        assert!(
+            ok,
+            "zero tool calls must NOT flip ok for a text-only subagent"
+        );
         assert!(
             summary.contains("emitted no tool calls"),
             "advisory note must be present: {summary}"
@@ -554,7 +560,10 @@ mod tests {
         ];
         let (summary, ok) = distill(&evs);
         assert!(!ok);
-        assert!(summary.contains("errored"), "keeps existing errored note: {summary}");
+        assert!(
+            summary.contains("errored"),
+            "keeps existing errored note: {summary}"
+        );
     }
 
     #[test]
@@ -658,7 +667,10 @@ mod tests {
         ];
         let (summary, ok) = distill(&evs);
         assert!(!ok, "errored + orphan must be not-ok");
-        assert!(summary.contains("errored"), "errored note present: {summary}");
+        assert!(
+            summary.contains("errored"),
+            "errored note present: {summary}"
+        );
         assert!(
             summary.contains("produced no result") && summary.contains("c2"),
             "orphan note names c2: {summary}"

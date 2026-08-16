@@ -92,13 +92,18 @@ pub fn request_body(req: &CompletionRequest) -> Value {
     }
     if !req.tools.is_empty() {
         body["tools"] = Value::Array(
-            req.tools.iter().map(|t| json!({
-                "type": "function",
-                "name": t.name,
-                "description": t.description,
-                "parameters": t.parameters,
-                "strict": false,
-            })).collect(),
+            req.tools
+                .iter()
+                .map(|t| {
+                    json!({
+                        "type": "function",
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
+                        "strict": false,
+                    })
+                })
+                .collect(),
         );
     }
     if let Some(r) = reasoning_params(req) {
@@ -138,7 +143,8 @@ impl ResponsesToolAccum {
     /// Record the `call_id` for an `item_id`, learned from
     /// `response.output_item.added`.
     fn note_call_id(&mut self, item_id: &str, call_id: &str) {
-        self.call_ids.insert(item_id.to_string(), call_id.to_string());
+        self.call_ids
+            .insert(item_id.to_string(), call_id.to_string());
     }
 
     fn flush(&mut self, item_id: &str, name: &str, arguments: &str) -> Option<ProviderEvent> {
@@ -215,8 +221,14 @@ pub fn parse_event(data: &str, acc: &mut ResponsesToolAccum) -> Vec<ProviderEven
         }
         "response.completed" => {
             if let Some(usage) = v.get("response").and_then(|r| r.get("usage")) {
-                let input = usage.get("input_tokens").and_then(|n| n.as_u64()).unwrap_or(0);
-                let output = usage.get("output_tokens").and_then(|n| n.as_u64()).unwrap_or(0);
+                let input = usage
+                    .get("input_tokens")
+                    .and_then(|n| n.as_u64())
+                    .unwrap_or(0);
+                let output = usage
+                    .get("output_tokens")
+                    .and_then(|n| n.as_u64())
+                    .unwrap_or(0);
                 let cached = usage
                     .get("input_tokens_details")
                     .and_then(|d| d.get("cached_tokens"))
@@ -445,7 +457,10 @@ mod tests {
             reassert: None,
         };
         let body = request_body(&req);
-        assert!(body["input"].is_array(), "multi-message input must be an array");
+        assert!(
+            body["input"].is_array(),
+            "multi-message input must be an array"
+        );
         let input = body["input"].as_array().unwrap();
         assert_eq!(input.len(), 3);
         assert_eq!(input[2]["type"], "function_call_output");

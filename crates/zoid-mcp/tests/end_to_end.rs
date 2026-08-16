@@ -18,7 +18,12 @@ fn fixture_cfg() -> (String, McpServerConfig) {
 
 async fn wait_ready(m: &McpManager) {
     for _ in 0..50 {
-        if m.status().iter().any(|s| s.name == "fake" && s.state == ServerState::Ready) { return; }
+        if m.status()
+            .iter()
+            .any(|s| s.name == "fake" && s.state == ServerState::Ready)
+        {
+            return;
+        }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     panic!("fixture server never became ready: {:?}", m.status());
@@ -55,18 +60,27 @@ async fn crash_mid_call_is_a_clean_error() {
     let out = m.call_tool("fake__echo", &json!({})).await; // warm-up (proves alive)
     assert!(!out.is_error, "{}", out.text);
     // Route a call to the crash tool by name through the same server.
-    let crash = m.call_tool_direct_for_test("fake", "crash", &json!({})).await;
+    let crash = m
+        .call_tool_direct_for_test("fake", "crash", &json!({}))
+        .await;
     assert!(crash.is_error);
 
     // After the crash, the server's client actor sees EOF and the manager must
     // surface `Disconnected` (spec §D/§E). Poll briefly for the flag to settle.
     let mut disconnected = false;
     for _ in 0..50 {
-        if m.status().iter().any(|s| s.name == "fake" && s.state == ServerState::Disconnected) {
+        if m.status()
+            .iter()
+            .any(|s| s.name == "fake" && s.state == ServerState::Disconnected)
+        {
             disconnected = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert!(disconnected, "crashed server must read Disconnected: {:?}", m.status());
+    assert!(
+        disconnected,
+        "crashed server must read Disconnected: {:?}",
+        m.status()
+    );
 }

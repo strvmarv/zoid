@@ -107,10 +107,7 @@ fn remove_zoid_dir(p: &Path) -> Result<bool> {
         return Ok(false);
     }
     if p.file_name().and_then(|n| n.to_str()) != Some("zoid") {
-        anyhow::bail!(
-            "refusing to remove {} — not a zoid directory",
-            p.display()
-        );
+        anyhow::bail!("refusing to remove {} — not a zoid directory", p.display());
     }
     std::fs::remove_dir_all(p)?;
     Ok(true)
@@ -140,7 +137,11 @@ mod tests {
     fn abort_when_not_confirmed_removes_nothing() {
         let tmp = tempfile::tempdir().unwrap();
         let t = mk_targets(tmp.path(), tmp.path().join("zoid"));
-        let (data, config, cache) = (t.data_dir.clone(), t.config_dir.clone(), t.cache_dir.clone());
+        let (data, config, cache) = (
+            t.data_dir.clone(),
+            t.config_dir.clone(),
+            t.cache_dir.clone(),
+        );
         let mut out = Vec::new();
         run_with_io(t, false, &mut "no\n".as_bytes(), &mut out).unwrap();
         assert!(data.exists() && config.exists() && cache.exists());
@@ -153,7 +154,11 @@ mod tests {
         let bin = tmp.path().join("zoid");
         std::fs::write(&bin, b"ELF").unwrap();
         let t = mk_targets(tmp.path(), bin.clone());
-        let (data, config, cache) = (t.data_dir.clone(), t.config_dir.clone(), t.cache_dir.clone());
+        let (data, config, cache) = (
+            t.data_dir.clone(),
+            t.config_dir.clone(),
+            t.cache_dir.clone(),
+        );
         let mut out = Vec::new();
         run_with_io(t, false, &mut "uninstall\n".as_bytes(), &mut out).unwrap();
         assert!(!data.exists() && !config.exists() && !cache.exists());

@@ -64,7 +64,9 @@ mod tests {
     fn not_in_base_registry() {
         // Subagents must NOT be able to cancel their siblings.
         assert!(
-            !crate::registry().iter().any(|t| t.name() == "cancel_subagent"),
+            !crate::registry()
+                .iter()
+                .any(|t| t.name() == "cancel_subagent"),
             "cancel_subagent must be chat-only, never in the subagent registry"
         );
     }

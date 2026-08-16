@@ -151,7 +151,10 @@ mod tests {
         let root = tmp.path();
         for (name, contents) in [
             ("alpha", "---\nname: alpha\ndescription: d\n---\nbody a\n"),
-            ("beta", "---\nname: beta\ndescription: d\ntools:\n  - read\n---\nbody b\n"),
+            (
+                "beta",
+                "---\nname: beta\ndescription: d\ntools:\n  - read\n---\nbody b\n",
+            ),
             ("broken", "no frontmatter here\n"),
         ] {
             let d = root.join(name);

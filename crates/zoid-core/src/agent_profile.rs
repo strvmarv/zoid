@@ -256,10 +256,28 @@ mod tests {
     #[test]
     fn agent_registry_push_unique_appends_new_agent() {
         let mut r = AgentRegistry::new(vec![]);
-        let a = AgentProfile { name: "a".into(), description: "d".into(), system_prompt: "s".into(), tools: vec![], model: None };
+        let a = AgentProfile {
+            name: "a".into(),
+            description: "d".into(),
+            system_prompt: "s".into(),
+            tools: vec![],
+            model: None,
+        };
         assert!(r.push_unique(a));
-        assert!(!r.push_unique(AgentProfile { name: "a".into(), description: "d".into(), system_prompt: "s".into(), tools: vec![], model: None }));
-        let b = AgentProfile { name: "b".into(), description: "d".into(), system_prompt: "s".into(), tools: vec![], model: None };
+        assert!(!r.push_unique(AgentProfile {
+            name: "a".into(),
+            description: "d".into(),
+            system_prompt: "s".into(),
+            tools: vec![],
+            model: None
+        }));
+        let b = AgentProfile {
+            name: "b".into(),
+            description: "d".into(),
+            system_prompt: "s".into(),
+            tools: vec![],
+            model: None,
+        };
         assert!(r.push_unique(b));
         assert_eq!(r.names(), vec!["a".to_string(), "b".to_string()]);
     }
@@ -275,7 +293,10 @@ mod tests {
     fn agent_registry_names_and_all_are_in_order() {
         let r = AgentRegistry::builtin();
         let via_all: Vec<&str> = r.all().iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(via_all, r.names().iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(
+            via_all,
+            r.names().iter().map(String::as_str).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -302,7 +323,10 @@ mod tests {
         let p = parse_agent_md(md).unwrap();
         assert_eq!(p.name, "code-reviewer");
         assert_eq!(p.description, "Reviews code changes");
-        assert_eq!(p.tools, vec!["read".to_string(), "grep".to_string(), "glob".to_string()]);
+        assert_eq!(
+            p.tools,
+            vec!["read".to_string(), "grep".to_string(), "glob".to_string()]
+        );
         assert_eq!(p.model.as_deref(), Some("claude-sonnet"));
         assert_eq!(p.system_prompt, "You are a code reviewer.\n");
     }

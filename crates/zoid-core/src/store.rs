@@ -210,11 +210,14 @@ impl EventStore {
         // version is higher. Never touch source = "user" rows.
         for seed in zoid_model::local_seed::CURATED_LOCAL_MODELS {
             // Check if the row exists and its source/schema_version.
-            let existing: Option<(String, u32)> = self.conn.query_row(
-                "SELECT source, COALESCE(schema_version, 0) FROM local_models WHERE id = ?1",
-                params![seed.id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            ).ok();
+            let existing: Option<(String, u32)> = self
+                .conn
+                .query_row(
+                    "SELECT source, COALESCE(schema_version, 0) FROM local_models WHERE id = ?1",
+                    params![seed.id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .ok();
 
             match existing {
                 None => {
@@ -247,7 +250,9 @@ impl EventStore {
                         ],
                     )?;
                 }
-                Some((source, row_version)) if source == "curated" && seed.schema_version > row_version => {
+                Some((source, row_version))
+                    if source == "curated" && seed.schema_version > row_version =>
+                {
                     // Update curated entry with newer seed version.
                     self.conn.execute(
                         "UPDATE local_models SET
@@ -342,7 +347,8 @@ impl EventStore {
             .unwrap_or_default()
             .as_millis() as i64;
         let cutoff = now - ttl_ms;
-        self.conn.execute("DELETE FROM logs WHERE ts < ?1", params![cutoff])?;
+        self.conn
+            .execute("DELETE FROM logs WHERE ts < ?1", params![cutoff])?;
         Ok(())
     }
 
@@ -504,7 +510,11 @@ impl EventStore {
     }
 
     /// Newest-first, capped — the resume-fill query. O(cap), not O(history).
-    pub fn load_recent_embeddings(&self, model_id: &str, cap: usize) -> Result<Vec<(Ulid, Vec<f32>)>> {
+    pub fn load_recent_embeddings(
+        &self,
+        model_id: &str,
+        cap: usize,
+    ) -> Result<Vec<(Ulid, Vec<f32>)>> {
         let mut stmt = self.conn.prepare(
             "SELECT event_id, vector FROM event_embeddings
              WHERE model_id = ?1 ORDER BY rowid DESC LIMIT ?2",
@@ -544,7 +554,9 @@ impl EventStore {
         // 500 keeps us well under SQLITE_MAX_VARIABLE_NUMBER (default 999) with the
         // model_id param to spare.
         for chunk in ids.chunks(500) {
-            let placeholders = std::iter::repeat_n("?", chunk.len()).collect::<Vec<_>>().join(",");
+            let placeholders = std::iter::repeat_n("?", chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
             let sql = format!(
                 "SELECT event_id, vector FROM event_embeddings
                  WHERE model_id = ?1 AND event_id IN ({placeholders})"
@@ -1143,14 +1155,18 @@ mod tests {
             Ulid::from(10u128),
             None,
             1,
-            EventKind::UserMessage { text: "in session a".into() },
+            EventKind::UserMessage {
+                text: "in session a".into(),
+            },
         )
         .with_session(sid_a);
         let eb = Event::new(
             Ulid::from(11u128),
             None,
             1,
-            EventKind::UserMessage { text: "in session b".into() },
+            EventKind::UserMessage {
+                text: "in session b".into(),
+            },
         )
         .with_session(sid_b);
         store.append(&ea).unwrap();
@@ -1203,20 +1219,35 @@ mod tests {
         let store = EventStore::open(":memory:").unwrap();
         let sid = Ulid::from(1u128);
         // seed two models' vectors for the same ids
-        store.write_embedding(Ulid::from(10u128), "bge", &[1.0, 0.0, 0.0]).unwrap();
-        store.write_embedding(Ulid::from(11u128), "bge", &[0.0, 1.0, 0.0]).unwrap();
-        store.write_embedding(Ulid::from(10u128), "other", &[9.0, 9.0, 9.0]).unwrap();
+        store
+            .write_embedding(Ulid::from(10u128), "bge", &[1.0, 0.0, 0.0])
+            .unwrap();
+        store
+            .write_embedding(Ulid::from(11u128), "bge", &[0.0, 1.0, 0.0])
+            .unwrap();
+        store
+            .write_embedding(Ulid::from(10u128), "other", &[9.0, 9.0, 9.0])
+            .unwrap();
         let _ = sid;
 
         let got = store
-            .vectors_by_ids("bge", &[Ulid::from(10u128), Ulid::from(11u128), Ulid::from(99u128)])
+            .vectors_by_ids(
+                "bge",
+                &[Ulid::from(10u128), Ulid::from(11u128), Ulid::from(99u128)],
+            )
             .unwrap();
 
         assert_eq!(got.len(), 2, "only bge rows for existing ids");
         assert_eq!(got.get(&Ulid::from(10u128)).unwrap(), &vec![1.0, 0.0, 0.0]);
         assert_eq!(got.get(&Ulid::from(11u128)).unwrap(), &vec![0.0, 1.0, 0.0]);
-        assert!(!got.contains_key(&Ulid::from(99u128)), "missing id absent, not error");
-        assert!(!got.values().any(|v| v == &vec![9.0, 9.0, 9.0]), "other-model row excluded");
+        assert!(
+            !got.contains_key(&Ulid::from(99u128)),
+            "missing id absent, not error"
+        );
+        assert!(
+            !got.values().any(|v| v == &vec![9.0, 9.0, 9.0]),
+            "other-model row excluded"
+        );
     }
 
     #[test]
@@ -1629,9 +1660,12 @@ mod tests {
         .unwrap();
         // An event with no tokens → contributes zero.
         s.append(
-            &Event::new(Ulid::from(4u128), None, 4, EventKind::UserMessage {
-                text: "hi".into(),
-            })
+            &Event::new(
+                Ulid::from(4u128),
+                None,
+                4,
+                EventKind::UserMessage { text: "hi".into() },
+            )
             .with_session(sa),
         )
         .unwrap();
@@ -1656,8 +1690,24 @@ mod tests {
         // Create two sessions with events.
         store.insert_session(sid1, "s1", "/repo", 100, 100).unwrap();
         store.insert_session(sid2, "s2", "/repo", 200, 200).unwrap();
-        let ev1 = Event::new(Ulid::new(), None, 150, EventKind::UserMessage { text: "hello".into() }).with_session(sid1);
-        let ev2 = Event::new(Ulid::new(), None, 250, EventKind::UserMessage { text: "world".into() }).with_session(sid2);
+        let ev1 = Event::new(
+            Ulid::new(),
+            None,
+            150,
+            EventKind::UserMessage {
+                text: "hello".into(),
+            },
+        )
+        .with_session(sid1);
+        let ev2 = Event::new(
+            Ulid::new(),
+            None,
+            250,
+            EventKind::UserMessage {
+                text: "world".into(),
+            },
+        )
+        .with_session(sid2);
         store.append(&ev1).unwrap();
         store.append(&ev2).unwrap();
 
@@ -1666,8 +1716,14 @@ mod tests {
 
         // sid1's row is gone; sid2's row remains.
         let rows = store.list_session_rows().unwrap();
-        assert!(rows.iter().all(|r| r.id != sid1), "deleted session row gone");
-        assert!(rows.iter().any(|r| r.id == sid2), "other session row remains");
+        assert!(
+            rows.iter().all(|r| r.id != sid1),
+            "deleted session row gone"
+        );
+        assert!(
+            rows.iter().any(|r| r.id == sid2),
+            "other session row remains"
+        );
 
         // sid1's events are gone; sid2's events remain.
         let s1_events = store.load_session(sid1).unwrap();
@@ -1691,27 +1747,36 @@ mod tests {
         store.seed_local_models().unwrap();
 
         // Table exists.
-        let count: i64 = store.conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='local_models'",
-            [],
-            |r| r.get(0),
-        ).unwrap();
+        let count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='local_models'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(count, 1, "local_models table must exist");
 
         // qwythos is seeded.
-        let id: String = store.conn.query_row(
-            "SELECT id FROM local_models WHERE id = 'qwythos'",
-            [],
-            |r| r.get(0),
-        ).unwrap();
+        let id: String = store
+            .conn
+            .query_row(
+                "SELECT id FROM local_models WHERE id = 'qwythos'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(id, "qwythos");
 
         // source is "curated".
-        let source: String = store.conn.query_row(
-            "SELECT source FROM local_models WHERE id = 'qwythos'",
-            [],
-            |r| r.get(0),
-        ).unwrap();
+        let source: String = store
+            .conn
+            .query_row(
+                "SELECT source FROM local_models WHERE id = 'qwythos'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(source, "curated");
     }
 
@@ -1723,12 +1788,18 @@ mod tests {
         store.seed_local_models().unwrap();
         // Seeding again must not duplicate or error.
         store.seed_local_models().unwrap();
-        let count: i64 = store.conn.query_row(
-            "SELECT COUNT(*) FROM local_models WHERE id = 'qwythos'",
-            [],
-            |r| r.get(0),
-        ).unwrap();
-        assert_eq!(count, 1, "qwythos must appear exactly once after double-seed");
+        let count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM local_models WHERE id = 'qwythos'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "qwythos must appear exactly once after double-seed"
+        );
     }
 
     #[test]
@@ -1748,20 +1819,29 @@ mod tests {
         // Re-seed: must not overwrite the user entry.
         store.seed_local_models().unwrap();
 
-        let source: String = store.conn.query_row(
-            "SELECT source FROM local_models WHERE id = 'my-model'",
-            [],
-            |r| r.get(0),
-        ).unwrap();
+        let source: String = store
+            .conn
+            .query_row(
+                "SELECT source FROM local_models WHERE id = 'my-model'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(source, "user", "user-defined entry must survive re-seed");
 
         // And the curated entry must still be present.
-        let curated_source: String = store.conn.query_row(
-            "SELECT source FROM local_models WHERE id = 'qwythos'",
-            [],
-            |r| r.get(0),
-        ).unwrap();
-        assert_eq!(curated_source, "curated", "curated entry must still be present");
+        let curated_source: String = store
+            .conn
+            .query_row(
+                "SELECT source FROM local_models WHERE id = 'qwythos'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            curated_source, "curated",
+            "curated entry must still be present"
+        );
     }
 
     #[test]
@@ -1811,11 +1891,14 @@ mod tests {
         };
         store.write_log(&row).unwrap();
 
-        let (sid, eid): (Option<String>, Option<String>) = store.conn.query_row(
-            "SELECT session_id, event_id FROM logs WHERE ts = 2000",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        ).unwrap();
+        let (sid, eid): (Option<String>, Option<String>) = store
+            .conn
+            .query_row(
+                "SELECT session_id, event_id FROM logs WHERE ts = 2000",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
         assert!(sid.is_none(), "system log must have NULL session_id");
         assert!(eid.is_none(), "system log must have NULL event_id");
     }
@@ -1827,8 +1910,24 @@ mod tests {
         let store = EventStore::open(dir.to_str().unwrap()).unwrap();
 
         // Insert entries at ts 1000 (old) and ts 5000 (recent).
-        let old = LogRow { ts: 1000, level: "warn".into(), scope: "system".into(), session_id: None, event_id: None, message: "old".into(), fields: None };
-        let recent = LogRow { ts: 5000, level: "warn".into(), scope: "system".into(), session_id: None, event_id: None, message: "recent".into(), fields: None };
+        let old = LogRow {
+            ts: 1000,
+            level: "warn".into(),
+            scope: "system".into(),
+            session_id: None,
+            event_id: None,
+            message: "old".into(),
+            fields: None,
+        };
+        let recent = LogRow {
+            ts: 5000,
+            level: "warn".into(),
+            scope: "system".into(),
+            session_id: None,
+            event_id: None,
+            message: "recent".into(),
+            fields: None,
+        };
         store.write_log(&old).unwrap();
         store.write_log(&recent).unwrap();
 
@@ -1842,9 +1941,15 @@ mod tests {
             .as_millis() as i64;
         store.purge_logs(now - 3000).unwrap();
 
-        let count: i64 = store.conn.query_row("SELECT COUNT(*) FROM logs", [], |r| r.get(0)).unwrap();
+        let count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM logs", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 1, "only the recent entry (ts=5000) should survive");
-        let msg: String = store.conn.query_row("SELECT message FROM logs", [], |r| r.get(0)).unwrap();
+        let msg: String = store
+            .conn
+            .query_row("SELECT message FROM logs", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(msg, "recent");
     }
 
@@ -1854,7 +1959,10 @@ mod tests {
         let _ = std::fs::remove_file(&dir);
         let store = EventStore::open(dir.to_str().unwrap()).unwrap();
         store.purge_logs(72 * 60 * 60 * 1000).unwrap();
-        let count: i64 = store.conn.query_row("SELECT COUNT(*) FROM logs", [], |r| r.get(0)).unwrap();
+        let count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM logs", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 0);
     }
 }

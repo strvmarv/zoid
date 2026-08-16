@@ -202,14 +202,26 @@ pub fn conversation_for_branch<'a>(
         }
         match &e.kind {
             EventKind::UserMessage { text: t } => {
-                flush(&mut text, &mut calls, &mut turn_ts, &mut out, pending_thinking.take());
+                flush(
+                    &mut text,
+                    &mut calls,
+                    &mut turn_ts,
+                    &mut out,
+                    pending_thinking.take(),
+                );
                 out.push(ChatMsg::User {
                     text: t.clone(),
                     ts: e.ts,
                 });
             }
             EventKind::AssistantMessage { text: t } => {
-                flush(&mut text, &mut calls, &mut turn_ts, &mut out, pending_thinking.take());
+                flush(
+                    &mut text,
+                    &mut calls,
+                    &mut turn_ts,
+                    &mut out,
+                    pending_thinking.take(),
+                );
                 out.push(ChatMsg::Assistant {
                     thinking: None,
                     text: t.clone(),
@@ -218,7 +230,13 @@ pub fn conversation_for_branch<'a>(
                 });
             }
             EventKind::ModelThinking { text: t } => {
-                flush(&mut text, &mut calls, &mut turn_ts, &mut out, pending_thinking.take());
+                flush(
+                    &mut text,
+                    &mut calls,
+                    &mut turn_ts,
+                    &mut out,
+                    pending_thinking.take(),
+                );
                 pending_thinking = Some(t.clone());
             }
             EventKind::ModelDelta { text: t } => {
@@ -243,10 +261,22 @@ pub fn conversation_for_branch<'a>(
                 // id — the card is the human-facing record.
                 if question_ids.contains(id.as_str()) {
                     // The assistant turn that made the call(s) still ends here.
-                    flush(&mut text, &mut calls, &mut turn_ts, &mut out, pending_thinking.take());
+                    flush(
+                        &mut text,
+                        &mut calls,
+                        &mut turn_ts,
+                        &mut out,
+                        pending_thinking.take(),
+                    );
                     continue;
                 }
-                flush(&mut text, &mut calls, &mut turn_ts, &mut out, pending_thinking.take());
+                flush(
+                    &mut text,
+                    &mut calls,
+                    &mut turn_ts,
+                    &mut out,
+                    pending_thinking.take(),
+                );
                 let (output, was_compacted) = match compacted.get(id.as_str()) {
                     Some(sum) => ((*sum).to_string(), true),
                     None => (output.clone(), false),
@@ -266,7 +296,13 @@ pub fn conversation_for_branch<'a>(
                 question,
                 choices,
             } => {
-                flush(&mut text, &mut calls, &mut turn_ts, &mut out, pending_thinking.take());
+                flush(
+                    &mut text,
+                    &mut calls,
+                    &mut turn_ts,
+                    &mut out,
+                    pending_thinking.take(),
+                );
                 let state = match answered.get(id.as_str()) {
                     Some(ans) => QuestionCardState::Answered {
                         answer: (*ans).to_string(),
@@ -290,7 +326,13 @@ pub fn conversation_for_branch<'a>(
                 // standalone conversation item.
             }
             EventKind::DelegationResult { summary, ok, .. } => {
-                flush(&mut text, &mut calls, &mut turn_ts, &mut out, pending_thinking.take());
+                flush(
+                    &mut text,
+                    &mut calls,
+                    &mut turn_ts,
+                    &mut out,
+                    pending_thinking.take(),
+                );
                 out.push(ChatMsg::Delegated {
                     summary: summary.clone(),
                     ok: *ok,
@@ -313,15 +355,26 @@ pub fn conversation_for_branch<'a>(
                 marker,
                 rescue,
             } => {
-                flush(&mut text, &mut calls, &mut turn_ts, &mut out, pending_thinking.take());
-                let evicted_topics: Vec<String> = marker.spans.iter().map(|s| s.topic_hint.clone()).collect();
+                flush(
+                    &mut text,
+                    &mut calls,
+                    &mut turn_ts,
+                    &mut out,
+                    pending_thinking.take(),
+                );
+                let evicted_topics: Vec<String> =
+                    marker.spans.iter().map(|s| s.topic_hint.clone()).collect();
                 let rescue = rescue.as_ref().map(|r| RescueSummary {
                     goal_text: r.goal_text.clone(),
                     weight: r.weight.round() as u32,
-                    rescued: r.survivors.iter().map(|s| RescuedTurnSummary {
-                        topic_hint: s.topic_hint.clone(),
-                        bump_milli: (s.rescue_bump * 1000.0).round() as u32,
-                    }).collect(),
+                    rescued: r
+                        .survivors
+                        .iter()
+                        .map(|s| RescuedTurnSummary {
+                            topic_hint: s.topic_hint.clone(),
+                            bump_milli: (s.rescue_bump * 1000.0).round() as u32,
+                        })
+                        .collect(),
                 });
                 out.push(ChatMsg::Evicted {
                     reclaimed_tokens: *reclaimed_tokens,
@@ -330,8 +383,7 @@ pub fn conversation_for_branch<'a>(
                     ts: e.ts,
                 });
             }
-            EventKind::TurnsReadmitted { .. }
-            | EventKind::DirectiveReasserted { .. } => {
+            EventKind::TurnsReadmitted { .. } | EventKind::DirectiveReasserted { .. } => {
                 // Metadata marker; not a conversation item. (Out of scope: rendering
                 // the in-context breadcrumb / recall filtering is a later slice.)
             }
@@ -340,7 +392,13 @@ pub fn conversation_for_branch<'a>(
             | EventKind::WakeCancelled { .. } => { /* bookkeeping: no conversation row */ }
         }
     }
-    flush(&mut text, &mut calls, &mut turn_ts, &mut out, pending_thinking.take());
+    flush(
+        &mut text,
+        &mut calls,
+        &mut turn_ts,
+        &mut out,
+        pending_thinking.take(),
+    );
     // If thinking was the last event with no following assistant message,
     // emit a standalone assistant message with empty text + the thinking.
     if let Some(thinking) = pending_thinking.take() {
@@ -424,7 +482,7 @@ mod tests {
                     ts: 0
                 },
                 ChatMsg::Assistant {
-                        thinking: None,
+                    thinking: None,
                     text: "let me look".into(),
                     tool_calls: vec![ToolCallRef {
                         id: "".into(),
@@ -462,7 +520,7 @@ mod tests {
         assert_eq!(
             conv[1],
             ChatMsg::Assistant {
-                    thinking: None,
+                thinking: None,
                 text: "".into(),
                 tool_calls: vec![ToolCallRef {
                     id: "".into(),
@@ -506,7 +564,7 @@ mod tests {
         assert_eq!(
             conv[1],
             ChatMsg::Assistant {
-                    thinking: None,
+                thinking: None,
                 text: "".into(),
                 tool_calls: vec![ToolCallRef {
                     id: "call_1".into(),
@@ -825,34 +883,42 @@ mod tests {
 
     #[test]
     fn conversation_emits_evicted_with_rescue_summary() {
-        use crate::eviction::{RescueRationale, RescuedTurn};
         use crate::event::{Event, EventKind, EvictedSpan, EvictionMarker};
+        use crate::eviction::{RescueRationale, RescuedTurn};
         use ulid::Ulid;
         let mk = |id: u128, k| Event::new(Ulid::from(id), None, id as i64, k);
         let events = vec![
             mk(1, EventKind::UserMessage { text: "old".into() }),
-            mk(2, EventKind::AssistantMessage { text: "reply".into() }),
-            mk(3, EventKind::TurnsEvicted {
-                ids: vec![Ulid::from(1u128)],
-                reclaimed_tokens: 500,
-                marker: EvictionMarker {
-                    spans: vec![EvictedSpan {
-                        token_estimate: 500,
-                        topic_hint: "old".into(),
-                    }],
+            mk(
+                2,
+                EventKind::AssistantMessage {
+                    text: "reply".into(),
                 },
-                rescue: Some(RescueRationale {
-                    goal_text: "implement rescue".into(),
-                    weight: 12.0,
-                    survivors: vec![RescuedTurn {
-                        ids: vec![Ulid::from(2u128)],
-                        topic_hint: "reply".into(),
-                        base_score: 1.0,
-                        rescue_bump: 8.4,
-                        keep_score: 9.4,
-                    }],
-                }),
-            }),
+            ),
+            mk(
+                3,
+                EventKind::TurnsEvicted {
+                    ids: vec![Ulid::from(1u128)],
+                    reclaimed_tokens: 500,
+                    marker: EvictionMarker {
+                        spans: vec![EvictedSpan {
+                            token_estimate: 500,
+                            topic_hint: "old".into(),
+                        }],
+                    },
+                    rescue: Some(RescueRationale {
+                        goal_text: "implement rescue".into(),
+                        weight: 12.0,
+                        survivors: vec![RescuedTurn {
+                            ids: vec![Ulid::from(2u128)],
+                            topic_hint: "reply".into(),
+                            base_score: 1.0,
+                            rescue_bump: 8.4,
+                            keep_score: 9.4,
+                        }],
+                    }),
+                },
+            ),
         ];
         let msgs = conversation(&events);
         // Find the Evicted message.

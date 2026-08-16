@@ -65,7 +65,10 @@ mod tests {
 
     #[test]
     fn last_valid_second_is_ok() {
-        assert_eq!(evaluate(BUILD + WINDOW_SECS, BUILD, WINDOW_SECS), Verdict::Ok);
+        assert_eq!(
+            evaluate(BUILD + WINDOW_SECS, BUILD, WINDOW_SECS),
+            Verdict::Ok
+        );
     }
 
     #[test]
@@ -78,7 +81,10 @@ mod tests {
 
     #[test]
     fn clock_before_build_is_flagged() {
-        assert_eq!(evaluate(BUILD - 1, BUILD, WINDOW_SECS), Verdict::ClockBeforeBuild);
+        assert_eq!(
+            evaluate(BUILD - 1, BUILD, WINDOW_SECS),
+            Verdict::ClockBeforeBuild
+        );
     }
 
     #[test]

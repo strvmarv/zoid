@@ -270,7 +270,10 @@ impl Visit for FieldGrab {
             "ttft_ms" => self.ttft_ms = value,
             "total_ms" => self.total_ms = value,
             "iterations" => self.iterations = value,
-            _ => { self.extra_fields.insert(field.name().to_string(), value.into()); }
+            _ => {
+                self.extra_fields
+                    .insert(field.name().to_string(), value.into());
+            }
         }
     }
     fn record_bool(&mut self, field: &Field, value: bool) {
@@ -280,7 +283,10 @@ impl Visit for FieldGrab {
                 self.cache_hit_present = true;
             }
             "proj_rebuilt" => self.proj_rebuilt = value,
-            _ => { self.extra_fields.insert(field.name().to_string(), value.into()); }
+            _ => {
+                self.extra_fields
+                    .insert(field.name().to_string(), value.into());
+            }
         }
     }
     fn record_str(&mut self, field: &Field, value: &str) {
@@ -289,7 +295,10 @@ impl Visit for FieldGrab {
             "name" => self.name = Some(value.to_string()),
             "ctx" => self.ctx = Some(value.to_string()),
             "message" => self.message = Some(value.to_string()),
-            _ => { self.extra_fields.insert(field.name().to_string(), value.into()); }
+            _ => {
+                self.extra_fields
+                    .insert(field.name().to_string(), value.into());
+            }
         }
     }
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
@@ -297,7 +306,8 @@ impl Visit for FieldGrab {
         if field.name() == "message" && self.message.is_none() {
             self.message = Some(format!("{value:?}"));
         } else if field.name() != "message" {
-            self.extra_fields.insert(field.name().to_string(), format!("{value:?}").into());
+            self.extra_fields
+                .insert(field.name().to_string(), format!("{value:?}").into());
         }
     }
 }
@@ -348,12 +358,7 @@ impl<S: tracing::Subscriber> Layer<S> for ObsLayer {
                 g.ctx.unwrap_or_default(),
                 g.message.clone().unwrap_or_default(),
             );
-            s.record_log(
-                now_ms(),
-                lvl,
-                &g.message.unwrap_or_default(),
-                fields,
-            );
+            s.record_log(now_ms(), lvl, &g.message.unwrap_or_default(), fields);
         }
     }
 }
@@ -552,7 +557,9 @@ mod tests {
     #[test]
     fn ring_buffer_captures_warn_and_error() {
         let state = Arc::new(Mutex::new(ObsState::default()));
-        let layer = ObsLayer { state: state.clone() };
+        let layer = ObsLayer {
+            state: state.clone(),
+        };
         let sub = tracing_subscriber::registry().with(layer);
         tracing::subscriber::with_default(sub, || {
             tracing::warn!("test warning");
@@ -570,23 +577,41 @@ mod tests {
     #[test]
     fn ring_buffer_captures_unknown_fields() {
         let state = Arc::new(Mutex::new(ObsState::default()));
-        let layer = ObsLayer { state: state.clone() };
+        let layer = ObsLayer {
+            state: state.clone(),
+        };
         let sub = tracing_subscriber::registry().with(layer);
         tracing::subscriber::with_default(sub, || {
-            tracing::warn!(branch = "test-branch", branch_oid = "abc123", head_oid = "def456", "worktree diagnostic");
+            tracing::warn!(
+                branch = "test-branch",
+                branch_oid = "abc123",
+                head_oid = "def456",
+                "worktree diagnostic"
+            );
         });
         let s = state.lock().unwrap();
         assert_eq!(s.logs.len(), 1);
         let fields = s.logs[0].fields.as_ref().expect("fields must be captured");
-        assert!(fields.contains("branch"), "fields must include branch: {fields}");
-        assert!(fields.contains("abc123"), "fields must include branch_oid: {fields}");
-        assert!(fields.contains("def456"), "fields must include head_oid: {fields}");
+        assert!(
+            fields.contains("branch"),
+            "fields must include branch: {fields}"
+        );
+        assert!(
+            fields.contains("abc123"),
+            "fields must include branch_oid: {fields}"
+        );
+        assert!(
+            fields.contains("def456"),
+            "fields must include head_oid: {fields}"
+        );
     }
 
     #[test]
     fn ring_buffer_drops_oldest_when_full() {
         let state = Arc::new(Mutex::new(ObsState::default()));
-        let layer = ObsLayer { state: state.clone() };
+        let layer = ObsLayer {
+            state: state.clone(),
+        };
         let sub = tracing_subscriber::registry().with(layer);
         tracing::subscriber::with_default(sub, || {
             for i in 0..(MAX_LOG_RING + 5) {
@@ -596,7 +621,10 @@ mod tests {
         let s = state.lock().unwrap();
         assert_eq!(s.logs.len(), MAX_LOG_RING, "ring must be at capacity");
         // The oldest 5 entries are dropped; the first remaining is index 5.
-        assert_eq!(s.logs[0].message, "fill entry 5", "oldest surviving entry should be entry 5");
+        assert_eq!(
+            s.logs[0].message, "fill entry 5",
+            "oldest surviving entry should be entry 5"
+        );
     }
 
     #[test]

@@ -12,12 +12,17 @@ pub fn hybrid_recall(fts_ids: &[Ulid], vector_ids: &[Ulid], limit: usize) -> Vec
     let mut order: Vec<Ulid> = Vec::new(); // first-seen order, for stable ties
     for list in [fts_ids, vector_ids] {
         for (rank, id) in list.iter().enumerate() {
-            let e = score.entry(*id).or_insert_with(|| { order.push(*id); 0.0 });
+            let e = score.entry(*id).or_insert_with(|| {
+                order.push(*id);
+                0.0
+            });
             *e += 1.0 / (RRF_K + rank as f32);
         }
     }
     order.sort_by(|a, b| {
-        score[b].partial_cmp(&score[a]).unwrap()
+        score[b]
+            .partial_cmp(&score[a])
+            .unwrap()
             .then_with(|| a.cmp(b)) // deterministic tie-break by id
     });
     order.truncate(limit);
@@ -27,7 +32,9 @@ pub fn hybrid_recall(fts_ids: &[Ulid], vector_ids: &[Ulid], limit: usize) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn id(n: u128) -> Ulid { Ulid::from(n) }
+    fn id(n: u128) -> Ulid {
+        Ulid::from(n)
+    }
 
     #[test]
     fn identical_lists_preserve_order() {

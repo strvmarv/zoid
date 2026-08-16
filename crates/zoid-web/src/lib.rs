@@ -3,8 +3,8 @@
 //! Tools in zoid-tools delegate to `search`/`fetch`; the agent loop calls them
 //! via the new `ToolKind::Network` async seam.
 
-pub(crate) mod search;
 pub(crate) mod extract;
+pub(crate) mod search;
 
 use std::time::Duration;
 
@@ -111,8 +111,8 @@ pub async fn fetch(url: &str, offset: usize, limit: usize) -> anyhow::Result<Fet
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::AsyncWriteExt;
     use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt;
 
     #[test]
     fn http_client_builds_with_user_agent() {
@@ -137,7 +137,8 @@ mod tests {
                 let _ = sock.read(&mut buf).await;
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
-                    html.len(), html
+                    html.len(),
+                    html
                 );
                 let _ = sock.write_all(resp.as_bytes()).await;
             }
@@ -170,8 +171,14 @@ ensure the article node wins the readability scoring against the nav.</p>
         let addr = spawn_html_server(ARTICLE_HTML).await;
         let r = fetch(&format!("http://{addr}"), 0, 100_000).await.unwrap();
         assert_eq!(r.title, "Test Page");
-        assert!(!r.content.trim().is_empty(), "content should be extracted markdown");
-        assert!(!r.outline.is_empty(), "first fetch (offset 0) includes outline");
+        assert!(
+            !r.content.trim().is_empty(),
+            "content should be extracted markdown"
+        );
+        assert!(
+            !r.outline.is_empty(),
+            "first fetch (offset 0) includes outline"
+        );
         assert_eq!(r.offset, 0);
     }
 
@@ -224,7 +231,10 @@ ensure the article node wins the readability scoring against the nav.</p>
     #[ignore]
     async fn live_ddg_search_returns_results() {
         let results = search("rust async trait").await.unwrap();
-        assert!(!results.is_empty(), "DDG should return results for a common query");
+        assert!(
+            !results.is_empty(),
+            "DDG should return results for a common query"
+        );
         assert!(!results[0].url.is_empty());
     }
 
@@ -232,7 +242,9 @@ ensure the article node wins the readability scoring against the nav.</p>
     #[tokio::test]
     #[ignore]
     async fn live_fetch_extracts_markdown() {
-        let r = fetch("https://doc.rust-lang.org/book/", 0, 5000).await.unwrap();
+        let r = fetch("https://doc.rust-lang.org/book/", 0, 5000)
+            .await
+            .unwrap();
         assert!(!r.content.is_empty(), "fetch should return content");
         assert!(!r.outline.is_empty(), "first fetch includes outline");
     }

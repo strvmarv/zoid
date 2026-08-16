@@ -20,12 +20,14 @@ pub(crate) fn extract_markdown(html: &str, url: &str) -> Result<(String, String)
     // content = the whole HTML passthrough and text = just the title. Detect
     // this: after markdown conversion, if the markdown is no longer than the
     // title (i.e. it's just the title or empty), there's no article body.
-    let markdown = htmd::convert(&product.content)
-        .map_err(|e| anyhow!("html→markdown failed: {e}"))?;
+    let markdown =
+        htmd::convert(&product.content).map_err(|e| anyhow!("html→markdown failed: {e}"))?;
     let md_trimmed = markdown.trim();
     let title_trimmed = product.title.trim();
     if md_trimmed.is_empty() || md_trimmed == title_trimmed {
-        return Err(anyhow!("no extractable content (page may be JS-only or empty)"));
+        return Err(anyhow!(
+            "no extractable content (page may be JS-only or empty)"
+        ));
     }
     Ok((product.title, markdown))
 }
@@ -41,10 +43,7 @@ pub(crate) fn build_outline(markdown: &str) -> Vec<HeadingMark> {
         if trimmed.starts_with('#') {
             let level = trimmed.chars().take_while(|c| *c == '#').count() as u8;
             if (1..=6).contains(&level) {
-                let text = trimmed
-                    .trim_start_matches('#')
-                    .trim()
-                    .to_string();
+                let text = trimmed.trim_start_matches('#').trim().to_string();
                 if !text.is_empty() {
                     out.push(HeadingMark {
                         level,
@@ -68,11 +67,7 @@ pub(crate) fn page(markdown: &str, offset: usize, limit: usize) -> Option<String
         return None;
     }
     let end = (offset + limit).min(total);
-    let window: String = markdown
-        .chars()
-        .skip(offset)
-        .take(end - offset)
-        .collect();
+    let window: String = markdown.chars().skip(offset).take(end - offset).collect();
     Some(window)
 }
 

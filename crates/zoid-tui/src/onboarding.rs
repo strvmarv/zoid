@@ -63,10 +63,7 @@ fn new_user_lines(offer_superpowers: bool, width: usize) -> Vec<Line<'static>> {
     lines.push(Line::from(""));
 
     // Intro (dim).
-    for w in crate::render::wrap_plain(
-        &format!("{indent}{NEW_USER_INTRO}"),
-        width,
-    ) {
+    for w in crate::render::wrap_plain(&format!("{indent}{NEW_USER_INTRO}"), width) {
         lines.push(Line::from(Span::styled(w, Style::new().fg(color::DIM))));
     }
 
@@ -74,29 +71,33 @@ fn new_user_lines(offer_superpowers: bool, width: usize) -> Vec<Line<'static>> {
     for prompt in NEW_USER_PROMPTS {
         let row = format!("{indent}  {} {}", glyph::USER_TURN, prompt);
         for w in crate::render::wrap_plain(&row, width) {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    // The › marker is the first non-space char; wrap_plain may
-                    // break a long prompt across lines, but the marker only
-                    // appears on the first row. For wrapped continuations the
-                    // whole row is TXT (the marker is embedded in the string).
-                    w.clone(),
-                    Style::new().fg(color::TXT),
-                ),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                // The › marker is the first non-space char; wrap_plain may
+                // break a long prompt across lines, but the marker only
+                // appears on the first row. For wrapped continuations the
+                // whole row is TXT (the marker is embedded in the string).
+                w.clone(),
+                Style::new().fg(color::TXT),
+            )]));
         }
     }
 
     if offer_superpowers {
         lines.push(Line::from(""));
         for w in wrap_title(indent, SUPERPOWERS_OFFER, width) {
-            lines.push(Line::from(Span::styled(w, Style::new().fg(color::CHAT_ACCENT))));
+            lines.push(Line::from(Span::styled(
+                w,
+                Style::new().fg(color::CHAT_ACCENT),
+            )));
         }
     }
 
     lines.push(Line::from(""));
     for w in wrap_title(indent, HELP_HINT, width) {
-        lines.push(Line::from(Span::styled(w, Style::new().fg(color::CHAT_ACCENT))));
+        lines.push(Line::from(Span::styled(
+            w,
+            Style::new().fg(color::CHAT_ACCENT),
+        )));
     }
 
     lines
@@ -118,7 +119,10 @@ fn returning_user_lines(width: usize) -> Vec<Line<'static>> {
             .collect();
     lines.push(Line::from(""));
     for w in wrap_title("  ", HELP_HINT, width) {
-        lines.push(Line::from(Span::styled(w, Style::new().fg(color::CHAT_ACCENT))));
+        lines.push(Line::from(Span::styled(
+            w,
+            Style::new().fg(color::CHAT_ACCENT),
+        )));
     }
     lines
 }
@@ -152,9 +156,10 @@ mod tests {
         }
         // The title line carries the accent color.
         assert!(
-            lines
+            lines.iter().any(|l| l
+                .spans
                 .iter()
-                .any(|l| l.spans.iter().any(|s| s.style.fg == Some(color::CHAT_ACCENT))),
+                .any(|s| s.style.fg == Some(color::CHAT_ACCENT))),
             "at least one line must use the accent color"
         );
     }
@@ -211,9 +216,11 @@ mod tests {
 
     #[test]
     fn superpowers_offer_line_shown_only_when_offered() {
-        let joined = |ls: &[ratatui::text::Line]| ls.iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
-            .collect::<String>();
+        let joined = |ls: &[ratatui::text::Line]| {
+            ls.iter()
+                .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+                .collect::<String>()
+        };
         let with = empty_state_lines(true, true, 80);
         let without = empty_state_lines(true, false, 80);
         assert!(joined(&with).contains(":plugin install superpowers"));

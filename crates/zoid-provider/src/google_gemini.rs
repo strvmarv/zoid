@@ -96,7 +96,10 @@ pub fn parse_chunk(obj: &Value) -> Vec<ProviderEvent> {
             {
                 for part in parts {
                     // thought part (only present when includeThoughts true)
-                    let is_thought = part.get("thought").and_then(|t| t.as_bool()).unwrap_or(false);
+                    let is_thought = part
+                        .get("thought")
+                        .and_then(|t| t.as_bool())
+                        .unwrap_or(false);
                     if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
                         if !text.is_empty() {
                             out.push(if is_thought {
@@ -107,9 +110,21 @@ pub fn parse_chunk(obj: &Value) -> Vec<ProviderEvent> {
                         }
                     }
                     if let Some(fc) = part.get("functionCall") {
-                        let id = fc.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
-                        let name = fc.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
-                        let args = fc.get("args").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
+                        let id = fc
+                            .get("id")
+                            .and_then(|i| i.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let name = fc
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let args = fc
+                            .get("args")
+                            .cloned()
+                            .filter(Value::is_object)
+                            .unwrap_or_else(|| json!({}));
                         out.push(ProviderEvent::ToolCall(ToolCall { id, name, args }));
                     }
                 }
@@ -140,9 +155,18 @@ pub fn parse_chunk(obj: &Value) -> Vec<ProviderEvent> {
     // (see spike research, 2026-07-10/2026-07-11).
     if let Some(usage) = obj.get("usageMetadata") {
         if let Some(prompt_tokens) = usage.get("promptTokenCount").and_then(|n| n.as_u64()) {
-            let output = usage.get("candidatesTokenCount").and_then(|n| n.as_u64()).unwrap_or(0);
-            let cached = usage.get("cachedContentTokenCount").and_then(|n| n.as_u64()).unwrap_or(0);
-            let thinking = usage.get("thoughtsTokenCount").and_then(|n| n.as_u64()).unwrap_or(0);
+            let output = usage
+                .get("candidatesTokenCount")
+                .and_then(|n| n.as_u64())
+                .unwrap_or(0);
+            let cached = usage
+                .get("cachedContentTokenCount")
+                .and_then(|n| n.as_u64())
+                .unwrap_or(0);
+            let thinking = usage
+                .get("thoughtsTokenCount")
+                .and_then(|n| n.as_u64())
+                .unwrap_or(0);
             out.push(ProviderEvent::Usage(Usage {
                 input_tokens: prompt_tokens,
                 output_tokens: output,
@@ -295,8 +319,7 @@ impl Provider for GoogleGeminiProvider {
             .await?;
         let body = resp.text().await?;
         let v: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
-        Ok(v
-            .get("models")
+        Ok(v.get("models")
             .and_then(|m| m.as_array())
             .map(|arr| {
                 arr.iter()
@@ -372,7 +395,10 @@ mod tests {
             reassert: None,
         };
         let (_, body) = request_body(&req, "m");
-        assert_eq!(body["tools"][0]["functionDeclarations"][0]["name"], "read_file");
+        assert_eq!(
+            body["tools"][0]["functionDeclarations"][0]["name"],
+            "read_file"
+        );
     }
 
     #[test]
@@ -405,8 +431,14 @@ mod tests {
         assert_eq!(contents[1]["role"], "model");
         assert_eq!(contents[1]["parts"][0]["functionCall"]["name"], "read_file");
         assert_eq!(contents[2]["role"], "user");
-        assert_eq!(contents[2]["parts"][0]["functionResponse"]["name"], "read_file");
-        assert_eq!(contents[2]["parts"][0]["functionResponse"]["response"]["content"], "file body");
+        assert_eq!(
+            contents[2]["parts"][0]["functionResponse"]["name"],
+            "read_file"
+        );
+        assert_eq!(
+            contents[2]["parts"][0]["functionResponse"]["response"]["content"],
+            "file body"
+        );
     }
 
     #[test]
@@ -421,7 +453,10 @@ mod tests {
             reassert: None,
         };
         let (_, body) = request_body(&req, "m");
-        assert_eq!(body["generationConfig"]["thinkingConfig"]["includeThoughts"], true);
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"]["includeThoughts"],
+            true
+        );
     }
 
     #[test]
@@ -431,7 +466,10 @@ mod tests {
                 "content": { "role": "model", "parts": [{ "text": "Hel" }] }
             }]
         });
-        assert_eq!(parse_chunk(&chunk), vec![ProviderEvent::TextDelta("Hel".into())]);
+        assert_eq!(
+            parse_chunk(&chunk),
+            vec![ProviderEvent::TextDelta("Hel".into())]
+        );
     }
 
     #[test]
@@ -482,7 +520,10 @@ mod tests {
             }]
         });
         let out = parse_chunk(&chunk);
-        assert!(out.is_empty(), "empty-text thoughtSignature part yields nothing: got {out:?}");
+        assert!(
+            out.is_empty(),
+            "empty-text thoughtSignature part yields nothing: got {out:?}"
+        );
     }
 
     #[test]
@@ -502,7 +543,8 @@ mod tests {
         });
         let out = parse_chunk(&chunk);
         assert!(
-            out.iter().any(|e| matches!(e, ProviderEvent::Error(msg) if msg.contains("SAFETY"))),
+            out.iter()
+                .any(|e| matches!(e, ProviderEvent::Error(msg) if msg.contains("SAFETY"))),
             "blocked request must yield Error: got {out:?}"
         );
     }
@@ -612,7 +654,9 @@ mod tests {
         while let Some(ev) = rx.recv().await {
             got.push(ev);
         }
-        assert!(got.iter().any(|e| matches!(e, ProviderEvent::TextDelta(t) if t == "hi")));
+        assert!(got
+            .iter()
+            .any(|e| matches!(e, ProviderEvent::TextDelta(t) if t == "hi")));
         assert!(got.iter().any(|e| matches!(e, ProviderEvent::Done)));
     }
 }

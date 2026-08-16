@@ -105,9 +105,7 @@ enum Cmd {
         reply: oneshot::Sender<Result<()>>,
     },
     /// Create/refresh the `local_models` table (curated seed). Boot-time, once.
-    SeedLocalModels {
-        reply: oneshot::Sender<Result<()>>,
-    },
+    SeedLocalModels { reply: oneshot::Sender<Result<()>> },
     /// Write one log entry to the `logs` table.
     WriteLog {
         row: crate::store::LogRow,
@@ -227,7 +225,11 @@ impl SessionHandle {
                     } => {
                         let _ = reply.send(store.write_embedding(event_id, &model_id, &vector));
                     }
-                    Cmd::VectorsByIds { model_id, ids, reply } => {
+                    Cmd::VectorsByIds {
+                        model_id,
+                        ids,
+                        reply,
+                    } => {
                         let _ = reply.send(store.vectors_by_ids(&model_id, &ids));
                     }
                     Cmd::LoadRecentEmbeddings {
@@ -534,7 +536,11 @@ impl SessionHandle {
     ) -> Result<std::collections::HashMap<Ulid, Vec<f32>>> {
         let (reply, rx) = oneshot::channel();
         self.tx
-            .send(Cmd::VectorsByIds { model_id, ids, reply })
+            .send(Cmd::VectorsByIds {
+                model_id,
+                ids,
+                reply,
+            })
             .await
             .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
         rx.await
@@ -753,14 +759,20 @@ mod tests {
         h.append(ev).await.unwrap();
 
         assert_eq!(
-            h.unembedded_events("bge".into(), sid, 10).await.unwrap().len(),
+            h.unembedded_events("bge".into(), sid, 10)
+                .await
+                .unwrap()
+                .len(),
             1
         );
         h.write_embedding(Ulid::from(10u128), "bge".into(), vec![0.5, 0.5])
             .await
             .unwrap();
         assert_eq!(
-            h.unembedded_events("bge".into(), sid, 10).await.unwrap().len(),
+            h.unembedded_events("bge".into(), sid, 10)
+                .await
+                .unwrap()
+                .len(),
             0
         );
         let loaded = h.load_recent_embeddings("bge".into(), 10).await.unwrap();
@@ -776,7 +788,10 @@ mod tests {
     async fn delete_session_removes_session() {
         let store = SessionHandle::spawn(":memory:").unwrap();
         let sid = Ulid::new();
-        store.new_session(sid, "test".into(), "/repo".into(), 0).await.unwrap();
+        store
+            .new_session(sid, "test".into(), "/repo".into(), 0)
+            .await
+            .unwrap();
         // Confirm it exists.
         let before = store.list_sessions(None).await.unwrap();
         assert!(before.iter().any(|s| s.id == sid));
@@ -784,13 +799,18 @@ mod tests {
         store.delete_session(sid).await.unwrap();
         // Confirm it's gone.
         let after = store.list_sessions(None).await.unwrap();
-        assert!(!after.iter().any(|s| s.id == sid), "session must be deleted");
+        assert!(
+            !after.iter().any(|s| s.id == sid),
+            "session must be deleted"
+        );
     }
 
     #[tokio::test]
     async fn handle_vectors_by_ids_round_trips() {
         let h = SessionHandle::spawn(":memory:").unwrap();
-        h.write_embedding(Ulid::from(10u128), "bge".into(), vec![1.0, 0.0]).await.unwrap();
+        h.write_embedding(Ulid::from(10u128), "bge".into(), vec![1.0, 0.0])
+            .await
+            .unwrap();
         let got = h
             .vectors_by_ids("bge".into(), vec![Ulid::from(10u128), Ulid::from(20u128)])
             .await
@@ -845,11 +865,12 @@ mod tests {
 
         // Re-open and verify.
         let store = crate::store::EventStore::open(dir.to_str().unwrap()).unwrap();
-        let msg: String = store.conn.query_row(
-            "SELECT message FROM logs WHERE ts = 42000",
-            [],
-            |r| r.get(0),
-        ).unwrap();
+        let msg: String = store
+            .conn
+            .query_row("SELECT message FROM logs WHERE ts = 42000", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
         assert_eq!(msg, "test via handle");
     }
 
@@ -862,7 +883,10 @@ mod tests {
         drop(h);
 
         let store = crate::store::EventStore::open(dir.to_str().unwrap()).unwrap();
-        let count: i64 = store.conn.query_row("SELECT COUNT(*) FROM logs", [], |r| r.get(0)).unwrap();
+        let count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM logs", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 0);
     }
 }

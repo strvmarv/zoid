@@ -3,9 +3,9 @@
 
 use crate::{Tool, ToolKind, ToolOutput, ToolSpec};
 use serde_json::{json, Value};
+use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
-use std::future::Future;
 use zoid_web::SearchResult;
 
 pub struct WebSearch;
@@ -95,8 +95,14 @@ mod tests {
         }];
         let out = format_results(&results);
         assert!(out.contains("1. [Rust Async](https://doc.rust-lang.org/async-book/)"));
-        assert!(out.contains(UNTRUSTED_OPEN), "snippet wrapped in untrusted open: {out}");
-        assert!(out.contains(UNTRUSTED_CLOSE), "snippet wrapped in untrusted close: {out}");
+        assert!(
+            out.contains(UNTRUSTED_OPEN),
+            "snippet wrapped in untrusted open: {out}"
+        );
+        assert!(
+            out.contains(UNTRUSTED_CLOSE),
+            "snippet wrapped in untrusted close: {out}"
+        );
         assert!(out.contains("Async/await in Rust"));
     }
 

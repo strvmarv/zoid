@@ -323,7 +323,9 @@ impl Provider for EmitToolCallThenStall {
 /// A stub Network tool whose `run_async` sleeps, for hard-cancel testing.
 struct SlowNetworkTool;
 impl zoid_tools::Tool for SlowNetworkTool {
-    fn name(&self) -> &str { "slow_network" }
+    fn name(&self) -> &str {
+        "slow_network"
+    }
     fn spec(&self) -> zoid_provider::ToolSpec {
         zoid_provider::ToolSpec {
             name: "slow_network".into(),
@@ -334,9 +336,14 @@ impl zoid_tools::Tool for SlowNetworkTool {
     fn run(&self, _: &serde_json::Value, _: &std::path::Path) -> zoid_tools::ToolOutput {
         unreachable!("Network tool: run() never called")
     }
-    fn kind(&self) -> zoid_tools::ToolKind { zoid_tools::ToolKind::Network }
-    fn run_async(&self, _: &serde_json::Value, _: &std::path::Path)
-        -> std::pin::Pin<Box<dyn std::future::Future<Output = zoid_tools::ToolOutput> + Send + '_>>
+    fn kind(&self) -> zoid_tools::ToolKind {
+        zoid_tools::ToolKind::Network
+    }
+    fn run_async(
+        &self,
+        _: &serde_json::Value,
+        _: &std::path::Path,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = zoid_tools::ToolOutput> + Send + '_>>
     {
         Box::pin(async {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
@@ -349,7 +356,9 @@ impl zoid_tools::Tool for SlowNetworkTool {
 /// happy-path test (asserts the ToolResult flows back like a Local tool).
 struct FastNetworkTool;
 impl zoid_tools::Tool for FastNetworkTool {
-    fn name(&self) -> &str { "fast_network" }
+    fn name(&self) -> &str {
+        "fast_network"
+    }
     fn spec(&self) -> zoid_provider::ToolSpec {
         zoid_provider::ToolSpec {
             name: "fast_network".into(),
@@ -360,9 +369,14 @@ impl zoid_tools::Tool for FastNetworkTool {
     fn run(&self, _: &serde_json::Value, _: &std::path::Path) -> zoid_tools::ToolOutput {
         unreachable!("Network tool: run() never called")
     }
-    fn kind(&self) -> zoid_tools::ToolKind { zoid_tools::ToolKind::Network }
-    fn run_async(&self, _: &serde_json::Value, _: &std::path::Path)
-        -> std::pin::Pin<Box<dyn std::future::Future<Output = zoid_tools::ToolOutput> + Send + '_>>
+    fn kind(&self) -> zoid_tools::ToolKind {
+        zoid_tools::ToolKind::Network
+    }
+    fn run_async(
+        &self,
+        _: &serde_json::Value,
+        _: &std::path::Path,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = zoid_tools::ToolOutput> + Send + '_>>
     {
         Box::pin(async { zoid_tools::ToolOutput::ok("network-ok") })
     }
@@ -530,7 +544,10 @@ async fn network_tool_hard_cancel_yields_killed_result() {
     .unwrap();
 
     let complete = drain.await.unwrap();
-    assert!(complete, "TurnComplete must fire even when the turn is cancelled");
+    assert!(
+        complete,
+        "TurnComplete must fire even when the turn is cancelled"
+    );
 
     let log = session.snapshot().await.unwrap();
     assert!(
@@ -600,7 +617,10 @@ async fn network_tool_happy_path_flows_tool_result() {
     .unwrap();
 
     let complete = drain.await.unwrap();
-    assert!(complete, "TurnComplete must fire after the network tool returns");
+    assert!(
+        complete,
+        "TurnComplete must fire after the network tool returns"
+    );
 
     let log = session.snapshot().await.unwrap();
     assert!(
@@ -845,7 +865,10 @@ async fn gate_prompt_deny_blocks_tool() {
 
     let _ = drain.await;
     assert!(!path.exists(), "denied command must not execute");
-    assert!(events.iter().any(|e| {
-        matches!(&e.kind, EventKind::ToolResult { is_error, .. } if *is_error)
-    }), "denied prompt must produce an error ToolResult");
+    assert!(
+        events
+            .iter()
+            .any(|e| { matches!(&e.kind, EventKind::ToolResult { is_error, .. } if *is_error) }),
+        "denied prompt must produce an error ToolResult"
+    );
 }

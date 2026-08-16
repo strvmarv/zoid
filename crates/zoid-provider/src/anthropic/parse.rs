@@ -514,10 +514,7 @@ mod tests {
         };
         let mut acc = ToolUseAccumulator::default();
         let events = event(frame, &mut acc);
-        assert_eq!(
-            events,
-            vec![ProviderEvent::ThinkingSignature("sig".into())]
-        );
+        assert_eq!(events, vec![ProviderEvent::ThinkingSignature("sig".into())]);
     }
 
     #[test]

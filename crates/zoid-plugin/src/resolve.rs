@@ -66,7 +66,10 @@ mod tests {
 
     #[test]
     fn classify_ref_distinguishes_url_from_id() {
-        assert_eq!(classify_ref("superpowers"), PluginRef::Id("superpowers".into()));
+        assert_eq!(
+            classify_ref("superpowers"),
+            PluginRef::Id("superpowers".into())
+        );
         assert_eq!(
             classify_ref("github.com/obra/superpowers/tree/main/skills"),
             PluginRef::Url("github.com/obra/superpowers/tree/main/skills".into())
@@ -89,20 +92,29 @@ mod tests {
     #[test]
     fn unknown_id_resolves_to_catalog() {
         let r = PluginRef::Id("ok-skills".into());
-        assert_eq!(resolve_source(&r, &["superpowers"], false, false), ManifestSource::Catalog);
+        assert_eq!(
+            resolve_source(&r, &["superpowers"], false, false),
+            ManifestSource::Catalog
+        );
     }
 
     #[test]
     fn known_id_still_bundled() {
         let r = PluginRef::Id("superpowers".into());
-        assert_eq!(resolve_source(&r, &["superpowers"], false, false), ManifestSource::Bundled);
+        assert_eq!(
+            resolve_source(&r, &["superpowers"], false, false),
+            ManifestSource::Bundled
+        );
     }
 
     #[test]
     fn url_prefers_repo_manifest_then_bundled_then_wizard() {
         let r = PluginRef::Url("github.com/o/r/tree/main/skills".into());
         assert_eq!(resolve_source(&r, &[], true, false), ManifestSource::Repo);
-        assert_eq!(resolve_source(&r, &[], false, true), ManifestSource::Bundled);
+        assert_eq!(
+            resolve_source(&r, &[], false, true),
+            ManifestSource::Bundled
+        );
         assert_eq!(
             resolve_source(&r, &[], false, false),
             ManifestSource::WizardFallback

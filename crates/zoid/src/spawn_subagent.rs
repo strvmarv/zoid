@@ -194,7 +194,10 @@ mod tests {
     fn abort_summary_uses_reason_label() {
         // A killed/timed-out subagent must surface its reason in the summary.
         let s = super::abort_summary(Some(crate::agent::AbortReason::IdleTimeout));
-        assert!(s.contains("idle timeout"), "summary carries the reason: {s}");
+        assert!(
+            s.contains("idle timeout"),
+            "summary carries the reason: {s}"
+        );
         let s2 = super::abort_summary(None);
         assert!(!s2.is_empty(), "a reasonless abort still has a summary");
     }

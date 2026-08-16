@@ -25,11 +25,17 @@ pub fn build(req: &CompletionRequest) -> AnthropicRequest {
     };
     if let Some(text) = &req.reassert {
         if let Some(last) = out.messages.last_mut() {
-            let block = ContentBlock::Text { text: format!("\n\n{text}"), cache_control: None };
+            let block = ContentBlock::Text {
+                text: format!("\n\n{text}"),
+                cache_control: None,
+            };
             match &mut last.content {
                 MessageContent::Text(s) => {
                     last.content = MessageContent::Blocks(vec![
-                        ContentBlock::Text { text: std::mem::take(s), cache_control: None },
+                        ContentBlock::Text {
+                            text: std::mem::take(s),
+                            cache_control: None,
+                        },
                         block,
                     ]);
                 }
@@ -102,15 +108,12 @@ pub fn thinking_betas(req: &CompletionRequest) -> Vec<String> {
     let info = crate::model::model_info(&req.model);
     match req.thinking {
         crate::ThinkingMode::Off => Vec::new(),
-        crate::ThinkingMode::Auto | crate::ThinkingMode::Effort(_) => {
-            match info.thinking {
-                crate::model::ThinkingSupport::Budget
-                | crate::model::ThinkingSupport::Adaptive => {
-                    vec!["extended-thinking-2025-05-14".into()]
-                }
-                _ => Vec::new(),
+        crate::ThinkingMode::Auto | crate::ThinkingMode::Effort(_) => match info.thinking {
+            crate::model::ThinkingSupport::Budget | crate::model::ThinkingSupport::Adaptive => {
+                vec!["extended-thinking-2025-05-14".into()]
             }
-        }
+            _ => Vec::new(),
+        },
     }
 }
 
@@ -536,8 +539,13 @@ mod tests {
         let body = serde_json::to_value(build(&r)).unwrap();
         let msgs = body["messages"].as_array().unwrap();
         let last = msgs.last().unwrap();
-        assert_eq!(last["role"], "user", "tail stays user-role (alternation preserved)");
-        assert!(serde_json::to_string(&last["content"]).unwrap().contains("STANDING REMINDER"));
+        assert_eq!(
+            last["role"], "user",
+            "tail stays user-role (alternation preserved)"
+        );
+        assert!(serde_json::to_string(&last["content"])
+            .unwrap()
+            .contains("STANDING REMINDER"));
         assert_eq!(msgs.len(), 1, "no new trailing message added");
     }
 
@@ -546,7 +554,9 @@ mod tests {
         let r = req(vec![Message::user("hi")], vec![], None);
         let mut r2 = r.clone();
         r2.reassert = None;
-        assert_eq!(serde_json::to_value(build(&r)).unwrap(), serde_json::to_value(build(&r2)).unwrap());
+        assert_eq!(
+            serde_json::to_value(build(&r)).unwrap(),
+            serde_json::to_value(build(&r2)).unwrap()
+        );
     }
-
 }
