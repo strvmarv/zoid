@@ -38,6 +38,7 @@ fn build_session(n_turns: u128, tool_calls_per_turn: usize, tool_result_chars: u
                 name: "read_file".into(),
                 output,
                 is_error: false,
+                error_kind: None,
             }));
             id += 1;
         }

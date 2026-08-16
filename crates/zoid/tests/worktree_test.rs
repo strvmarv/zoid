@@ -2,8 +2,14 @@ use std::path::Path;
 use zoid::worktree::create_worktree;
 
 /// Init a git repo at `dir` with one committed file (worktrees need a HEAD).
+/// Also sets local git identity so CLI `git commit` commands in tests work
+/// in CI environments with no global git config.
 fn init_repo(dir: &Path) {
     let repo = git2::Repository::init(dir).unwrap();
+    // Set local identity so `git commit` via CLI works without global config.
+    let mut config = repo.config().unwrap();
+    config.set_str("user.name", "zoid-test").unwrap();
+    config.set_str("user.email", "zoid-test@example.com").unwrap();
     std::fs::write(dir.join("a.txt"), "hi").unwrap();
     let mut idx = repo.index().unwrap();
     idx.add_path(Path::new("a.txt")).unwrap();
@@ -366,7 +372,7 @@ fn exit_worktree_retains_branch_with_unmerged_commits() {
     );
 
     // The production code path: delete_branch = !has_unmerged = false → branch retained.
-    zoid::worktree::remove_worktree(tmp.path(), &name, !has_unmerged);
+    let _ = zoid::worktree::remove_worktree(tmp.path(), &name, !has_unmerged);
 
     // Verify: worktree dir removed, branch retained.
     assert!(!wt_path.exists(), "worktree dir removed");

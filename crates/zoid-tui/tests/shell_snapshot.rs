@@ -922,8 +922,10 @@ fn config_overlay_frame() {
 
     let mut s = ShellState::new();
     s.overlay = Overlay::Config;
-    let mut cfg = Config::default();
-    cfg.provider = "ollama".into(); // pin a configured provider (default is now the empty unconfigured sentinel)
+    let mut cfg = Config {
+        provider: "ollama".into(), // pin a configured provider (default is now the empty unconfigured sentinel)
+        ..Config::default()
+    };
     let prov = Provenance {
         // all Default except model, shadowed by env.
         provider: Source::Default,
@@ -1014,8 +1016,10 @@ fn config_overlay_provider_picker() {
     s.config_section = 0;
     s.config_field = 0; // "provider" row
     s.config_col = ConfigCol::Picker;
-    let mut cfg = Config::default();
-    cfg.provider = "ollama".into(); // pin a configured provider (default is now the empty unconfigured sentinel)
+    let mut cfg = Config {
+        provider: "ollama".into(), // pin a configured provider (default is now the empty unconfigured sentinel)
+        ..Config::default()
+    };
     let prov = Provenance {
         provider: Source::Default,
         subagent_idle_timeout_secs: Source::Default,
@@ -1154,8 +1158,10 @@ fn config_overlay_narrow_degrades() {
     s.config_section = 0;
     s.config_field = 0; // "provider" row
     s.config_col = ConfigCol::Picker;
-    let mut cfg = Config::default();
-    cfg.provider = "ollama".into(); // pin a configured provider (default is now the empty unconfigured sentinel)
+    let mut cfg = Config {
+        provider: "ollama".into(), // pin a configured provider (default is now the empty unconfigured sentinel)
+        ..Config::default()
+    };
     let prov = Provenance {
         provider: Source::Default,
         subagent_idle_timeout_secs: Source::Default,
