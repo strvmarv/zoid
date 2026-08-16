@@ -1786,6 +1786,7 @@ async fn run_turn_inner(
                             continue;
                         }
                     }
+                    dispatched_this_turn = true;
                     // Pool check: if the global in-flight set is at capacity, queue
                     // the dispatch instead of spawning. Returns a non-error "queued"
                     // tool result and signals the main loop to enqueue the subagent;
