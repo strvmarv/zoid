@@ -1823,6 +1823,7 @@ async fn run_turn_inner(
                                          wait for its DelegationResult."
                                     ),
                                     is_error: false,
+                                    error_kind: None,
                                 },
                                 session_id,
                                 now,
