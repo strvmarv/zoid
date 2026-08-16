@@ -88,13 +88,23 @@ directory can be deleted:
 
 ### Design
 
-**Pre-check in the agent loop:** Before dispatching any tool call (both Local
-and Network arms), the agent loop checks `cwd.exists()`. If the CWD no longer
+**Pre-check in the agent loop:** Before dispatching a tool call in the Local
+and Network arms, the agent loop checks `cwd.exists()`. If the CWD no longer
 exists, it short-circuits: instead of running the tool, it returns a
 `ToolOutput::err_kind(ErrorKind::CwdDeleted, ...)` with a recovery message.
 
+**Emitting tools are explicitly exempt** from the pre-check. `exit_worktree`
+and `enter_worktree` are `ToolKind::Emitting` — handled in a separate dispatch
+arm that does not use `cwd` for file operations. `exit_worktree` is the
+recovery action the pre-check tells the model to call; short-circuiting it
+would trap the agent in a deleted-CWD state with no escape. The check belongs
+only in the Local and Network arms, not above the `ToolKind` match.
+
 The check is a single `Path::exists()` syscall — negligible overhead per tool
-call.
+call. For Network tools (`web_search`, `web_fetch`) the check is technically a
+no-op (they ignore `cwd`), but running it uniformly avoids a per-tool
+branching decision and catches the case where a Network tool is later modified
+to touch the filesystem.
 
 **New ErrorKind variant:**
 
@@ -106,11 +116,19 @@ CwdDeleted,
 
 **Recovery message format:**
 
+When the agent loop knows it is in a worktree (it tracks `cwd_for_exec` and
+handles `WorktreeAction`), the message is unambiguous:
+
 ```
-[error: cwd_deleted] The working directory "{cwd}" no longer exists. If you
-are in a worktree, call exit_worktree to return to the main checkout. If you
-deleted the directory intentionally, navigate to an existing directory first
-(e.g., cd to the repo root before running another command).
+[error: cwd_deleted] You are in a worktree — the working directory "{cwd}" no
+longer exists. Call exit_worktree to return to the main checkout.
+```
+
+When not in a worktree (CWD is the main checkout or a user-specified dir):
+
+```
+[error: cwd_deleted] The working directory "{cwd}" no longer exists. Navigate
+to an existing directory (e.g., the repo root) before running another command.
 ```
 
 The message is intentionally prescriptive — it tells the model exactly what to
@@ -129,9 +147,19 @@ happen once per tool call.
 
 **Interaction with the `ToolOutput`/`ErrorKind` changes:** The CWD-deleted
 check produces a `ToolOutput` with `ErrorKind::CwdDeleted` before the tool is
-ever called, so the tool's own error paths are never reached. The
+called, so the tool's own error paths are not reached in the common case. The
 `EventKind::ToolResult` for a CWD-deleted short-circuit carries
 `error_kind: Some(CwdDeleted)` like any other error.
+
+**TOCTOU race:** `cwd.exists()` can pass and the CWD can be deleted before the
+tool's file operation runs (e.g., a sibling `worktree: false` subagent deletes
+the CWD between the pre-check and the tool's `current_dir(cwd)`/file op). In
+this race window, the tool hits its own OS-error path and is categorized
+according to that tool's error mapping (typically `Internal` for a generic
+"No such file or directory"). This is acceptable — the pre-check catches the
+common case (CWD already gone at dispatch time); the tool's error handling is
+the fallback for the race. The spec does not overclaim that the pre-check
+eliminates all CWD-deletion errors.
 
 ### Testing
 
@@ -169,7 +197,7 @@ pub enum ErrorKind {
     /// OS-level permission failure (write to read-only path, dir read denied).
     PermissionDenied,
     /// Ambiguous or precondition failure (edit: `old_string` ambiguous or not
-    /// found, write: path exists and can't overwrite).
+    /// found).
     Conflict,
     /// The working directory was deleted out from under the agent. Recovery:
     /// call exit_worktree (if in a worktree) or navigate to an existing
@@ -208,7 +236,11 @@ tool at a time.
 
 ### Layer 2: `zoid-core` — Event propagation
 
-`EventKind::ToolResult` gains `error_kind: Option<ErrorKind>`:
+`EventKind::ToolResult` gains `error_kind: Option<ErrorKind>`. Since
+`EventKind` is `#[derive(Serialize, Deserialize)]` and persisted to SQLite
+(`store.rs` does `serde_json::to_string`/`from_str`), the new field **must**
+have `#[serde(default)]` so existing sessions on disk (which lack the field)
+deserialize successfully as `error_kind: None`:
 
 ```rust
 ToolResult {
@@ -216,10 +248,15 @@ ToolResult {
     name: String,
     output: String,
     is_error: bool,
+    #[serde(default)]
     error_kind: Option<ErrorKind>,  // new
-    // ... existing fields ...
 }
 ```
+
+`ErrorKind` itself must also derive `Serialize, Deserialize` (it's carried
+inside the persisted event). Add a test that deserializes a legacy
+`ToolResult` JSON (without the `error_kind` field) and asserts
+`error_kind: None`.
 
 The agent loop, when constructing a `ToolResult` event from a `ToolOutput`:
 
@@ -230,10 +267,14 @@ EventKind::ToolResult {
 }
 ```
 
-The **model-facing text** gets the `[error: <kind>]` prefix rendered at the point
-where the tool result is converted to the provider message (in the context/request
-builder, not in the tool itself). This keeps the prefix consistent across all tools
-without each tool having to format it. The rendering:
+The **model-facing text** gets the `[error: <kind>]` prefix rendered at the
+point where the tool result is converted to a provider `Message` — in
+`agent.rs`'s `map_msg` function (`ChatMsg::ToolResult { id, name, output, .. }
+=> Message::tool_with_call_id(name, id, output)`). The prefix is prepended to
+`output` when `is_error && error_kind.is_some()`. This keeps it consistent
+across all tools without each tool having to format it. `context.rs` does not
+produce provider `Message`s (it builds `ContextItem`s for token estimation) and
+is **not** the rendering location. The rendering:
 
 ```
 [error: backend_unavailable] web_search failed: DuckDuckGo returned an error page
@@ -277,16 +318,23 @@ if results.is_empty() {
 Ok(results)
 ```
 
-`is_ddg_error_page` checks for known DDG error/diagnostic markers in the HTML body.
-The check is heuristic (DDG doesn't document its error pages), based on observed
-patterns:
+`is_ddg_error_page` checks for known DDG error/diagnostic markers in the HTML
+body. The check is heuristic (DDG doesn't document its error pages), based on
+observed patterns. The exact predicate:
 
-- Presence of `error-lite@duckduckgo.com` or `error@duckduckgo.com` in the body.
-- Presence of DDG anomaly/diagnostic text patterns (e.g., "If this error persists").
-- Absence of any `.result` CSS class divs (already true since `results.is_empty()`)
-  combined with the presence of non-page-chrome text (indicating an error message
-  rather than a genuine "no results" page, which still has the normal DDG page
-  structure with a "No results" message).
+```rust
+fn is_ddg_error_page(body: &str) -> bool {
+    body.contains("error-lite@duckduckgo.com")
+        || body.contains("error@duckduckgo.com")
+        || body.contains("If this error persists")
+}
+```
+
+This is intentionally simple: three substring checks, OR'd together. The
+heuristic does **not** use "presence of non-page-chrome text" as a signal —
+a genuine "no results" page also has non-chrome text (the "No results"
+message), so that signal is ambiguous. Only the three named DDG
+error/diagnostic markers trigger `BackendUnavailable`.
 
 The heuristic is intentionally conservative: false positives (classifying a genuine
 empty-results page as `BackendUnavailable`) cause the model to retry unnecessarily,
@@ -302,16 +350,29 @@ The `web_search` tool in `zoid-tools` maps the error:
 - Error message contains "empty query" → `ErrorKind::InvalidInput`
 - Network/timeout error → `ErrorKind::Timeout` or `BackendUnavailable`
 
-**Alternative considered:** returning a typed error from `zoid_web::search` instead
-of string-matching. This is cleaner but requires changing the `zoid_web` public API
-(returning a custom error enum instead of `anyhow::Result`). The string-matching
-approach keeps `zoid_web` unchanged and puts the categorization in the tool layer
-where `ErrorKind` lives. The trade-off is acceptable for now; a future refactor can
-make `zoid_web` return typed errors.
+**Alternative considered:** returning a typed error from `zoid_web::search`
+instead of string-matching. This is cleaner but requires changing the
+`zoid_web` public API (returning a custom error enum instead of
+`anyhow::Result`). The string-matching approach avoids coupling `zoid_web` to
+`ErrorKind` (the leaf crate stays independent of the tool-layer type) and puts
+the categorization in the tool layer. The trade-off is acceptable for now; a
+future refactor can make `zoid_web` return typed errors.
 
-**Decision: string-matching in the tool layer.** The `zoid_web` crate stays a pure
-leaf with `anyhow::Result`; the `zoid-tools` layer categorizes. This keeps the
-change small and avoids coupling `zoid_web` to `ErrorKind`.
+**Note:** `zoid_web` is not left unchanged — `is_ddg_error_page` is added to
+`search.rs`, and the 2xx-empty-extraction check changes `fetch`'s behavior
+from `Ok(FetchResult{content: ""})` to `Err(...)` for unparseable 2xx
+responses. This is a deliberate behavior change to the leaf crate: returning
+empty content as `Ok` was always unhelpful (the model sees a blank page with
+no diagnostic), and `Err` lets the tool layer categorize it as
+`BackendUnavailable`. The change ripples to any caller of `zoid_web::fetch`,
+but the sole caller is the `web_fetch` tool, which already handles `Err`.
+
+**Decision: string-matching in the tool layer for categorization; behavior
+change in `zoid_web` for detection.** `zoid_web` gains the detection logic
+(`is_ddg_error_page`, empty-extraction `Err`); `zoid-tools` gains the
+categorization (string-matching the error message to `ErrorKind`). This keeps
+`ErrorKind` out of `zoid_web` while making the leaf crate's errors more
+informative.
 
 #### `fetch.rs` — Already mostly correct
 
@@ -324,12 +385,21 @@ on a 2xx response (the page returned something but it wasn't parseable as conten
 
 ### Tool-by-tool error audit
 
-Each tool's error paths are categorized. Here is the complete mapping:
+Each tool's error paths are categorized. The base `registry()` tools are
+listed first, followed by the chat-only tools (`invoke_skill.rs` registry).
+Tools that currently have a single catch-all `io::Error` path (read, ls,
+write) require inspecting `e.kind()` (`std::io::ErrorKind`) to categorize
+correctly — e.g., `ErrorKind::NotFound` → `NotFound`,
+`ErrorKind::PermissionDenied` → `PermissionDenied`, else → `Internal`. This is
+not a simple label swap; the implementation plan should account for the
+`io::ErrorKind` inspection in these tools.
+
+**Base registry tools:**
 
 | Tool | Error path | ErrorKind | Model-facing text |
 |------|-----------|-----------|-------------------|
-| **read** | missing file | NotFound | `read({path}): file does not exist` |
-| **read** | non-UTF8 file | InvalidInput | `read({path}): file is not valid UTF-8` |
+| **read** | missing file (`io::ErrorKind::NotFound`) | NotFound | `read({path}): file does not exist` |
+| **read** | non-UTF8 file (`io::ErrorKind::InvalidData`) | InvalidInput | `read({path}): file is not valid UTF-8` |
 | **read** | limit < 1 | InvalidInput | `read: limit must be >= 1` |
 | **read** | offset past end | InvalidInput | `read({path}): offset {offset} past end (total {total} lines)` |
 | **read** | other IO error | Internal | `read({path}): {e}` |
@@ -343,8 +413,8 @@ Each tool's error paths are categorized. Here is the complete mapping:
 | **edit** | other IO error | Internal | `edit({path}): {e}` |
 | **grep** | no matches | N/A (not an error — returns empty result set) | — |
 | **glob** | no matches | N/A (not an error — returns empty result set) | — |
-| **ls** | dir doesn't exist | NotFound | `ls({path}): directory does not exist` |
-| **ls** | permission denied | PermissionDenied | `ls({path}): permission denied` |
+| **ls** | dir doesn't exist (`io::ErrorKind::NotFound`) | NotFound | `ls({path}): directory does not exist` |
+| **ls** | permission denied (`io::ErrorKind::PermissionDenied`) | PermissionDenied | `ls({path}): permission denied` |
 | **ls** | other IO error | Internal | `ls({path}): {e}` |
 | **shell** | nonzero exit | N/A (already has `[exit N]` signal) | — |
 | **shell** | spawn failure | Internal | `shell({command}): {e}` |
@@ -364,6 +434,27 @@ Each tool's error paths are categorized. Here is the complete mapping:
 | **ask_user** | (interactive — no error paths) | — | — |
 | **update_tasks** | (emitting — no error paths) | — | — |
 | **submit_feedback** | (emitting — no error paths) | — | — |
+
+**Chat-only tools (from `invoke_skill.rs` registry):**
+
+| Tool | Kind | Error path | ErrorKind | Model-facing text |
+|------|------|-----------|-----------|-------------------|
+| **subagent_diff** | Local | subagent history not found | NotFound | `subagent_diff: history not found for {id}` |
+| **subagent_diff** | Local | git rev-parse/diff failed | Internal | `subagent_diff: git rev-parse failed: {e}` |
+| **recall** | Emitting | (handled by agent loop; validation errors) | InvalidInput | `recall: {error}` |
+| **dispatch_subagent** | Emitting | task argument required | InvalidInput | `dispatch_subagent: 'task' is required` |
+| **dispatch_subagent** | Emitting | profile/agent resolution failure | Internal | `dispatch_subagent: {e}` |
+| **dispatch_subagent** | Emitting | pool full (queued) | N/A (not an error — returns queued status) | — |
+| **cancel_subagent** | Emitting | (handled by agent loop) | Internal | `cancel_subagent: {e}` |
+| **list_subagents** | Local | (no error paths — reads in-memory registry) | — | — |
+| **list_agents** | Local | (no error paths — reads in-memory registry) | — | — |
+| **enter_worktree** | Emitting | name required | InvalidInput | `enter_worktree: 'name' is required` |
+| **enter_worktree** | Emitting | already in a worktree | Conflict | `already in a worktree — exit with exit_worktree first` |
+| **exit_worktree** | Emitting | not in a worktree | Conflict | `not in a worktree` |
+| **exit_worktree** | Emitting | subagent running | Conflict | `cannot exit worktree while a subagent is running` |
+| **schedule_wake** | Emitting | (validation errors) | InvalidInput | `schedule_wake: {e}` |
+| **cancel_wake** | Emitting | (validation errors) | InvalidInput | `cancel_wake: {e}` |
+| **show** | Emitting | (handled by agent loop) | Internal | `show: {e}` |
 
 ### Testing
 
@@ -396,10 +487,15 @@ Each tool's error paths are categorized. Here is the complete mapping:
 - Agent loop: same for the Network tool-dispatch arm.
 - The recovery message is prescriptive (names `exit_worktree` explicitly).
 
+#### Serialization compatibility
+
+- Deserialize a legacy `ToolResult` JSON (without `error_kind`) and assert
+  `error_kind: None` (verifies `#[serde(default)]` works).
+
 #### Integration tests
 
-- The `[error: <kind>]` prefix appears in the model-facing tool result text (tested
-  at the context/request builder level).
+- The `[error: <kind>]` prefix appears in the model-facing tool result text
+  (tested at the `map_msg` conversion in `agent.rs`, not `context.rs`).
 
 ### Migration path
 
@@ -415,25 +511,49 @@ Each tool's error paths are categorized. Here is the complete mapping:
 
 ### Files touched
 
+**`zoid-tools` (ErrorKind + tool error categorization):**
 - `crates/zoid-tools/src/lib.rs` — `ErrorKind` enum, `ToolOutput` changes
-- `crates/zoid-tools/src/read.rs` — categorize error paths
-- `crates/zoid-tools/src/write.rs` — categorize error paths
+- `crates/zoid-tools/src/read.rs` — categorize error paths (inspect `io::ErrorKind`)
+- `crates/zoid-tools/src/write.rs` — categorize error paths (inspect `io::ErrorKind`)
 - `crates/zoid-tools/src/edit.rs` — categorize error paths
-- `crates/zoid-tools/src/ls.rs` — categorize error paths
+- `crates/zoid-tools/src/ls.rs` — categorize error paths (inspect `io::ErrorKind`)
 - `crates/zoid-tools/src/shell.rs` — categorize spawn failure
 - `crates/zoid-tools/src/git_context.rs` — categorize error paths
 - `crates/zoid-tools/src/web_search.rs` — categorize error paths + DDG outage mapping
 - `crates/zoid-tools/src/web_fetch.rs` — categorize error paths + empty-extraction check
+- `crates/zoid-tools/src/subagent_diff.rs` — categorize error paths (Local tool)
+
+**`zoid-web` (outage detection):**
 - `crates/zoid-web/src/search.rs` — `is_ddg_error_page` + `search_with_client` logic
-- `crates/zoid-web/src/lib.rs` — `fetch` 2xx empty-extraction check
-- `crates/zoid-core/src/event.rs` — `ToolResult` event gains `error_kind`
-- `crates/zoid-core/src/projection.rs` — `ChatMsg::ToolResult` gains `error_kind`
-- `crates/zoid-core/src/context.rs` — `[error: <kind>]` prefix rendering in request builder
-- `crates/zoid-core/src/compaction.rs` — propagate `error_kind` through compaction
-- `crates/zoid-core/src/eviction.rs` — propagate `error_kind` (if needed for ranking)
-- `crates/zoid-core/src/reassert.rs` — propagate `error_kind` through reassert
-- `crates/zoid/src/agent.rs` — CWD-deleted pre-check in Local and Network tool-dispatch arms; `[error: <kind>]` prefix rendering in `ChatMsg` → `Message` conversion
-- `crates/zoid/src/zoom.rs` — `ChatMsg::ToolResult` display (if it reads `error_kind`)
+- `crates/zoid-web/src/lib.rs` — `fetch` 2xx empty-extraction behavior change
+
+**`zoid-core` (event propagation — blast radius from adding a field to a serde-persisted enum variant):**
+- `crates/zoid-core/src/event.rs` — `ToolResult` event gains `#[serde(default)] error_kind: Option<ErrorKind>`
+- `crates/zoid-core/src/projection.rs` — `ChatMsg::ToolResult` gains `error_kind`; ~10 construction/match sites updated
+- `crates/zoid-core/src/compaction.rs` — propagate `error_kind` through compaction; construction sites updated
+- `crates/zoid-core/src/eviction.rs` — propagate `error_kind`; construction sites updated
+- `crates/zoid-core/src/reassert.rs` — propagate `error_kind` through reassert; construction sites updated
+- `crates/zoid-core/src/store.rs` — `fts_content` match arm updated (reads `ToolResult { output, name, .. }`)
+- `crates/zoid-core/src/context.rs` — construction sites updated (does NOT do prefix rendering)
+
+**`zoid` (agent loop + prefix rendering + CWD pre-check):**
+- `crates/zoid/src/agent.rs` — CWD-deleted pre-check in Local and Network arms (Emitting exempt); `[error: <kind>]` prefix rendering in `map_msg` (`ChatMsg` → `Message` conversion); ~15 construction sites updated
+- `crates/zoid/src/eventlog.rs` — `ToolResult { output, .. }` match arm updated
+- `crates/zoid/src/spawn_subagent.rs` — construction sites updated (if any `ToolResult` constructions exist)
+- `crates/zoid/src/subagent.rs` — ~7 test construction sites updated
+- `crates/zoid/src/main.rs` — ~22 construction/match sites updated
+- `crates/zoid/src/invoke_skill.rs` — chat-only tool error paths categorized
+
+**`zoid-tui` (UI display — Goal #3):**
+- `crates/zoid-tui/src/chat.rs` — ~23 `ChatMsg::ToolResult` pattern match and construction sites updated; UI can read `error_kind` for icon/color differentiation
+- `crates/zoid-tui/src/objects.rs` — construction/match sites updated
+- `crates/zoid-tui/tests/chat_snapshot.rs` — snapshot test construction sites updated
+- `crates/zoid-tui/tests/shell_snapshot.rs` — snapshot test construction sites updated
+- `crates/zoid-tui/examples/scenes/mod.rs` — construction sites updated
+
+**Integration tests:**
+- `crates/zoid/tests/*.rs` — ~7 test files with `EventKind::ToolResult` constructions updated
+- `crates/zoid-core/tests/*.rs` — any construction sites updated
 
 ### Locked decisions
 
@@ -452,10 +572,14 @@ Each tool's error paths are categorized. Here is the complete mapping:
   errors. No `ErrorKind` applies.
 - **shell nonzero exit is not an error:** it already has `[exit N]` + stderr; only
   spawn failures get an `ErrorKind`.
-- **CWD-deleted pre-check:** the agent loop checks `cwd.exists()` before every
-  tool call; if false, short-circuits with `ErrorKind::CwdDeleted` and a
-  recovery message pointing to `exit_worktree`. Not a per-tool check — it's a
-  loop-level guard.
+- **CWD-deleted pre-check:** the agent loop checks `cwd.exists()` before
+  every Local and Network tool call (Emitting tools are exempt — they are the
+  recovery path); if false, short-circuits with `ErrorKind::CwdDeleted` and a
+  context-aware recovery message pointing to `exit_worktree` (when in a
+  worktree) or navigating to an existing directory. Not a per-tool check — it's
+  a loop-level guard. A TOCTOU race exists (CWD deleted between pre-check and
+  tool execution); the tool's own error handling is the fallback, typically
+  categorized `Internal` for the resulting "No such file or directory."
 - **No self-deletion guard:** the agent is trusted not to `rm -rf` its own CWD;
   the pre-check catches the aftermath, not the cause.
 - **Worktree-flow audit:** the `exit_worktree` path is already hardened (WT-2:
