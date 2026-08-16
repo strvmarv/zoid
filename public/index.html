@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>zoid — the coding agent that adapts as fast as the ecosystem</title>
-<meta name="description" content="zoid — a terminal-native AI coding agent built in Rust. Active context management, bring-your-own-tools (MCP), and your choice of model — Ollama, Anthropic, OpenAI, Google Gemini, OpenCode Zen. Now in beta.">
+<meta name="description" content="zoid — a terminal-native AI coding agent built in Rust. Active context management, bring-your-own-tools (MCP), and your choice of model — Ollama, Anthropic, OpenAI, Google Gemini, OpenCode Zen.">
 <style>
 :root{
   --bg:#0d1117; --panel:#161b22; --gutter:#0b0e13; --line:#30363d; --line2:#21262d;
@@ -54,7 +54,6 @@ h1{font-size:clamp(27px,5vw,45px);line-height:1.18;margin:20px auto 12px;font-we
 .sub{color:var(--muted);margin:0 0 10px;font-size:clamp(13px,1.6vw,15px);}
 .soon{color:var(--acc);font-weight:600;letter-spacing:.1em;text-transform:uppercase;
   font-size:12px;margin:0 0 44px;}
-.beta{margin:0 0 20px;}
 .chip{display:inline-block;background:var(--chip);color:var(--acc);font-weight:600;
   letter-spacing:.08em;text-transform:uppercase;font-size:11px;padding:4px 11px;border-radius:20px;}
 .cta{display:flex;flex-direction:column;align-items:center;gap:12px;margin:0 auto 44px;max-width:760px;}
@@ -308,11 +307,10 @@ pre.tui{margin:0;padding:14px 16px;font-family:var(--mono);font-size:13px;line-h
   <div class="wordmark"><span class="type">zoid</span></div>
   <h1 class="fade d1">The coding agent that <span class="thesis">adapts as fast as the ecosystem</span>.</h1>
   <p class="sub fade d2">Terminal-native · Built in Rust · One ~16&nbsp;MB binary</p>
-  <p class="beta fade d3"><span class="chip">Now in beta</span></p>
   <div class="cta fade d3">
     <a class="btn" href="https://github.com/strvmarv/zoid/releases/latest">Install zoid</a>
     <code class="oneliner">curl --proto '=https' --tlsv1.2 -LsSf https://github.com/strvmarv/zoid/releases/latest/download/zoid-installer.sh | sh</code>
-    <p class="betanote">Evaluation builds expire 30 days after release — run <code>zoid update</code> to stay current (anonymous, checksum-verified, from GitHub Releases). PowerShell installer &amp; per-platform archives on the releases page.</p>
+    <p class="betanote">Run <code>zoid update</code> to stay current (anonymous, checksum-verified, from GitHub Releases). PowerShell installer &amp; per-platform archives on the releases page.</p>
   </div>
 
   <!-- Hero: the context-economy animated player -->
@@ -853,7 +851,13 @@ pre.tui{margin:0;padding:14px 16px;font-family:var(--mono);font-size:13px;line-h
   <div class="wordmark">zoid</div>
   <p style="margin:16px 0 0;"><a class="btn" href="https://github.com/strvmarv/zoid/releases/latest">Install zoid</a></p>
   <p style="margin:12px 0 0;font-size:12px;color:var(--dim);">Download the latest release or build from source.</p>
-  <p style="margin:14px 0 0;font-size:12px;">© 2026</p>
+  <div class="links" style="margin:16px 0 0;font-size:13px;display:flex;gap:20px;flex-wrap:wrap;">
+    <a href="https://github.com/strvmarv/zoid">⭐ GitHub</a>
+    <a href="https://github.com/strvmarv/zoid/issues">Issues</a>
+    <a href="https://github.com/strvmarv/zoid/blob/main/CONTRIBUTING.md">Contributing</a>
+    <a href="https://github.com/strvmarv/zoid/blob/main/CHANGELOG.md">Changelog</a>
+  </div>
+  <p style="margin:14px 0 0;font-size:12px;">&copy; 2026 · MIT OR Apache-2.0</p>
 </footer>
 
 <script>
