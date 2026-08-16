@@ -4,6 +4,14 @@ All notable changes to zoid are documented here. Each `## X.Y.Z` section
 matches a released version tag; `cargo-dist` parses the section matching the
 tag being released and uses it as that release's announcement notes.
 
+## 0.9.2
+
+This is a bridge release. zoid is now open source at
+[strvmarv/zoid](https://github.com/strvmarv/zoid) under MIT OR Apache-2.0.
+This is the last release on `strvmarv/zoid-releases`; future releases live on
+`strvmarv/zoid`. After installing this update, `zoid update` will
+automatically check the new repo going forward.
+
 ## 0.9.1
 
 Subagent dispatch hardening, worktree branch-deletion fix, Windows home-dir
