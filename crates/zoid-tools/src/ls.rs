@@ -2,6 +2,7 @@ use crate::{str_arg, Tool, ToolOutput};
 use globset::Glob;
 use serde_json::{json, Value};
 use std::path::Path;
+use zoid_core::ErrorKind;
 use zoid_provider::ToolSpec;
 
 const MAX_RESULTS: usize = 500;
@@ -46,7 +47,14 @@ impl Tool for Ls {
         let dir = crate::resolve(cwd, &path);
         let entries = match std::fs::read_dir(&dir) {
             Ok(e) => e,
-            Err(e) => return ToolOutput::err(format!("ls({path}): {e}")),
+            Err(e) => {
+                let kind = match e.kind() {
+                    std::io::ErrorKind::NotFound => ErrorKind::NotFound,
+                    std::io::ErrorKind::PermissionDenied => ErrorKind::PermissionDenied,
+                    _ => ErrorKind::Internal,
+                };
+                return ToolOutput::err_kind(kind, format!("ls({path}): {e}"));
+            }
         };
         let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
         paths.sort();
@@ -123,5 +131,16 @@ mod tests {
             std::path::Path::new("."),
         );
         assert!(out.is_error);
+        assert_eq!(out.error_kind, Some(ErrorKind::NotFound));
+    }
+
+    #[test]
+    fn missing_dir_is_not_found() {
+        let out = Ls.run(
+            &json!({ "path": "/nonexistent/path/that/does/not/exist" }),
+            std::path::Path::new("."),
+        );
+        assert!(out.is_error);
+        assert_eq!(out.error_kind, Some(ErrorKind::NotFound));
     }
 }
