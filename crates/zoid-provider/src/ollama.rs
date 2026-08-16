@@ -591,7 +591,7 @@ mod tests {
     #[test]
     fn default_local_num_ctx_clears_zoid_fixed_overhead() {
         // DEFAULT_LOCAL_NUM_CTX is a compile-time constant >= 32768.
-        let _: usize = DEFAULT_LOCAL_NUM_CTX;
+        const _: () = assert!(DEFAULT_LOCAL_NUM_CTX >= 32768);
     }
 
     fn ctx_req() -> CompletionRequest {

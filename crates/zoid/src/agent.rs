@@ -535,8 +535,12 @@ fn map_msg(m: ChatMsg) -> Message {
         ChatMsg::ToolResult {
             id, name, output, is_error, error_kind, ..
         } => {
-            let text = if is_error && error_kind.is_some() {
-                format!("[error: {}] {}", error_kind.unwrap().as_str(), output)
+            let text = if is_error {
+                if let Some(kind) = error_kind {
+                    format!("[error: {}] {}", kind.as_str(), output)
+                } else {
+                    output
+                }
             } else {
                 output
             };

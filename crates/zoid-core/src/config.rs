@@ -300,7 +300,7 @@ mod tests {
         assert!(dflt.companion.open);
 
         // Default is false
-        let (cfg, _) = merge(&vec![(Source::Default, PartialConfig::default())]);
+        let (cfg, _) = merge(&[(Source::Default, PartialConfig::default())]);
         assert!(
             !cfg.companion.enabled,
             "companion.enabled defaults to false"
@@ -308,7 +308,7 @@ mod tests {
 
         // TOML overrides
         let (pc, _) = parse_toml("[companion]\nenabled = true\nport = 9123\nopen = false").unwrap();
-        let (cfg, _) = merge(&vec![(Source::UserGlobal, pc)]);
+        let (cfg, _) = merge(&[(Source::UserGlobal, pc)]);
         assert!(
             cfg.companion.enabled,
             "companion.enabled overridden via TOML"

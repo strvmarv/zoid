@@ -9733,15 +9733,11 @@ mod tests {
         .with_session(app.session_id);
         app.events.push(ev);
 
-        // Manually trigger the drain (mirrors the DelegationResult handler)
+        // Manually trigger the drain (mirrors the DelegationResult handler).
+        // The queue is empty and the pool is empty, so the drain loop would
+        // not enter — assert that directly instead of a never-looping while.
         let max = app.config.subagent.max_concurrent;
-        while !app.queued_subagents.is_empty()
-            && (max == 0 || app.in_flight.lock().unwrap().len() < max)
-        {
-            // Would call spawn_queued_subagent, but queue is empty so this
-            // loop body never executes.
-            unreachable!("queue is empty — loop should not enter");
-        }
+        assert!(app.queued_subagents.is_empty() || max == 0 || app.in_flight.lock().unwrap().len() >= max);
 
         assert!(app.queued_subagents.is_empty(), "queue untouched");
         assert!(app.in_flight.lock().unwrap().is_empty(), "pool untouched");
@@ -9970,7 +9966,7 @@ mod tests {
 
         // All 3 subagents' hard tokens should be cancelled.
         let map = app.in_flight.lock().unwrap();
-        for (_, handle) in map.iter() {
+        for handle in map.values() {
             assert!(
                 handle.hard.is_cancelled(),
                 "all subagent hard tokens must be cancelled"
@@ -10755,8 +10751,10 @@ mod tests {
     fn effective_base_url_prefers_override_then_registry() {
         use zoid_core::config::Config;
         // No override → registry default for the canonical id.
-        let mut c = Config::default(); // provider pinned to "ollama" (legacy) → ollama-cloud, base_url = None
-        c.provider = "ollama".into();
+        let mut c = Config {
+            provider: "ollama".into(), // pin to "ollama" (legacy) → ollama-cloud, base_url = None
+            ..Config::default()
+        };
         assert_eq!(effective_base_url(&c), "https://ollama.com");
 
         // Explicit local id, no override → local endpoint.
@@ -11496,9 +11494,10 @@ mod onboarding_tests {
     use zoid_core::config::Config;
 
     fn cfg_with_provider(provider: &str) -> Config {
-        let mut c = Config::default();
-        c.provider = provider.to_string();
-        c
+        Config {
+            provider: provider.to_string(),
+            ..Config::default()
+        }
     }
 
     #[test]

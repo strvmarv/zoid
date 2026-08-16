@@ -402,10 +402,10 @@ async fn smoke_over_eviction_calibration_mismatch() {
         let uid = i * 2 + 1;
         let aid = i * 2 + 2;
         seed.push(Event::new(Ulid::from(uid), None, uid as i64, EventKind::UserMessage {
-            text: format!("{big}"),
+            text: big.clone(),
         }));
         seed.push(Event::new(Ulid::from(aid), None, aid as i64, EventKind::AssistantMessage {
-            text: format!("{big}"),
+            text: big.clone(),
         }));
     }
 
