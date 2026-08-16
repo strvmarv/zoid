@@ -24,10 +24,16 @@ Four deliverables:
 **In scope:**
 - Create `CODE_OF_CONDUCT.md` at repo root.
 - Create `docs/DEVELOPMENT.md` consolidating build/test/release conventions
-  and a crate architecture overview.
+  and a crate architecture overview. `DEVELOPMENT.md` is now the canonical
+  developer reference; `AGENTS.md` is frozen as a legacy pointer (its
+  sections on releases and terminal minimum size are replaced by
+  `DEVELOPMENT.md`). Update `AGENTS.md` to shrink to a pointer at the top.
 - Rewrite `README.md` as a proper project landing page.
 - Update `public/index.html` framing: remove "Now in beta" chip and meta
-  description, add GitHub stars/link CTA, add "Get involved" section.
+  description, rewrite the hero betanote, add GitHub CTA and "Get involved"
+  section in the footer.
+- Fix `AGENTS.md` fallback test command to include `--features zoid/local-embed`
+  (matching `DEVELOPMENT.md` and `CONTRIBUTING.md`).
 
 **Out of scope:**
 - Phase 5 (issue templates, PR template, GitHub Discussions, CI badge —
@@ -38,11 +44,17 @@ Four deliverables:
 - New screenshots — use existing TUI frame art from `public/index.html` if
   imagery is needed; no new renders.
 
+**Note on scope expansion:** The original Phase 4 spec said "README does not
+need this pass — it was written in OSS voice from the start in Phase 3a."
+The current README is a 41-line stub; a full rewrite is a justified expansion
+of the original Phase 4 brief, driven by the v1.0.0 public launch.
+
 ## 1. CODE_OF_CONDUCT.md
 
 Standard Contributor Covenant v2.1 (https://contributor-covenant.org/version/2/1/code_of_conduct/).
-Copy verbatim. No project-specific customization needed — the enforcement
-contact is `strvmarv@gmail.com` (the maintainer's GitHub email).
+Copy the Covenant text, filling in the enforcement contact field with
+`strvmarv@gmail.com` (the maintainer's GitHub email). This is the only
+project-specific customization.
 
 ## 2. docs/DEVELOPMENT.md
 
@@ -69,22 +81,23 @@ zoid is a Cargo workspace of 14 crates:
 | `zoid-core` | Core domain: sessions, events, config, secrets, skills, modes, agents, economy, eviction |
 | `zoid-model` | Dependency-free model/provider catalog (static registry, ModelInfo, ProviderEntry) |
 | `zoid-provider` | The LLM provider seam: streaming interface + per-provider implementations |
-| `zoid-tui` | The terminal UI: layout, renderers, snapshot tests |
-| `zoid-tools` | Built-in tools (read, write, edit, grep, glob, shell, subagents, etc.) |
+| `zoid-tui` | The terminal UI: layout, renderers, snapshot tests. Depends on `zoid-core`, `zoid-model`, and `zoid-syntax` |
+| `zoid-tools` | Built-in tools (read, write, edit, grep, glob, shell, subagents, web_fetch, web_search, etc.) |
 | `zoid-mcp` | MCP (Model Context Protocol) server discovery and connection management |
 | `zoid-embed` | Local embedding model (candle) for semantic retrieval |
-| `zoid-companion` | Companion browser view server (visual side panel) |
-| `zoid-plugin` | Plugin manifest types and parsing |
-| `zoid-plugin-import` | Filesystem source adapter for plugin import |
-| `zoid-syntax` | Syntax highlighting / code parsing utilities |
-| `zoid-testkit` | Test fixtures and helpers (intentionally version-pinned, excluded from release) |
-| `zoid-web` | Web companion app |
+| `zoid-companion` | Optional localhost companion server: pushes a single HTML card over SSE to a side panel. std threads, no tokio |
+| `zoid-plugin` | Plugin manifest types and parsing (local `plugins/*.toml` resolution) |
+| `zoid-plugin-import` | GitHub-tree-fetching CLI for importing external plugin repos (repo/bulk subcommands) |
+| `zoid-syntax` | Tree-sitter highlight/symbols/folds utilities |
+| `zoid-testkit` | Test fixtures and helpers (excluded from the dist release; rides the workspace version) |
+| `zoid-web` | DuckDuckGo search + readability fetch leaf — powers `web_fetch`/`web_search` via `zoid-tools` |
 
-Dependency flow: `zoid` depends on everything; `zoid-core` depends on
-`zoid-model` (not `zoid-provider`); `zoid-provider` depends on `zoid-model`;
-`zoid-tui` depends on `zoid-core` and `zoid-model`. The provider seam is
-intentionally decoupled from core so the provider/plugin surface stays
-independent.
+Dependency flow: `zoid` depends on all first-party leaf crates it
+orchestrates (core, provider, tools, tui, companion, mcp, embed);
+`zoid-core` depends on `zoid-model` (not `zoid-provider`); `zoid-provider`
+depends on `zoid-model`; `zoid-tui` depends on `zoid-core`, `zoid-model`, and
+`zoid-syntax`. The provider seam is intentionally decoupled from core so the
+provider/plugin surface stays independent.
 
 ## Building
 
@@ -211,8 +224,9 @@ API key, and picking a model. After that you land straight in the chat.
 - **Bring your own tools** — MCP (Model Context Protocol) support for
   connecting external tools (GitHub, databases, APIs). Built-in tools
   (read, write, edit, grep, glob, shell, subagents) included.
-- **Choose your own model** — Ollama, Anthropic, OpenAI, Google Gemini, and
-  OpenCode Zen. Switch providers without restarting your session.
+- **Choose your own model** — Ollama, Anthropic, OpenAI, and OpenCode Zen.
+  Switch providers without restarting your session. (Google Gemini support
+  is implemented but not yet user-selectable.)
 - **Modes and skills** — importable skill sets (like
   [Superpowers](https://github.com/obra/superpowers)) become first-class
   modes with their own system prompts and behaviors.
@@ -235,6 +249,7 @@ release conventions.
 
 - [Report a bug](https://github.com/strvmarv/zoid/issues)
 - [Request a feature](https://github.com/strvmarv/zoid/issues)
+- [Report a vulnerability](SECURITY.md)
 - [Contribute](CONTRIBUTING.md) — PRs welcome
 - [Code of Conduct](CODE_OF_CONDUCT.md)
 
@@ -265,8 +280,12 @@ include only the license badge:
 2. **Hero "Now in beta" chip (line 311):** Remove the
    `<p class="beta fade d3"><span class="chip">Now in beta</span></p>`
    line entirely.
-3. **Hero betanote (line 315):** Already neutralized in Phase 3b ("from
-   GitHub Releases"). Keep as-is.
+3. **Hero betanote (line 315):** Still contains commercial-era framing
+   ("Evaluation builds expire 30 days after release"). Rewrite to drop the
+   expiry clause entirely:
+   ```html
+   <p class="betanote">Run <code>zoid update</code> to stay current (anonymous, checksum-verified, from GitHub Releases). PowerShell installer &amp; per-platform archives on the releases page.</p>
+   ```
 4. **Footer "Get involved" section:** Replace the current footer with a
    richer version that includes:
    - The install button (already present)
@@ -293,7 +312,7 @@ New footer:
   <p style="margin:16px 0 0;"><a class="btn" href="https://github.com/strvmarv/zoid/releases/latest">Install zoid</a></p>
   <p style="margin:12px 0 0;font-size:12px;color:var(--dim);">Download the latest release or build from source.</p>
   <div class="links" style="margin:16px 0 0;font-size:13px;display:flex;gap:20px;flex-wrap:wrap;">
-    <a href="https://github.com/strvmarv/zoid">GitHub</a>
+    <a href="https://github.com/strvmarv/zoid">⭐ GitHub</a>
     <a href="https://github.com/strvmarv/zoid/issues">Issues</a>
     <a href="https://github.com/strvmarv/zoid/blob/main/CONTRIBUTING.md">Contributing</a>
     <a href="https://github.com/strvmarv/zoid/blob/main/CHANGELOG.md">Changelog</a>
