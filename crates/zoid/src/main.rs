@@ -1734,6 +1734,7 @@ impl ProjectionCache {
                 name,
                 output,
                 is_error,
+                error_kind,
                 ..
             } => {
                 self.flush_pending_assistant();
@@ -1746,7 +1747,7 @@ impl ProjectionCache {
                     name: name.clone(),
                     output: output.clone(),
                     is_error: *is_error,
-                    error_kind: None,
+                    error_kind: *error_kind,
                     compacted: false,
                     ts: ev.ts,
                 });
