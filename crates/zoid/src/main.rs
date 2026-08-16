@@ -7,12 +7,12 @@ use crossterm::{
     },
     execute,
     terminal::{
-        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-        supports_keyboard_enhancement,
+        disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, EnterAlternateScreen,
+        LeaveAlternateScreen,
     },
 };
 use futures_util::StreamExt;
-use ratatui::{Terminal, layout::Rect, prelude::CrosstermBackend, text::Line};
+use ratatui::{layout::Rect, prelude::CrosstermBackend, text::Line, Terminal};
 use ratatui_textarea::{CursorMove, TextArea};
 use std::io::stdout;
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ use ulid::Ulid;
 
 mod obs;
 
-use zoid::agent::{AgentUpdate, run_agent_turn_cancellable};
+use zoid::agent::{run_agent_turn_cancellable, AgentUpdate};
 use zoid_core::event::{Event, EventKind};
 use zoid_core::projection::conversation;
 use zoid_core::session::SessionHandle;
@@ -32,7 +32,7 @@ use zoid_provider::{default_model, default_provider};
 use zoid_tui::chat::ChatView;
 use zoid_tui::layout::compute;
 use zoid_tui::render_shell;
-use zoid_tui::route::{PasteTarget, palette_selected_command, route_key, route_mouse, route_paste};
+use zoid_tui::route::{palette_selected_command, route_key, route_mouse, route_paste, PasteTarget};
 
 /// Duration of the zoom fold/unfold line-reveal animation (Ⓡ2, T5).
 const ZOOM_ANIM_MS: u64 = 160;
@@ -95,10 +95,7 @@ fn resolve_cache_dir(env: impl Fn(&str) -> Option<String>) -> PathBuf {
     let base = env("XDG_CACHE_HOME")
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
-        .or_else(|| {
-            home_dir(&env)
-                .map(|h| h.join(".cache"))
-        })
+        .or_else(|| home_dir(&env).map(|h| h.join(".cache")))
         .unwrap_or_else(|| PathBuf::from(".cache"));
     base.join("zoid")
 }
@@ -156,7 +153,7 @@ fn load_config() -> (
     zoid_core::config::Provenance,
     Vec<String>,
 ) {
-    use zoid_core::config::{PartialConfig, Source, merge, parse_toml};
+    use zoid_core::config::{merge, parse_toml, PartialConfig, Source};
     let env = |k: &str| std::env::var(k).ok();
     let cfg_dir = resolve_config_dir(env);
     let mut warnings: Vec<String> = Vec::new();
@@ -806,11 +803,7 @@ async fn pick_session(
             // always within the first screen. Session rows (selected >= 1) are
             // at line 2 + selected. The delete-confirm line renders below the
             // session rows so it never shifts the selected row's line.
-            let selected_line = if selected == 0 {
-                2
-            } else {
-                2 + selected
-            };
+            let selected_line = if selected == 0 { 2 } else { 2 + selected };
             // Visible height = inner area (borders take 2 rows).
             let visible_height = area.height.saturating_sub(2) as usize;
             let scroll_y = picker_scroll_offset(selected_line, visible_height);
@@ -828,85 +821,86 @@ async fn pick_session(
             }
             // Inline confirm for pending delete — captures all keys.
             if let Some(idx) = pending_delete {
-                    match key.code {
-                        crossterm::event::KeyCode::Char('y')
-                        | crossterm::event::KeyCode::Char('Y')
-                        | crossterm::event::KeyCode::Enter => {
-                            // `idx` is a logical index (1..=n); session `idx - 1`.
-                            if let Some(s) = sessions.get(idx - 1) {
-                                let _ = session.delete_session(s.id).await;
-                            }
-                            sessions = session
-                                .list_sessions(Some(root.to_string()))
-                                .await
-                                .unwrap_or_default();
-                            n = sessions.len();
-                            live = sessions
-                                .iter()
-                                .map(|s| {
-                                    zoid_core::store::is_live(
-                                        s.active,
-                                        s.active_pid,
-                                        s.active_heartbeat,
-                                        boot_ts,
-                                        pid_alive,
-                                    )
-                                })
-                                .collect();
-                            // After a delete, clamp the cursor to a valid
-                            // session row (1..=n). If no sessions remain,
-                            // land on "Create new" (index 0). Never reset to 0
-                            // when sessions still exist — index 0 is "Create
-                            // new", not the first session.
-                            if n == 0 {
-                                selected = 0;
-                            } else if selected > n {
-                                selected = n;
-                            }
-                            pending_delete = None;
+                match key.code {
+                    crossterm::event::KeyCode::Char('y')
+                    | crossterm::event::KeyCode::Char('Y')
+                    | crossterm::event::KeyCode::Enter => {
+                        // `idx` is a logical index (1..=n); session `idx - 1`.
+                        if let Some(s) = sessions.get(idx - 1) {
+                            let _ = session.delete_session(s.id).await;
                         }
-                        crossterm::event::KeyCode::Char('n')
-                        | crossterm::event::KeyCode::Char('N')
-                        | crossterm::event::KeyCode::Esc => {
-                            pending_delete = None;
+                        sessions = session
+                            .list_sessions(Some(root.to_string()))
+                            .await
+                            .unwrap_or_default();
+                        n = sessions.len();
+                        live = sessions
+                            .iter()
+                            .map(|s| {
+                                zoid_core::store::is_live(
+                                    s.active,
+                                    s.active_pid,
+                                    s.active_heartbeat,
+                                    boot_ts,
+                                    pid_alive,
+                                )
+                            })
+                            .collect();
+                        // After a delete, clamp the cursor to a valid
+                        // session row (1..=n). If no sessions remain,
+                        // land on "Create new" (index 0). Never reset to 0
+                        // when sessions still exist — index 0 is "Create
+                        // new", not the first session.
+                        if n == 0 {
+                            selected = 0;
+                        } else if selected > n {
+                            selected = n;
                         }
-                        _ => {}
+                        pending_delete = None;
                     }
-                    continue;
+                    crossterm::event::KeyCode::Char('n')
+                    | crossterm::event::KeyCode::Char('N')
+                    | crossterm::event::KeyCode::Esc => {
+                        pending_delete = None;
+                    }
+                    _ => {}
                 }
-                let pick_key = match key.code {
-                    crossterm::event::KeyCode::Up => PickKey::Up,
-                    crossterm::event::KeyCode::Down => PickKey::Down,
-                    crossterm::event::KeyCode::Enter => PickKey::Enter,
-                    crossterm::event::KeyCode::Esc => PickKey::Esc,
-                    crossterm::event::KeyCode::Delete
-                    | crossterm::event::KeyCode::Backspace => PickKey::Delete,
-                    _ => continue,
-                };
-                match pick_choice(n, selected, pick_key) {
-                    PickOutcome::Pending(new_sel) => selected = new_sel,
-                    PickOutcome::Resume(idx) => {
-                        // idx is a logical index (1..=n); session `idx - 1`.
-                        let s = &sessions[idx - 1];
-                        return Ok(PickResult::Resume {
-                            id: s.id,
-                            name: s.name.clone(),
-                            created_ts: s.created_ts,
-                        });
-                    }
-                    PickOutcome::CreateNew => return Ok(PickResult::CreateNew),
-                    PickOutcome::Abort => {
-                        anyhow::bail!("startup picker aborted");
-                    }
-                    PickOutcome::DeleteConfirm(idx) => {
-                        // idx is a logical index (1..=n); session `idx - 1`.
-                        let sess_idx = idx - 1;
-                        if live.get(sess_idx).copied().unwrap_or(false) {
-                            continue;
-                        }
-                        pending_delete = Some(idx);
-                    }
+                continue;
+            }
+            let pick_key = match key.code {
+                crossterm::event::KeyCode::Up => PickKey::Up,
+                crossterm::event::KeyCode::Down => PickKey::Down,
+                crossterm::event::KeyCode::Enter => PickKey::Enter,
+                crossterm::event::KeyCode::Esc => PickKey::Esc,
+                crossterm::event::KeyCode::Delete | crossterm::event::KeyCode::Backspace => {
+                    PickKey::Delete
                 }
+                _ => continue,
+            };
+            match pick_choice(n, selected, pick_key) {
+                PickOutcome::Pending(new_sel) => selected = new_sel,
+                PickOutcome::Resume(idx) => {
+                    // idx is a logical index (1..=n); session `idx - 1`.
+                    let s = &sessions[idx - 1];
+                    return Ok(PickResult::Resume {
+                        id: s.id,
+                        name: s.name.clone(),
+                        created_ts: s.created_ts,
+                    });
+                }
+                PickOutcome::CreateNew => return Ok(PickResult::CreateNew),
+                PickOutcome::Abort => {
+                    anyhow::bail!("startup picker aborted");
+                }
+                PickOutcome::DeleteConfirm(idx) => {
+                    // idx is a logical index (1..=n); session `idx - 1`.
+                    let sess_idx = idx - 1;
+                    if live.get(sess_idx).copied().unwrap_or(false) {
+                        continue;
+                    }
+                    pending_delete = Some(idx);
+                }
+            }
         }
     }
 }
@@ -1137,7 +1131,9 @@ fn select_provider(
             Arc::new(
                 zoid_provider::ollama::OllamaProvider::new(String::new())
                     .with_base_url(base_url)
-                    .with_num_ctx(zoid_provider::ollama::configured_num_ctx(config.economy.num_ctx)),
+                    .with_num_ctx(zoid_provider::ollama::configured_num_ctx(
+                        config.economy.num_ctx,
+                    )),
             ),
             "ollama",
             true, // no key required → treat as ready
@@ -1161,7 +1157,8 @@ fn select_provider(
         "opencode-zen" => match key_for("OPENCODE_GO_API_KEY") {
             Some(k) => (
                 Arc::new(
-                    zoid_provider::opencode_zen::OpenCodeZenProvider::new(k).with_base_url(base_url),
+                    zoid_provider::opencode_zen::OpenCodeZenProvider::new(k)
+                        .with_base_url(base_url),
                 ),
                 "opencode-zen",
                 true,
@@ -1275,8 +1272,9 @@ fn provider_for_id(
                 as Arc<dyn Provider>
         }),
         "opencode-zen" => key_for("OPENCODE_GO_API_KEY").map(|k| {
-            Arc::new(zoid_provider::opencode_zen::OpenCodeZenProvider::new(k).with_base_url(base_url))
-                as Arc<dyn Provider>
+            Arc::new(
+                zoid_provider::opencode_zen::OpenCodeZenProvider::new(k).with_base_url(base_url),
+            ) as Arc<dyn Provider>
         }),
         "anthropic" => key_for("ANTHROPIC_API_KEY").map(|k| {
             Arc::new(zoid_provider::anthropic::AnthropicProvider::new(k).with_base_url(base_url))
@@ -1539,7 +1537,9 @@ impl ProjectionCache {
             .filter_map(|e| match &e.kind {
                 EventKind::QuestionAsked { id, kind, .. }
                     if !matches!(kind, zoid_core::event::QuestionKind::Approval) =>
-                    Some(id.clone()),
+                {
+                    Some(id.clone())
+                }
                 _ => None,
             })
             .collect();
@@ -1621,7 +1621,9 @@ impl ProjectionCache {
         use zoid_core::projection::{
             ChatMsg, QuestionCardState, RescueSummary, RescuedTurnSummary, ToolCallRef,
         };
-        let bump_len = || ProjectionImpact::MsgsMutated { mutated_index: None };
+        let bump_len = || ProjectionImpact::MsgsMutated {
+            mutated_index: None,
+        };
         // token_ledger sums `e.tokens` across ALL events (not just Usage), so the
         // incremental path must do the same — accumulate tokens here, before the
         // kind-specific match. `last_input_tokens`/`last_output_tokens` track the
@@ -1647,7 +1649,9 @@ impl ProjectionCache {
             // finalize_pending) — the fold starts a fresh pending turn, while
             // append-to-last would mutate the just-pushed message.
             EventKind::ModelDelta { text } => {
-                self.pending_text.get_or_insert_with(String::new).push_str(text);
+                self.pending_text
+                    .get_or_insert_with(String::new)
+                    .push_str(text);
                 self.pending_turn_ts.get_or_insert(ev.ts);
                 self.churn_dirty = true;
                 self.events_len = Some(self.events_len.unwrap_or(0) + 1);
@@ -1844,12 +1848,15 @@ impl ProjectionCache {
 
             // Tier 3 — content mutation.
             EventKind::ToolResultCompacted { id, summary, .. } => {
-                if let Some((idx, ChatMsg::ToolResult { output, compacted, .. })) = self
-                    .msgs
-                    .iter_mut()
-                    .enumerate()
-                    .rev()
-                    .find(|(_, m)| matches!(m, ChatMsg::ToolResult { id: rid, .. } if rid == id))
+                if let Some((
+                    idx,
+                    ChatMsg::ToolResult {
+                        output, compacted, ..
+                    },
+                )) =
+                    self.msgs.iter_mut().enumerate().rev().find(
+                        |(_, m)| matches!(m, ChatMsg::ToolResult { id: rid, .. } if rid == id),
+                    )
                 {
                     *output = summary.clone();
                     *compacted = true;
@@ -2182,8 +2189,9 @@ struct App {
     /// Shared in-flight subagent ID set, threaded into TurnConfig so the
     /// Emitting handler can enforce sequential dispatch (Gap 3). The spawned
     /// subagent's DelegationResult removes the ID.
-    in_flight:
-        std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, zoid::agent::SubagentHandle>>>,
+    in_flight: std::sync::Arc<
+        std::sync::Mutex<std::collections::HashMap<String, zoid::agent::SubagentHandle>>,
+    >,
     /// The reply channel for an in-flight `ask_user` question (Task 11): `Some`
     /// while the question overlay is up. Dropping it (Esc-abort) makes the
     /// agent loop record a balanced "[user aborted]" result and end the turn.
@@ -2744,9 +2752,7 @@ async fn main() -> Result<()> {
         queued_subagents: std::collections::VecDeque::new(),
         active_worktree: None,
         active_wt_tx: tokio::sync::watch::channel(None).0,
-        in_flight: std::sync::Arc::new(std::sync::Mutex::new(
-            std::collections::HashMap::new(),
-        )),
+        in_flight: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         pending_answer: None,
         turn_cancel: None,
         turn_hard: None,
@@ -3218,8 +3224,7 @@ where
         // Esc/Ctrl-C routes to CancelTurn while this is true. Also true when
         // subagents are in flight (no main turn) so the two-press subagent-kill
         // path in CancelTurn is reachable.
-        app.shell.cancellable = app.turn_cancel.is_some()
-            || !app.in_flight_subagents.is_empty();
+        app.shell.cancellable = app.turn_cancel.is_some() || !app.in_flight_subagents.is_empty();
         app.shell.spinner = zoid_tui::tokens::glyph::SPINNER[zoid_tui::motion::spinner_frame(
             elapsed,
             80,
@@ -4126,8 +4131,14 @@ fn current_write(
             "economy.band_headroom_pct",
             TomlValue::Int(econ.band_headroom_pct as i64),
         ),
-        "protected turns" => ("economy.min_protected_turns", TomlValue::Int(econ.min_protected_turns as i64)),
-        "protection pct" => ("economy.protection_pct", TomlValue::Int(econ.protection_pct as i64)),
+        "protected turns" => (
+            "economy.min_protected_turns",
+            TomlValue::Int(econ.min_protected_turns as i64),
+        ),
+        "protection pct" => (
+            "economy.protection_pct",
+            TomlValue::Int(econ.protection_pct as i64),
+        ),
         "reduced motion" => ("reduced_motion", TomlValue::Bool(app.config.reduced_motion)),
         "thinking" => (
             "thinking.enabled",
@@ -4147,7 +4158,13 @@ fn current_write(
 }
 
 /// The (label, kind) of the row under the config cursor, if any.
-fn current_config_field(app: &App) -> Option<(&'static str, zoid_tui::config_view::FieldKind, Option<&'static str>)> {
+fn current_config_field(
+    app: &App,
+) -> Option<(
+    &'static str,
+    zoid_tui::config_view::FieldKind,
+    Option<&'static str>,
+)> {
     app.shell
         .config_sections
         .get(app.shell.config_section)
@@ -4350,8 +4367,8 @@ fn apply_config_write(
 }
 
 async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result<bool> {
-    use zoid_tui::Overlay;
     use zoid_tui::route::Action;
+    use zoid_tui::Overlay;
     match action {
         Action::Quit => return Ok(true),
         Action::CycleMode => {
@@ -4530,7 +4547,8 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             // Yielded always blocks (even when not busy) — a taken-over session
             // can't accept new turns until the user :session new or :session resume.
             if app.yielded {
-                app.shell.status_hint = Some("session taken over — :session new or :session resume".into());
+                app.shell.status_hint =
+                    Some("session taken over — :session new or :session resume".into());
                 return Ok(false);
             }
             // Busy (a turn streaming) but not yielded: stash the message for
@@ -4724,8 +4742,8 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 app.body_cache = BodyCache::default();
                 app.shell.conversation_scroll = 0;
                 app.shell.follow_tail = true; // jump to the latest of the loaded session
-                // The resumed session runs with ITS OWN mode, never the
-                // previous session's overlay prompt + scoped skills.
+                                              // The resumed session runs with ITS OWN mode, never the
+                                              // previous session's overlay prompt + scoped skills.
                 restore_mode_for_session(app).await;
                 if let Some(info) = app
                     .session
@@ -4849,11 +4867,8 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                         .position(|&x| x == sid)
                         .unwrap_or(app.shell.session_selected);
                     app.shell.session_confirm = None;
-                    return Box::pin(handle_action(
-                        app,
-                        zoid_tui::route::Action::SessionPick,
-                    ))
-                    .await;
+                    return Box::pin(handle_action(app, zoid_tui::route::Action::SessionPick))
+                        .await;
                 }
             }
         }
@@ -4998,10 +5013,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             use zoid_core::config::TomlValue;
             if let Some((label, _kind, _)) = current_config_field(app) {
                 let write = match label {
-                    "eviction" => Some((
-                        "eviction.enabled",
-                        !app.config.eviction.enabled,
-                    )),
+                    "eviction" => Some(("eviction.enabled", !app.config.eviction.enabled)),
                     "auto-evict cold" => Some((
                         "economy.auto_evict_cold",
                         !app.config.economy.auto_evict_cold,
@@ -5483,7 +5495,11 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::CatalogConfirmYes => {
             // mcp path: install from the carried confirm. Must NOT re-enter
             // install_plugin — its catalog id-path requires [source].
-            let mcp = app.shell.plugin_catalog.as_ref().and_then(|c| c.mcp.clone());
+            let mcp = app
+                .shell
+                .plugin_catalog
+                .as_ref()
+                .and_then(|c| c.mcp.clone());
             if let Some(confirm) = mcp {
                 app.shell.plugin_catalog = None;
                 app.shell.overlay = Overlay::None;
@@ -5548,11 +5564,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 let prev = o.chosen_provider.clone();
                 o.step = zoid_tui::state::OnboardingStep::Provider;
                 o.options = zoid_tui::config_view::provider_options("");
-                o.list_sel = o
-                    .options
-                    .iter()
-                    .position(|opt| opt.id == prev)
-                    .unwrap_or(0);
+                o.list_sel = o.options.iter().position(|opt| opt.id == prev).unwrap_or(0);
                 o.key_buffer.clear();
             }
         }
@@ -5611,11 +5623,7 @@ fn handle_onboarding_select(app: &mut App) -> Result<bool> {
         }
         OnboardingStep::Model => {
             // Index 0 = "use default" → empty model. Else the selected model id.
-            let model = if sel == 0 {
-                String::new()
-            } else {
-                chosen_id
-            };
+            let model = if sel == 0 { String::new() } else { chosen_id };
             apply_config_write(app, "model", TomlValue::Str(model), false);
             app.shell.overlay = zoid_tui::Overlay::None;
             // onboarding stays None — DONE
@@ -5748,7 +5756,11 @@ fn subagent_kill_decision(armed: bool, pending: usize) -> (bool, bool, String) {
     if armed {
         (false, true, format!("killing {pending} subagent(s)…"))
     } else {
-        (true, false, format!("kill {pending} subagent(s)? Esc again to confirm"))
+        (
+            true,
+            false,
+            format!("kill {pending} subagent(s)? Esc again to confirm"),
+        )
     }
 }
 
@@ -6000,22 +6012,24 @@ fn spawn_catalog_load(app: &App) {
     let ui_tx = app.ui_tx.clone();
     let cache_dir = resolve_cache_dir(|k| std::env::var(k).ok()).join("catalog");
     tokio::spawn(async move {
-        let res: Result<Vec<zoid::catalog::CatalogEntry>, String> =
-            if let Some(v) = zoid::catalog::cache_if_fresh(
+        let res: Result<Vec<zoid::catalog::CatalogEntry>, String> = if let Some(v) =
+            zoid::catalog::cache_if_fresh(
                 chrono::Utc::now(),
                 chrono::Duration::hours(24),
                 &cache_dir,
             ) {
-                Ok(v)
-            } else {
-                match zoid::catalog::fetch_text(&zoid::catalog::catalog_index_url()).await {
-                    Ok(body) => zoid::catalog::store_and_parse(chrono::Utc::now(), &cache_dir, &body)
-                        .map_err(|e| e.to_string()),
-                    Err(e) => zoid::catalog::cached_any(&cache_dir)
-                        .ok_or_else(|| format!("catalog unavailable: {e}")),
-                }
-            };
-        let _ = ui_tx.send(zoid::agent::AgentUpdate::CatalogLoaded(res)).await;
+            Ok(v)
+        } else {
+            match zoid::catalog::fetch_text(&zoid::catalog::catalog_index_url()).await {
+                Ok(body) => zoid::catalog::store_and_parse(chrono::Utc::now(), &cache_dir, &body)
+                    .map_err(|e| e.to_string()),
+                Err(e) => zoid::catalog::cached_any(&cache_dir)
+                    .ok_or_else(|| format!("catalog unavailable: {e}")),
+            }
+        };
+        let _ = ui_tx
+            .send(zoid::agent::AgentUpdate::CatalogLoaded(res))
+            .await;
     });
 }
 
@@ -6123,10 +6137,16 @@ fn apply_mcp_manifest_fetched(
 /// Map a loaded catalog index (`AgentUpdate::CatalogLoaded`) to `PluginCatalogRow`s.
 /// Skips entries whose kind is not `mode`/`skills`/`mcp`. `source_label` takes
 /// a char-safe (not byte) prefix of the source ref.
-fn map_catalog_entries(entries: Vec<zoid::catalog::CatalogEntry>) -> Vec<zoid_tui::state::PluginCatalogRow> {
+fn map_catalog_entries(
+    entries: Vec<zoid::catalog::CatalogEntry>,
+) -> Vec<zoid_tui::state::PluginCatalogRow> {
     entries
         .into_iter()
-        .filter(|e| e.kind.iter().any(|k| k == "mode" || k == "skills" || k == "mcp"))
+        .filter(|e| {
+            e.kind
+                .iter()
+                .any(|k| k == "mode" || k == "skills" || k == "mcp")
+        })
         .map(|e| zoid_tui::state::PluginCatalogRow {
             id: e.id,
             name: e.name,
@@ -6176,10 +6196,11 @@ fn apply_catalog_loaded(app: &mut App, res: Result<Vec<zoid::catalog::CatalogEnt
 /// AgentUpdate::PluginScan.
 fn install_plugin(app: &mut App, arg: String) {
     use zoid::plugin_install::parse_plugin_install_args;
-    use zoid_plugin::resolve::{ManifestSource, PluginRef, classify_ref, resolve_source};
+    use zoid_plugin::resolve::{classify_ref, resolve_source, ManifestSource, PluginRef};
     let (plugin_ref, over) = parse_plugin_install_args(&arg);
     if plugin_ref.trim().is_empty() {
-        app.shell.status_hint = Some("usage: :plugin install <id|github-url> [--mode|--skills]".into());
+        app.shell.status_hint =
+            Some("usage: :plugin install <id|github-url> [--mode|--skills]".into());
         return;
     }
     if app.installing_plugin {
@@ -6189,13 +6210,19 @@ fn install_plugin(app: &mut App, arg: String) {
     let r = classify_ref(&plugin_ref);
     // Reject a bad id up front (M4): the Catalog branch interpolates id into a raw URL.
     if let PluginRef::Id(id) = &r {
-        if !id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-')) {
+        if !id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
+        {
             app.shell.status_hint = Some(format!("invalid plugin id '{id}'"));
             return;
         }
     }
     let ui_tx = app.ui_tx.clone();
-    match (&r, resolve_source(&r, zoid_plugin::bundled::bundled_ids(), false, false)) {
+    match (
+        &r,
+        resolve_source(&r, zoid_plugin::bundled::bundled_ids(), false, false),
+    ) {
         (PluginRef::Id(id), ManifestSource::Bundled) => {
             let manifest = zoid_plugin::bundled::bundled_manifest(id).expect("bundled id resolves");
             if let Err(e) = manifest.validate() {
@@ -6337,7 +6364,13 @@ fn apply_plugin_scan(
     id: String,
     origin: String,
     over: zoid::plugin_install::KindOverride,
-    res: Result<(zoid_plugin::manifest::PluginManifest, zoid_core::wizard::UpstreamScan), String>,
+    res: Result<
+        (
+            zoid_plugin::manifest::PluginManifest,
+            zoid_core::wizard::UpstreamScan,
+        ),
+        String,
+    >,
 ) -> bool {
     use zoid::plugin_install::KindOverride;
     app.installing_plugin = false;
@@ -6421,7 +6454,11 @@ fn apply_plugin_scan(
     // its "could not be activated" message is meaningless for a skills pack,
     // which has no mode to activate. (Live hot-reload is deferred to a later spec.)
     if is_skills_kind {
-        let n = scan.files.iter().filter(|f| f.upstream_path.ends_with("/SKILL.md")).count();
+        let n = scan
+            .files
+            .iter()
+            .filter(|f| f.upstream_path.ends_with("/SKILL.md"))
+            .count();
         app.shell.status_hint = Some(format!(
             "plugin '{id}' installed ({n} skills). Restart zoid to load them."
         ));
@@ -6623,7 +6660,8 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             Ok(false)
         }
         Command::PluginList => {
-            app.shell.plugin_catalog = Some(zoid_tui::state::PluginCatalogState::loading_read_only());
+            app.shell.plugin_catalog =
+                Some(zoid_tui::state::PluginCatalogState::loading_read_only());
             app.shell.overlay = zoid_tui::state::Overlay::PluginCatalog;
             spawn_catalog_load(app);
             Ok(false)
@@ -6656,8 +6694,8 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
             app.body_cache = BodyCache::default();
             app.shell.conversation_scroll = 0;
             app.shell.follow_tail = true; // new session starts pinned to the latest
-            // A fresh session has no saved mode yet ⇒ this resets to Chat rather
-            // than carrying over the previous session's active mode.
+                                          // A fresh session has no saved mode yet ⇒ this resets to Chat rather
+                                          // than carrying over the previous session's active mode.
             restore_mode_for_session(app).await;
             // Claim the new session and clear any yielded state from the prior
             // (taken-over) session — `:new` is the documented yield escape hatch.
@@ -6731,8 +6769,7 @@ async fn exec_command(app: &mut App, cmd: zoid_tui::command::Command) -> Result<
         }
         Command::Worktree(name) => {
             if name.trim().is_empty() {
-                app.shell.status_hint =
-                    Some("usage: :worktree <name> · :worktree exit".into());
+                app.shell.status_hint = Some("usage: :worktree <name> · :worktree exit".into());
                 return Ok(false);
             }
             // Call the handler directly — NOT via the ui_tx channel.
@@ -6928,22 +6965,20 @@ fn resolve_thinking(
     match model_support {
         zoid_provider::model::ThinkingSupport::None => ThinkingMode::Off,
         _ if !enabled => ThinkingMode::Off,
-        _ => {
-            match &config_thinking.effort {
-                None => ThinkingMode::Auto,
-                Some(e) => {
-                    use zoid_provider::EffortLevel;
-                    let level = match e.as_str() {
-                        "low" => EffortLevel::Low,
-                        "medium" => EffortLevel::Medium,
-                        "high" => EffortLevel::High,
-                        "max" => EffortLevel::Max,
-                        _ => EffortLevel::High,
-                    };
-                    ThinkingMode::Effort(level)
-                }
+        _ => match &config_thinking.effort {
+            None => ThinkingMode::Auto,
+            Some(e) => {
+                use zoid_provider::EffortLevel;
+                let level = match e.as_str() {
+                    "low" => EffortLevel::Low,
+                    "medium" => EffortLevel::Medium,
+                    "high" => EffortLevel::High,
+                    "max" => EffortLevel::Max,
+                    _ => EffortLevel::High,
+                };
+                ThinkingMode::Effort(level)
             }
-        }
+        },
     }
 }
 
@@ -7051,10 +7086,12 @@ fn compute_worktree_switch(
                 // Capture OIDs BEFORE remove_worktree deletes the branch —
                 // otherwise the diagnostic branch_oid is always None.
                 let repo = git2::Repository::open(repo_root).ok();
-                let branch_oid = repo.as_ref()
+                let branch_oid = repo
+                    .as_ref()
                     .and_then(|r| r.find_branch(&wt.name, git2::BranchType::Local).ok())
                     .and_then(|b| b.get().target());
-                let head_oid = repo.as_ref()
+                let head_oid = repo
+                    .as_ref()
                     .and_then(|r| r.head().ok())
                     .and_then(|h| h.target());
                 let has_unmerged = zoid::worktree::branch_has_unmerged_commits(repo_root, &wt.name);
@@ -7179,7 +7216,11 @@ fn rebuild_pending_wakes<'a>(
         std::collections::HashMap::new();
     for e in events {
         match &e.kind {
-            EventKind::WakeScheduled { wake_id, fire_at_ms, note } => {
+            EventKind::WakeScheduled {
+                wake_id,
+                fire_at_ms,
+                note,
+            } => {
                 by_id.insert(wake_id.clone(), (*fire_at_ms, note.clone()));
             }
             EventKind::WakeFired { wake_id } | EventKind::WakeCancelled { wake_id } => {
@@ -7216,7 +7257,9 @@ fn validate_schedule(enabled: bool, pending_count: usize, delay_secs: u64) -> Re
         return Err(format!("delay must be at least {WAKE_MIN_DELAY_SECS}s"));
     }
     if delay_secs > WAKE_MAX_DELAY_SECS {
-        return Err(format!("delay must be at most {WAKE_MAX_DELAY_SECS}s (30 days)"));
+        return Err(format!(
+            "delay must be at most {WAKE_MAX_DELAY_SECS}s (30 days)"
+        ));
     }
     if pending_count >= WAKE_MAX_PENDING {
         return Err(format!("too many pending wakes (max {WAKE_MAX_PENDING})"));
@@ -7246,7 +7289,11 @@ async fn handle_schedule_wake(
     }
 
     let wake_id = Ulid::new().to_string();
-    let fire_at_ms = now_ms().saturating_add(i64::try_from(delay_secs).unwrap_or(i64::MAX).saturating_mul(1000));
+    let fire_at_ms = now_ms().saturating_add(
+        i64::try_from(delay_secs)
+            .unwrap_or(i64::MAX)
+            .saturating_mul(1000),
+    );
     app.record(EventKind::WakeScheduled {
         wake_id: wake_id.clone(),
         fire_at_ms,
@@ -7254,7 +7301,8 @@ async fn handle_schedule_wake(
     })
     .await
     .map_err(|e| format!("failed to persist wake: {e}"))?;
-    app.pending_wakes.insert((fire_at_ms, wake_id.clone()), note);
+    app.pending_wakes
+        .insert((fire_at_ms, wake_id.clone()), note);
     let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
     Ok(wake_id)
 }
@@ -7273,9 +7321,11 @@ async fn handle_cancel_wake(app: &mut App, id: Option<String>) -> Result<String,
         None => app.pending_wakes.keys().cloned().collect(),
     };
     for (fire_at, wid) in &targets {
-        app.record(EventKind::WakeCancelled { wake_id: wid.clone() })
-            .await
-            .map_err(|e| format!("failed to persist cancel: {e}"))?;
+        app.record(EventKind::WakeCancelled {
+            wake_id: wid.clone(),
+        })
+        .await
+        .map_err(|e| format!("failed to persist cancel: {e}"))?;
         app.pending_wakes.remove(&(*fire_at, wid.clone()));
     }
     let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
@@ -7378,10 +7428,16 @@ async fn drain_due_wakes(app: &mut App) -> anyhow::Result<bool> {
     }
     // Idle: fire them. Only now do we mutate the pending set + record events.
     for (fire_at, id) in &due {
-        let note = app.pending_wakes.remove(&(*fire_at, id.clone())).unwrap_or_default();
+        let note = app
+            .pending_wakes
+            .remove(&(*fire_at, id.clone()))
+            .unwrap_or_default();
         let text = wake_injection_text(&note, *fire_at, now);
         app.record(EventKind::UserMessage { text }).await?;
-        app.record(EventKind::WakeFired { wake_id: id.clone() }).await?;
+        app.record(EventKind::WakeFired {
+            wake_id: id.clone(),
+        })
+        .await?;
     }
     // Re-arm the watcher to the next remaining deadline (or park).
     let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
@@ -7441,9 +7497,7 @@ fn spawn_queued_subagent(app: &mut App, qs: QueuedSubagent) {
     };
     let cwd = wt
         .as_ref()
-        .map(|w| {
-            std::fs::canonicalize(w.path()).unwrap_or_else(|_| w.path().to_path_buf())
-        })
+        .map(|w| std::fs::canonicalize(w.path()).unwrap_or_else(|_| w.path().to_path_buf()))
         .unwrap_or_else(|| qs.cwd.clone());
 
     // Spawn — pull params from `app` so the queued spawn matches a direct one.
@@ -7460,7 +7514,12 @@ fn spawn_queued_subagent(app: &mut App, qs: QueuedSubagent) {
                 .fetched_model_info
                 .map(|info| info.thinking)
                 .unwrap_or_else(|| zoid_provider::model::model_info(&app.model).thinking);
-            resolve_thinking(&app.config.thinking, app.prov.thinking_enabled, &app.config.provider, model_support)
+            resolve_thinking(
+                &app.config.thinking,
+                app.prov.thinking_enabled,
+                &app.config.provider,
+                model_support,
+            )
         },
         app.session.clone(),
         app.session_id,
@@ -7544,8 +7603,8 @@ fn spawn_turn(app: &mut App) {
     turn_config.policy = policy_from_config(&app.economy, app.context_target);
     turn_config.eviction = zoid_core::eviction::EvictionPolicy {
         enabled: app.config.eviction.enabled,
-        capacity: app.shell.ctx_ceiling,                // capacity = model window
-        context_target: app.context_target,             // resolved soft setpoint
+        capacity: app.shell.ctx_ceiling,    // capacity = model window
+        context_target: app.context_target, // resolved soft setpoint
         band_headroom_pct: app.economy.band_headroom_pct,
         min_protected_turns: app.economy.min_protected_turns,
         protection_pct: app.economy.protection_pct,
@@ -7558,7 +7617,12 @@ fn spawn_turn(app: &mut App) {
         .fetched_model_info
         .map(|info| info.thinking)
         .unwrap_or_else(|| zoid_provider::model::model_info(&app.model).thinking);
-    turn_config.thinking = resolve_thinking(&app.config.thinking, app.prov.thinking_enabled, &app.config.provider, model_support);
+    turn_config.thinking = resolve_thinking(
+        &app.config.thinking,
+        app.prov.thinking_enabled,
+        &app.config.provider,
+        model_support,
+    );
     turn_config.approval = app.config.approval.clone();
     turn_config.kill = kill.clone();
     turn_config.in_flight = Some(app.in_flight.clone());
@@ -7616,62 +7680,129 @@ mod thinking_tests {
 
     #[test]
     fn resolve_thinking_forces_off_when_unsupported() {
-        let cfg = zoid_core::config::ThinkingConfig { enabled: true, effort: Some("high".into()) };
-        let mode = resolve_thinking(&cfg, zoid_core::config::Source::Default, "anthropic-api", zoid_provider::model::ThinkingSupport::None);
+        let cfg = zoid_core::config::ThinkingConfig {
+            enabled: true,
+            effort: Some("high".into()),
+        };
+        let mode = resolve_thinking(
+            &cfg,
+            zoid_core::config::Source::Default,
+            "anthropic-api",
+            zoid_provider::model::ThinkingSupport::None,
+        );
         assert_eq!(mode, zoid_provider::ThinkingMode::Off);
     }
 
     #[test]
     fn resolve_thinking_off_when_config_disabled() {
-        let cfg = zoid_core::config::ThinkingConfig { enabled: false, effort: None };
+        let cfg = zoid_core::config::ThinkingConfig {
+            enabled: false,
+            effort: None,
+        };
         // Explicit enabled=false → Source::UserGlobal → user override wins.
-        let mode = resolve_thinking(&cfg, zoid_core::config::Source::UserGlobal, "ollama-local", zoid_provider::model::ThinkingSupport::Toggle);
+        let mode = resolve_thinking(
+            &cfg,
+            zoid_core::config::Source::UserGlobal,
+            "ollama-local",
+            zoid_provider::model::ThinkingSupport::Toggle,
+        );
         assert_eq!(mode, zoid_provider::ThinkingMode::Off);
     }
 
     #[test]
     fn resolve_thinking_auto_when_enabled_no_effort() {
-        let cfg = zoid_core::config::ThinkingConfig { enabled: true, effort: None };
-        let mode = resolve_thinking(&cfg, zoid_core::config::Source::UserGlobal, "anthropic-api", zoid_provider::model::ThinkingSupport::Budget);
+        let cfg = zoid_core::config::ThinkingConfig {
+            enabled: true,
+            effort: None,
+        };
+        let mode = resolve_thinking(
+            &cfg,
+            zoid_core::config::Source::UserGlobal,
+            "anthropic-api",
+            zoid_provider::model::ThinkingSupport::Budget,
+        );
         assert_eq!(mode, zoid_provider::ThinkingMode::Auto);
     }
 
     #[test]
     fn resolve_thinking_effort_when_enabled_with_effort() {
-        let cfg = zoid_core::config::ThinkingConfig { enabled: true, effort: Some("max".into()) };
-        let mode = resolve_thinking(&cfg, zoid_core::config::Source::UserGlobal, "anthropic-api", zoid_provider::model::ThinkingSupport::Adaptive);
-        assert_eq!(mode, zoid_provider::ThinkingMode::Effort(zoid_provider::EffortLevel::Max));
+        let cfg = zoid_core::config::ThinkingConfig {
+            enabled: true,
+            effort: Some("max".into()),
+        };
+        let mode = resolve_thinking(
+            &cfg,
+            zoid_core::config::Source::UserGlobal,
+            "anthropic-api",
+            zoid_provider::model::ThinkingSupport::Adaptive,
+        );
+        assert_eq!(
+            mode,
+            zoid_provider::ThinkingMode::Effort(zoid_provider::EffortLevel::Max)
+        );
     }
 
     #[test]
     fn resolve_thinking_provider_default_flips_on_for_ollama_local() {
         // Source::Default (user set no [thinking].enabled) + ollama-local + capable → Auto.
-        let cfg = zoid_core::config::ThinkingConfig { enabled: false, effort: None };
-        let mode = resolve_thinking(&cfg, zoid_core::config::Source::Default, "ollama-local", zoid_provider::model::ThinkingSupport::Toggle);
+        let cfg = zoid_core::config::ThinkingConfig {
+            enabled: false,
+            effort: None,
+        };
+        let mode = resolve_thinking(
+            &cfg,
+            zoid_core::config::Source::Default,
+            "ollama-local",
+            zoid_provider::model::ThinkingSupport::Toggle,
+        );
         assert_eq!(mode, zoid_provider::ThinkingMode::Auto);
     }
 
     #[test]
     fn resolve_thinking_provider_default_off_for_cloud() {
         // Same Default provenance, but a cloud provider → stays Off (false default).
-        let cfg = zoid_core::config::ThinkingConfig { enabled: false, effort: None };
-        let mode = resolve_thinking(&cfg, zoid_core::config::Source::Default, "ollama-cloud", zoid_provider::model::ThinkingSupport::Toggle);
+        let cfg = zoid_core::config::ThinkingConfig {
+            enabled: false,
+            effort: None,
+        };
+        let mode = resolve_thinking(
+            &cfg,
+            zoid_core::config::Source::Default,
+            "ollama-cloud",
+            zoid_provider::model::ThinkingSupport::Toggle,
+        );
         assert_eq!(mode, zoid_provider::ThinkingMode::Off);
     }
 
     #[test]
     fn resolve_thinking_provider_default_off_when_capability_none() {
         // Provider default flips on, but the model doesn't support thinking → Off.
-        let cfg = zoid_core::config::ThinkingConfig { enabled: false, effort: None };
-        let mode = resolve_thinking(&cfg, zoid_core::config::Source::Default, "ollama-local", zoid_provider::model::ThinkingSupport::None);
+        let cfg = zoid_core::config::ThinkingConfig {
+            enabled: false,
+            effort: None,
+        };
+        let mode = resolve_thinking(
+            &cfg,
+            zoid_core::config::Source::Default,
+            "ollama-local",
+            zoid_provider::model::ThinkingSupport::None,
+        );
         assert_eq!(mode, zoid_provider::ThinkingMode::Off);
     }
 
     #[test]
     fn resolve_thinking_env_override_wins_over_provider_default() {
         // ZOID_THINKING=off → Source::Env → user override wins, even for ollama-local.
-        let cfg = zoid_core::config::ThinkingConfig { enabled: false, effort: None };
-        let mode = resolve_thinking(&cfg, zoid_core::config::Source::Env, "ollama-local", zoid_provider::model::ThinkingSupport::Toggle);
+        let cfg = zoid_core::config::ThinkingConfig {
+            enabled: false,
+            effort: None,
+        };
+        let mode = resolve_thinking(
+            &cfg,
+            zoid_core::config::Source::Env,
+            "ollama-local",
+            zoid_provider::model::ThinkingSupport::Toggle,
+        );
         assert_eq!(mode, zoid_provider::ThinkingMode::Off);
     }
 
@@ -7680,17 +7811,36 @@ mod thinking_tests {
         // User wrote [thinking] effort="high" with no enabled key. thinking_enabled
         // is Source::Default (the enabled key was absent), so the provider default
         // flips enabled to true, and effort flows through. The result is Effort(High).
-        let cfg = zoid_core::config::ThinkingConfig { enabled: false, effort: Some("high".into()) };
-        let mode = resolve_thinking(&cfg, zoid_core::config::Source::Default, "ollama-local", zoid_provider::model::ThinkingSupport::Toggle);
-        assert_eq!(mode, zoid_provider::ThinkingMode::Effort(zoid_provider::EffortLevel::High));
+        let cfg = zoid_core::config::ThinkingConfig {
+            enabled: false,
+            effort: Some("high".into()),
+        };
+        let mode = resolve_thinking(
+            &cfg,
+            zoid_core::config::Source::Default,
+            "ollama-local",
+            zoid_provider::model::ThinkingSupport::Toggle,
+        );
+        assert_eq!(
+            mode,
+            zoid_provider::ThinkingMode::Effort(zoid_provider::EffortLevel::High)
+        );
     }
 
     #[test]
     fn resolve_thinking_canonical_id_matches_legacy_ollama_spelling() {
         // "ollama" canonicalizes to "ollama-cloud", so the local default does NOT
         // apply to the legacy spelling. Only "ollama-local" matches.
-        let cfg = zoid_core::config::ThinkingConfig { enabled: false, effort: None };
-        let mode = resolve_thinking(&cfg, zoid_core::config::Source::Default, "ollama", zoid_provider::model::ThinkingSupport::Toggle);
+        let cfg = zoid_core::config::ThinkingConfig {
+            enabled: false,
+            effort: None,
+        };
+        let mode = resolve_thinking(
+            &cfg,
+            zoid_core::config::Source::Default,
+            "ollama",
+            zoid_provider::model::ThinkingSupport::Toggle,
+        );
         assert_eq!(mode, zoid_provider::ThinkingMode::Off);
     }
 
@@ -7740,7 +7890,7 @@ mod thinking_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{Terminal, backend::TestBackend, style::Modifier};
+    use ratatui::{backend::TestBackend, style::Modifier, Terminal};
     use ratatui_textarea::TextArea;
 
     #[test]
@@ -7748,16 +7898,39 @@ mod tests {
         use zoid_core::event::{Event, EventKind};
         let mk = |kind| Event::new(Ulid::new(), None, 0, kind);
         let evs = vec![
-            mk(EventKind::WakeScheduled { wake_id: "a".into(), fire_at_ms: 300, note: "later".into() }),
-            mk(EventKind::WakeScheduled { wake_id: "b".into(), fire_at_ms: 100, note: "soon".into() }),
-            mk(EventKind::WakeScheduled { wake_id: "c".into(), fire_at_ms: 200, note: "gone".into() }),
-            mk(EventKind::WakeFired { wake_id: "b".into() }),      // b fired → excluded
-            mk(EventKind::WakeCancelled { wake_id: "c".into() }),  // c cancelled → excluded
+            mk(EventKind::WakeScheduled {
+                wake_id: "a".into(),
+                fire_at_ms: 300,
+                note: "later".into(),
+            }),
+            mk(EventKind::WakeScheduled {
+                wake_id: "b".into(),
+                fire_at_ms: 100,
+                note: "soon".into(),
+            }),
+            mk(EventKind::WakeScheduled {
+                wake_id: "c".into(),
+                fire_at_ms: 200,
+                note: "gone".into(),
+            }),
+            mk(EventKind::WakeFired {
+                wake_id: "b".into(),
+            }), // b fired → excluded
+            mk(EventKind::WakeCancelled {
+                wake_id: "c".into(),
+            }), // c cancelled → excluded
         ];
         let pending = rebuild_pending_wakes(&evs);
         // Only `a` survives; BTreeMap orders by (fire_at, id).
-        assert_eq!(pending.len(), 1, "only the un-fired, un-cancelled wake survives");
-        assert_eq!(pending.get(&(300, "a".to_string())).map(String::as_str), Some("later"));
+        assert_eq!(
+            pending.len(),
+            1,
+            "only the un-fired, un-cancelled wake survives"
+        );
+        assert_eq!(
+            pending.get(&(300, "a".to_string())).map(String::as_str),
+            Some("later")
+        );
         // Earliest fire_at of the pending set.
         assert_eq!(pending.keys().next().map(|(t, _)| *t), Some(300));
     }
@@ -7765,10 +7938,18 @@ mod tests {
     #[test]
     fn earliest_fire_at_is_the_min_key() {
         let mut pending = std::collections::BTreeMap::new();
-        assert_eq!(earliest_fire_at(&pending), None, "empty → None (watcher parks)");
+        assert_eq!(
+            earliest_fire_at(&pending),
+            None,
+            "empty → None (watcher parks)"
+        );
         pending.insert((500i64, "a".to_string()), "n".to_string());
         pending.insert((100i64, "b".to_string()), "n".to_string());
-        assert_eq!(earliest_fire_at(&pending), Some(100), "earliest fire_at wins");
+        assert_eq!(
+            earliest_fire_at(&pending),
+            Some(100),
+            "earliest fire_at wins"
+        );
     }
 
     #[test]
@@ -7787,21 +7968,40 @@ mod tests {
 
     #[test]
     fn validate_schedule_enforces_switch_floor_and_cap() {
-        assert!(validate_schedule(false, 0, 60).is_err(), "disabled → reject");
-        assert!(validate_schedule(true, 0, 29).is_err(), "below 30s floor → reject");
-        assert!(validate_schedule(true, 16, 60).is_err(), "at 16 pending cap → reject");
-        assert!(validate_schedule(true, 15, 30).is_ok(), "enabled, 30s, under cap → ok");
-        assert!(validate_schedule(true, 0, WAKE_MAX_DELAY_SECS + 1).is_err(), "above 30-day cap → reject");
-        assert!(validate_schedule(true, 0, WAKE_MAX_DELAY_SECS).is_ok(), "exactly at cap → ok");
+        assert!(
+            validate_schedule(false, 0, 60).is_err(),
+            "disabled → reject"
+        );
+        assert!(
+            validate_schedule(true, 0, 29).is_err(),
+            "below 30s floor → reject"
+        );
+        assert!(
+            validate_schedule(true, 16, 60).is_err(),
+            "at 16 pending cap → reject"
+        );
+        assert!(
+            validate_schedule(true, 15, 30).is_ok(),
+            "enabled, 30s, under cap → ok"
+        );
+        assert!(
+            validate_schedule(true, 0, WAKE_MAX_DELAY_SECS + 1).is_err(),
+            "above 30-day cap → reject"
+        );
+        assert!(
+            validate_schedule(true, 0, WAKE_MAX_DELAY_SECS).is_ok(),
+            "exactly at cap → ok"
+        );
     }
 
     #[test]
     fn second_cancel_escalates_to_hard() {
         let graceful = tokio_util::sync::CancellationToken::new();
         let hard = tokio_util::sync::CancellationToken::new();
-        let reg = std::sync::Arc::new(std::sync::Mutex::new(
-            std::collections::HashMap::<String, zoid::agent::SubagentHandle>::new(),
-        ));
+        let reg = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+            String,
+            zoid::agent::SubagentHandle,
+        >::new()));
         // First Esc: graceful only.
         assert_eq!(
             escalate_cancel(&graceful, &hard, &reg),
@@ -7832,12 +8032,18 @@ mod tests {
 
         // First press: graceful only — subagents untouched.
         let _ = escalate_cancel(&graceful, &hard, &reg);
-        assert!(!sub.hard.is_cancelled(), "first Esc must not kill subagents");
+        assert!(
+            !sub.hard.is_cancelled(),
+            "first Esc must not kill subagents"
+        );
 
         // Second press: force — every registered subagent's hard fires with Killed.
         let hint = escalate_cancel(&graceful, &hard, &reg);
         assert_eq!(hint, "force-stopping…");
-        assert!(sub.hard.is_cancelled(), "force Esc kills in-flight subagents");
+        assert!(
+            sub.hard.is_cancelled(),
+            "force Esc kills in-flight subagents"
+        );
         assert_eq!(
             *sub.abort_reason.lock().unwrap(),
             Some(zoid::agent::AbortReason::Killed)
@@ -7850,13 +8056,19 @@ mod tests {
         let (next, fire, hint) = super::subagent_kill_decision(false, 3);
         assert!(next, "first press arms");
         assert!(!fire, "first press must not fire");
-        assert!(hint.contains("Esc again"), "first press asks to confirm: {hint}");
+        assert!(
+            hint.contains("Esc again"),
+            "first press asks to confirm: {hint}"
+        );
 
         // Second press (armed): fires, disarms, reports the kill.
         let (next, fire, hint) = super::subagent_kill_decision(true, 3);
         assert!(!next, "second press disarms");
         assert!(fire, "second press fires");
-        assert!(hint.contains("killing"), "second press reports the kill: {hint}");
+        assert!(
+            hint.contains("killing"),
+            "second press reports the kill: {hint}"
+        );
     }
 
     #[test]
@@ -8130,7 +8342,7 @@ mod tests {
         assert!(!p.auto_evict_cold);
         assert_eq!(p.token_ceiling, None); // EconomyConfig.token_ceiling retired
         assert_eq!(p.compact_threshold, Some(160_000)); // 80% of 200k
-        // 0% disables compaction
+                                                        // 0% disables compaction
         let econ0 = zoid_core::config::EconomyConfig {
             compact_threshold_pct: 0,
             ..econ
@@ -8272,7 +8484,7 @@ mod tests {
 
     #[test]
     fn write_config_file_round_trips_through_temp_dir() {
-        use zoid_core::config::{TomlValue, parse_toml};
+        use zoid_core::config::{parse_toml, TomlValue};
         let dir = tempfile::tempdir().unwrap();
         // Parent dir does not exist yet — write_config_file must create it.
         let path = dir.path().join("nested").join("config.toml");
@@ -8322,7 +8534,10 @@ mod tests {
     #[test]
     fn home_preferred_over_userprofile() {
         // On Git Bash, both HOME and USERPROFILE are set; HOME wins (Unix-style).
-        let p = resolve_db_path(env_of(&[("HOME", "/home/u"), ("USERPROFILE", r"C:\Users\u")]));
+        let p = resolve_db_path(env_of(&[
+            ("HOME", "/home/u"),
+            ("USERPROFILE", r"C:\Users\u"),
+        ]));
         assert_eq!(p, PathBuf::from("/home/u/.local/share/zoid/zoid.db"));
     }
 
@@ -8404,14 +8619,14 @@ mod tests {
     fn parses_numstat_sums_and_counts_files() {
         let out = "12\t3\tsrc/a.rs\n0\t5\tsrc/b.rs\n7\t0\tCargo.toml\n";
         assert_eq!(parse_numstat(out), (19, 8, 3)); // added=12+0+7, removed=3+5+0, files=3
-        // Binary files show `-\t-\tpath`; count the file, add zero lines.
+                                                    // Binary files show `-\t-\tpath`; count the file, add zero lines.
         assert_eq!(parse_numstat("-\t-\tlogo.png\n"), (0, 0, 1));
         assert_eq!(parse_numstat(""), (0, 0, 0));
     }
 
     #[test]
     fn imports_legacy_events_under_one_session_once() {
-        use rusqlite::{Connection, params};
+        use rusqlite::{params, Connection};
         use ulid::Ulid;
         use zoid_core::event::EventKind;
         use zoid_core::store::EventStore;
@@ -8548,9 +8763,7 @@ mod tests {
             queued_subagents: std::collections::VecDeque::new(),
             active_worktree: None,
             active_wt_tx: tokio::sync::watch::channel(None).0,
-        in_flight: std::sync::Arc::new(std::sync::Mutex::new(
-            std::collections::HashMap::new(),
-        )),
+            in_flight: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             pending_answer: None,
             turn_cancel: None,
             turn_hard: None,
@@ -8579,8 +8792,14 @@ mod tests {
     async fn schedule_then_cancel_roundtrips_the_pending_set() {
         let mut app = test_app().await;
         // Assumes wake.enabled defaults true in the test config.
-        let id = handle_schedule_wake(&mut app, 60, "check CI".into()).await.unwrap();
-        assert_eq!(app.pending_wakes.len(), 1, "schedule inserts one pending wake");
+        let id = handle_schedule_wake(&mut app, 60, "check CI".into())
+            .await
+            .unwrap();
+        assert_eq!(
+            app.pending_wakes.len(),
+            1,
+            "schedule inserts one pending wake"
+        );
         assert_eq!(
             earliest_fire_at(&app.pending_wakes),
             app.pending_wakes.keys().next().map(|(t, _)| *t)
@@ -8636,14 +8855,18 @@ mod tests {
         let mut app = test_app().await;
         app.streaming = false;
         let past = now_ms() - 10_000; // already due, > 5s late
-        app.pending_wakes.insert((past, "w1".to_string()), "check the build".to_string());
+        app.pending_wakes
+            .insert((past, "w1".to_string()), "check the build".to_string());
         let _ = app.next_wake_tx.send(earliest_fire_at(&app.pending_wakes));
 
         let spawned = drain_due_wakes(&mut app).await.unwrap();
 
         assert!(spawned, "an idle orchestrator fires the due wake");
         assert!(app.streaming, "firing marks the turn streaming");
-        assert!(app.pending_wakes.is_empty(), "the fired wake leaves the pending set");
+        assert!(
+            app.pending_wakes.is_empty(),
+            "the fired wake leaves the pending set"
+        );
         let log = app.session.snapshot().await.unwrap();
         assert!(
             log.iter().any(|e| matches!(&e.kind,
@@ -8651,7 +8874,8 @@ mod tests {
             "the late-stamped note is injected as a UserMessage"
         );
         assert!(
-            log.iter().any(|e| matches!(&e.kind, EventKind::WakeFired { wake_id } if wake_id == "w1")),
+            log.iter()
+                .any(|e| matches!(&e.kind, EventKind::WakeFired { wake_id } if wake_id == "w1")),
             "a WakeFired marker is recorded at injection (at-least-once)"
         );
     }
@@ -8661,7 +8885,8 @@ mod tests {
         let mut app = test_app().await;
         app.streaming = false;
         let future = now_ms() + 60_000;
-        app.pending_wakes.insert((future, "w2".to_string()), "later".to_string());
+        app.pending_wakes
+            .insert((future, "w2".to_string()), "later".to_string());
         let spawned = drain_due_wakes(&mut app).await.unwrap();
         assert!(!spawned, "a not-yet-due wake must not fire");
         assert_eq!(app.pending_wakes.len(), 1, "it stays pending");
@@ -8728,8 +8953,8 @@ mod tests {
 
     #[test]
     fn apply_event_parity_with_full_refresh() {
-        use zoid_core::event::{Event, EventKind, TokenStat};
         use ulid::Ulid;
+        use zoid_core::event::{Event, EventKind, TokenStat};
 
         // Build a realistic event sequence covering every tier:
         // UserMessage, ModelDelta, ModelThinking, ToolCall, ToolResult,
@@ -8743,32 +8968,85 @@ mod tests {
             e
         };
 
-        events.push(mk(EventKind::UserMessage { text: "hello".into() }));
+        events.push(mk(EventKind::UserMessage {
+            text: "hello".into(),
+        }));
         events.push(mk(EventKind::ModelDelta { text: "res".into() }));
         events.push(mk(EventKind::ModelThinking { text: "hmm".into() }));
-        events.push(mk(EventKind::ToolCall { id: "t1".into(), name: "read".into(), args: r#"{"path":"f.rs"}"#.into() }));
+        events.push(mk(EventKind::ToolCall {
+            id: "t1".into(),
+            name: "read".into(),
+            args: r#"{"path":"f.rs"}"#.into(),
+        }));
         // ToolResult with tokens
-        let mut tr = mk(EventKind::ToolResult { id: "t1".into(), name: "read".into(), output: "file contents".into(), is_error: false });
-        tr.tokens = Some(TokenStat { input: 100, output: 50, cached: 20, thinking: 5 });
+        let mut tr = mk(EventKind::ToolResult {
+            id: "t1".into(),
+            name: "read".into(),
+            output: "file contents".into(),
+            is_error: false,
+        });
+        tr.tokens = Some(TokenStat {
+            input: 100,
+            output: 50,
+            cached: 20,
+            thinking: 5,
+        });
         events.push(tr);
         events.push(mk(EventKind::Usage));
-        events.push(mk(EventKind::QuestionAsked { id: "q1".into(), kind: zoid_core::event::QuestionKind::Ask, question: "which?".into(), choices: vec!["a".into(), "b".into()] }));
-        events.push(mk(EventKind::QuestionAnswered { id: "q1".into(), answer: "a".into() }));
-        events.push(mk(EventKind::AssistantMessage { text: "final answer".into() }));
-        events.push(mk(EventKind::DelegationResult { subagent_id: "s1".into(), branch: "subagent:s1".into(), summary: "done".into(), ok: true }));
-        events.push(mk(EventKind::ToolResultCompacted { id: "t1".into(), summary: "compacted summary".into(), original_tokens: 500 }));
+        events.push(mk(EventKind::QuestionAsked {
+            id: "q1".into(),
+            kind: zoid_core::event::QuestionKind::Ask,
+            question: "which?".into(),
+            choices: vec!["a".into(), "b".into()],
+        }));
+        events.push(mk(EventKind::QuestionAnswered {
+            id: "q1".into(),
+            answer: "a".into(),
+        }));
+        events.push(mk(EventKind::AssistantMessage {
+            text: "final answer".into(),
+        }));
+        events.push(mk(EventKind::DelegationResult {
+            subagent_id: "s1".into(),
+            branch: "subagent:s1".into(),
+            summary: "done".into(),
+            ok: true,
+        }));
+        events.push(mk(EventKind::ToolResultCompacted {
+            id: "t1".into(),
+            summary: "compacted summary".into(),
+            original_tokens: 500,
+        }));
         events.push(mk(EventKind::Tasks { items: vec![] }));
-        events.push(mk(EventKind::WakeScheduled { wake_id: "w1".into(), fire_at_ms: 99999, note: "reminder".into() }));
-        events.push(mk(EventKind::WakeFired { wake_id: "w1".into() }));
-        events.push(mk(EventKind::WakeCancelled { wake_id: "w2".into() }));
+        events.push(mk(EventKind::WakeScheduled {
+            wake_id: "w1".into(),
+            fire_at_ms: 99999,
+            note: "reminder".into(),
+        }));
+        events.push(mk(EventKind::WakeFired {
+            wake_id: "w1".into(),
+        }));
+        events.push(mk(EventKind::WakeCancelled {
+            wake_id: "w2".into(),
+        }));
         events.push(mk(EventKind::TurnsDropped { turns_dropped: 1 }));
-        events.push(mk(EventKind::ContextMutation { item: "msg:0".into(), op: zoid_core::event::MutationOp::Pin }));
+        events.push(mk(EventKind::ContextMutation {
+            item: "msg:0".into(),
+            op: zoid_core::event::MutationOp::Pin,
+        }));
         events.push(mk(EventKind::DirectiveReasserted { at_cumulative: 500 }));
-        events.push(mk(EventKind::TurnsReadmitted { ids: vec![Ulid::from(42u128)] }));
+        events.push(mk(EventKind::TurnsReadmitted {
+            ids: vec![Ulid::from(42u128)],
+        }));
         events.push(mk(EventKind::TurnsEvicted {
             ids: vec![Ulid::from(1u128)],
             reclaimed_tokens: 1000,
-            marker: zoid_core::event::EvictionMarker { spans: vec![zoid_core::event::EvictedSpan { token_estimate: 500, topic_hint: "topic".into() }] },
+            marker: zoid_core::event::EvictionMarker {
+                spans: vec![zoid_core::event::EvictedSpan {
+                    token_estimate: 500,
+                    topic_hint: "topic".into(),
+                }],
+            },
             rescue: None,
         }));
 
@@ -8793,8 +9071,14 @@ mod tests {
         assert_eq!(incr.cached_total, full.cached_total, "cached_total");
         assert_eq!(incr.thinking_total, full.thinking_total, "thinking_total");
         // Parity: last tokens
-        assert_eq!(incr.last_input_tokens, full.last_input_tokens, "last_input_tokens");
-        assert_eq!(incr.last_output_tokens, full.last_output_tokens, "last_output_tokens");
+        assert_eq!(
+            incr.last_input_tokens, full.last_input_tokens,
+            "last_input_tokens"
+        );
+        assert_eq!(
+            incr.last_output_tokens, full.last_output_tokens,
+            "last_output_tokens"
+        );
         // Parity: tasks
         assert_eq!(incr.tasks, full.tasks, "tasks");
         // Parity: window + churn (rebuilt from dirty flags)
@@ -8807,7 +9091,12 @@ mod tests {
         use zoid_core::event::{Event, EventKind, TokenStat};
         let mut cache = ProjectionCache::default();
         let mut ev = Event::new(Ulid::new(), None, 0, EventKind::Usage);
-        ev.tokens = Some(TokenStat { input: 100, output: 50, cached: 20, thinking: 5 });
+        ev.tokens = Some(TokenStat {
+            input: 100,
+            output: 50,
+            cached: 20,
+            thinking: 5,
+        });
         let impact = cache.apply_event(&ev);
         assert_eq!(impact, ProjectionImpact::Economy);
         assert_eq!(cache.ledger_total, 150);
@@ -8824,14 +9113,26 @@ mod tests {
         use zoid_core::event::{Event, EventKind};
         let mut cache = ProjectionCache::default();
         // Seed with a user message so the projection has a turn context.
-        let u = Event::new(Ulid::new(), None, 0, EventKind::UserMessage { text: "hi".into() });
+        let u = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::UserMessage { text: "hi".into() },
+        );
         cache.apply_event(&u);
         cache.refresh(&zoid::eventlog::EventLog::from_vec(vec![u]));
         assert!(!cache.churn_dirty, "clean after refresh");
         // Apply a ToolCall — should set churn_dirty (churn_timeline tracks paths).
-        let tc = Event::new(Ulid::new(), None, 1, EventKind::ToolCall {
-            id: "t1".into(), name: "read".into(), args: r#"{"path":"f.rs"}"#.into(),
-        });
+        let tc = Event::new(
+            Ulid::new(),
+            None,
+            1,
+            EventKind::ToolCall {
+                id: "t1".into(),
+                name: "read".into(),
+                args: r#"{"path":"f.rs"}"#.into(),
+            },
+        );
         let impact = cache.apply_event(&tc);
         assert!(cache.churn_dirty, "ToolCall must set churn_dirty");
         assert!(matches!(impact, ProjectionImpact::MsgsMutated { .. }));
@@ -8843,11 +9144,26 @@ mod tests {
         let mut cache = ProjectionCache::default();
         // Seed an assistant message to append to.
         cache.msgs.push(zoid_core::projection::ChatMsg::Assistant {
-            text: "hello".into(), tool_calls: vec![], ts: 0, thinking: None,
+            text: "hello".into(),
+            tool_calls: vec![],
+            ts: 0,
+            thinking: None,
         });
-        let ev = Event::new(Ulid::new(), None, 0, EventKind::ModelDelta { text: " world".into() });
+        let ev = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::ModelDelta {
+                text: " world".into(),
+            },
+        );
         let impact = cache.apply_event(&ev);
-        assert_eq!(impact, ProjectionImpact::MsgsMutated { mutated_index: None });
+        assert_eq!(
+            impact,
+            ProjectionImpact::MsgsMutated {
+                mutated_index: None
+            }
+        );
         // Not MsgsAppended — caller must NOT invalidate body_cache.
     }
 
@@ -8856,30 +9172,58 @@ mod tests {
         use zoid_core::event::{Event, EventKind};
         let mut cache = ProjectionCache::default();
         // Accumulate a pending delta.
-        let ev1 = Event::new(Ulid::new(), None, 0, EventKind::ModelDelta { text: "partial".into() });
+        let ev1 = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::ModelDelta {
+                text: "partial".into(),
+            },
+        );
         cache.apply_event(&ev1);
         // ModelThinking should flush the pending turn.
-        let ev2 = Event::new(Ulid::new(), None, 1, EventKind::ModelThinking { text: "hmm".into() });
+        let ev2 = Event::new(
+            Ulid::new(),
+            None,
+            1,
+            EventKind::ModelThinking { text: "hmm".into() },
+        );
         let impact = cache.apply_event(&ev2);
-        assert_eq!(impact, ProjectionImpact::MsgsMutated { mutated_index: None });
+        assert_eq!(
+            impact,
+            ProjectionImpact::MsgsMutated {
+                mutated_index: None
+            }
+        );
         assert_eq!(cache.msgs.len(), 1, "pending assistant turn was flushed");
         // The thinking should be stashed (not on the flushed message — it goes
         // to the NEXT assistant message).
         match &cache.msgs[0] {
             zoid_core::projection::ChatMsg::Assistant { thinking, text, .. } => {
                 assert_eq!(text, "partial");
-                assert!(thinking.is_none(), "thinking goes to next message, not the flushed one");
+                assert!(
+                    thinking.is_none(),
+                    "thinking goes to next message, not the flushed one"
+                );
             }
             _ => panic!("expected Assistant"),
         }
-        assert!(cache.pending_thinking.is_some(), "thinking stashed for next message");
+        assert!(
+            cache.pending_thinking.is_some(),
+            "thinking stashed for next message"
+        );
     }
 
     #[test]
     fn apply_event_model_thinking_no_op_when_no_pending() {
         use zoid_core::event::{Event, EventKind};
         let mut cache = ProjectionCache::default();
-        let ev = Event::new(Ulid::new(), None, 0, EventKind::ModelThinking { text: "hmm".into() });
+        let ev = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::ModelThinking { text: "hmm".into() },
+        );
         let impact = cache.apply_event(&ev);
         assert_eq!(impact, ProjectionImpact::Economy);
         assert!(cache.msgs.is_empty(), "no message pushed");
@@ -8890,7 +9234,14 @@ mod tests {
     fn finalize_pending_emits_standalone_thinking() {
         use zoid_core::event::{Event, EventKind};
         let mut cache = ProjectionCache::default();
-        let ev = Event::new(Ulid::new(), None, 0, EventKind::ModelThinking { text: "deep thoughts".into() });
+        let ev = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::ModelThinking {
+                text: "deep thoughts".into(),
+            },
+        );
         cache.apply_event(&ev);
         assert!(cache.msgs.is_empty());
         let impact = cache.finalize_pending();
@@ -8909,15 +9260,30 @@ mod tests {
     fn apply_event_tool_result_suppressed_for_non_approval_question() {
         use zoid_core::event::{Event, EventKind};
         let mut cache = ProjectionCache::default();
-        let q = Event::new(Ulid::new(), None, 0, EventKind::QuestionAsked {
-            id: "q1".into(), kind: zoid_core::event::QuestionKind::Ask,
-            question: "which?".into(), choices: vec!["a".into()],
-        });
+        let q = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::QuestionAsked {
+                id: "q1".into(),
+                kind: zoid_core::event::QuestionKind::Ask,
+                question: "which?".into(),
+                choices: vec!["a".into()],
+            },
+        );
         cache.apply_event(&q);
         assert_eq!(cache.msgs.len(), 1, "question card pushed");
-        let tr = Event::new(Ulid::new(), None, 1, EventKind::ToolResult {
-            id: "q1".into(), name: "ask_user".into(), output: "answer".into(), is_error: false,
-        });
+        let tr = Event::new(
+            Ulid::new(),
+            None,
+            1,
+            EventKind::ToolResult {
+                id: "q1".into(),
+                name: "ask_user".into(),
+                output: "answer".into(),
+                is_error: false,
+            },
+        );
         let impact = cache.apply_event(&tr);
         assert_eq!(cache.msgs.len(), 1, "ToolResult suppressed — no new msg");
         assert!(matches!(impact, ProjectionImpact::MsgsMutated { .. }));
@@ -8927,16 +9293,35 @@ mod tests {
     fn apply_event_tool_result_not_suppressed_for_approval_question() {
         use zoid_core::event::{Event, EventKind};
         let mut cache = ProjectionCache::default();
-        let q = Event::new(Ulid::new(), None, 0, EventKind::QuestionAsked {
-            id: "q2".into(), kind: zoid_core::event::QuestionKind::Approval,
-            question: "approve?".into(), choices: vec!["yes".into(), "no".into()],
-        });
+        let q = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::QuestionAsked {
+                id: "q2".into(),
+                kind: zoid_core::event::QuestionKind::Approval,
+                question: "approve?".into(),
+                choices: vec!["yes".into(), "no".into()],
+            },
+        );
         cache.apply_event(&q);
-        let tr = Event::new(Ulid::new(), None, 1, EventKind::ToolResult {
-            id: "q2".into(), name: "shell".into(), output: "done".into(), is_error: false,
-        });
+        let tr = Event::new(
+            Ulid::new(),
+            None,
+            1,
+            EventKind::ToolResult {
+                id: "q2".into(),
+                name: "shell".into(),
+                output: "done".into(),
+                is_error: false,
+            },
+        );
         let impact = cache.apply_event(&tr);
-        assert_eq!(cache.msgs.len(), 2, "ToolResult NOT suppressed for Approval");
+        assert_eq!(
+            cache.msgs.len(),
+            2,
+            "ToolResult NOT suppressed for Approval"
+        );
         assert_eq!(impact, ProjectionImpact::MsgsAppended);
     }
 
@@ -8945,21 +9330,48 @@ mod tests {
         use zoid_core::event::{Event, EventKind};
         let mut cache = ProjectionCache::default();
         // Push a ToolResult, then an AssistantMessage, then compact the result.
-        let tr = Event::new(Ulid::new(), None, 0, EventKind::ToolResult {
-            id: "t1".into(), name: "read".into(), output: "full output".into(), is_error: false,
-        });
+        let tr = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::ToolResult {
+                id: "t1".into(),
+                name: "read".into(),
+                output: "full output".into(),
+                is_error: false,
+            },
+        );
         cache.apply_event(&tr);
-        let am = Event::new(Ulid::new(), None, 1, EventKind::AssistantMessage { text: "ok".into() });
+        let am = Event::new(
+            Ulid::new(),
+            None,
+            1,
+            EventKind::AssistantMessage { text: "ok".into() },
+        );
         cache.apply_event(&am);
         assert_eq!(cache.msgs.len(), 2);
-        let comp = Event::new(Ulid::new(), None, 2, EventKind::ToolResultCompacted {
-            id: "t1".into(), summary: "summary".into(), original_tokens: 100,
-        });
+        let comp = Event::new(
+            Ulid::new(),
+            None,
+            2,
+            EventKind::ToolResultCompacted {
+                id: "t1".into(),
+                summary: "summary".into(),
+                original_tokens: 100,
+            },
+        );
         let impact = cache.apply_event(&comp);
-        assert_eq!(impact, ProjectionImpact::MsgsMutated { mutated_index: Some(0) });
+        assert_eq!(
+            impact,
+            ProjectionImpact::MsgsMutated {
+                mutated_index: Some(0)
+            }
+        );
         // Caller sees index 0 != msgs.len()-1 (which is 1) → invalidates body_cache.
         match &cache.msgs[0] {
-            zoid_core::projection::ChatMsg::ToolResult { output, compacted, .. } => {
+            zoid_core::projection::ChatMsg::ToolResult {
+                output, compacted, ..
+            } => {
                 assert_eq!(output, "summary");
                 assert!(*compacted);
             }
@@ -8971,9 +9383,15 @@ mod tests {
     fn apply_event_question_answered_miss_returns_economy() {
         use zoid_core::event::{Event, EventKind};
         let mut cache = ProjectionCache::default();
-        let ev = Event::new(Ulid::new(), None, 0, EventKind::QuestionAnswered {
-            id: "nonexistent".into(), answer: "x".into(),
-        });
+        let ev = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::QuestionAnswered {
+                id: "nonexistent".into(),
+                answer: "x".into(),
+            },
+        );
         let impact = cache.apply_event(&ev);
         assert_eq!(impact, ProjectionImpact::Economy);
         assert!(cache.msgs.is_empty());
@@ -8984,12 +9402,32 @@ mod tests {
         use zoid_core::event::{Event, EventKind};
         use zoid_core::tasks::TaskItem;
         let mut cache = ProjectionCache::default();
-        let t1 = TaskItem { text: "a".into(), status: zoid_core::tasks::TaskStatus::Done };
-        let ev1 = Event::new(Ulid::new(), None, 0, EventKind::Tasks { items: vec![t1.clone()] });
+        let t1 = TaskItem {
+            text: "a".into(),
+            status: zoid_core::tasks::TaskStatus::Done,
+        };
+        let ev1 = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::Tasks {
+                items: vec![t1.clone()],
+            },
+        );
         cache.apply_event(&ev1);
         assert_eq!(cache.tasks.len(), 1);
-        let t2 = TaskItem { text: "b".into(), status: zoid_core::tasks::TaskStatus::Active };
-        let ev2 = Event::new(Ulid::new(), None, 1, EventKind::Tasks { items: vec![t2.clone()] });
+        let t2 = TaskItem {
+            text: "b".into(),
+            status: zoid_core::tasks::TaskStatus::Active,
+        };
+        let ev2 = Event::new(
+            Ulid::new(),
+            None,
+            1,
+            EventKind::Tasks {
+                items: vec![t2.clone()],
+            },
+        );
         let impact = cache.apply_event(&ev2);
         assert_eq!(impact, ProjectionImpact::Economy);
         assert_eq!(cache.tasks.len(), 1, "last-write-wins");
@@ -9000,9 +9438,16 @@ mod tests {
     fn apply_event_wake_scheduled_is_noop() {
         use zoid_core::event::{Event, EventKind};
         let mut cache = ProjectionCache::default();
-        let ev = Event::new(Ulid::new(), None, 0, EventKind::WakeScheduled {
-            wake_id: "w1".into(), fire_at_ms: 99999, note: "reminder".into(),
-        });
+        let ev = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::WakeScheduled {
+                wake_id: "w1".into(),
+                fire_at_ms: 99999,
+                note: "reminder".into(),
+            },
+        );
         let impact = cache.apply_event(&ev);
         assert_eq!(impact, ProjectionImpact::Economy);
         assert!(cache.msgs.is_empty());
@@ -9015,19 +9460,50 @@ mod tests {
         use zoid_core::event::{Event, EventKind};
         let mut cache = ProjectionCache::default();
         // ModelDelta accumulates in pending, ToolResult flushes it.
-        let d = Event::new(Ulid::new(), None, 0, EventKind::ModelDelta { text: "partial".into() });
+        let d = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::ModelDelta {
+                text: "partial".into(),
+            },
+        );
         cache.apply_event(&d);
-        assert!(cache.msgs.is_empty(), "delta accumulates in pending, not msgs");
-        let tc = Event::new(Ulid::new(), None, 1, EventKind::ToolCall { id: "t1".into(), name: "read".into(), args: "{}".into() });
+        assert!(
+            cache.msgs.is_empty(),
+            "delta accumulates in pending, not msgs"
+        );
+        let tc = Event::new(
+            Ulid::new(),
+            None,
+            1,
+            EventKind::ToolCall {
+                id: "t1".into(),
+                name: "read".into(),
+                args: "{}".into(),
+            },
+        );
         cache.apply_event(&tc);
         assert!(cache.msgs.is_empty(), "tool call accumulates in pending");
-        let tr = Event::new(Ulid::new(), None, 2, EventKind::ToolResult { id: "t1".into(), name: "read".into(), output: "ok".into(), is_error: false });
+        let tr = Event::new(
+            Ulid::new(),
+            None,
+            2,
+            EventKind::ToolResult {
+                id: "t1".into(),
+                name: "read".into(),
+                output: "ok".into(),
+                is_error: false,
+            },
+        );
         let impact = cache.apply_event(&tr);
         assert_eq!(impact, ProjectionImpact::MsgsAppended);
         assert_eq!(cache.msgs.len(), 2, "flushed Assistant + ToolResult");
         // First msg is the flushed assistant turn with delta text + tool call.
         match &cache.msgs[0] {
-            zoid_core::projection::ChatMsg::Assistant { text, tool_calls, .. } => {
+            zoid_core::projection::ChatMsg::Assistant {
+                text, tool_calls, ..
+            } => {
                 assert_eq!(text, "partial");
                 assert_eq!(tool_calls.len(), 1);
             }
@@ -9039,19 +9515,41 @@ mod tests {
     fn apply_event_tool_result_compacted_in_place() {
         use zoid_core::event::{Event, EventKind};
         let mut cache = ProjectionCache::default();
-        let tr = Event::new(Ulid::new(), None, 0, EventKind::ToolResult {
-            id: "t1".into(), name: "read".into(), output: "full output".into(), is_error: false,
-        });
+        let tr = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::ToolResult {
+                id: "t1".into(),
+                name: "read".into(),
+                output: "full output".into(),
+                is_error: false,
+            },
+        );
         cache.apply_event(&tr);
         assert_eq!(cache.msgs.len(), 1);
-        let comp = Event::new(Ulid::new(), None, 1, EventKind::ToolResultCompacted {
-            id: "t1".into(), summary: "summary".into(), original_tokens: 100,
-        });
+        let comp = Event::new(
+            Ulid::new(),
+            None,
+            1,
+            EventKind::ToolResultCompacted {
+                id: "t1".into(),
+                summary: "summary".into(),
+                original_tokens: 100,
+            },
+        );
         let impact = cache.apply_event(&comp);
-        assert!(matches!(impact, ProjectionImpact::MsgsMutated { mutated_index: Some(0) }));
+        assert!(matches!(
+            impact,
+            ProjectionImpact::MsgsMutated {
+                mutated_index: Some(0)
+            }
+        ));
         assert_eq!(cache.msgs.len(), 1, "no new msg — in-place mutation");
         match &cache.msgs[0] {
-            zoid_core::projection::ChatMsg::ToolResult { output, compacted, .. } => {
+            zoid_core::projection::ChatMsg::ToolResult {
+                output, compacted, ..
+            } => {
                 assert_eq!(output, "summary");
                 assert!(*compacted);
             }
@@ -9063,21 +9561,42 @@ mod tests {
     fn apply_event_question_answered_in_place() {
         use zoid_core::event::{Event, EventKind};
         let mut cache = ProjectionCache::default();
-        let q = Event::new(Ulid::new(), None, 0, EventKind::QuestionAsked {
-            id: "q1".into(), kind: zoid_core::event::QuestionKind::Ask,
-            question: "which?".into(), choices: vec!["a".into(), "b".into()],
-        });
+        let q = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::QuestionAsked {
+                id: "q1".into(),
+                kind: zoid_core::event::QuestionKind::Ask,
+                question: "which?".into(),
+                choices: vec!["a".into(), "b".into()],
+            },
+        );
         cache.apply_event(&q);
         assert_eq!(cache.msgs.len(), 1);
-        let a = Event::new(Ulid::new(), None, 1, EventKind::QuestionAnswered {
-            id: "q1".into(), answer: "a".into(),
-        });
+        let a = Event::new(
+            Ulid::new(),
+            None,
+            1,
+            EventKind::QuestionAnswered {
+                id: "q1".into(),
+                answer: "a".into(),
+            },
+        );
         let impact = cache.apply_event(&a);
-        assert!(matches!(impact, ProjectionImpact::MsgsMutated { mutated_index: Some(0) }));
+        assert!(matches!(
+            impact,
+            ProjectionImpact::MsgsMutated {
+                mutated_index: Some(0)
+            }
+        ));
         assert_eq!(cache.msgs.len(), 1, "no new msg — in-place mutation");
         match &cache.msgs[0] {
             zoid_core::projection::ChatMsg::Question { state, .. } => {
-                assert!(matches!(state, zoid_core::projection::QuestionCardState::Answered { .. }));
+                assert!(matches!(
+                    state,
+                    zoid_core::projection::QuestionCardState::Answered { .. }
+                ));
             }
             _ => panic!("expected Question"),
         }
@@ -9088,10 +9607,20 @@ mod tests {
         use zoid_core::event::{Event, EventKind};
         let mut cache = ProjectionCache::default();
         // Seed with some events applied incrementally.
-        let ev = Event::new(Ulid::new(), None, 0, EventKind::UserMessage { text: "hi".into() });
+        let ev = Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::UserMessage { text: "hi".into() },
+        );
         cache.apply_event(&ev);
         let mut usage = Event::new(Ulid::new(), None, 1, EventKind::Usage);
-        usage.tokens = Some(zoid_core::event::TokenStat { input: 10, output: 5, cached: 0, thinking: 0 });
+        usage.tokens = Some(zoid_core::event::TokenStat {
+            input: 10,
+            output: 5,
+            cached: 0,
+            thinking: 0,
+        });
         cache.apply_event(&usage);
         assert!(cache.churn_dirty);
         // Force full invalidation.
@@ -9108,25 +9637,41 @@ mod tests {
     fn refresh_dirty_flags_rebuild_only_dirty() {
         use zoid_core::event::{Event, EventKind};
         let mut cache = ProjectionCache::default();
-        let log = zoid::eventlog::EventLog::from_vec(vec![
-            Event::new(Ulid::new(), None, 0, EventKind::UserMessage { text: "hi".into() }),
-        ]);
+        let log = zoid::eventlog::EventLog::from_vec(vec![Event::new(
+            Ulid::new(),
+            None,
+            0,
+            EventKind::UserMessage { text: "hi".into() },
+        )]);
         // Full refresh to seed.
         cache.refresh(&log);
         let window_before = cache.window.clone();
         // Set only churn_dirty (via a Usage event).
         let mut ev = Event::new(Ulid::new(), None, 1, EventKind::Usage);
-        ev.tokens = Some(zoid_core::event::TokenStat { input: 10, output: 5, cached: 0, thinking: 0 });
+        ev.tokens = Some(zoid_core::event::TokenStat {
+            input: 10,
+            output: 5,
+            cached: 0,
+            thinking: 0,
+        });
         cache.apply_event(&ev);
         cache.events_len = Some(cache.events_len.unwrap_or(0)); // don't trigger full refresh
-        // Push the event to the log so refresh sees the right length.
+                                                                // Push the event to the log so refresh sees the right length.
         let log2 = zoid::eventlog::EventLog::from_vec(vec![
-            Event::new(Ulid::new(), None, 0, EventKind::UserMessage { text: "hi".into() }),
+            Event::new(
+                Ulid::new(),
+                None,
+                0,
+                EventKind::UserMessage { text: "hi".into() },
+            ),
             ev,
         ]);
         cache.refresh(&log2);
         // window should NOT have been rebuilt (window_dirty was not set by Usage).
-        assert_eq!(cache.window, window_before, "window not rebuilt — only churn was dirty");
+        assert_eq!(
+            cache.window, window_before,
+            "window not rebuilt — only churn was dirty"
+        );
         assert!(!cache.churn_dirty, "churn_dirty cleared");
     }
 
@@ -9581,8 +10126,7 @@ mod tests {
             "UserMessage recorded for the spawned turn"
         );
         assert_eq!(
-            app.pending_message,
-            None,
+            app.pending_message, None,
             "message is not queued when not streaming"
         );
         assert!(app.textarea.lines()[0].is_empty(), "textarea cleared");
@@ -9730,15 +10274,15 @@ mod tests {
         .with_session(app.session_id);
         app.events.push(ev);
 
-        // Manually trigger the drain (mirrors the DelegationResult handler)
+        // Manually trigger the drain (mirrors the DelegationResult handler).
+        // The queue is empty and the pool is empty, so the drain loop would
+        // not enter — assert that directly instead of a never-looping while.
         let max = app.config.subagent.max_concurrent;
-        while !app.queued_subagents.is_empty()
-            && (max == 0 || app.in_flight.lock().unwrap().len() < max)
-        {
-            // Would call spawn_queued_subagent, but queue is empty so this
-            // loop body never executes.
-            unreachable!("queue is empty — loop should not enter");
-        }
+        assert!(
+            app.queued_subagents.is_empty()
+                || max == 0
+                || app.in_flight.lock().unwrap().len() >= max
+        );
 
         assert!(app.queued_subagents.is_empty(), "queue untouched");
         assert!(app.in_flight.lock().unwrap().is_empty(), "pool untouched");
@@ -9793,8 +10337,8 @@ mod tests {
         // unit test (it needs a real provider), but we can verify the
         // drain condition is true.
         let max = app.config.subagent.max_concurrent;
-        let should_drain =
-            !app.queued_subagents.is_empty() && (max == 0 || app.in_flight.lock().unwrap().len() < max);
+        let should_drain = !app.queued_subagents.is_empty()
+            && (max == 0 || app.in_flight.lock().unwrap().len() < max);
         assert!(should_drain, "pool has room — drain should fire");
 
         // Pop the queued subagent (simulates what the drain loop does).
@@ -9901,14 +10445,14 @@ mod tests {
 
         // Drain condition: pool is full (3 < 3 is false), so no drain.
         let max = app.config.subagent.max_concurrent;
-        let should_drain =
-            !app.queued_subagents.is_empty() && (max == 0 || app.in_flight.lock().unwrap().len() < max);
+        let should_drain = !app.queued_subagents.is_empty()
+            && (max == 0 || app.in_flight.lock().unwrap().len() < max);
         assert!(!should_drain, "pool is full — drain should NOT fire");
 
         // One subagent finishes — pool drops to 2, now 2 < 3 is true.
         app.in_flight.lock().unwrap().remove("sub-0");
-        let should_drain =
-            !app.queued_subagents.is_empty() && (max == 0 || app.in_flight.lock().unwrap().len() < max);
+        let should_drain = !app.queued_subagents.is_empty()
+            && (max == 0 || app.in_flight.lock().unwrap().len() < max);
         assert!(should_drain, "pool has room — drain should fire");
     }
 
@@ -9949,15 +10493,13 @@ mod tests {
 
         // First Esc: arms, does NOT fire.
         let pending = app.in_flight.lock().unwrap().len();
-        let (next_armed, fire, _hint) =
-            subagent_kill_decision(app.subagent_kill_armed, pending);
+        let (next_armed, fire, _hint) = subagent_kill_decision(app.subagent_kill_armed, pending);
         assert!(next_armed, "first press arms");
         assert!(!fire, "first press must not fire");
         app.subagent_kill_armed = next_armed;
 
         // Second Esc: fires, disarms.
-        let (next_armed, fire, _hint) =
-            subagent_kill_decision(app.subagent_kill_armed, pending);
+        let (next_armed, fire, _hint) = subagent_kill_decision(app.subagent_kill_armed, pending);
         assert!(!next_armed, "second press disarms");
         assert!(fire, "second press fires");
         if fire {
@@ -9967,7 +10509,7 @@ mod tests {
 
         // All 3 subagents' hard tokens should be cancelled.
         let map = app.in_flight.lock().unwrap();
-        for (_, handle) in map.iter() {
+        for handle in map.values() {
             assert!(
                 handle.hard.is_cancelled(),
                 "all subagent hard tokens must be cancelled"
@@ -10005,8 +10547,7 @@ mod tests {
         assert_eq!(app.in_flight.lock().unwrap().len(), 3);
 
         // Cancel only sub-1 (the model calls cancel_subagent with id="sub-1").
-        let fired =
-            zoid::agent::fire_subagent_kill(&app.in_flight, Some("sub-1"));
+        let fired = zoid::agent::fire_subagent_kill(&app.in_flight, Some("sub-1"));
         assert_eq!(fired, 1, "exactly 1 subagent was targeted");
 
         // sub-1's hard token is cancelled; the others are NOT.
@@ -10130,7 +10671,10 @@ mod tests {
             take_deferred_delegation_wake(&mut app),
             "a deferred wake must fire at TurnComplete"
         );
-        assert!(app.streaming, "firing marks the continuation turn streaming");
+        assert!(
+            app.streaming,
+            "firing marks the continuation turn streaming"
+        );
         assert!(!app.wake_after_delegation, "the flag is cleared");
 
         app.streaming = false;
@@ -10167,7 +10711,9 @@ mod tests {
             Ulid::new(),
             None,
             0,
-            EventKind::UserMessage { text: "hello".into() },
+            EventKind::UserMessage {
+                text: "hello".into(),
+            },
         );
         app.events.push(ev);
         app.proj.refresh(&app.events);
@@ -10185,7 +10731,9 @@ mod tests {
             Ulid::new(),
             None,
             1,
-            EventKind::ModelDelta { text: "subagent text".into() },
+            EventKind::ModelDelta {
+                text: "subagent text".into(),
+            },
         )
         .with_session(app.session_id);
         // Override the branch to a subagent branch.
@@ -10228,7 +10776,9 @@ mod tests {
             Ulid::new(),
             None,
             0,
-            EventKind::UserMessage { text: "hello".into() },
+            EventKind::UserMessage {
+                text: "hello".into(),
+            },
         );
         app.events.push(ev);
         app.proj.refresh(&app.events);
@@ -10240,7 +10790,9 @@ mod tests {
             Ulid::new(),
             None,
             1,
-            EventKind::ModelDelta { text: "response".into() },
+            EventKind::ModelDelta {
+                text: "response".into(),
+            },
         );
 
         let is_subagent_branch = main_ev.branch != zoid_core::event::BranchId::default();
@@ -10266,32 +10818,58 @@ mod tests {
     /// shows them.
     #[test]
     fn subagent_branch_events_invisible_in_conversation() {
-        use zoid_core::event::{Event, EventKind, BranchId};
+        use zoid_core::event::{BranchId, Event, EventKind};
         use zoid_core::projection::conversation;
 
         let sub_branch = BranchId("subagent:01ABC".into());
         let events = [
             // Main-branch user message.
-            Event::new(Ulid::new(), None, 0, EventKind::UserMessage { text: "hello".into() }),
+            Event::new(
+                Ulid::new(),
+                None,
+                0,
+                EventKind::UserMessage {
+                    text: "hello".into(),
+                },
+            ),
             // Subagent-branch assistant text (must NOT appear).
             // Event has no with_branch builder — set .branch directly.
             {
-                let mut ev = Event::new(Ulid::new(), None, 1, EventKind::ModelDelta { text: "subagent working".into() });
+                let mut ev = Event::new(
+                    Ulid::new(),
+                    None,
+                    1,
+                    EventKind::ModelDelta {
+                        text: "subagent working".into(),
+                    },
+                );
                 ev.branch = sub_branch.clone();
                 ev
             },
             // Subagent-branch tool call (must NOT appear).
             {
-                let mut ev = Event::new(Ulid::new(), None, 2, EventKind::ToolCall {
-                    id: "tc1".into(),
-                    name: "read".into(),
-                    args: r#"{"path":"src/main.rs"}"#.into(),
-                });
+                let mut ev = Event::new(
+                    Ulid::new(),
+                    None,
+                    2,
+                    EventKind::ToolCall {
+                        id: "tc1".into(),
+                        name: "read".into(),
+                        args: r#"{"path":"src/main.rs"}"#.into(),
+                    },
+                );
                 ev.branch = sub_branch;
                 ev
             },
             // Main-branch assistant text (must appear).
-            Event::new(Ulid::new(), None, 3, EventKind::AssistantMessage { text: "done".into() }),
+            Event::new(
+                Ulid::new(),
+                None,
+                3,
+                EventKind::AssistantMessage {
+                    text: "done".into(),
+                },
+            ),
         ];
 
         let msgs = conversation(events.iter());
@@ -10306,7 +10884,10 @@ mod tests {
 
         // Main-branch messages are visible.
         assert!(joined.contains("hello"), "user message visible: {joined}");
-        assert!(joined.contains("done"), "assistant message visible: {joined}");
+        assert!(
+            joined.contains("done"),
+            "assistant message visible: {joined}"
+        );
         // Subagent-branch messages are NOT visible.
         assert!(
             !joined.contains("subagent working"),
@@ -10325,8 +10906,22 @@ mod tests {
         use zoid_core::projection::{conversation, ChatMsg};
 
         let events = [
-            Event::new(Ulid::new(), None, 0, EventKind::UserMessage { text: "do the thing".into() }),
-            Event::new(Ulid::new(), None, 1, EventKind::AssistantMessage { text: "delegating".into() }),
+            Event::new(
+                Ulid::new(),
+                None,
+                0,
+                EventKind::UserMessage {
+                    text: "do the thing".into(),
+                },
+            ),
+            Event::new(
+                Ulid::new(),
+                None,
+                1,
+                EventKind::AssistantMessage {
+                    text: "delegating".into(),
+                },
+            ),
             Event::new(
                 Ulid::new(),
                 None,
@@ -10490,7 +11085,7 @@ mod tests {
         // result exceeds the threshold and compaction fires.
         app.economy.compact_threshold_pct = 50;
         app.context_target = 100; // 50% of 100 = 50 tokens threshold
-        // Seed an event log with an uncompacted tool result.
+                                  // Seed an event log with an uncompacted tool result.
         let tc_id = Ulid::new();
         app.record(EventKind::UserMessage {
             text: "do something".into(),
@@ -10581,7 +11176,8 @@ mod tests {
         app.textarea = make_input(ratatui_textarea::TextArea::default());
         let _ = handle_action(&mut app, zoid_tui::route::Action::Submit).await;
         assert!(
-            app.shell.status_hint.as_deref() != Some("session taken over — :session new or :session resume"),
+            app.shell.status_hint.as_deref()
+                != Some("session taken over — :session new or :session resume"),
             "after :new, Submit must not surface the yielded hint"
         );
     }
@@ -10751,8 +11347,10 @@ mod tests {
     fn effective_base_url_prefers_override_then_registry() {
         use zoid_core::config::Config;
         // No override → registry default for the canonical id.
-        let mut c = Config::default(); // provider pinned to "ollama" (legacy) → ollama-cloud, base_url = None
-        c.provider = "ollama".into();
+        let c = Config {
+            provider: "ollama".into(), // pin to "ollama" (legacy) → ollama-cloud, base_url = None
+            ..Config::default()
+        };
         assert_eq!(effective_base_url(&c), "https://ollama.com");
 
         // Explicit local id, no override → local endpoint.
@@ -10966,10 +11564,7 @@ mod tests {
     #[test]
     fn pick_choice_delete_on_create_new_is_noop() {
         // Index 0 is "Create new". Delete is a no-op → Pending(0).
-        assert_eq!(
-            pick_choice(2, 0, PickKey::Delete),
-            PickOutcome::Pending(0)
-        );
+        assert_eq!(pick_choice(2, 0, PickKey::Delete), PickOutcome::Pending(0));
     }
 
     // --- picker_scroll_offset tests ---
@@ -11196,16 +11791,37 @@ mod tests {
             removed: 1,
             truncated_by: 2,
             lines: vec![
-                zoid_tools::DiffLine { old_no: Some(1), new_no: Some(1), kind: zoid_tools::DiffKind::Ctx, text: "a".into() },
-                zoid_tools::DiffLine { old_no: None, new_no: Some(2), kind: zoid_tools::DiffKind::Add, text: "b".into() },
-                zoid_tools::DiffLine { old_no: Some(3), new_no: None, kind: zoid_tools::DiffKind::Del, text: "c".into() },
+                zoid_tools::DiffLine {
+                    old_no: Some(1),
+                    new_no: Some(1),
+                    kind: zoid_tools::DiffKind::Ctx,
+                    text: "a".into(),
+                },
+                zoid_tools::DiffLine {
+                    old_no: None,
+                    new_no: Some(2),
+                    kind: zoid_tools::DiffKind::Add,
+                    text: "b".into(),
+                },
+                zoid_tools::DiffLine {
+                    old_no: Some(3),
+                    new_no: None,
+                    kind: zoid_tools::DiffKind::Del,
+                    text: "c".into(),
+                },
             ],
         };
         let r = map_render_diff(fd);
         assert_eq!((r.added, r.removed, r.truncated_by), (3, 1, 2));
         assert_eq!(r.lines.len(), 3);
-        assert!(matches!(r.lines[1].kind, zoid_tui::state::RenderDiffKind::Add));
-        assert!(matches!(r.lines[2].kind, zoid_tui::state::RenderDiffKind::Del));
+        assert!(matches!(
+            r.lines[1].kind,
+            zoid_tui::state::RenderDiffKind::Add
+        ));
+        assert!(matches!(
+            r.lines[2].kind,
+            zoid_tui::state::RenderDiffKind::Del
+        ));
     }
 }
 
@@ -11245,7 +11861,9 @@ mod worktree_switch_tests {
         let mut active = None;
         let (cwd, _warn) = compute_worktree_switch(
             &mut active,
-            WorktreeAction::Enter { name: "feature-x".into() },
+            WorktreeAction::Enter {
+                name: "feature-x".into(),
+            },
             false,
             repo.path(),
         )
@@ -11263,8 +11881,20 @@ mod worktree_switch_tests {
     fn enter_guard_already_in_worktree_errors() {
         let repo = init_repo();
         let mut active = None;
-        compute_worktree_switch(&mut active, WorktreeAction::Enter { name: "a".into() }, false, repo.path()).unwrap();
-        let err = compute_worktree_switch(&mut active, WorktreeAction::Enter { name: "b".into() }, false, repo.path()).unwrap_err();
+        compute_worktree_switch(
+            &mut active,
+            WorktreeAction::Enter { name: "a".into() },
+            false,
+            repo.path(),
+        )
+        .unwrap();
+        let err = compute_worktree_switch(
+            &mut active,
+            WorktreeAction::Enter { name: "b".into() },
+            false,
+            repo.path(),
+        )
+        .unwrap_err();
         assert!(err.contains("already in a worktree"), "got: {err}");
     }
 
@@ -11272,7 +11902,13 @@ mod worktree_switch_tests {
     fn enter_guard_subagent_running_errors() {
         let repo = init_repo();
         let mut active = None;
-        let err = compute_worktree_switch(&mut active, WorktreeAction::Enter { name: "a".into() }, true, repo.path()).unwrap_err();
+        let err = compute_worktree_switch(
+            &mut active,
+            WorktreeAction::Enter { name: "a".into() },
+            true,
+            repo.path(),
+        )
+        .unwrap_err();
         assert!(err.contains("subagent"), "got: {err}");
         assert!(active.is_none(), "guard must not enter");
     }
@@ -11281,8 +11917,16 @@ mod worktree_switch_tests {
     fn exit_returns_absolute_repo_root_and_clears() {
         let repo = init_repo();
         let mut active = None;
-        compute_worktree_switch(&mut active, WorktreeAction::Enter { name: "a".into() }, false, repo.path()).unwrap();
-        let (cwd, _warn) = compute_worktree_switch(&mut active, WorktreeAction::Exit, false, repo.path()).expect("exit should succeed");
+        compute_worktree_switch(
+            &mut active,
+            WorktreeAction::Enter { name: "a".into() },
+            false,
+            repo.path(),
+        )
+        .unwrap();
+        let (cwd, _warn) =
+            compute_worktree_switch(&mut active, WorktreeAction::Exit, false, repo.path())
+                .expect("exit should succeed");
         assert!(cwd.is_absolute());
         assert_eq!(
             cwd.canonicalize().unwrap(),
@@ -11296,7 +11940,8 @@ mod worktree_switch_tests {
     fn exit_guard_not_in_worktree_errors() {
         let repo = init_repo();
         let mut active = None;
-        let err = compute_worktree_switch(&mut active, WorktreeAction::Exit, false, repo.path()).unwrap_err();
+        let err = compute_worktree_switch(&mut active, WorktreeAction::Exit, false, repo.path())
+            .unwrap_err();
         assert!(err.contains("not in a worktree"), "got: {err}");
     }
 
@@ -11306,11 +11951,22 @@ mod worktree_switch_tests {
         // can be re-entered without error.
         let repo = init_repo();
         let mut active = None;
-        let (cwd, _warn) = compute_worktree_switch(&mut active, WorktreeAction::Enter { name: "keep".into() }, false, repo.path()).unwrap();
+        let (cwd, _warn) = compute_worktree_switch(
+            &mut active,
+            WorktreeAction::Enter {
+                name: "keep".into(),
+            },
+            false,
+            repo.path(),
+        )
+        .unwrap();
         // Dirty it: modify the tracked file inside the worktree.
         std::fs::write(cwd.join("f.txt"), "uncommitted change").unwrap();
         compute_worktree_switch(&mut active, WorktreeAction::Exit, false, repo.path()).unwrap();
-        assert!(cwd.exists(), "dirty worktree dir must be KEPT on exit (no data loss)");
+        assert!(
+            cwd.exists(),
+            "dirty worktree dir must be KEPT on exit (no data loss)"
+        );
         // The bytes themselves must survive, not just the directory — this is the
         // actual "no data loss" invariant (a dir-only check would pass even if a
         // future remove-adjacent bug truncated tracked files).
@@ -11320,7 +11976,15 @@ mod worktree_switch_tests {
             "uncommitted bytes must survive a dirty exit"
         );
         // Re-enter the same name — must NOT error (idempotent re-enter).
-        let (cwd2, _warn) = compute_worktree_switch(&mut active, WorktreeAction::Enter { name: "keep".into() }, false, repo.path()).unwrap();
+        let (cwd2, _warn) = compute_worktree_switch(
+            &mut active,
+            WorktreeAction::Enter {
+                name: "keep".into(),
+            },
+            false,
+            repo.path(),
+        )
+        .unwrap();
         assert!(cwd2.exists());
         assert!(active.is_some());
     }
@@ -11333,7 +11997,9 @@ mod worktree_switch_tests {
         let mut active = None;
         let (cwd, _warn) = compute_worktree_switch(
             &mut active,
-            WorktreeAction::Enter { name: "unmerged".into() },
+            WorktreeAction::Enter {
+                name: "unmerged".into(),
+            },
             false,
             repo.path(),
         )
@@ -11355,13 +12021,8 @@ mod worktree_switch_tests {
             .unwrap();
         // Exit — the worktree is clean (no uncommitted changes), but the
         // branch has an unmerged commit.
-        let (_root, warn) = compute_worktree_switch(
-            &mut active,
-            WorktreeAction::Exit,
-            false,
-            repo.path(),
-        )
-        .unwrap();
+        let (_root, warn) =
+            compute_worktree_switch(&mut active, WorktreeAction::Exit, false, repo.path()).unwrap();
         assert!(active.is_none(), "exit clears active");
         // The branch must still exist (not deleted).
         let branch_exists = std::process::Command::new("git")
@@ -11371,10 +12032,16 @@ mod worktree_switch_tests {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false);
-        assert!(branch_exists, "branch 'unmerged' must be retained — has unmerged commits");
+        assert!(
+            branch_exists,
+            "branch 'unmerged' must be retained — has unmerged commits"
+        );
         // The warning must mention the branch name and "retained".
         let warn = warn.expect("warning should be Some when branch is retained");
-        assert!(warn.contains("unmerged"), "warning mentions branch name: {warn}");
+        assert!(
+            warn.contains("unmerged"),
+            "warning mentions branch name: {warn}"
+        );
         assert!(warn.contains("retained"), "warning says 'retained': {warn}");
     }
 
@@ -11389,7 +12056,9 @@ mod worktree_switch_tests {
         let mut active = None;
         let (cwd, _warn) = compute_worktree_switch(
             &mut active,
-            WorktreeAction::Enter { name: "diverged".into() },
+            WorktreeAction::Enter {
+                name: "diverged".into(),
+            },
             false,
             repo.path(),
         )
@@ -11397,31 +12066,44 @@ mod worktree_switch_tests {
         // Commit on the branch.
         std::fs::write(cwd.join("branch.txt"), "branch work").unwrap();
         std::process::Command::new("git")
-            .args(["-C"]).arg(&cwd).args(["add", "."]).output().unwrap();
+            .args(["-C"])
+            .arg(&cwd)
+            .args(["add", "."])
+            .output()
+            .unwrap();
         std::process::Command::new("git")
-            .args(["-C"]).arg(&cwd).args(["commit", "-m", "branch commit"]).output().unwrap();
+            .args(["-C"])
+            .arg(&cwd)
+            .args(["commit", "-m", "branch commit"])
+            .output()
+            .unwrap();
         // Advance main past the branch point — main and the branch now diverge.
         std::process::Command::new("git")
-            .args(["-C"]).arg(repo.path()).args(["commit", "--allow-empty", "-m", "main advanced"])
-            .output().unwrap();
+            .args(["-C"])
+            .arg(repo.path())
+            .args(["commit", "--allow-empty", "-m", "main advanced"])
+            .output()
+            .unwrap();
         // Exit — the branch has a commit not reachable from main's HEAD.
-        let (_root, warn) = compute_worktree_switch(
-            &mut active,
-            WorktreeAction::Exit,
-            false,
-            repo.path(),
-        )
-        .unwrap();
+        let (_root, warn) =
+            compute_worktree_switch(&mut active, WorktreeAction::Exit, false, repo.path()).unwrap();
         assert!(active.is_none(), "exit clears active");
         let branch_exists = std::process::Command::new("git")
-            .args(["-C"]).arg(repo.path()).args(["rev-parse", "--verify", "diverged"])
-            .output().map(|o| o.status.success()).unwrap_or(false);
+            .args(["-C"])
+            .arg(repo.path())
+            .args(["rev-parse", "--verify", "diverged"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
         assert!(
             branch_exists,
             "branch 'diverged' must be retained — has unmerged commits even though main advanced"
         );
         let warn = warn.expect("warning should be Some when branch is retained");
-        assert!(warn.contains("diverged"), "warning mentions branch name: {warn}");
+        assert!(
+            warn.contains("diverged"),
+            "warning mentions branch name: {warn}"
+        );
         assert!(warn.contains("retained"), "warning says 'retained': {warn}");
     }
 
@@ -11431,7 +12113,10 @@ mod worktree_switch_tests {
         let repo = init_repo();
         std::fs::write(repo.path().join("f.txt"), "hi there changed").unwrap();
         let (_added, _removed, files) = git_status_at(repo.path());
-        assert!(files >= 1, "git_status_at must see the change in the given dir: files={files}");
+        assert!(
+            files >= 1,
+            "git_status_at must see the change in the given dir: files={files}"
+        );
     }
 
     #[test]
@@ -11439,7 +12124,10 @@ mod worktree_switch_tests {
         use super::current_branch_at;
         let repo = init_repo();
         let b = current_branch_at(repo.path());
-        assert!(b == "main" || b == "master", "init default branch, got: {b}");
+        assert!(
+            b == "main" || b == "master",
+            "init default branch, got: {b}"
+        );
     }
 }
 
@@ -11450,8 +12138,12 @@ mod mcp_confirm_guard_tests {
 
     fn row(id: &str) -> PluginCatalogRow {
         PluginCatalogRow {
-            id: id.into(), name: id.into(), kind_label: "mcp".into(),
-            description: String::new(), source_label: String::new(), license: None,
+            id: id.into(),
+            name: id.into(),
+            kind_label: "mcp".into(),
+            description: String::new(),
+            source_label: String::new(),
+            license: None,
         }
     }
 
@@ -11460,7 +12152,7 @@ mod mcp_confirm_guard_tests {
         let mut cat = PluginCatalogState::loading();
         cat.rows = vec![row("a"), row("b")];
         cat.cursor = 1; // on "b"
-        // List mode → not awaiting any fetch yet.
+                        // List mode → not awaiting any fetch yet.
         assert!(!catalog_confirm_awaits(&cat, "b"));
         cat.begin_confirm_loading();
         assert!(catalog_confirm_awaits(&cat, "b")); // the row whose fetch we spawned
@@ -11475,13 +12167,21 @@ mod mcp_install_tests {
 
     #[test]
     fn user_target_is_config_mcp_json() {
-        let p = mcp_target_path(McpTarget::User, std::path::Path::new("/cfg"), std::path::Path::new("/repo"));
+        let p = mcp_target_path(
+            McpTarget::User,
+            std::path::Path::new("/cfg"),
+            std::path::Path::new("/repo"),
+        );
         assert_eq!(p, std::path::Path::new("/cfg/mcp.json"));
     }
 
     #[test]
     fn project_target_is_cwd_dot_mcp_json() {
-        let p = mcp_target_path(McpTarget::Project, std::path::Path::new("/cfg"), std::path::Path::new("/repo"));
+        let p = mcp_target_path(
+            McpTarget::Project,
+            std::path::Path::new("/cfg"),
+            std::path::Path::new("/repo"),
+        );
         assert_eq!(p, std::path::Path::new("/repo/.mcp.json"));
     }
 }
@@ -11492,9 +12192,10 @@ mod onboarding_tests {
     use zoid_core::config::Config;
 
     fn cfg_with_provider(provider: &str) -> Config {
-        let mut c = Config::default();
-        c.provider = provider.to_string();
-        c
+        Config {
+            provider: provider.to_string(),
+            ..Config::default()
+        }
     }
 
     #[test]
@@ -11580,10 +12281,7 @@ mod onboarding_tests {
     fn canonical_id_empty_is_not_ollama_local() {
         // The gate's ollama-local exemption precedes the empty-provider check.
         // Its correctness depends on canonical_id("") != "ollama-local".
-        assert_ne!(
-            zoid_provider::model::canonical_id(""),
-            "ollama-local"
-        );
+        assert_ne!(zoid_provider::model::canonical_id(""), "ollama-local");
         assert_eq!(zoid_provider::model::canonical_id(""), "");
     }
 }

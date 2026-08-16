@@ -75,7 +75,10 @@ async fn smoke_context_compaction_and_eviction_trace() {
     eprintln!("high_water (evict)  = {}", band.high_water);
     eprintln!("low_water  (stop)  = {}", band.low_water);
     eprintln!("headroom (tokens)   = {}", band.high_water - band.low_water);
-    assert_eq!(band.high_water, context_target, "target < usable, so high_water == target");
+    assert_eq!(
+        band.high_water, context_target,
+        "target < usable, so high_water == target"
+    );
 
     // --- Seed enough turns to cross high_water ---
     // Each turn: user ~ big + assistant ~ big. estimate_tokens = chars/3.
@@ -92,7 +95,10 @@ async fn smoke_context_compaction_and_eviction_trace() {
     eprintln!("\n=== SEED ===");
     eprintln!("turns               = {n_turns}");
     eprintln!("est tokens BEFORE   = {est_before}");
-    eprintln!("over tokens vs hw   = {}", est_before as i64 - band.high_water as i64);
+    eprintln!(
+        "over tokens vs hw   = {}",
+        est_before as i64 - band.high_water as i64
+    );
 
     let session = SessionHandle::spawn(":memory:").unwrap();
     for e in &seed {
@@ -184,13 +190,20 @@ async fn smoke_context_compaction_and_eviction_trace() {
     eprintln!("TurnsEvicted waves   = {n_eviction_waves}");
     eprintln!("evicted event ids    = {n_evicted_events}");
     eprintln!("est tokens AFTER    = {est_after}");
-    eprintln!("delta (before-after)= {}", est_before as i64 - est_after as i64);
-    eprintln!("est after vs low    = {} (low_water={})",
+    eprintln!(
+        "delta (before-after)= {}",
+        est_before as i64 - est_after as i64
+    );
+    eprintln!(
+        "est after vs low    = {} (low_water={})",
         est_after as i64 - band.low_water as i64,
-        band.low_water);
-    eprintln!("est after vs high   = {} (high_water={})",
+        band.low_water
+    );
+    eprintln!(
+        "est after vs high   = {} (high_water={})",
         est_after as i64 - band.high_water as i64,
-        band.high_water);
+        band.high_water
+    );
 
     // The seed had no tool results, so compaction has nothing to compact.
     // The gate should fall through to eviction. Assert the shape:
@@ -200,10 +213,7 @@ async fn smoke_context_compaction_and_eviction_trace() {
         "est > high_water and nothing to compact → eviction must fire"
     );
     // Eviction should drive the estimate down toward (ideally to) low_water.
-    assert!(
-        est_after < est_before,
-        "eviction must reduce the estimate"
-    );
+    assert!(est_after < est_before, "eviction must reduce the estimate");
     // Observation: eviction overshoots low_water substantially. The wave
     // evicts in whole-turn units (each turn ≈ 2*per_msg tokens), and it evicts
     // turns until the *estimate* drops below low_water — but the estimate uses
@@ -225,7 +235,11 @@ async fn smoke_context_compaction_and_eviction_trace() {
             it.label, it.kind, it.heat, it.pinned, it.evicted, it.compacted, it.tokens
         );
     }
-    eprintln!("  ... ({} items total, {} tokens)", win.items.len(), win.total_tokens);
+    eprintln!(
+        "  ... ({} items total, {} tokens)",
+        win.items.len(),
+        win.total_tokens
+    );
 }
 
 /// Second variant: seed with large tool *results* in the log, then drive a
@@ -241,7 +255,10 @@ async fn smoke_compaction_path_trace() {
     let context_target: u64 = 30_000;
     let headroom_pct: u8 = 20;
     let band = zoid_core::band::derive_band(capacity, context_target, None, headroom_pct);
-    eprintln!("=== BAND === high_water={} low_water={}", band.high_water, band.low_water);
+    eprintln!(
+        "=== BAND === high_water={} low_water={}",
+        band.high_water, band.low_water
+    );
 
     // Seed: a few user/assistant pairs PLUS several large shell tool results.
     // `shell` has no path key → stays ItemKind::ToolResult (compactable).
@@ -249,32 +266,59 @@ async fn smoke_compaction_path_trace() {
     let mut seed = Vec::new();
     let mut next_id: u128 = 1;
     for i in 0..6u128 {
-        let uid = next_id; next_id += 1;
-        let cid = next_id; next_id += 1;
-        let rid = next_id; next_id += 1;
-        let aid = next_id; next_id += 1;
-        seed.push(Event::new(Ulid::from(uid), None, uid as i64, EventKind::UserMessage {
-            text: format!("run command {i}"),
-        }));
-        seed.push(Event::new(Ulid::from(cid), None, cid as i64, EventKind::ToolCall {
-            id: format!("c{cid}"),
-            name: "shell".into(),
-            args: format!(r#"{{"command":"echo big {i}"}}"#),
-        }));
-        seed.push(Event::new(Ulid::from(rid), None, rid as i64, EventKind::ToolResult {
-            id: format!("c{cid}"),
-            name: "shell".into(),
-            output: big_output.clone(),
-            is_error: false,
-        }));
-        seed.push(Event::new(Ulid::from(aid), None, aid as i64, EventKind::AssistantMessage {
-            text: format!("ok {i}"),
-        }));
+        let uid = next_id;
+        next_id += 1;
+        let cid = next_id;
+        next_id += 1;
+        let rid = next_id;
+        next_id += 1;
+        let aid = next_id;
+        next_id += 1;
+        seed.push(Event::new(
+            Ulid::from(uid),
+            None,
+            uid as i64,
+            EventKind::UserMessage {
+                text: format!("run command {i}"),
+            },
+        ));
+        seed.push(Event::new(
+            Ulid::from(cid),
+            None,
+            cid as i64,
+            EventKind::ToolCall {
+                id: format!("c{cid}"),
+                name: "shell".into(),
+                args: format!(r#"{{"command":"echo big {i}"}}"#),
+            },
+        ));
+        seed.push(Event::new(
+            Ulid::from(rid),
+            None,
+            rid as i64,
+            EventKind::ToolResult {
+                id: format!("c{cid}"),
+                name: "shell".into(),
+                output: big_output.clone(),
+                is_error: false,
+            },
+        ));
+        seed.push(Event::new(
+            Ulid::from(aid),
+            None,
+            aid as i64,
+            EventKind::AssistantMessage {
+                text: format!("ok {i}"),
+            },
+        ));
     }
 
     let est_before = context_window_with(seed.iter(), overhead()).total_tokens;
     eprintln!("\n=== SEED === turns=6, est tokens BEFORE = {est_before}");
-    eprintln!("over high_water by {}", est_before as i64 - band.high_water as i64);
+    eprintln!(
+        "over high_water by {}",
+        est_before as i64 - band.high_water as i64
+    );
 
     let session = SessionHandle::spawn(":memory:").unwrap();
     for e in &seed {
@@ -294,25 +338,46 @@ async fn smoke_compaction_path_trace() {
 
     let (tx, mut rx) = mpsc::channel::<AgentUpdate>(256);
     let drain = tokio::spawn(async move {
-        let mut s = false; let mut c = false;
+        let mut s = false;
+        let mut c = false;
         while let Some(u) = rx.recv().await {
-            match u { AgentUpdate::CompactionStarted => s = true, AgentUpdate::CompactionComplete => c = true, _ => {} }
+            match u {
+                AgentUpdate::CompactionStarted => s = true,
+                AgentUpdate::CompactionComplete => c = true,
+                _ => {}
+            }
         }
         (s, c)
     });
 
     let mut cfg = chat_turn_config();
     cfg.eviction = zoid_core::eviction::EvictionPolicy {
-        enabled: true, capacity, context_target, band_headroom_pct: headroom_pct,
-        min_protected_turns: 2, protection_pct: 15, max_output: None, rescue_weight: None,
+        enabled: true,
+        capacity,
+        context_target,
+        band_headroom_pct: headroom_pct,
+        min_protected_turns: 2,
+        protection_pct: 15,
+        max_output: None,
+        rescue_weight: None,
     };
     cfg.context_window = capacity;
 
     let out = run_agent_turn(
-        cfg, provider, Arc::new(zoid_tools::registry()), Arc::new(zoid_tools::AllowAll),
-        session, zoid::eventlog::EventLog::from_vec(seed), "m".into(), tx, Ulid::new(),
-        zoid_companion::CompanionHub::new(), now,
-    ).await.unwrap();
+        cfg,
+        provider,
+        Arc::new(zoid_tools::registry()),
+        Arc::new(zoid_tools::AllowAll),
+        session,
+        zoid::eventlog::EventLog::from_vec(seed),
+        "m".into(),
+        tx,
+        Ulid::new(),
+        zoid_companion::CompanionHub::new(),
+        now,
+    )
+    .await
+    .unwrap();
     let (saw_started, saw_complete) = drain.await.unwrap();
 
     let est_after_compaction_only = {
@@ -323,36 +388,64 @@ async fn smoke_compaction_path_trace() {
         // counts, then reason about which lever fired.
         context_window_with(out.iter(), overhead()).total_tokens
     };
-    let n_compacted = out.iter().filter(|e| matches!(e.kind, EventKind::ToolResultCompacted { .. })).count();
-    let n_evicted = out.iter().filter_map(|e| match &e.kind {
-        EventKind::TurnsEvicted { ids, .. } => Some(ids.len()), _ => None,
-    }).sum::<usize>();
+    let n_compacted = out
+        .iter()
+        .filter(|e| matches!(e.kind, EventKind::ToolResultCompacted { .. }))
+        .count();
+    let n_evicted = out
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::TurnsEvicted { ids, .. } => Some(ids.len()),
+            _ => None,
+        })
+        .sum::<usize>();
 
     eprintln!("\n=== AFTER TURN ===");
     eprintln!("CompactionStarted/Complete = {saw_started}/{saw_complete}");
     eprintln!("ToolResultCompacted events = {n_compacted}");
     eprintln!("TurnsEvicted event ids     = {n_evicted}");
     eprintln!("est tokens AFTER          = {est_after_compaction_only}");
-    eprintln!("delta                     = {}", est_before as i64 - est_after_compaction_only as i64);
+    eprintln!(
+        "delta                     = {}",
+        est_before as i64 - est_after_compaction_only as i64
+    );
 
     // Compaction fires first (largest-first). With 6 × ~7k-token tool results
     // = ~42k tokens of tool output, compaction should replace several with
     // short summaries. Whether eviction *also* fires depends on whether the
     // compacted estimate is still over high_water.
-    assert!(n_compacted > 0, "large tool results over high_water → compaction must fire");
-    assert!(saw_started && saw_complete, "compaction lifecycle must emit both updates");
-    assert!(est_after_compaction_only < est_before, "context must shrink");
+    assert!(
+        n_compacted > 0,
+        "large tool results over high_water → compaction must fire"
+    );
+    assert!(
+        saw_started && saw_complete,
+        "compaction lifecycle must emit both updates"
+    );
+    assert!(
+        est_after_compaction_only < est_before,
+        "context must shrink"
+    );
 
     eprintln!("\n=== WINDOW ITEMS (top 10) ===");
     let win = context_window_with(out.iter(), overhead());
     for it in win.items.iter().take(10) {
-        eprintln!("  {:<20} {:?} compacted={} tokens={}", it.label, it.kind, it.compacted, it.tokens);
+        eprintln!(
+            "  {:<20} {:?} compacted={} tokens={}",
+            it.label, it.kind, it.compacted, it.tokens
+        );
     }
-    eprintln!("  ... ({} items, {} tokens)", win.items.len(), win.total_tokens);
+    eprintln!(
+        "  ... ({} items, {} tokens)",
+        win.items.len(),
+        win.total_tokens
+    );
 
     // Did eviction also fire? Report it.
     if n_evicted > 0 {
-        eprintln!("\n→ eviction ALSO fired after compaction (est still > high_water after compaction)");
+        eprintln!(
+            "\n→ eviction ALSO fired after compaction (est still > high_water after compaction)"
+        );
     } else {
         eprintln!("\n→ compaction alone brought est under high_water; eviction did NOT fire");
     }
@@ -374,7 +467,10 @@ async fn smoke_over_eviction_calibration_mismatch() {
     let context_target: u64 = 300_000;
     let headroom_pct: u8 = 20;
     let band = zoid_core::band::derive_band(capacity, context_target, None, headroom_pct);
-    eprintln!("=== BAND === high_water={} low_water={}", band.high_water, band.low_water);
+    eprintln!(
+        "=== BAND === high_water={} low_water={}",
+        band.high_water, band.low_water
+    );
 
     // Simulate a session of ~100 turns, each ~2k tokens (raw chars/3).
     // Raw window total = ~200k. But with a calibration ratio of 1.4 (real
@@ -390,7 +486,10 @@ async fn smoke_over_eviction_calibration_mismatch() {
     eprintln!("\nraw window total    = {raw_window_total}");
     eprintln!("calibration_ratio  = {calibration_ratio}");
     eprintln!("OVERCOUNT_BIAS      = {overcount_bias}");
-    eprintln!("est (scaled)        = {est}  → over high_water by {}", est as i64 - band.high_water as i64);
+    eprintln!(
+        "est (scaled)        = {est}  → over high_water by {}",
+        est as i64 - band.high_water as i64
+    );
 
     // Build synthetic events: 100 user/assistant pairs, each ~2k raw tokens.
     // per_turn_raw_tokens = 2k → each message ~1k tokens → ~3000 chars.
@@ -400,12 +499,18 @@ async fn smoke_over_eviction_calibration_mismatch() {
     for i in 0..n_turns as u128 {
         let uid = i * 2 + 1;
         let aid = i * 2 + 2;
-        seed.push(Event::new(Ulid::from(uid), None, uid as i64, EventKind::UserMessage {
-            text: format!("{big}"),
-        }));
-        seed.push(Event::new(Ulid::from(aid), None, aid as i64, EventKind::AssistantMessage {
-            text: format!("{big}"),
-        }));
+        seed.push(Event::new(
+            Ulid::from(uid),
+            None,
+            uid as i64,
+            EventKind::UserMessage { text: big.clone() },
+        ));
+        seed.push(Event::new(
+            Ulid::from(aid),
+            None,
+            aid as i64,
+            EventKind::AssistantMessage { text: big },
+        ));
     }
 
     let policy = EvictionPolicy {
@@ -421,7 +526,14 @@ async fn smoke_over_eviction_calibration_mismatch() {
     let scorer = RecencyScorer;
     let ctx = GoalContext::default();
 
-    let plan = plan_evictions(seed.iter(), &policy, est, &scorer, &ctx, calibration_ratio * overcount_bias);
+    let plan = plan_evictions(
+        seed.iter(),
+        &policy,
+        est,
+        &scorer,
+        &ctx,
+        calibration_ratio * overcount_bias,
+    );
 
     let n_evicted_turns = plan.turns.len();
     let reclaimed_scaled: u64 = plan.turns.iter().map(|t| t.token_estimate).sum();
@@ -429,21 +541,42 @@ async fn smoke_over_eviction_calibration_mismatch() {
     let raw_evicted = n_evicted_turns as u64 * per_turn_raw_tokens;
     let raw_after = raw_window_total as i64 - raw_evicted as i64;
 
-    eprintln!("\n=== EVICTION PLAN (with scale={:.2}) ===", calibration_ratio * overcount_bias);
+    eprintln!(
+        "\n=== EVICTION PLAN (with scale={:.2}) ===",
+        calibration_ratio * overcount_bias
+    );
     eprintln!("turns evicted         = {n_evicted_turns} of {n_turns}");
-    eprintln!("reclaimed (scaled)    = {reclaimed_scaled}  ← sum of per-turn scaled token_estimate");
+    eprintln!(
+        "reclaimed (scaled)    = {reclaimed_scaled}  ← sum of per-turn scaled token_estimate"
+    );
     eprintln!("est after (scaled)    = {est_after}  ← current_tokens - reclaimed");
     eprintln!("raw tokens evicted    = {raw_evicted}  ← {n_evicted_turns} turns × {per_turn_raw_tokens} raw");
     eprintln!("raw after (unscaled)  = {raw_after}");
-    eprintln!("est after vs low      = {} (low_water={})", est_after - band.low_water as i64, band.low_water);
-    eprintln!("raw after vs low      = {} (low_water={})", raw_after - band.low_water as i64, band.low_water);
+    eprintln!(
+        "est after vs low      = {} (low_water={})",
+        est_after - band.low_water as i64,
+        band.low_water
+    );
+    eprintln!(
+        "raw after vs low      = {} (low_water={})",
+        raw_after - band.low_water as i64,
+        band.low_water
+    );
 
     eprintln!("\n=== FIX VERIFICATION ===");
     eprintln!("current_tokens (est)  = {est}  (raw × {calibration_ratio} × {overcount_bias})");
-    eprintln!("scale factor          = {:.2}", calibration_ratio * overcount_bias);
-    eprintln!("reclaimed per turn    = {:.0}  (raw {per_turn_raw_tokens} × scale)", per_turn_raw_tokens as f64 * calibration_ratio * overcount_bias);
-    eprintln!("Real context after    = {raw_after} raw tokens ({:.0}% of original)",
-        raw_after as f64 / raw_window_total as f64 * 100.0);
+    eprintln!(
+        "scale factor          = {:.2}",
+        calibration_ratio * overcount_bias
+    );
+    eprintln!(
+        "reclaimed per turn    = {:.0}  (raw {per_turn_raw_tokens} × scale)",
+        per_turn_raw_tokens as f64 * calibration_ratio * overcount_bias
+    );
+    eprintln!(
+        "Real context after    = {raw_after} raw tokens ({:.0}% of original)",
+        raw_after as f64 / raw_window_total as f64 * 100.0
+    );
 
     // With the scale applied, the planner evicts fewer turns because each
     // turn's reclaimed contribution is scaled to match current_tokens.

@@ -301,12 +301,18 @@ mod tests {
 
         // Default is false
         let (cfg, _) = merge(&vec![(Source::Default, PartialConfig::default())]);
-        assert!(!cfg.companion.enabled, "companion.enabled defaults to false");
+        assert!(
+            !cfg.companion.enabled,
+            "companion.enabled defaults to false"
+        );
 
         // TOML overrides
         let (pc, _) = parse_toml("[companion]\nenabled = true\nport = 9123\nopen = false").unwrap();
         let (cfg, _) = merge(&vec![(Source::UserGlobal, pc)]);
-        assert!(cfg.companion.enabled, "companion.enabled overridden via TOML");
+        assert!(
+            cfg.companion.enabled,
+            "companion.enabled overridden via TOML"
+        );
     }
 
     #[test]
@@ -413,7 +419,10 @@ mod tests {
     fn ui_defaults_when_section_absent() {
         let (p, _) = parse_toml("[economy]\nrecent_n = 3").unwrap();
         let (cfg, _) = merge(&[(Source::Project, p)]);
-        assert_eq!(cfg.economy.min_protected_turns, 3, "recent_n=3 aliases to min_protected_turns");
+        assert_eq!(
+            cfg.economy.min_protected_turns, 3,
+            "recent_n=3 aliases to min_protected_turns"
+        );
         assert!(cfg.ui.edit_diff, "absent [ui] → default on");
         assert_eq!(cfg.ui.edit_diff_inline, 5);
     }
@@ -1047,12 +1056,21 @@ mod approval_config_tests {
             "[approval]\nyolo = true\nshell_danger = [\"make deploy\"]\nshell_allow = [\"git push --force-with-lease\"]"
         ).unwrap();
         assert_eq!(p.approval.yolo, Some(true));
-        assert_eq!(p.approval.shell_danger, Some(vec!["make deploy".to_string()]));
-        assert_eq!(p.approval.shell_allow, Some(vec!["git push --force-with-lease".to_string()]));
+        assert_eq!(
+            p.approval.shell_danger,
+            Some(vec!["make deploy".to_string()])
+        );
+        assert_eq!(
+            p.approval.shell_allow,
+            Some(vec!["git push --force-with-lease".to_string()])
+        );
         let (cfg, _) = merge(&[(Source::UserGlobal, p)]);
         assert!(cfg.approval.yolo);
         assert_eq!(cfg.approval.shell_danger, vec!["make deploy".to_string()]);
-        assert_eq!(cfg.approval.shell_allow, vec!["git push --force-with-lease".to_string()]);
+        assert_eq!(
+            cfg.approval.shell_allow,
+            vec!["git push --force-with-lease".to_string()]
+        );
     }
 
     #[test]
@@ -1068,7 +1086,10 @@ mod approval_config_tests {
         let (user, _) = parse_toml("[approval]\nshell_danger = [\"a\", \"b\"]").unwrap();
         let (proj, _) = parse_toml("[approval]\nshell_danger = [\"b\", \"c\"]").unwrap();
         let (cfg, _) = merge(&[(Source::UserGlobal, user), (Source::Project, proj)]);
-        assert_eq!(cfg.approval.shell_danger, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+        assert_eq!(
+            cfg.approval.shell_danger,
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
     }
 
     #[test]
@@ -1076,7 +1097,10 @@ mod approval_config_tests {
         let (user, _) = parse_toml("[approval]\nshell_allow = [\"x\"]").unwrap();
         let (proj, _) = parse_toml("[approval]\nshell_allow = [\"y\"]").unwrap();
         let (cfg, _) = merge(&[(Source::UserGlobal, user), (Source::Project, proj)]);
-        assert_eq!(cfg.approval.shell_allow, vec!["x".to_string(), "y".to_string()]);
+        assert_eq!(
+            cfg.approval.shell_allow,
+            vec!["x".to_string(), "y".to_string()]
+        );
     }
 
     #[test]
