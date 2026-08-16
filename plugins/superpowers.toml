@@ -1,0 +1,35 @@
+[plugin]
+id = "superpowers"
+schema = 1
+kind = ["mode"]
+name = "Superpowers"
+description = "A curated skill set for structured software engineering workflows."
+
+[source]
+repo = "obra/superpowers"
+ref = "d884ae04edebef577e82ff7c4e143debd0bbec99"
+subtree = "skills"
+
+[mode]
+loader = "using-superpowers/SKILL.md"
+strip_prefix = "skills/"
+body = "from-skill-frontmatter"
+description = "Superpowers — a curated skill set for structured software engineering workflows (TDD, debugging, code review, planning, parallel agents, git worktrees, verification), imported from obra/superpowers."
+body_intro = """
+You are operating in "Superpowers" mode, imported from obra/superpowers.
+
+Before any task, check if an available skill applies and invoke it with invoke_skill. The skills are:
+"""
+body_outro = """
+
+Always check for an applicable skill before starting work. If multiple skills apply, invoke the most specific one first. After completing work, invoke verification-before-completion before claiming success.
+
+Skill work produces specs, plans, and debugging notes. Keep the running narration terse, and when the work is done do NOT reframe the whole effort in long paragraphs: close with a short recap of what changed and any next step.
+"""
+
+[[install]]
+effect = "activate"
+
+[[install]]
+effect = "onboarding_hint"
+text = "Superpowers mode installed and active."
