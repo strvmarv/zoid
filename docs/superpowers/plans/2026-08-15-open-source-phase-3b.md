@@ -187,6 +187,7 @@ jobs:
             git config user.email "catalog-bot@users.noreply.github.com"
             git add plugins/index.json
             git commit -m "chore(catalog): regenerate index.json"
+            git pull --rebase origin main
             git push
           fi
 ```
@@ -403,7 +404,7 @@ text now resolve against strvmarv/zoid instead of strvmarv/zoid-releases."
 
 - [ ] **Step 1: Remove the "Do not cut a release yet" block from `docs/RELEASING.md`**
 
-Delete lines 6-11 (the blockquote starting with `> **Do not cut a release yet.**` through the line ending `before following the steps below.`). The file should start:
+Delete lines 6–12 (the blockquote starting with `> **Do not cut a release yet.**` through the line ending `steps below.`) and the blank line at line 13. The file should start:
 
 ```markdown
 # Releasing zoid
@@ -448,15 +449,15 @@ Line 855 — change the beta/expiry copy to neutral OSS framing:
   <p style="margin:12px 0 0;font-size:12px;color:var(--dim);">Download the latest release or build from source.</p>
 ```
 
-- [ ] **Step 4: Verify no zoid-releases references remain in docs**
+- [ ] **Step 4: Verify no zoid-releases references remain in docs and config**
 
 Run:
 
 ```bash
-grep -rn 'zoid-releases' docs/RELEASING.md public/index.html README.md AGENTS.md CONTRIBUTING.md SECURITY.md
+grep -rn 'zoid-releases' docs/RELEASING.md public/index.html README.md AGENTS.md CONTRIBUTING.md SECURITY.md dist-workspace.toml .github/workflows/release.yml .github/workflows/catalog-index.yml
 ```
 
-Expected: no output.
+Expected: no output. The `dist-workspace.toml` and `release.yml` are verified clean (no `zoid-releases` references exist in them today), but including them in this grep confirms nothing was missed.
 
 - [ ] **Step 5: Commit**
 
@@ -546,10 +547,10 @@ cargo insta test --accept -p zoid-tui
 Then verify the diff is version-token-only:
 
 ```bash
-git diff --stat -p zoid-tui/ | grep '^[+-]' | grep -v '0.9.1\|1.0.0\|^[+-][+-][+-]' | head -10
+git diff -p zoid-tui/ | grep '^[+-]' | grep -v '0.9.1\|1.0.0\|zoid-releases\|^[+-][+-][+-]' | head -10
 ```
 
-Expected: no output (all changes are `0.9.1` → `1.0.0` token replacements). If non-version changes appear, investigate before continuing.
+Expected: no output (all changes are `0.9.1` → `1.0.0` token replacements, plus `zoid-releases` → `zoid` URL changes from Task 2 that appear in any snapshot capturing feedback/upgrade prompts). If non-version, non-URL changes appear, investigate before continuing.
 
 - [ ] **Step 4: Verify the release gate**
 
@@ -678,8 +679,10 @@ gh api repos/strvmarv/zoid/pages -X POST \
   -f "source[path]=/public" 2>&1
 ```
 
-If the API returns an error (some GitHub plans handle Pages differently),
-enable via Settings → Pages → Source: `main` / `/public`.
+If the API returns an error, this step requires manual intervention via the
+GitHub web UI (Settings → Pages → Source: `main` / `/public`). Note: some
+GitHub configurations expect `public` without the leading `/`; try both.
+This step is semi-manual — stop and hand off to a human if the API call fails.
 
 - [ ] **Step 2: Verify the marketing site renders**
 
@@ -713,7 +716,7 @@ EOF
 gh api repos/strvmarv/zoid-releases/contents/README.md \
   -X PUT \
   -f message="docs: point to strvmarv/zoid as the new home" \
-  -f content=$(base64 -w 0 /tmp/zr-readme.md) \
+  -f content=$(base64 < /tmp/zr-readme.md | tr -d '\n') \
   -f sha="$README_SHA" 2>&1
 ```
 
