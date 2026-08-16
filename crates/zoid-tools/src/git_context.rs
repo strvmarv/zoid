@@ -9,6 +9,7 @@ use crate::{Tool, ToolOutput};
 use serde_json::{json, Value};
 use std::path::Path;
 use std::process::Command;
+use zoid_core::ErrorKind;
 use zoid_provider::ToolSpec;
 
 /// Read-only git status/branch reporter for the working directory.
@@ -39,20 +40,28 @@ impl Tool for GitContext {
         {
             Ok(o) => o,
             // `git` missing on PATH — surface it rather than pretending clean.
-            Err(e) => return ToolOutput::err(format!("git_context: could not run git: {e}")),
+            Err(e) => {
+                return ToolOutput::err_kind(
+                    ErrorKind::Internal,
+                    format!("git_context: could not run git: {e}"),
+                )
+            }
         };
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);
             let msg = stderr.trim();
             // Not a repo (or any other git error): report, don't crash.
-            return ToolOutput::err(format!(
-                "git_context: {}",
-                if msg.is_empty() {
-                    "not a git repository"
-                } else {
-                    msg
-                }
-            ));
+            return ToolOutput::err_kind(
+                ErrorKind::Internal,
+                format!(
+                    "git_context: {}",
+                    if msg.is_empty() {
+                        "not a git repository"
+                    } else {
+                        msg
+                    }
+                ),
+            );
         }
         let stdout = String::from_utf8_lossy(&out.stdout);
         let mut branch_line = "(unknown)";

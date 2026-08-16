@@ -2,6 +2,7 @@ use crate::{str_arg, KillSlot, Tool, ToolOutput};
 use serde_json::{json, Value};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use zoid_core::ErrorKind;
 use zoid_provider::ToolSpec;
 
 /// Run a shell command in the working directory and capture its output.
@@ -69,7 +70,7 @@ impl Tool for Shell {
                     error_kind: None,
                 }
             }
-            Err(e) => ToolOutput::err(format!("shell({command}): {e}")),
+            Err(e) => ToolOutput::err_kind(ErrorKind::Internal, format!("shell({command}): {e}")),
         }
     }
 }
@@ -149,6 +150,7 @@ mod tests {
         let out = Shell::default().run(&json!({}), std::path::Path::new("."));
         assert!(out.is_error);
         assert!(out.text.contains("command"));
+        assert_eq!(out.error_kind, Some(ErrorKind::InvalidInput));
     }
 
     #[cfg(unix)]
