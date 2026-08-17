@@ -378,7 +378,10 @@ mod tests {
         // (ollama-local, ollama-cloud, opencode-go, anthropic-api,
         // zai-coding-plan) and that anthropic-api + zai-coding-plan are
         // present + selectable.
-        assert_eq!(opts.len(), 6);
+        assert_eq!(opts.len(), 7);
+        let gemini = opts.iter().find(|o| o.id == "gemini-api").unwrap();
+        assert!(gemini.selectable);
+        assert!(gemini.detail.contains("generativelanguage.googleapis.com"));
         let zen = opts.iter().find(|o| o.id == "opencode-zen").unwrap();
         assert!(zen.selectable);
         assert!(zen.detail.contains("https://opencode.ai/zen"));

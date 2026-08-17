@@ -18,7 +18,7 @@ expression: terminal.backend().to_string()
 "                                │   anthropic · api key  http  https://api.an…                                                 │                                "
 "                                │   zai · coding plan  http  https://api.z.ai…                                                 │                                "
 "                                │   opencode · zen  http  https://opencode.ai…                                                 │                                "
-"                                │                                                                                              │                                "
+"                                │   gemini · api key  http  https://generativ…                                                 │                                "
 "                                │                                                                                              │                                "
 "                                │                                                                                              │                                "
 "                                │                                                                                              │                                "

@@ -133,7 +133,7 @@ pub async fn reconcile(
                 let exists = p
                     .models
                     .iter()
-                    .any(|m| m.id.to_ascii_lowercase() == id.to_ascii_lowercase());
+                    .any(|m| m.id.eq_ignore_ascii_case(id));
                 if !exists {
                     report.added.push((p.id.clone(), id.clone()));
                     match fetcher.caps(&p.id, &base_url, key, id).await {
@@ -192,7 +192,7 @@ pub async fn reconcile(
                 let exists = p
                     .models
                     .iter()
-                    .any(|m| m.id.to_ascii_lowercase() == id.to_ascii_lowercase());
+                    .any(|m| m.id.eq_ignore_ascii_case(id));
                 if !exists {
                     report
                         .reported

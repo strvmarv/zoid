@@ -143,7 +143,22 @@ async fn run_refresh_models() -> Result<()> {
     let cfg_dir = resolve_config_dir(|k| std::env::var(k).ok());
     let shipped = cfg_dir.join("models.toml");
     let user = cfg_dir.join("models.user.toml");
-    let (reg, _warn) = zoid_registry::load(&shipped, &user)?;
+    // Fall back to the embedded shipped file if the on-disk one is absent
+    // (same pattern as the boot path).
+    let (reg, _warn) = match zoid_registry::load(&shipped, &user) {
+        Ok(r) => r,
+        Err(_) => {
+            let shipped_text = include_str!("../../zoid-model/models.toml");
+            let shipped_reg = zoid_registry::parse::parse_shipped(shipped_text)?;
+            match std::fs::read_to_string(&user) {
+                Ok(user_text) => {
+                    let patch = zoid_registry::parse::parse_user(&user_text)?;
+                    (zoid_registry::merge::merge(shipped_reg, patch), None)
+                }
+                Err(_) => (shipped_reg, None),
+            }
+        }
+    };
 
     // Resolve keys via env → secret store (same precedence as select_provider).
     let db = db_path()?;

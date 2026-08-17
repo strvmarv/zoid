@@ -19,6 +19,8 @@ expression: lines
         http https://api.z.ai/api/coding/paas/v4
       opencode · zen
         http https://opencode.ai/zen
+      gemini · api key
+        http https://generativelanguage.googleapis.com
 
   ☐ 2 — API key  (locked)
 
