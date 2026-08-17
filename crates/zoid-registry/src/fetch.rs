@@ -51,6 +51,58 @@ pub fn parse_gemini_models(body: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Parse the context window from an Ollama `/api/show` response body. The
+/// `model_info` map carries family-specific keys like `glm.context_length`,
+/// `llama.context_length`, etc. — we try known keys and fall back to any
+/// key ending in `.context_length`. Uses `as_f64()` since JSON numbers may
+/// be floats. Returns `None` when unparseable. Mirrors the
+/// `parse_ollama_context_window` in `zoid-provider::ollama`.
+pub fn parse_ollama_context_window(body: &str) -> Option<u64> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let info = v.get("model_info")?;
+    for key in &[
+        "glm.context_length",
+        "llama.context_length",
+        "deepseek.context_length",
+        "qwen.context_length",
+        "mistral.context_length",
+    ] {
+        if let Some(n) = info.get(key).and_then(|v| v.as_f64()) {
+            return Some(n as u64);
+        }
+    }
+    if let Some(obj) = info.as_object() {
+        for (k, v) in obj {
+            if k.ends_with(".context_length") {
+                if let Some(n) = v.as_f64() {
+                    return Some(n as u64);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Parse the Ollama `/api/show` `capabilities` array for thinking support.
+/// Returns `ThinkingSupport::Toggle` when the array contains `"thinking"`,
+/// `None` otherwise (including absent, non-array, null, or malformed). Mirrors
+/// `parse_ollama_thinking` in `zoid-provider::ollama`.
+pub fn parse_ollama_thinking(body: &str) -> zoid_model::ThinkingSupport {
+    let v: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => return zoid_model::ThinkingSupport::None,
+    };
+    let caps = match v.get("capabilities").and_then(|c| c.as_array()) {
+        Some(c) => c,
+        None => return zoid_model::ThinkingSupport::None,
+    };
+    if caps.iter().any(|c| c.as_str() == Some("thinking")) {
+        zoid_model::ThinkingSupport::Toggle
+    } else {
+        zoid_model::ThinkingSupport::None
+    }
+}
+
 /// Parse Gemini `/v1beta/models` caps for one model → `ModelInfo`.
 ///
 /// Looks for the entry whose `name` (after stripping the `models/` prefix)
@@ -122,7 +174,8 @@ pub async fn list_models(provider_id: &str, base_url: &str, key: &str) -> Result
 /// Only Ollama and Gemini expose a caps endpoint we can derive `ModelInfo`
 /// from; other providers return `None` (caps come from the shipped registry).
 ///
-/// - Ollama: `POST {base_url}/api/show` → `model_info.context_length`
+/// - Ollama: `POST {base_url}/api/show` → `model_info.<family>.context_length`
+///   (family-prefixed key) plus the `capabilities` array for thinking support
 /// - Gemini: `GET {base_url}/v1beta/models` (parsed by `parse_gemini_caps`)
 pub async fn caps(
     provider_id: &str,
@@ -143,17 +196,24 @@ pub async fn caps(
                 .error_for_status()?
                 .text()
                 .await?;
-            let v: serde_json::Value = serde_json::from_str(&body)?;
-            let window = v
-                .get("model_info")
-                .and_then(|m| m.get("context_length"))
-                .and_then(|n| n.as_u64());
+            let body = client
+                .post(format!("{base_url}/api/show"))
+                .header("authorization", format!("Bearer {key}"))
+                .header("content-type", "application/json")
+                .json(&serde_json::json!({ "model": model }))
+                .send()
+                .await?
+                .error_for_status()?
+                .text()
+                .await?;
+            let window = parse_ollama_context_window(&body);
+            let thinking = parse_ollama_thinking(&body);
             Ok(window.map(|w| ModelInfo {
                 context_window: w,
                 max_output: 0,
                 tools: true,
                 prompt_cache: true,
-                thinking: zoid_model::ThinkingSupport::None,
+                thinking,
                 thinking_wire: zoid_model::ThinkingWireShape::None,
             }))
         }
@@ -200,5 +260,63 @@ mod tests {
         let caps = parse_gemini_caps(body, "gemini-3-flash").unwrap();
         assert_eq!(caps.context_window, 1_000_000);
         assert_eq!(caps.max_output, 8192);
+    }
+
+    #[test]
+    fn parse_ollama_context_window_family_key() {
+        // Ollama returns family-prefixed keys; the bare `context_length` key
+        // does NOT exist, so the old `model_info.context_length` lookup missed.
+        let body = r#"{"model_info":{"glm.context_length":131072,"llama.context_length":8192}}"#;
+        assert_eq!(parse_ollama_context_window(body), Some(131_072));
+    }
+
+    #[test]
+    fn parse_ollama_context_window_float_number() {
+        // JSON numbers may be floats; as_u64() would miss them.
+        let body = r#"{"model_info":{"llama.context_length":32768.0}}"#;
+        assert_eq!(parse_ollama_context_window(body), Some(32_768));
+    }
+
+    #[test]
+    fn parse_ollama_context_window_fallback_scan() {
+        // Unknown family falls back to any *.context_length key.
+        let body = r#"{"model_info":{"phi4.context_length":16384}}"#;
+        assert_eq!(parse_ollama_context_window(body), Some(16_384));
+    }
+
+    #[test]
+    fn parse_ollama_context_window_missing() {
+        assert_eq!(parse_ollama_context_window(r#"{"model_info":{}}"#), None);
+        assert_eq!(parse_ollama_context_window("not json"), None);
+    }
+
+    #[test]
+    fn parse_ollama_thinking_toggle() {
+        let body = r#"{"capabilities":["tools","thinking"]}"#;
+        assert_eq!(
+            parse_ollama_thinking(body),
+            zoid_model::ThinkingSupport::Toggle
+        );
+    }
+
+    #[test]
+    fn parse_ollama_thinking_none_when_absent() {
+        let body = r#"{"capabilities":["tools"]}"#;
+        assert_eq!(
+            parse_ollama_thinking(body),
+            zoid_model::ThinkingSupport::None
+        );
+    }
+
+    #[test]
+    fn parse_ollama_thinking_none_when_malformed() {
+        assert_eq!(
+            parse_ollama_thinking("not json"),
+            zoid_model::ThinkingSupport::None
+        );
+        assert_eq!(
+            parse_ollama_thinking(r#"{"capabilities":"not-array"}"#),
+            zoid_model::ThinkingSupport::None
+        );
     }
 }
