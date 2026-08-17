@@ -16,9 +16,12 @@
 //! - All other providers are report-only: new live models and absent
 //!   static/user models are reported but never deleted.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::HashMap;
-use zoid_model::{ModelInfo, Registry, Source, Transport};
+use std::path::Path;
+use zoid_model::{ModelInfo, Registry, Source, Transport, WireShape};
+
+use crate::raw::{RawModelSer, RawProviderSer, RawRegistrySer};
 
 /// A report of what reconcile did (and what it left for a human).
 #[derive(Debug, Default)]
@@ -208,6 +211,139 @@ pub async fn reconcile(
     }
 
     Ok(report)
+}
+
+/// Write the refreshed `wire` rows to `models.user.toml`, preserving every
+/// existing `user` row verbatim. The apply rules (spec §7 "Refresh-time"):
+///
+/// 1. Read the existing user file (if present) and keep every row that is NOT
+///    a `wire` row being touched by the report. `user` rows (and wire rows not
+///    in `report.added`/`updated`/`removed`) are carried over unchanged.
+/// 2. For each `report.added` entry, append a `wire` row using the caps in
+///    `report.caps` (populated by `reconcile`); when caps are absent (the
+///    fetch returned `None`), emit a conservative-default wire row.
+/// 3. For each `report.updated` entry, rewrite that `wire` row's caps from
+///    `report.caps`.
+/// 4. For each `report.removed` entry, drop that `wire` row.
+/// 5. Serialize to TOML and write atomically (temp file + rename) so a crash
+///    mid-write never leaves a half-written user file.
+///
+/// `reg` is the *merged* registry (`zoid_registry::load`'s output) — it's used
+/// to look up the existing wire row's `wire_shape` for `added`/`updated` rows
+/// (the shape is provider/model metadata, not endpoint-derived, and lives in
+/// the shipped file for the curated providers).
+pub fn write_user_file(
+    user_path: &Path,
+    reg: &Registry,
+    report: &ReconcileReport,
+) -> Result<()> {
+    // Index the report entries for O(1) lookup by (provider, model).
+    let updated: HashMap<(String, String), ()> =
+        report.updated.iter().cloned().map(|k| (k, ())).collect();
+    let removed: HashMap<(String, String), ()> =
+        report.removed.iter().cloned().map(|k| (k, ())).collect();
+
+    // Read + parse the existing user file (if present). A missing file is an
+    // empty patch; a malformed file is a hard error here (unlike `load`, which
+    // falls back — the refresh tool should not silently drop user rows).
+    let existing: zoid_model::RegistryPatch = match std::fs::read_to_string(user_path) {
+        Ok(text) => crate::parse::parse_user(&text)
+            .with_context(|| format!("parsing existing user file {}", user_path.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            zoid_model::RegistryPatch::default()
+        }
+        Err(e) => return Err(anyhow::anyhow!("read {}: {e}", user_path.display())),
+    };
+
+    // Build the output patch, provider by provider. We preserve the existing
+    // file's provider order, then append any provider that only appears in the
+    // report (a brand-new provider getting its first wire row).
+    let mut out: Vec<RawProviderSer> = Vec::new();
+    let mut seen_providers: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for ep in &existing.providers {
+        seen_providers.insert(ep.id.clone());
+        let mut rows: Vec<RawModelSer> = Vec::new();
+        for em in &ep.models {
+            let key = (ep.id.clone(), em.id.clone());
+            // Drop removed wire rows.
+            if removed.contains_key(&key) {
+                continue;
+            }
+            // Rewrite updated wire rows with the refreshed caps.
+            if let Some(()) = updated.get(&key) {
+                if let Some(info) = report.caps.get(&key) {
+                    let wire_shape = wire_shape_for(reg, &ep.id, &em.id);
+                    rows.push(RawModelSer::wire_row(&em.id, wire_shape, info));
+                    continue;
+                }
+                // No caps in the report (fetch returned None) — keep the
+                // existing row verbatim (couldn't refresh, spec §7).
+            }
+            // Otherwise carry the row through verbatim (user rows, untouched
+            // wire rows, etc.).
+            rows.push(RawModelSer::from_patch(em));
+        }
+        out.push(RawProviderSer {
+            id: ep.id.clone(),
+            model: rows,
+        });
+    }
+
+    // Append the added wire rows. Group by provider; a provider that has no
+    // existing entry gets a new one (appended in report order).
+    for (pid, mid) in &report.added {
+        let key = (pid.clone(), mid.clone());
+        let info = report
+            .caps
+            .get(&key)
+            .copied()
+            .unwrap_or(zoid_model::DEFAULT_MODEL_INFO);
+        let wire_shape = wire_shape_for(reg, pid, mid);
+        let row = RawModelSer::wire_row(mid, wire_shape, &info);
+        match out.iter_mut().find(|p| &p.id == pid) {
+            Some(p) => p.model.push(row),
+            None => {
+                seen_providers.insert(pid.clone());
+                out.push(RawProviderSer {
+                    id: pid.clone(),
+                    model: vec![row],
+                });
+            }
+        }
+    }
+
+    let ser = RawRegistrySer { provider: out };
+    let text = toml::to_string_pretty(&ser)
+        .context("serializing refreshed user registry to TOML")?;
+
+    // Atomic write: temp file in the same directory, then rename.
+    let dir = user_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(dir)
+        .with_context(|| format!("creating {}", dir.display()))?;
+    let tmp = dir.join(format!(
+        ".{}.tmp",
+        user_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("models.user.toml")
+    ));
+    std::fs::write(&tmp, &text).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, user_path)
+        .with_context(|| format!("renaming {} -> {}", tmp.display(), user_path.display()))?;
+    Ok(())
+}
+
+/// Look up the `wire_shape` for a (provider, model) pair in the merged
+/// registry, falling back to `OpenAIChat` when the model isn't present yet
+/// (the common case for a brand-new `added` row on a report-only provider —
+/// though in practice `added` only fires for wire-capable providers, which
+/// always have a curated shape in the shipped file).
+fn wire_shape_for(reg: &Registry, provider: &str, model: &str) -> WireShape {
+    reg.wire_shape(provider, model).unwrap_or(WireShape::OpenAIChat)
 }
 
 #[cfg(test)]
@@ -457,5 +593,150 @@ mod tests {
             .any(|s| s.contains("old-model") && s.contains("absent from live")));
         // It is NOT removed (report-only provider).
         assert!(report.removed.is_empty());
+    }
+
+    #[test]
+    fn write_user_file_round_trips_wire_rows() {
+        // Wire rows live in the user file (the shipped file only allows
+        // `source = "static"`). So the existing user file starts with two
+        // wire rows ("old-wire", "upd-wire") plus one `user` row ("user-keep"
+        // that must be preserved verbatim). The shipped registry has only the
+        // static "keep-static" row. The merged registry (= shipped + user)
+        // is what `reconcile` ran against and what we pass to `write_user_file`.
+        let shipped = Registry {
+            providers: vec![http_provider(
+                "ollama-cloud",
+                vec![static_model("keep-static")],
+            )],
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let user_path = dir.path().join("models.user.toml");
+        std::fs::write(
+            &user_path,
+            r#"[[provider]]
+id = "ollama-cloud"
+
+  [[provider.model]]
+  id = "user-keep"
+  source = "user"
+  hidden = true
+
+  [[provider.model]]
+  id = "old-wire"
+  source = "wire"
+  wire_shape = "ollama"
+  context_window = 8000
+
+  [[provider.model]]
+  id = "upd-wire"
+  source = "wire"
+  wire_shape = "ollama"
+  context_window = 8000
+"#,
+        )
+        .unwrap();
+
+        // The merged registry the refresh tool loaded (shipped + user file).
+        let user_patch = crate::parse::parse_user(&std::fs::read_to_string(&user_path).unwrap())
+            .unwrap();
+        let reg = crate::merge::merge(
+            shipped.clone(),
+            user_patch,
+        );
+
+        // Report: add new-wire (with caps), update upd-wire (new caps), remove
+        // old-wire. keep-static and user-keep are untouched.
+        let mut report = ReconcileReport::default();
+        report.added.push(("ollama-cloud".to_string(), "new-wire".to_string()));
+        report.caps.insert(
+            ("ollama-cloud".to_string(), "new-wire".to_string()),
+            ModelInfo { context_window: 131_072, max_output: 0, tools: true, prompt_cache: true, ..info() },
+        );
+        report.updated.push(("ollama-cloud".to_string(), "upd-wire".to_string()));
+        report.caps.insert(
+            ("ollama-cloud".to_string(), "upd-wire".to_string()),
+            ModelInfo { context_window: 65_536, ..info() },
+        );
+        report.removed.push(("ollama-cloud".to_string(), "old-wire".to_string()));
+
+        write_user_file(&user_path, &reg, &report).unwrap();
+
+        // Round-trip: parse the written file back and merge it over the
+        // shipped registry (which only has the static row).
+        let written = std::fs::read_to_string(&user_path).unwrap();
+        let patch = crate::parse::parse_user(&written).unwrap();
+        let merged = crate::merge::merge(shipped, patch);
+
+        let p = merged.entry("ollama-cloud").unwrap();
+        // user-keep preserved (hidden user row).
+        let uk = p.models.iter().find(|m| m.id == "user-keep").unwrap();
+        assert_eq!(uk.source, Source::User);
+        assert!(uk.hidden);
+        // old-wire removed.
+        assert!(p.models.iter().all(|m| m.id != "old-wire"));
+        // new-wire added with the fetched caps.
+        let nw = p.models.iter().find(|m| m.id == "new-wire").unwrap();
+        assert_eq!(nw.source, Source::Wire);
+        assert_eq!(nw.info.context_window, 131_072);
+        assert!(nw.info.tools);
+        // upd-wire updated to the new caps.
+        let uw = p.models.iter().find(|m| m.id == "upd-wire").unwrap();
+        assert_eq!(uw.source, Source::Wire);
+        assert_eq!(uw.info.context_window, 65_536);
+        // keep-static untouched.
+        assert!(p.models.iter().any(|m| m.id == "keep-static" && m.source == Source::Static));
+    }
+
+    #[test]
+    fn write_user_file_handles_missing_user_file() {
+        // No existing user file: the writer should create one with just the
+        // added wire rows.
+        let reg = Registry {
+            providers: vec![http_provider("ollama-cloud", vec![])],
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let user_path = dir.path().join("models.user.toml");
+
+        let mut report = ReconcileReport::default();
+        report.added.push(("ollama-cloud".to_string(), "solo-wire".to_string()));
+        report.caps.insert(
+            ("ollama-cloud".to_string(), "solo-wire".to_string()),
+            ModelInfo { context_window: 4096, ..info() },
+        );
+
+        write_user_file(&user_path, &reg, &report).unwrap();
+        assert!(user_path.exists(), "user file must be created when absent");
+
+        let written = std::fs::read_to_string(&user_path).unwrap();
+        let patch = crate::parse::parse_user(&written).unwrap();
+        assert_eq!(patch.providers.len(), 1);
+        assert_eq!(patch.providers[0].id, "ollama-cloud");
+        assert_eq!(patch.providers[0].models.len(), 1);
+        assert_eq!(patch.providers[0].models[0].id, "solo-wire");
+        assert_eq!(patch.providers[0].models[0].source, Some(Source::Wire));
+        assert_eq!(patch.providers[0].models[0].context_window, Some(4096));
+    }
+
+    #[test]
+    fn write_user_file_uses_defaults_when_caps_absent() {
+        // An added wire row whose caps are NOT in report.caps (the fetch
+        // returned None) must still be written, with conservative defaults.
+        let reg = Registry {
+            providers: vec![http_provider("ollama-cloud", vec![])],
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let user_path = dir.path().join("models.user.toml");
+
+        let mut report = ReconcileReport::default();
+        // Added with NO caps entry — reconcile reports this case via `reported`.
+        report.added.push(("ollama-cloud".to_string(), "no-caps".to_string()));
+
+        write_user_file(&user_path, &reg, &report).unwrap();
+        let written = std::fs::read_to_string(&user_path).unwrap();
+        let patch = crate::parse::parse_user(&written).unwrap();
+        let m = &patch.providers[0].models[0];
+        assert_eq!(m.id, "no-caps");
+        assert_eq!(m.source, Some(Source::Wire));
+        assert_eq!(m.context_window, Some(zoid_model::DEFAULT_MODEL_INFO.context_window));
     }
 }

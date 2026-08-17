@@ -1,7 +1,7 @@
 //! serde-deserializable mirror types for the TOML registry, plus `TryFrom`
 //! conversions into the dependency-free `zoid_model` types.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use zoid_model::{
     ModelEntry, ModelInfo, ModelPatch, ProviderEntry, ProviderPatch, Registry, RegistryPatch,
     Source, Status, ThinkingSupport, ThinkingWireShape, Transport, WireShape,
@@ -303,5 +303,161 @@ impl TryFrom<RawRegistryPatch> for RegistryPatch {
             providers.push(ProviderPatch { id: rp.id, models });
         }
         Ok(RegistryPatch { providers })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Serialize mirror: a `RawRegistryPatch` shape that can be *emitted* as TOML.
+// The deserialization mirror above (`RawModelPatch`/`RawProviderPatch`/
+// `RawRegistryPatch`) has every field `Option` so a partial override preserves
+// shipped values on read. The writer needs the inverse: a struct that omits
+// `None` fields on serialize so the round-tripped file is clean and readable.
+// These `Raw*Ser` types are the serialization-only mirror used by
+// `refresh::write_user_file`.
+// ---------------------------------------------------------------------------
+
+fn wire_shape_str(w: WireShape) -> &'static str {
+    match w {
+        WireShape::OpenAIChat => "openai-chat",
+        WireShape::AnthropicMessages => "anthropic-messages",
+        WireShape::OpenAIResponses => "openai-responses",
+        WireShape::GoogleGemini => "google-gemini",
+        WireShape::Ollama => "ollama",
+    }
+}
+
+fn source_str(s: Source) -> &'static str {
+    match s {
+        Source::Static => "static",
+        Source::Wire => "wire",
+        Source::User => "user",
+    }
+}
+
+fn thinking_str(t: ThinkingSupport) -> &'static str {
+    match t {
+        ThinkingSupport::None => "none",
+        ThinkingSupport::Toggle => "toggle",
+        ThinkingSupport::ToggleWithEffort => "toggle-with-effort",
+        ThinkingSupport::Budget => "budget",
+        ThinkingSupport::Adaptive => "adaptive",
+    }
+}
+
+fn thinking_wire_str(t: ThinkingWireShape) -> &'static str {
+    match t {
+        ThinkingWireShape::None => "none",
+        ThinkingWireShape::Anthropic => "anthropic",
+        ThinkingWireShape::DeepSeek => "deepseek",
+        ThinkingWireShape::OpenAI => "openai",
+        ThinkingWireShape::Ollama => "ollama",
+    }
+}
+
+/// A model row in the user file, shaped for TOML serialization. `Option`
+/// fields are skipped when `None` (via `#[serde(skip_serializing_if)]`) so the
+/// emitted file only carries the fields that were actually set — round-tripping
+/// a partial user edit back through `parse_user` preserves the same override
+/// semantics.
+#[derive(Debug, Serialize)]
+pub struct RawModelSer {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wire_shape: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_wire: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub download_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quant: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modelfile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_ctx: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vram_curve: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RawProviderSer {
+    pub id: String,
+    pub model: Vec<RawModelSer>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RawRegistrySer {
+    pub provider: Vec<RawProviderSer>,
+}
+
+impl RawModelSer {
+    /// Build a `wire`-source row from a `ModelInfo` caps block. A wire row
+    /// always carries its full caps (the reconcile fetched them), so every
+    /// caps field is emitted; local-provisioning fields are left `None`.
+    pub fn wire_row(id: &str, wire_shape: WireShape, info: &ModelInfo) -> Self {
+        Self {
+            id: id.to_string(),
+            display: None,
+            wire_shape: Some(wire_shape_str(wire_shape).to_string()),
+            source: Some(source_str(Source::Wire).to_string()),
+            default: None,
+            hidden: None,
+            context_window: Some(info.context_window),
+            max_output: Some(info.max_output),
+            tools: Some(info.tools),
+            prompt_cache: Some(info.prompt_cache),
+            thinking: Some(thinking_str(info.thinking).to_string()),
+            thinking_wire: Some(thinking_wire_str(info.thinking_wire).to_string()),
+            runtime: None,
+            download_source: None,
+            quant: None,
+            modelfile: None,
+            num_ctx: None,
+            vram_curve: None,
+        }
+    }
+
+    /// Re-serialize an existing parsed user patch row verbatim (preserves a
+    /// user's manual `hidden`/`default`/`display`/local-provisioning edits).
+    pub fn from_patch(p: &ModelPatch) -> Self {
+        Self {
+            id: p.id.clone(),
+            display: p.display.clone(),
+            wire_shape: p.wire_shape.map(wire_shape_str).map(str::to_string),
+            source: p.source.map(source_str).map(str::to_string),
+            default: p.default,
+            hidden: p.hidden,
+            context_window: p.context_window,
+            max_output: p.max_output,
+            tools: p.tools,
+            prompt_cache: p.prompt_cache,
+            thinking: p.thinking.map(thinking_str).map(str::to_string),
+            thinking_wire: p.thinking_wire.map(thinking_wire_str).map(str::to_string),
+            runtime: p.runtime.clone(),
+            download_source: p.download_source.clone(),
+            quant: p.quant.clone(),
+            modelfile: p.modelfile.clone(),
+            num_ctx: p.num_ctx,
+            vram_curve: p.vram_curve.clone(),
+        }
     }
 }

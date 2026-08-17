@@ -129,6 +129,55 @@ fn uninstall_targets() -> zoid::uninstall::Targets {
     }
 }
 
+/// Run the `zoid refresh-models` subcommand: load the merged registry from
+/// disk, resolve each provider's API key (env → secret store, same precedence
+/// as `select_provider`), fetch live model lists, reconcile against the
+/// on-disk registry, write the resulting `wire` rows to `models.user.toml`
+/// (preserving existing `user` rows), and print the report.
+///
+/// Runs entirely before any DB/terminal setup (like `update`/`uninstall`) and
+/// exits after printing. Network failures are isolated per provider by
+/// `reconcile` and reported (never fatal); a missing user file is treated as
+/// empty by `zoid_registry::load`.
+async fn run_refresh_models() -> Result<()> {
+    let cfg_dir = resolve_config_dir(|k| std::env::var(k).ok());
+    let shipped = cfg_dir.join("models.toml");
+    let user = cfg_dir.join("models.user.toml");
+    let (reg, _warn) = zoid_registry::load(&shipped, &user)?;
+
+    // Resolve keys via env → secret store (same precedence as select_provider).
+    let db = db_path()?;
+    let secret_key = resolve_secret_key_path(|k| std::env::var(k).ok());
+    let secrets = zoid_core::secret::EncryptedDb::open(&db.to_string_lossy(), &secret_key).ok();
+    let mut keys: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for p in &reg.providers {
+        if let Some(env) = &p.key_env {
+            if let Ok(v) = std::env::var(env) {
+                if !v.is_empty() {
+                    keys.insert(p.id.clone(), v);
+                    continue;
+                }
+            }
+            if let Some(s) = &secrets {
+                use zoid_core::secret::SecretStore;
+                if let Some(v) = s.get(env) {
+                    keys.insert(p.id.clone(), v);
+                }
+            }
+        }
+    }
+
+    let report =
+        zoid_registry::refresh::reconcile(&reg, &keys, &zoid_registry::refresh::ReqwestFetcher)
+            .await?;
+
+    // Write wire rows to models.user.toml, preserving existing user rows.
+    zoid_registry::refresh::write_user_file(&user, &reg, &report)?;
+
+    println!("{report:#?}");
+    Ok(())
+}
+
 /// Format one unknown-key warning for the log, qualified by its source file.
 fn layer_warning_line(file: &str, key: &str) -> String {
     format!("{file}: ignored unknown key {key}")
@@ -2414,6 +2463,9 @@ async fn main() -> Result<()> {
         }
         zoid::cli::Cli::Update => {
             return zoid::update::run().await;
+        }
+        zoid::cli::Cli::RefreshModels => {
+            return run_refresh_models().await;
         }
         zoid::cli::Cli::Uninstall { purge } => {
             // Runs before any DB/terminal setup — we're deleting that state.
