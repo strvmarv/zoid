@@ -112,20 +112,29 @@ key_env = "OPENCODE_GO_API_KEY"
   `GO_MODELS`/`ZEN_MODELS` into the registry. Only meaningful for composite
   providers (opencode-go, opencode-zen) that route by model; for single-shape
   providers (ollama-local, anthropic-api, zai, gemini-api) it is present but
-  ignored (the provider is constructed directly, not routed).
+  ignored (the provider is constructed directly, not routed). The `ollama`
+  value is carried for completeness/self-documentation on `ollama-local` rows
+  but has no routing enum — Ollama is a standalone `OllamaProvider`, never
+  routed through a composite.
 - **`source`** — `static` | `wire` | `user`. In the shipped file it is always
   `static`; in the user file it is `wire` (tool-generated) or `user`
   (human-added).
 - **`default`** — optional `bool` on a model row; marks the provider's default
   model. At most one `default = true` per provider; if none, the first row in
   shipped order is the default (with a warning). Survives merge/reorder, and a
-  user row may override the default by setting `default = true`.
+  user row may override the default by setting `default = true`. **Merge rule:**
+  if a user-file row sets `default = true` on a model while the shipped file
+  already has `default = true` on a *different* model, the user-file default
+  wins and the shipped default is demoted (so the post-merge registry has
+  exactly one default per provider).
 - **`display`** — optional human-readable model name (e.g. "Claude Sonnet 4.5").
   Falls back to the raw `id` when absent. Preserves the `display_name` that
   `LocalModelSeed` currently carries for local models.
 - **`key_env`** — the secret env var name for the provider. Moves the
   `key_env_for()` mapping out of `main.rs`'s `match` arms and into the provider
-  entry, so adding a provider no longer requires editing `main.rs`.
+  entry, so adding a provider no longer requires editing `main.rs`. Keyless
+  providers (`ollama-local`) **omit** the key (or set it to the empty string);
+  the parser treats both as `None`, mirroring the `key_url` rule.
 - **`family`** — retained for display/grouping only (e.g. the picker's grouping
   and the `provider_label` drawer). It is no longer read for routing after the
   `select_provider`/`provider_for_id` `match` arms are replaced by
@@ -152,6 +161,12 @@ key_env = "OPENCODE_GO_API_KEY"
   else the first row in shipped order (with a warning). This replaces the
   "first entry = default" comment that lived in the deleted `ZEN_MODEL_IDS`
   const.
+- **`default_model()`** (the env-driven, no-argument form) composes two steps:
+  (1) env selects the provider (`OLLAMA_API_KEY` → `ollama-cloud`, else
+  `anthropic-api`), then (2) `default_model(provider)` returns that provider's
+  default. To preserve today's defaults, the shipped `models.toml` must carry
+  `default = true` on `glm-5.2:cloud` (under `ollama-cloud`) and on
+  `claude-sonnet-4-6` (under `anthropic-api`).
 
 ### Merge semantics
 
@@ -199,9 +214,12 @@ cannot populate `&'static str`, so these become **owned**:
 - Functions that currently return `&'static str` become owned:
   - `select_provider`'s `provider_name` → `String` (or `Arc<str>`).
   - `key_env_for` → `Option<String>`.
-  - `default_model` / `default_provider` → `String` (or `Arc<str>`).
+  - `default_model` → `String` (or `Arc<str>`).
   - `canonical_id` stays `&str`-in/`&str`-out where it only maps a borrowed
     input to a static alias; otherwise it returns owned.
+- `default_provider()` already returns `Arc<dyn Provider>` (owned) and needs no
+  string-ownership change; its only change is to consult the registry for the
+  default provider *id* rather than hardcoding env-var branches.
 
 This is a larger, more invasive change than "thread `Arc<Registry>`" suggests,
 and it is the bulk of Phase 2. The spec's "never a broken tree" claim (§6)
@@ -338,8 +356,9 @@ not new wire code.
   `GoogleGeminiProvider::list_models` shape, used for add/remove detection.
 - `GET {base}/v1beta/models` — model **caps** (`inputTokenLimit` /
   `outputTokenLimit`); a new dedicated fetcher + parser for the refresh tool.
-- `POST {base}/v1beta/models/{model}:streamGenerateContent` — the **streaming**
-  endpoint, already implemented in the leaf.
+- `POST {base}/v1/models/{model}:streamGenerateContent` — the **streaming**
+  endpoint, already implemented in the leaf (note the `v1` segment, matching
+  the existing `google_gemini.rs` path builder).
 
 **Caps:** the three shipped Gemini models are `static` (hand-researched), but
 because `/v1beta/models` returns `inputTokenLimit`/`outputTokenLimit`, the
