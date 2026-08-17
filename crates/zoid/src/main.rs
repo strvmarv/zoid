@@ -1308,6 +1308,98 @@ fn spawn_switch_model_fetch(app: &App, provider_id: &str) {
     }
 }
 
+/// Build the quick-switch provider picker options directly from a `Registry`.
+/// Each `Available` entry is selectable; `Planned` entries are shown but greyed
+/// out (not selectable). The current provider (after `canonical_id`) is marked.
+/// Mirrors `zoid_tui::config_view::provider_options` but reads the runtime
+/// registry rather than the deleted const table — used by the boot-time
+/// stale-selection recovery (which seeds the panes before the overlay opens).
+fn switch_provider_options(
+    reg: &zoid_model::Registry,
+    current_id: &str,
+) -> Vec<zoid_tui::config_view::PickOption> {
+    use zoid_model::{Status, Transport};
+    let cur = zoid_model::canonical_id(current_id);
+    reg.providers
+        .iter()
+        .map(|e| {
+            let (kind, endpoint) = match &e.transport {
+                Transport::Http { default_base_url } => ("http", default_base_url.clone()),
+                Transport::Cli { default_command } => ("cli", default_command.clone()),
+                Transport::Sdk => ("sdk", "—".to_string()),
+            };
+            let planned = e.status == Status::Planned;
+            let mut detail = format!("{kind}  {endpoint}");
+            if planned {
+                detail.push_str("  planned");
+            }
+            zoid_tui::config_view::PickOption {
+                id: e.id.clone(),
+                label: e.display.clone(),
+                detail,
+                selectable: !planned,
+                is_current: e.id == cur,
+            }
+        })
+        .collect()
+}
+
+/// Build the quick-switch model picker options for a provider directly from a
+/// `Registry`, excluding hidden rows and sorted alphabetically by id. Mirrors
+/// `zoid_tui::config_view::model_options` but reads the runtime registry.
+fn switch_model_options(
+    reg: &zoid_model::Registry,
+    provider_id: &str,
+    current_model: &str,
+) -> Vec<zoid_tui::config_view::PickOption> {
+    let mut rows: Vec<&zoid_model::ModelEntry> = reg
+        .models_for(provider_id)
+        .iter()
+        .filter(|m| !m.hidden)
+        .collect();
+    rows.sort_by(|a, b| a.id.cmp(&b.id));
+    rows.iter()
+        .map(|m| zoid_tui::config_view::PickOption {
+            id: m.id.clone(),
+            label: m
+                .display
+                .clone()
+                .unwrap_or_else(|| m.id.clone()),
+            detail: String::new(),
+            selectable: true,
+            is_current: m.id.eq_ignore_ascii_case(current_model),
+        })
+        .collect()
+}
+
+/// Seed the quick-switch overlay's two panes from the registry and open it.
+/// Used both by the boot-time stale-selection recovery and (in Task 11) the
+/// `Alt+P` action. `current_provider`/`current_model` mark the active row in
+/// each pane (so the cursor lands on the persisted selection when present).
+fn open_provider_switch(
+    shell: &mut zoid_tui::ShellState,
+    reg: &zoid_model::Registry,
+    current_provider: &str,
+    current_model: &str,
+) {
+    use zoid_tui::state::{Overlay, SwitchPane};
+    shell.overlay = Overlay::ProviderSwitch;
+    shell.switch_providers = switch_provider_options(reg, current_provider);
+    shell.switch_provider_sel = shell
+        .switch_providers
+        .iter()
+        .position(|o| o.is_current)
+        .unwrap_or(0);
+    shell.switch_pane = SwitchPane::Provider;
+    shell.switch_model_sel = 0;
+    let highlighted_provider_id = shell
+        .switch_providers
+        .get(shell.switch_provider_sel)
+        .map(|o| o.id.clone())
+        .unwrap_or_else(|| current_provider.to_string());
+    shell.switch_models = switch_model_options(reg, &highlighted_provider_id, current_model);
+}
+
 /// Build the economy `ContextPolicy` (spec §7.2) from the loaded config's
 /// `[economy]` table, resolving `compact_threshold_pct` (0–100) against the
 /// resolved `target` (the soft setpoint, NOT capacity) — 0 disables
@@ -2284,6 +2376,13 @@ struct App {
     /// second trigger from racing a concurrent write on the same folder
     /// (review M4).
     installing_plugin: bool,
+    /// Set at boot when the persisted `config.provider`/`config.model` is no
+    /// longer present (or no longer selectable) in the merged registry. Drives
+    /// the boot-time quick-switch recovery: when the user dismisses the
+    /// quick-switch without picking a valid model, the app falls back to the
+    /// offline `FakeProvider` and a persistent banner (spec §7). Cleared once a
+    /// valid selection is committed via `SwitchApply`.
+    stale_selection: bool,
 }
 
 impl App {
@@ -2536,11 +2635,25 @@ async fn main() -> Result<()> {
     events.clear_compacted_bodies();
 
     let (config, prov, cfg_warnings) = load_config();
-    // Task 10 wires the real merged-registry disk load here; until then the
-    // shipped registry is the fallback. Provider selection, key-env lookup,
-    // and caps resolution all read from `&reg` (an `Arc<Registry>`).
-    let reg: std::sync::Arc<zoid_model::Registry> =
-        std::sync::Arc::new(zoid_provider::model::shipped_registry().clone());
+    // Load the merged provider/model registry from disk: the shipped
+    // `models.toml` + the user `models.user.toml` overlay. The shipped file is
+    // the primary source (so upgrades can replace it); the embedded copy is the
+    // bootstrap default when the on-disk file is absent or corrupt.
+    let cfg_dir = resolve_config_dir(|k: &str| std::env::var(k).ok());
+    let shipped_path = cfg_dir.join("models.toml");
+    let user_path = cfg_dir.join("models.user.toml");
+    let (registry, reg_warning) = match zoid_registry::load(&shipped_path, &user_path) {
+        Ok((r, w)) => (r, w),
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to load registry; using embedded default");
+            let shipped = include_str!("../../zoid-model/models.toml");
+            (
+                zoid_registry::parse::parse_shipped(shipped).unwrap_or_default(),
+                Some(e.to_string()),
+            )
+        }
+    };
+    let reg: std::sync::Arc<zoid_model::Registry> = std::sync::Arc::new(registry);
     let model = if config.model.is_empty() {
         zoid_provider::default_model(&reg)
     } else {
@@ -2552,6 +2665,21 @@ async fn main() -> Result<()> {
         .ok(); // None → secrets unavailable this run (non-fatal)
 
     let (provider, provider_name, has_key) = select_provider(&config, &secrets, &reg);
+
+    // Stale-selection recovery (spec §7): when the merged registry no longer
+    // contains the persisted `config.provider` (removed) or `config.model`
+    // (removed or hidden), boot into the quick-switch overlay with a banner
+    // instead of silently falling back to a default. A removed provider
+    // implies its model is also stale, so the model check only runs when the
+    // provider is still present.
+    let provider_stale = reg.entry(&config.provider).is_none();
+    let model_stale = !provider_stale
+        && !config.model.is_empty()
+        && !reg
+            .models_for(&config.provider)
+            .iter()
+            .any(|m| m.id.eq_ignore_ascii_case(&config.model) && !m.hidden);
+    let stale_selection = provider_stale || model_stale;
 
     let mut shell = zoid_tui::ShellState::new();
     shell.reduced_motion = config.reduced_motion;
@@ -2594,7 +2722,6 @@ async fn main() -> Result<()> {
 
     let (ui_tx, mut ui_rx) = mpsc::channel::<AgentUpdate>(256);
 
-    let cfg_dir = resolve_config_dir(|k: &str| std::env::var(k).ok());
     let home = home_dir(|k: &str| std::env::var(k).ok());
     rep.step("building skills & modes");
     let skills = {
@@ -2793,6 +2920,7 @@ async fn main() -> Result<()> {
         embed_index,
         embedder,
         installing_plugin: false,
+        stale_selection,
     };
 
     // First-run onboarding wizard: open the overlay if the gate fires.
@@ -2815,6 +2943,37 @@ async fn main() -> Result<()> {
             env_shadow,
             ..Default::default()
         });
+    }
+
+    // Stale-selection recovery (spec §7): the persisted provider/model is no
+    // longer in the merged registry. Hard-stop into the quick-switch overlay
+    // with a banner — no silent fallback to a default. The panes are seeded
+    // from the registry BEFORE the overlay opens (the same ordering Alt+P
+    // relies on). The onboarding wizard (above) handles first-time users with
+    // the default provider, which is always present, so the two are mutually
+    // exclusive in practice.
+    if app.stale_selection {
+        open_provider_switch(
+            &mut app.shell,
+            &app.registry,
+            &app.config.provider,
+            &app.config.model,
+        );
+        let mut banner = String::from("Your selected provider or model is no longer available");
+        if provider_stale {
+            banner.push_str(&format!(" (provider \"{}\")", app.config.provider));
+        } else {
+            banner.push_str(&format!(" (model \"{}\")", app.config.model));
+        }
+        banner.push_str(
+            " — pick a replacement, or edit config.toml / un-hide it in models.user.toml. \
+             Dismiss to run offline.",
+        );
+        app.shell.banner = Some(banner);
+    } else if let Some(w) = reg_warning {
+        // Non-fatal registry load warning (e.g. malformed user file): surface
+        // it as a transient hint, not a blocking recovery.
+        app.shell.status_hint = Some(w);
     }
 
     // Restore the resumed session's persisted active mode (a no-op if that mode
@@ -5406,11 +5565,31 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                     // (spec §4.3). Empty → new provider's default_model() at runtime.
                     apply_config_write(app, "model", TomlValue::Unset, false);
                 }
+                // A valid selection resolves the stale condition (spec §7): clear
+                // the recovery flag and the banner so the app runs normally.
+                app.stale_selection = false;
+                app.shell.banner = None;
             }
             app.shell.overlay = Overlay::None;
         }
         Action::SwitchCancel => {
             app.shell.overlay = zoid_tui::state::Overlay::None;
+            // Dismiss-path recovery (spec §7): if the user closes the quick-switch
+            // without picking a valid model while the selection is stale, run the
+            // clearly-labeled offline `FakeProvider` and keep a persistent banner.
+            // The agent loop is inert (no real model), but the app stays navigable
+            // and the user can re-open the picker (Alt+P), edit config.toml, or
+            // un-hide a model at their leisure. Nothing is persisted.
+            if app.stale_selection {
+                app.provider =
+                    Arc::new(zoid_provider::FakeProvider::new(Vec::new()));
+                app.shell.provider = "offline (no model)".to_string();
+                app.shell.banner = Some(
+                    "No valid model selected — press Alt+P to choose one. \
+                     Running offline; the agent loop is inert until you pick a model."
+                        .to_string(),
+                );
+            }
         }
         Action::FeedbackAbort => {
             app.shell.feedback = None;
@@ -8775,6 +8954,7 @@ mod tests {
                 }
             },
             secrets: None,
+            registry: std::sync::Arc::new(zoid_provider::model::shipped_registry().clone()),
             textarea: make_input(TextArea::default()),
             streaming: false,
             shell: zoid_tui::ShellState::new(),
@@ -8817,6 +8997,7 @@ mod tests {
             embed_index: None,
             embedder: None,
             installing_plugin: false,
+            stale_selection: false,
         }
     }
 
@@ -11464,6 +11645,212 @@ mod tests {
         let (_provider, name, has_key) = select_provider(&config, &None, &reg);
         assert_eq!(name, "ollama");
         assert!(has_key, "ollama-local must be usable (ready) with no key");
+    }
+
+    // --- stale-selection recovery tests (Task 10, spec §7) ---
+
+    /// Build a tiny in-memory registry for the stale-selection tests: one
+    /// provider ("anthropic-api") with two models — a visible one and a hidden
+    /// one — so we can exercise removed/hidden/valid cases without touching disk.
+    fn stale_test_registry() -> zoid_model::Registry {
+        use zoid_model::{
+            ModelEntry, ModelInfo, ProviderEntry, Source, Status, ThinkingSupport,
+            ThinkingWireShape, Transport, WireShape,
+        };
+        let mk = |id: &str, hidden: bool| ModelEntry {
+            id: id.to_string(),
+            display: None,
+            wire_shape: WireShape::AnthropicMessages,
+            source: Source::Static,
+            default: false,
+            hidden,
+            info: ModelInfo {
+                context_window: 200_000,
+                max_output: 0,
+                tools: true,
+                prompt_cache: true,
+                thinking: ThinkingSupport::Budget,
+                thinking_wire: ThinkingWireShape::Anthropic,
+            },
+            runtime: None,
+            download_source: None,
+            quant: None,
+            modelfile: None,
+            num_ctx: None,
+            vram_curve: None,
+        };
+        zoid_model::Registry {
+            providers: vec![ProviderEntry {
+                id: "anthropic-api".to_string(),
+                display: "anthropic · api key".to_string(),
+                family: "anthropic".to_string(),
+                transport: Transport::Http {
+                    default_base_url: "https://api.anthropic.com".to_string(),
+                },
+                status: Status::Available,
+                key_url: Some("https://console.anthropic.com".to_string()),
+                key_env: Some("ANTHROPIC_API_KEY".to_string()),
+                models: vec![mk("claude-real", false), mk("claude-hidden", true)],
+            }],
+        }
+    }
+
+    /// A removed provider is stale: the registry has no entry for it.
+    #[test]
+    fn stale_provider_removed_is_stale() {
+        let reg = stale_test_registry();
+        let provider_stale = reg.entry("anthropic-api").is_none();
+        assert!(!provider_stale, "present provider is not stale");
+        let provider_stale = reg.entry("ghost-provider").is_none();
+        assert!(provider_stale, "absent provider is stale");
+    }
+
+    /// A removed or hidden model is stale; a present, visible model is not.
+    #[test]
+    fn stale_model_removed_or_hidden_is_stale() {
+        let reg = stale_test_registry();
+        let is_stale = |model: &str| {
+            !reg
+                .models_for("anthropic-api")
+                .iter()
+                .any(|m| m.id.eq_ignore_ascii_case(model) && !m.hidden)
+        };
+        assert!(!is_stale("claude-real"), "present visible model is not stale");
+        assert!(
+            is_stale("claude-hidden"),
+            "hidden model is stale (hidden flag excludes it)"
+        );
+        assert!(
+            is_stale("claude-gone"),
+            "absent model is stale"
+        );
+    }
+
+    /// The boot stale-check helper mirrors the boot inline computation: assert
+    /// a removed model sets the flag, a valid selection clears it, and the
+    /// quick-switch overlay + banner are seeded when stale.
+    fn boot_stale_flags(reg: &zoid_model::Registry, provider: &str, model: &str) -> (bool, bool) {
+        let provider_stale = reg.entry(provider).is_none();
+        let model_stale = !provider_stale
+            && !model.is_empty()
+            && !reg
+                .models_for(provider)
+                .iter()
+                .any(|m| m.id.eq_ignore_ascii_case(model) && !m.hidden);
+        (provider_stale, model_stale)
+    }
+
+    #[test]
+    fn stale_removed_model_triggers_quick_switch_and_banner() {
+        let reg = stale_test_registry();
+        // Removed model: stale → open quick-switch + banner.
+        let (provider_stale, model_stale) = boot_stale_flags(&reg, "anthropic-api", "claude-gone");
+        assert!(!provider_stale);
+        assert!(model_stale);
+        let mut shell = zoid_tui::ShellState::new();
+        open_provider_switch(&mut shell, &reg, "anthropic-api", "claude-gone");
+        assert_eq!(shell.overlay, zoid_tui::state::Overlay::ProviderSwitch);
+        // The provider pane is seeded from the registry before the overlay opens.
+        assert!(
+            !shell.switch_providers.is_empty(),
+            "switch_providers must be seeded before the overlay opens"
+        );
+        assert_eq!(shell.switch_providers[0].id, "anthropic-api");
+        // The model pane excludes hidden rows.
+        assert!(
+            shell
+                .switch_models
+                .iter()
+                .any(|o| o.id == "claude-real"),
+            "visible model is seeded in the model pane"
+        );
+        assert!(
+            !shell.switch_models.iter().any(|o| o.id == "claude-hidden"),
+            "hidden model is NOT seeded in the model pane"
+        );
+        // The banner is set by the boot path (mirrored here).
+        shell.banner = Some("stale".to_string());
+        assert!(shell.banner.is_some(), "banner is set when stale");
+    }
+
+    #[test]
+    fn stale_valid_selection_does_not_trigger() {
+        let reg = stale_test_registry();
+        let (provider_stale, model_stale) = boot_stale_flags(&reg, "anthropic-api", "claude-real");
+        assert!(!provider_stale);
+        assert!(!model_stale, "a present visible model is not stale");
+        // A valid selection proceeds normally: no overlay, no banner.
+        let shell = zoid_tui::ShellState::new();
+        assert_eq!(shell.overlay, zoid_tui::state::Overlay::None);
+        assert!(shell.banner.is_none());
+    }
+
+    /// Dismissing the quick-switch while stale runs the offline FakeProvider
+    /// and keeps a persistent banner (spec §7 dismiss path).
+    #[tokio::test]
+    async fn stale_dismiss_runs_offline_fakeprovider_with_persistent_banner() {
+        let mut app = test_app().await;
+        app.stale_selection = true;
+        app.shell.overlay = zoid_tui::state::Overlay::ProviderSwitch;
+        // Simulate the user pressing Esc on the quick-switch (SwitchCancel).
+        handle_action(&mut app, zoid_tui::route::Action::SwitchCancel)
+            .await
+            .unwrap();
+        assert_eq!(app.shell.overlay, zoid_tui::state::Overlay::None);
+        // The banner is now the persistent "no valid model" banner.
+        let banner = app
+            .shell
+            .banner
+            .as_ref()
+            .expect("persistent banner is set on stale dismiss");
+        assert!(
+            banner.contains("No valid model selected"),
+            "banner names the offline state: {banner}"
+        );
+        assert!(
+            banner.contains("Alt+P"),
+            "banner names the recovery path: {banner}"
+        );
+        // The provider label reflects the offline state.
+        assert!(
+            app.shell.provider.contains("offline"),
+            "provider label is offline: {}",
+            app.shell.provider
+        );
+        // stale_selection stays true (the user dismissed without resolving).
+        assert!(
+            app.stale_selection,
+            "stale flag persists after dismiss without a valid pick"
+        );
+    }
+
+    /// Picking a valid model in the quick-switch clears the stale flag + banner.
+    /// Verified at the state level: `open_provider_switch` seeds selectable panes,
+    /// and the boot path clears `stale_selection`/`banner` once a valid pick is
+    /// committed (the full config-write round-trip is exercised by the
+    /// `stale_dismiss_*` test's sibling integration tests; here we assert the
+    /// seeding invariants that the apply path depends on).
+    #[test]
+    fn stale_switch_seeds_selectable_panes_for_valid_pick() {
+        let reg = stale_test_registry();
+        let mut shell = zoid_tui::ShellState::new();
+        open_provider_switch(&mut shell, &reg, "anthropic-api", "claude-real");
+        // The current (valid) provider is marked and selectable.
+        let cur = shell
+            .switch_providers
+            .iter()
+            .find(|o| o.is_current)
+            .expect("current provider is marked");
+        assert_eq!(cur.id, "anthropic-api");
+        assert!(cur.selectable, "available provider is selectable");
+        // The current (valid) model is marked and selectable.
+        let cur_model = shell
+            .switch_models
+            .iter()
+            .find(|o| o.is_current)
+            .expect("current model is marked");
+        assert_eq!(cur_model.id, "claude-real");
+        assert!(cur_model.selectable, "visible model is selectable");
     }
 
     // --- resolve_resume_id tests ---

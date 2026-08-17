@@ -646,6 +646,13 @@ pub struct ShellState {
     /// bin clamps the upper bound per-frame against the real rect height
     /// (mirrors `conv_max_scroll`). Reset to 0 in `close_overlay`.
     pub help_scroll: usize,
+    /// A persistent, prominent banner shown above the input bar, set by the
+    /// bin for boot-time recovery flows (e.g. stale provider/model selection).
+    /// `None` normally; when set it stays until the user resolves the condition
+    /// (picks a valid model in the quick-switch, or edits `config.toml`).
+    /// Distinct from the transient one-line `status_hint` — this is a
+    /// multi-line, attention-grabbing message that names the recovery paths.
+    pub banner: Option<String>,
 }
 
 impl ShellState {
@@ -754,6 +761,7 @@ impl ShellState {
             switch_models: Vec::new(),
             mcp_status: Vec::new(),
             plugin_catalog: None,
+            banner: None,
         }
     }
 
