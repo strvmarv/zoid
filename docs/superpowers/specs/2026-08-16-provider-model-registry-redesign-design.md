@@ -391,6 +391,25 @@ const-lock tests become tests against the shipped `models.toml`.
 - `hidden = true` on a user row hides the matching shipped model.
 - Duplicate `(provider.id, model.id)` within one file → parse error.
 
+**Stale selection (upgrade removed/hid the selected provider or model):**
+
+`config.provider` and `config.model` persist as id strings, but the registry is
+now a file that changes on upgrade. When the merged registry no longer contains
+the persisted selection (provider removed, model removed, or model `hidden`),
+startup must **not** silently fall back to a default — that produces a "ghost"
+model with wrong caps (32k `DEFAULT_MODEL_INFO`) or a silently different
+provider, and the user is left wondering.
+
+Instead, **hard stop with a clear message**: report that the selected
+provider/model is no longer available, and direct the user to the model picker
+to choose a new one. No auto-selection, no in-memory fallback, no persisted
+rewrite. The user loads the picker, grabs a new model, and continues without
+ambiguity.
+
+This validation runs at load, after the merge, and covers both the
+`config.provider` and `config.model` fields (a removed provider implies its
+model is also stale).
+
 ---
 
 ## 8. Testing strategy
@@ -430,6 +449,10 @@ wire_shape), `/v1beta/models` caps parsing, and selection wiring.
 **Local models:** tests that `ollama-local` rows carry provisioning fields and
 that provisioning reads from the registry (replacing the deleted
 `seed_local_models` tests).
+
+**Stale selection:** tests that a removed/hidden provider or model triggers the
+hard-stop path (not a silent fallback), and that a valid selection proceeds
+normally.
 
 **Full gate:** `cargo nextest run --workspace --features zoid/local-embed
 --no-fail-fast` (per `docs/DEVELOPMENT.md`).
