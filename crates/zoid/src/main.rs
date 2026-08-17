@@ -7536,7 +7536,10 @@ fn spawn_queued_subagent(app: &mut App, qs: QueuedSubagent) {
             .then(|| std::time::Duration::from_secs(app.config.subagent.idle_timeout_secs)),
         (app.config.subagent.hard_timeout_secs > 0)
             .then(|| std::time::Duration::from_secs(app.config.subagent.hard_timeout_secs)),
-        app.registry.clone(),
+        // Task 10 adds `app.registry`; until then the merged registry isn't on
+        // `App`, so dispatch the empty default. The placeholder keeps the queued
+        // spawn's signature aligned with a direct spawn_subagent call.
+        std::sync::Arc::new(zoid_model::Registry::default()),
         app.config.provider.clone(),
     );
 }
@@ -7639,7 +7642,10 @@ fn spawn_turn(app: &mut App) {
     // Resolve per-(provider, model) caps from the merged registry (Task 8b).
     // `spawn_turn` overwrites the `Registry::default()` sentinel set by
     // `chat_turn_config_with` for tests.
-    turn_config.reg = app.registry.clone();
+    // Task 10 adds `app.registry`; until then the merged registry isn't on
+    // `App`, so fall back to the empty default (conservative 32k fallback for
+    // context-window / model-info resolution this turn).
+    turn_config.reg = std::sync::Arc::new(zoid_model::Registry::default());
     turn_config.provider_id = app.config.provider.clone();
     // The live-fetched context window (from ModelInfoFetched / ctx_ceiling),
     // not the static table's conservative default. This is what the
