@@ -80,6 +80,11 @@ pub fn build_subagent_request(
 
     CompletionRequest {
         model: model.to_string(),
+        // The subagent's constructed context request is never streamed — it's
+        // only used to extract the seed user message — so its `model_info` is
+        // never read. Use the conservative default to avoid a registry lookup
+        // (no registry/provider is in scope here).
+        model_info: zoid_provider::model::DEFAULT_MODEL_INFO,
         system: Some(profile.system_prompt.clone()),
         messages: vec![Message::user(user)],
         max_tokens: SUBAGENT_MAX_TOKENS,
@@ -127,6 +132,8 @@ pub async fn run_subagent(
     cancel: CancellationToken,
     hard: CancellationToken,
     progress: Arc<AtomicI64>,
+    reg: std::sync::Arc<zoid_model::Registry>,
+    provider_id: String,
 ) -> Result<SubagentResult> {
     let sub_ulid = id.strip_prefix("sub-").unwrap_or(&id).to_string();
     let branch = BranchId(format!("subagent:{sub_ulid}"));
@@ -183,6 +190,8 @@ pub async fn run_subagent(
         agents: None,
         context_window: 0, // subagents: eviction disabled, hard-ceiling pass skipped
         max_concurrent: 3, // subagents never dispatch; pool size is irrelevant
+        reg,
+        provider_id,
     };
     // Subagents have no session-scoped companion (the `show` tool is chat-only
     // and is never in the subagent tool registry), so this hub is never
@@ -637,6 +646,8 @@ mod tests {
             tokio_util::sync::CancellationToken::new(),
             tokio_util::sync::CancellationToken::new(),
             std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            std::sync::Arc::new(zoid_model::Registry::default()),
+            String::new(),
         )
         .await
         .unwrap();

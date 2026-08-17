@@ -65,6 +65,8 @@ pub fn spawn_subagent(
     abort_reason: std::sync::Arc<std::sync::Mutex<Option<crate::agent::AbortReason>>>,
     idle: Option<std::time::Duration>,
     ceiling: Option<std::time::Duration>,
+    reg: std::sync::Arc<zoid_model::Registry>,
+    provider_id: String,
 ) {
     tokio::spawn(async move {
         // Supervisor: trips `hard` (with a reason) on idle/ceiling breach. `done`
@@ -99,6 +101,8 @@ pub fn spawn_subagent(
             cancel,
             hard.clone(),
             progress,
+            reg,
+            provider_id,
         )
         .await;
 

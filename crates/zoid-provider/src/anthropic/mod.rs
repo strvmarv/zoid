@@ -50,9 +50,7 @@ impl AnthropicProvider {
     pub fn new(api_key: String) -> Self {
         Self {
             api_key,
-            base_url: crate::model::default_base_url("anthropic-api")
-                .unwrap_or("https://api.anthropic.com")
-                .to_string(),
+            base_url: "https://api.anthropic.com".to_string(),
             client: crate::http_client(),
             idle_timeout: crate::stream_idle_timeout(),
             betas: Vec::new(),
@@ -429,6 +427,7 @@ mod tests {
     fn probe_req() -> CompletionRequest {
         CompletionRequest {
             model: "m".into(),
+            model_info: crate::model::model_info("m"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 8,

@@ -231,6 +231,7 @@ mod tests {
             .with_idle_timeout(std::time::Duration::from_secs(2));
         let req = CompletionRequest {
             model: "glm-5.2".into(),
+            model_info: crate::model::model_info("glm-5.2"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 8,
@@ -256,6 +257,7 @@ mod tests {
             .with_idle_timeout(std::time::Duration::from_secs(2));
         let req = CompletionRequest {
             model: "minimax-m3".into(),
+            model_info: crate::model::model_info("minimax-m3"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 8,

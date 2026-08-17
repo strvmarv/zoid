@@ -20,9 +20,7 @@ impl ZaiProvider {
     pub fn new(api_key: String) -> Self {
         Self {
             api_key,
-            base_url: crate::model::default_base_url("zai-coding-plan")
-                .unwrap_or("https://api.z.ai/api/coding/paas/v4")
-                .to_string(),
+            base_url: "https://api.z.ai/api/coding/paas/v4".to_string(),
             client: crate::http_client(),
             idle_timeout: crate::stream_idle_timeout(),
         }
@@ -149,6 +147,7 @@ mod tests {
             .with_idle_timeout(Duration::from_secs(2));
         let req = CompletionRequest {
             model: "glm-5.2".into(),
+            model_info: crate::model::model_info("glm-5.2"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 8,

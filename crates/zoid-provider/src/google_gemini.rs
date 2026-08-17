@@ -347,6 +347,7 @@ mod tests {
     fn body_path_includes_model_and_endpoint() {
         let req = CompletionRequest {
             model: "gemini-3-flash".into(),
+            model_info: crate::model::model_info("gemini-3-flash"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 128,
@@ -368,6 +369,7 @@ mod tests {
     fn body_with_system_prompt_emits_system_instruction() {
         let req = CompletionRequest {
             model: "m".into(),
+            model_info: crate::model::model_info("m"),
             system: Some("be terse".into()),
             messages: vec![Message::user("x")],
             max_tokens: 8,
@@ -383,6 +385,7 @@ mod tests {
     fn body_with_tools_emits_function_declarations() {
         let req = CompletionRequest {
             model: "m".into(),
+            model_info: crate::model::model_info("m"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 8,
@@ -405,6 +408,7 @@ mod tests {
     fn body_tool_message_emits_function_response() {
         let req = CompletionRequest {
             model: "m".into(),
+            model_info: crate::model::model_info("m"),
             system: None,
             messages: vec![
                 Message::user("call it"),
@@ -445,6 +449,7 @@ mod tests {
     fn body_thinking_on_emits_thinking_config() {
         let req = CompletionRequest {
             model: "m".into(),
+            model_info: crate::model::model_info("m"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 8,
@@ -609,6 +614,7 @@ mod tests {
     fn probe_req() -> CompletionRequest {
         CompletionRequest {
             model: "gemini-3-flash".into(),
+            model_info: crate::model::model_info("gemini-3-flash"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 8,

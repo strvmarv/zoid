@@ -7536,6 +7536,8 @@ fn spawn_queued_subagent(app: &mut App, qs: QueuedSubagent) {
             .then(|| std::time::Duration::from_secs(app.config.subagent.idle_timeout_secs)),
         (app.config.subagent.hard_timeout_secs > 0)
             .then(|| std::time::Duration::from_secs(app.config.subagent.hard_timeout_secs)),
+        app.registry.clone(),
+        app.config.provider.clone(),
     );
 }
 
@@ -7634,6 +7636,11 @@ fn spawn_turn(app: &mut App) {
         .then(|| std::time::Duration::from_secs(app.config.subagent.hard_timeout_secs));
     turn_config.max_concurrent = app.config.subagent.max_concurrent;
     turn_config.agents = Some(app.agents.clone());
+    // Resolve per-(provider, model) caps from the merged registry (Task 8b).
+    // `spawn_turn` overwrites the `Registry::default()` sentinel set by
+    // `chat_turn_config_with` for tests.
+    turn_config.reg = app.registry.clone();
+    turn_config.provider_id = app.config.provider.clone();
     // The live-fetched context window (from ModelInfoFetched / ctx_ceiling),
     // not the static table's conservative default. This is what the
     // hard-ceiling compaction pass uses to decide if the request fits.

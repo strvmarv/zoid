@@ -241,6 +241,7 @@ mod tests {
     fn zen_req(model: &str) -> CompletionRequest {
         CompletionRequest {
             model: model.into(),
+            model_info: crate::test_model_info(),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 8,

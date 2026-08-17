@@ -349,9 +349,7 @@ impl OllamaProvider {
     pub fn new(api_key: String) -> Self {
         Self {
             api_key,
-            base_url: crate::model::default_base_url("ollama-cloud")
-                .unwrap_or("https://ollama.com")
-                .to_string(),
+            base_url: "https://ollama.com".to_string(),
             client: crate::http_client(),
             idle_timeout: crate::stream_idle_timeout(),
             last_prompt_eval: std::sync::atomic::AtomicU64::new(0),
@@ -597,6 +595,7 @@ mod tests {
     fn ctx_req() -> CompletionRequest {
         CompletionRequest {
             model: "ornith:9b".into(),
+            model_info: crate::model::model_info("ornith:9b"),
             system: Some("be terse".into()),
             messages: vec![Message::user("hi")],
             max_tokens: 1024,
@@ -686,6 +685,7 @@ mod tests {
     fn native_body_has_stream_and_system_leading_message_no_openai_fields() {
         let req = CompletionRequest {
             model: "glm-5.2:cloud".into(),
+            model_info: crate::model::model_info("glm-5.2:cloud"),
             system: Some("be terse".into()),
             messages: vec![Message::user("hi"), Message::assistant("hello")],
             max_tokens: 1024,
@@ -719,6 +719,7 @@ mod tests {
     fn body_without_system_has_no_system_message() {
         let req = CompletionRequest {
             model: "m".into(),
+            model_info: crate::model::model_info("m"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 8,
@@ -736,6 +737,7 @@ mod tests {
     fn body_includes_tools_and_tool_messages() {
         let req = CompletionRequest {
             model: "glm-5.2:cloud".into(),
+            model_info: crate::model::model_info("glm-5.2:cloud"),
             system: None,
             messages: vec![
                 Message::user("read foo"),
@@ -783,6 +785,7 @@ mod tests {
     fn body_without_tools_omits_tools_key() {
         let req = CompletionRequest {
             model: "m".into(),
+            model_info: crate::model::model_info("m"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 8,
@@ -799,6 +802,7 @@ mod tests {
         // the model supports thinking. request_body trusts that gate.
         let req = CompletionRequest {
             model: "qwythos:latest".into(),
+            model_info: crate::model::model_info("qwythos:latest"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 16,
@@ -816,6 +820,7 @@ mod tests {
         // capability gate forces it). request_body emits think: false for Off.
         let req = CompletionRequest {
             model: "glm-5.2:cloud".into(),
+            model_info: crate::model::model_info("glm-5.2:cloud"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 16,
@@ -834,6 +839,7 @@ mod tests {
         // from the static table (which returns None for unknown local models).
         let req = CompletionRequest {
             model: "qwythos:latest".into(),
+            model_info: crate::model::model_info("qwythos:latest"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 16,
@@ -853,6 +859,7 @@ mod tests {
     fn reassert_pushes_trailing_system_message_ollama() {
         let mut req = CompletionRequest {
             model: "m".into(),
+            model_info: crate::model::model_info("m"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 16,
@@ -1175,6 +1182,7 @@ mod tests {
     fn probe_req() -> CompletionRequest {
         CompletionRequest {
             model: "m".into(),
+            model_info: crate::model::model_info("m"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 8,

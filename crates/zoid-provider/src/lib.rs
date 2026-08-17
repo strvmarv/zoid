@@ -284,6 +284,10 @@ pub enum ThinkingMode {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompletionRequest {
     pub model: String,
+    /// Resolved per-(provider, model) capabilities, populated at request-build
+    /// time. Leaf providers read this instead of doing a global `model_info`
+    /// lookup (which no longer exists).
+    pub model_info: model::ModelInfo,
     pub system: Option<String>,
     pub messages: Vec<Message>,
     pub max_tokens: u32,
@@ -293,6 +297,17 @@ pub struct CompletionRequest {
     /// request (body byte-identical to pre-feature). `Some` = adapters render it
     /// at the tail (per-adapter placement).
     pub reassert: Option<String>,
+}
+
+/// A conservative test-only `ModelInfo` (32k window, no prompt cache, no
+/// thinking). Used by every test `CompletionRequest` literal so they don't
+/// have to repeat the full field list — and so the `model_info` field addition
+/// doesn't churn every test site. Mirrors `zoid_model::DEFAULT_MODEL_INFO` but
+/// is a free fn (not a `const`, which can't be re-exported cleanly) so it can
+/// be called from `#[cfg(test)]` modules in other files of this crate.
+#[cfg(test)]
+pub(crate) fn test_model_info() -> model::ModelInfo {
+    model::DEFAULT_MODEL_INFO
 }
 
 #[async_trait]
@@ -472,6 +487,7 @@ mod tests {
         let provider = FakeProvider::new(script.clone());
         let req = CompletionRequest {
             model: "fake".into(),
+            model_info: test_model_info(),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 64,
@@ -533,6 +549,7 @@ mod tool_types_tests {
         };
         let req = CompletionRequest {
             model: "m".into(),
+            model_info: test_model_info(),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 8,
@@ -605,6 +622,7 @@ mod thinking_mode_tests {
     fn thinking_mode_off_is_default() {
         let req = CompletionRequest {
             model: "m".into(),
+            model_info: test_model_info(),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 8,
