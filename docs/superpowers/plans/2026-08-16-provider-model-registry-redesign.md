@@ -45,8 +45,9 @@
 - `crates/zoid-provider/src/anthropic/mod.rs`, `ollama.rs`, `zai.rs` — hardcode fallback base URL (drop `default_base_url` free-fn call).
 - `crates/zoid-provider/src/opencode_go.rs` — delete `GO_MODELS`; route via `Registry::wire_shape`.
 - `crates/zoid-provider/src/opencode_zen.rs` — delete `ZEN_MODELS`; route via `Registry::wire_shape`.
-- `crates/zoid/src/agent.rs` — populate `req.model_info` at build time; add `model_info` to `TurnConfig`.
-- `crates/zoid/src/subagent.rs` — populate `TurnConfig.model_info`.
+- `crates/zoid/src/agent.rs` — populate `req.model_info` at build time; add `reg` + `provider_id` to `TurnConfig`.
+- `crates/zoid/src/subagent.rs` — thread `reg` + `provider_id` into the subagent `TurnConfig`.
+- `crates/zoid/src/spawn_subagent.rs` — forward `reg` + `provider_id` to `run_subagent`.
 - `crates/zoid/src/main.rs` — thread `Arc<Registry>`; rewrite `select_provider`/`provider_for_id`/`key_env_for`; add `refresh-models` subcommand; stale-selection recovery.
 - `crates/zoid/src/cli.rs` — add `Cli::RefreshModels` variant.
 - `crates/zoid-core/src/store.rs` — delete `seed_local_models` + `local_models` table.
@@ -221,7 +222,7 @@ pub struct RegistryPatch {
 }
 ```
 
-Delete: `PROVIDERS`, `ZEN_MODEL_IDS`, `MODEL_CAPS`, and the free fns `entry`, `models_for`, `default_base_url`, `selectable`, `model_info`. Keep `DEFAULT_MODEL_INFO` (used by `Registry::model_info` in Task 2) and keep `canonical_id` as a free fn (used by `config_view`/`main.rs` without a `Registry`).
+Delete: `PROVIDERS`, `ZEN_MODEL_IDS`, `MODEL_CAPS`, and the free fns `entry`, `models_for`, `default_base_url`, `selectable`, `model_info`. Keep `DEFAULT_MODEL_INFO` (used by `Registry::model_info` in Task 2) and keep `canonical_id` as a free fn — it is the **single** source of truth for alias resolution (there is no `Registry::canonical_id` associated fn; `Registry::entry` calls the free fn).
 
 Note: `ModelInfo`, `ThinkingSupport`, `ThinkingWireShape`, `Status` are unchanged (they already hold no `&'static str`; `ModelInfo` is `Copy` and stays `Copy` — it has no string fields).
 
@@ -302,18 +303,11 @@ Add an `impl Registry` block:
 
 ```rust
 impl Registry {
-    /// Resolve a stored/legacy provider id to its canonical id.
-    pub fn canonical_id(raw: &str) -> &str {
-        match raw {
-            "ollama" => "ollama-cloud",
-            "anthropic" => "anthropic-api",
-            other => other,
-        }
-    }
-
-    /// The registry entry for a provider id (resolving legacy aliases).
+    /// The registry entry for a provider id (resolving legacy aliases via the
+    /// free `canonical_id` fn — there is NO `Registry::canonical_id` associated
+    /// fn; the free fn is the single source of truth).
     pub fn entry(&self, id: &str) -> Option<&ProviderEntry> {
-        let id = Self::canonical_id(id);
+        let id = canonical_id(id);
         self.providers.iter().find(|e| e.id == id)
     }
 
@@ -1673,7 +1667,7 @@ git commit -m "refactor(zoid-provider): route composite providers via Registry::
 
 **Interfaces:**
 - Consumes: `zoid_model::ModelInfo`, `zoid_model::Registry`.
-- Produces: `CompletionRequest { model_info: ModelInfo, ... }`; leaf providers read `req.model_info`; `build_request_with_thinking` gains a `model_info: ModelInfo` parameter (or a `&Registry` + provider id).
+- Produces: `CompletionRequest { model_info: ModelInfo, ... }`; leaf providers read `req.model_info`; `build_request_with_thinking` gains a `model_info: ModelInfo` parameter; `TurnConfig` gains `reg: Arc<Registry>` + `provider_id: String`.
 
 **Rationale:** the leaf providers (`anthropic/request.rs`, `openai_compat.rs`, `openai_responses.rs`) currently call the *global* `model_info(&req.model)` to derive thinking params. The new registry lookup is per-`(provider, model)` and needs a `&Registry` + provider id those leaves don't hold. Rather than thread the registry into every leaf, resolve the caps **once** at request-build time (where the provider id is in scope) and carry the resolved `ModelInfo` on the request.
 
@@ -1721,9 +1715,9 @@ The leaf constructors call the deleted `default_base_url` free fn. Since `select
 
 (These literals match the current `default_base_url(...).unwrap_or(...)` fallbacks exactly.)
 
-- [ ] **Step 4: Populate `req.model_info` at build time**
+- [ ] **Step 4: Populate `req.model_info` at build time (full threading, incl. subagents)**
 
-In `crates/zoid/src/agent.rs`, `build_request_with_thinking` (line 638) currently calls `model_info(model)` twice (lines 653, 666) to compute `max_tokens`. Change its signature to accept the resolved `ModelInfo` (or a `&Registry` + provider id) and set `req.model_info`:
+In `crates/zoid/src/agent.rs`, `build_request_with_thinking` (line 638) currently calls `model_info(model)` twice (lines 653, 666) to compute `max_tokens`. Change its signature to accept the resolved `ModelInfo` and set `req.model_info`:
 
 ```rust
 pub fn build_request_with_thinking(
@@ -1746,23 +1740,59 @@ pub fn build_request_with_thinking(
 }
 ```
 
-The callers of `build_request_with_thinking` (agent.rs:892, 3362) and `build_request` (agent.rs:620) must resolve `model_info` from the registry. `run_turn_inner` (line 892) has `config: &TurnConfig` and `model: String`; add a `provider_id: &str` (or `model_info: ModelInfo`) to `TurnConfig` so the call site can resolve `reg.model_info(provider_id, &model)`. The `run_agent_turn*` entry points (main.rs:7658, subagent.rs:202) already have access to `app.config.provider` / the registry, so they can populate `TurnConfig.model_info` (or pass the resolved `ModelInfo`).
+**Carry the registry + provider id on `TurnConfig`** (not a pre-resolved `ModelInfo`, which would need a sentinel — `ModelInfo` has no `Default`). Add two fields to `TurnConfig` (agent.rs:184):
 
-**Simplest path:** add `pub model_info: ModelInfo` to `TurnConfig` (agent.rs:184), populate it in `spawn_turn` (main.rs, where `app.config.provider` + `app.registry` are in scope) and in `subagent.rs` (where the subagent's provider/model are known), and have `run_turn_inner` pass `config.model_info` into `build_request_with_thinking`. This keeps the leaf providers and `build_request_with_thinking` registry-agnostic.
+```rust
+pub struct TurnConfig {
+    // ... existing fields ...
+    /// The merged registry, used to resolve per-(provider, model) caps for this
+    /// turn AND for any subagent it dispatches. `Registry::default()` (empty) in
+    /// tests → conservative 32k fallback.
+    pub reg: std::sync::Arc<zoid_model::Registry>,
+    /// The provider id this turn runs under (e.g. "opencode-go"). Empty in tests.
+    pub provider_id: String,
+}
+```
 
-- [ ] **Step 5: Update all `CompletionRequest { ... }` literals in tests**
+Then resolve `model_info` at the point of use in `run_turn_inner` (agent.rs:822), which already has `config: &TurnConfig` and `model: String`:
 
-Every test that constructs a `CompletionRequest` literal (see the grep list: `anthropic/mod.rs`, `anthropic/request.rs`, `opencode_go.rs`, `zai.rs`, `google_gemini.rs`, `lib.rs`, `ollama.rs`, `openai_compat.rs`) must add a `model_info: ModelInfo { ... }` field. Add a test helper `fn test_model_info() -> ModelInfo` in each test module (or a shared one in `lib.rs` tests) to reduce churn.
+```rust
+let model_info = config.reg.model_info(&config.provider_id, &model);
+let req = build_request_with_thinking(&events, &model, model_info, &tools, &config.system, config.thinking, reassert_text.clone(), &config.branch);
+```
 
-- [ ] **Step 6: Run tests**
+**Enumerate every `TurnConfig` construction and every subagent hop** (this is the part the prior review flagged as under-specified — the subagent path has NO registry/provider in scope today):
 
-Run: `cargo test -p zoid-provider -p zoid`
-Expected: PASS.
+1. `chat_turn_config_with` (agent.rs:302) — add `reg: std::sync::Arc::new(zoid_model::Registry::default())` and `provider_id: String::new()` (test sentinels; `spawn_turn` overwrites them).
+2. `spawn_turn` (main.rs, near line 7572) — set `turn_config.reg = app.registry.clone()` and `turn_config.provider_id = app.config.provider.clone()` before calling `run_agent_turn_cancellable`.
+3. `run_subagent` (subagent.rs:113) — add two params `reg: std::sync::Arc<zoid_model::Registry>` and `provider_id: String`; set them in the `TurnConfig` literal at subagent.rs:165. The subagent's model is `profile.model.clone().unwrap_or(default_model)` (subagent.rs:133), which may differ from the main model, so `run_turn_inner` resolves the *subagent's* caps from `config.reg.model_info(&config.provider_id, &model)` — correct because the subagent's `TurnConfig` carries the same `reg` + `provider_id`.
+4. `spawn_subagent` (spawn_subagent.rs:47) — add the same two params and forward them to `run_subagent` (spawn_subagent.rs:85).
+5. The dispatch site (agent.rs:1782, inside `run_turn_inner`) — pass `config.reg.clone()` and `config.provider_id.clone()` to `spawn_subagent`. `run_turn_inner` has `config: &TurnConfig`, so these are in scope.
+6. `build_request` (agent.rs:620) — test-only; add a `model_info: ModelInfo` parameter (or hardcode a test value) rather than "registry resolution" (it has no registry/provider in scope).
+
+This keeps the leaf providers and `build_request_with_thinking` registry-agnostic, and resolves caps exactly once per turn at the boundary where `(provider, model)` is known.
+
+- [ ] **Step 5: Update all `CompletionRequest { ... }` literals (production + test)**
+
+Every `CompletionRequest` literal must add a `model_info: ModelInfo { ... }` field. The full list (not exhaustive — the compiler will surface any missed):
+
+- Production: `subagent.rs:81` (`build_subagent_request` — its `model_info` is never streamed, so any value compiles; use a conservative literal `ModelInfo { context_window: 32_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None }`).
+- Tests: `anthropic/mod.rs`, `anthropic/request.rs`, `opencode_go.rs`, `opencode_zen.rs:231` (`zen_req`), `zai.rs`, `google_gemini.rs`, `lib.rs`, `ollama.rs`, `openai_compat.rs`, `openai_responses.rs` (lines 416–527).
+
+Add a test helper `fn test_model_info() -> ModelInfo` in each test module (or a shared one in `lib.rs` tests) to reduce churn.
+
+- [ ] **Step 6: Run tests (note: `-p zoid` is still broken here)**
+
+Run: `cargo test -p zoid-provider`
+Expected: PASS (the provider crate compiles and its tests pass).
+
+Run: `cargo test -p zoid`
+Expected: **still broken** — `TurnConfig` has gained `reg`/`provider_id` fields, but `main.rs` still calls the old `context_ceiling`/`has_prompt_cache`/`default_model` signatures (Task 7) and `app.registry` doesn't exist until Task 10. This is expected per the Task 1 "broken until Task 11" note; do NOT try to make `-p zoid` pass here. Full compile resumes at Task 11.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/zoid-provider/src crates/zoid/src/agent.rs crates/zoid/src/main.rs crates/zoid/src/subagent.rs
+git add crates/zoid-provider/src crates/zoid/src/agent.rs crates/zoid/src/main.rs crates/zoid/src/subagent.rs crates/zoid/src/spawn_subagent.rs
 git commit -m "refactor: resolve per-(provider, model) caps into CompletionRequest"
 ```
 
@@ -1865,10 +1895,10 @@ Note: `reg.clone()` clones the `Arc` (a refcount bump), not the `Registry` data.
 Run: `cargo build -p zoid 2>&1 | head -50`
 Expected: compiler errors listing every call site that needs the new `reg` argument. Fix each mechanically.
 
-- [ ] **Step 5: Run tests**
+- [ ] **Step 5: Run tests (note: `-p zoid` is still broken here)**
 
 Run: `cargo test -p zoid`
-Expected: PASS (after updating the `key_env_for`/`entry_requires_key` tests to pass a `&Registry`).
+Expected: **still broken** — `app.registry` doesn't exist until Task 10, and `TurnConfig`'s new `reg`/`provider_id` fields aren't populated until Task 8b's `spawn_turn` wiring lands. This is expected per the Task 1 "broken until Task 11" note. Do NOT try to make `-p zoid` pass here; the `key_env_for`/`entry_requires_key` test updates are done now, but the crate won't fully compile until Task 11.
 
 - [ ] **Step 6: Commit**
 
@@ -1985,6 +2015,8 @@ pub fn model_options(reg: &model::Registry, provider_id: &str, current_model: &s
 
 In `crates/zoid-tui/src/render.rs`, the onboarding wizard calls `zoid_model::entry(&onb.chosen_provider)` at lines 1900 and 1946. These need a `&Registry`. The onboarding wizard's render path (`render_onboarding`) must receive the registry (thread it through the `ShellState` or pass it as a parameter from the bin, which already holds `app.registry`). Replace `zoid_model::entry(...)` with `reg.entry(...)`.
 
+**Also update `build_sections`** (config_view.rs:109), which calls `model::entry(&cfg.provider)` at line 123 and `model::PROVIDERS`/`model::canonical_id` at lines 32–33. It needs the same `&Registry` parameter, which cascades to `main.rs:4273` and the `shell_snapshot.rs` tests (lines 929–1289).
+
 - [ ] **Step 3: Port the lock tests**
 
 Replace the deleted const-lock tests in `zoid-model/src/lib.rs` with tests that load the shipped TOML and assert the same invariants. Move them to `zoid-registry` (which can `include_str!` the TOML) or keep a `#[cfg(test)]` in `zoid-model` that uses `include_str!` + a minimal inline parse. Since `zoid-model` is dependency-free, put these tests in `zoid-registry/src/parse.rs`:
@@ -2019,7 +2051,13 @@ fn shipped_registry_invariants() {
 - [ ] **Step 4: Build the workspace to surface remaining consumers**
 
 Run: `cargo build --workspace 2>&1 | head -80`
-Expected: compiler errors listing every remaining consumer of the deleted consts/free fns. Fix each (mostly `config_view` and `main.rs` call sites, plus `zoid-tui` tests).
+Expected: compiler errors listing every remaining consumer of the deleted consts/free fns. Fix each. Specific call sites to watch (the compiler surfaces them, but the correct replacement is non-obvious):
+
+- `main.rs:7516` and `:7619` — `zoid_provider::model::model_info(&app.model).thinking` → `app.registry.model_info(&app.config.provider, &app.model).thinking` (note: needs the **provider id**, not just `app.model`).
+- `main.rs:4297` (`base_url_write_for`) — `default_base_url(id)` → `app.registry.default_base_url(id)`.
+- `main.rs:5673` — `models_for(&provider_id).len()` → `app.registry.models_for(&provider_id).len()`.
+- `main.rs:12249` (test) — `PROVIDERS.iter()` → load the shipped TOML and iterate `reg.providers`.
+- `config_view.rs` `build_sections`/`provider_options`/`model_options` and `render.rs` onboarding (already enumerated in Step 2).
 
 - [ ] **Step 5: Run the full test suite**
 
@@ -2668,3 +2706,5 @@ git add -A && git commit -m "chore: final verification fixes" || echo "nothing t
 **Known follow-ups (not in this plan, flagged for the implementer):** the `gemini-api` `select_provider` arm is added in Task 9 but only becomes reachable once Task 15 ships the registry entry. This is intentional and covered by the phase ordering. (The `default_provider` dead-`reg` issue from the first review is resolved: `default_provider()` keeps its no-arg signature.)
 
 **Second-review resolutions:** the atomic migration (B1) exposed unenumerated consumers of the deleted free fns/consts. These are now addressed: Task 8b resolves per-`(provider, model)` caps into a new `CompletionRequest.model_info` field (leaf providers read `req.model_info` instead of the global `model_info`); leaf constructors hardcode their fallback base URL; `render.rs` onboarding `entry()` calls are enumerated in Task 11; `main.rs` unlisted call sites (`base_url_write_for`, `models_for`, `model_info`, `PROVIDERS`) are covered by Task 11's build-and-fix step; `write_user_file` reads caps from `report.caps` (populated for both `added` and `updated` rows in Task 13); the new-provider merge branch demotes duplicate defaults and documents the keyless/empty-base-url limitation.
+
+**Third-review resolutions:** the subagent path (B-1) is now fully threaded — `TurnConfig` carries `reg: Arc<Registry>` + `provider_id: String` (not a pre-resolved `ModelInfo`, which has no `Default`), and the threading is enumerated across `chat_turn_config_with`, `spawn_turn`, `run_subagent`, `spawn_subagent`, and the dispatch site in `run_turn_inner`. The verification expectations (B-2) now correctly state `-p zoid` is broken until Task 11. `chat_turn_config_with` (B-3) is enumerated with `Registry::default()`/empty-string sentinels. `canonical_id` is now a single free fn (no `Registry::canonical_id` associated fn). `build_sections` and the `main.rs:7516/7619` thinking-resolution sites are enumerated.
