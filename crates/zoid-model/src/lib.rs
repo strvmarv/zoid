@@ -143,6 +143,65 @@ pub struct Registry {
     pub providers: Vec<ProviderEntry>,
 }
 
+impl Registry {
+    /// The registry entry for a provider id (resolving legacy aliases via the
+    /// free `canonical_id` fn — there is NO `Registry::canonical_id` associated
+    /// fn; the free fn is the single source of truth).
+    pub fn entry(&self, id: &str) -> Option<&ProviderEntry> {
+        let id = canonical_id(id);
+        self.providers.iter().find(|e| e.id == id)
+    }
+
+    /// The model entries for a provider (empty for unknown ids).
+    pub fn models_for(&self, provider: &str) -> &[ModelEntry] {
+        self.entry(provider).map(|e| e.models.as_slice()).unwrap_or(&[])
+    }
+
+    /// The default base URL for an HTTP-transport provider, else `None`.
+    pub fn default_base_url(&self, provider: &str) -> Option<&str> {
+        match self.entry(provider).map(|e| &e.transport) {
+            Some(Transport::Http { default_base_url }) => Some(default_base_url.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Iterator over selectable (Available) entries.
+    pub fn selectable(&self) -> impl Iterator<Item = &ProviderEntry> {
+        self.providers.iter().filter(|e| e.status == Status::Available)
+    }
+
+    /// The default model id for a provider: the `default = true` row, else the
+    /// first row. `None` when the provider has no models.
+    pub fn default_model(&self, provider: &str) -> Option<&str> {
+        let models = self.models_for(provider);
+        models
+            .iter()
+            .find(|m| m.default)
+            .or_else(|| models.first())
+            .map(|m| m.id.as_str())
+    }
+
+    /// The wire shape for a (provider, model) pair. `None` when unknown.
+    pub fn wire_shape(&self, provider: &str, model: &str) -> Option<WireShape> {
+        let m = model.to_ascii_lowercase();
+        self.models_for(provider)
+            .iter()
+            .find(|e| e.id.to_ascii_lowercase() == m)
+            .map(|e| e.wire_shape)
+    }
+
+    /// Capabilities for a (provider, model) pair, looked up case-insensitively.
+    /// Unknown models get a conservative default (32k, no prompt cache).
+    pub fn model_info(&self, provider: &str, model: &str) -> ModelInfo {
+        let m = model.to_ascii_lowercase();
+        self.models_for(provider)
+            .iter()
+            .find(|e| e.id.to_ascii_lowercase() == m)
+            .map(|e| e.info)
+            .unwrap_or(DEFAULT_MODEL_INFO)
+    }
+}
+
 /// A partial override of a model row (from the user file). Every field is
 /// `Option`; `None` means "keep the shipped value". This is what makes
 /// field-level merge possible — a user who writes only `hidden = true` must
@@ -266,5 +325,44 @@ mod tests {
     fn registry_default_is_empty() {
         let reg = Registry::default();
         assert!(reg.providers.is_empty());
+    }
+
+    #[test]
+    fn registry_lookup_methods() {
+        let reg = Registry {
+            providers: vec![ProviderEntry {
+                id: "anthropic-api".to_string(),
+                display: "anthropic · api key".to_string(),
+                family: "anthropic".to_string(),
+                transport: Transport::Http { default_base_url: "https://api.anthropic.com".to_string() },
+                status: Status::Available,
+                key_url: Some("https://console.anthropic.com".to_string()),
+                key_env: Some("ANTHROPIC_API_KEY".to_string()),
+                models: vec![
+                    ModelEntry {
+                        id: "claude-sonnet-4-6".to_string(),
+                        display: None,
+                        wire_shape: WireShape::AnthropicMessages,
+                        source: Source::Static,
+                        default: true,
+                        hidden: false,
+                        info: ModelInfo { context_window: 1_000_000, max_output: 0, tools: true, prompt_cache: true, thinking: ThinkingSupport::Budget, thinking_wire: ThinkingWireShape::Anthropic },
+                        runtime: None, download_source: None, quant: None, modelfile: None, num_ctx: None, vram_curve: None,
+                    },
+                ],
+            }],
+        };
+
+        assert!(reg.entry("anthropic-api").is_some());
+        assert!(reg.entry("ANTHROPIC-API").is_none()); // provider ids are exact
+        assert_eq!(reg.models_for("anthropic-api").len(), 1);
+        assert_eq!(reg.default_base_url("anthropic-api"), Some("https://api.anthropic.com"));
+        assert_eq!(reg.default_model("anthropic-api"), Some("claude-sonnet-4-6"));
+        assert_eq!(reg.wire_shape("anthropic-api", "claude-sonnet-4-6"), Some(WireShape::AnthropicMessages));
+        // model id lookup is case-insensitive
+        assert_eq!(reg.model_info("anthropic-api", "CLAUDE-SONNET-4-6").context_window, 1_000_000);
+        // unknown model → conservative default
+        assert_eq!(reg.model_info("anthropic-api", "nope").context_window, 32_000);
+        assert_eq!(reg.selectable().count(), 1);
     }
 }
