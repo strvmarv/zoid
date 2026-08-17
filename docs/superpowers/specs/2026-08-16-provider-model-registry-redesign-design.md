@@ -400,15 +400,29 @@ startup must **not** silently fall back to a default — that produces a "ghost"
 model with wrong caps (32k `DEFAULT_MODEL_INFO`) or a silently different
 provider, and the user is left wondering.
 
-Instead, **hard stop with a clear message**: report that the selected
-provider/model is no longer available, and direct the user to the model picker
-to choose a new one. No auto-selection, no in-memory fallback, no persisted
-rewrite. The user loads the picker, grabs a new model, and continues without
-ambiguity.
+Instead, **hard stop into the quick-switch overlay** (`Overlay::ProviderSwitch`,
+the `Alt+P` surface): boot with the quick-switch open and a banner explaining
+that the selected provider/model is no longer available. The quick-switch's two
+side-by-side panes (providers left, models right) cover both stale cases in one
+screen — a removed provider is fixed in the left pane, a removed/hidden model
+in the right pane — so no separate "which picker to land on" decision is
+needed. No auto-selection, no in-memory fallback, no persisted rewrite.
+
+The quick-switch is preferred over the full settings overlay (`Overlay::Config`)
+because it is a focused, purpose-built provider+model surface: the settings
+overlay buries the provider/model field behind a sections rail and renders the
+picker as a contextual column, whereas the quick-switch drops the user straight
+into the exact decision with nothing else in the way.
+
+The banner also names the non-picker recovery paths (edit `config.toml`
+directly, or un-hide the model in `models.user.toml`), and the overlay remains
+dismissible so the user can choose one of those instead.
 
 This validation runs at load, after the merge, and covers both the
 `config.provider` and `config.model` fields (a removed provider implies its
-model is also stale).
+model is also stale). The quick-switch reads `state.switch_providers` /
+`state.switch_models`, which the bin seeds from the registry — so those must be
+seeded before the overlay opens (the same ordering `Alt+P` already relies on).
 
 ---
 
@@ -451,8 +465,9 @@ that provisioning reads from the registry (replacing the deleted
 `seed_local_models` tests).
 
 **Stale selection:** tests that a removed/hidden provider or model triggers the
-hard-stop path (not a silent fallback), and that a valid selection proceeds
-normally.
+quick-switch recovery path (boot into `Overlay::ProviderSwitch` with a banner,
+not a silent fallback), that the switch panes are seeded before the overlay
+opens, and that a valid selection proceeds normally.
 
 **Full gate:** `cargo nextest run --workspace --features zoid/local-embed
 --no-fail-fast` (per `docs/DEVELOPMENT.md`).
