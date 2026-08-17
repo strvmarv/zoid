@@ -910,3 +910,49 @@ key_env = "OPENCODE_GO_API_KEY"
   prompt_cache = false
   thinking = "toggle"
   thinking_wire = "none"
+
+# ---------------------------------------------------------------------------
+# gemini · api key (3 models; first = default)
+# ---------------------------------------------------------------------------
+[[provider]]
+id = "gemini-api"
+display = "gemini · api key"
+family = "gemini"
+transport = { kind = "http", default_base_url = "https://generativelanguage.googleapis.com" }
+status = "available"
+key_url = "https://aistudio.google.com/app/apikey"
+key_env = "GEMINI_API_KEY"
+
+  [[provider.model]]
+  id = "gemini-3.5-flash"
+  wire_shape = "google-gemini"
+  source = "static"
+  default = true
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "gemini-3.1-pro"
+  wire_shape = "google-gemini"
+  source = "static"
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "gemini-3-flash"
+  wire_shape = "google-gemini"
+  source = "static"
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle"
+  thinking_wire = "none"

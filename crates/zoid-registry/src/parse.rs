@@ -162,9 +162,51 @@ id = "anthropic-api"
     fn shipped_models_toml_parses() {
         let text = include_str!("../../zoid-model/models.toml");
         let reg = parse_shipped(text).unwrap();
-        // 6 providers now; becomes 7 when gemini-api lands (Task 15 updates this).
-        assert_eq!(reg.selectable().count(), 6);
+        // 7 selectable providers (gemini-api landed).
+        assert_eq!(reg.selectable().count(), 7);
         assert!(reg.entry("opencode-zen").unwrap().models.len() >= 52);
         assert!(reg.entry("opencode-go").unwrap().models.len() == 13);
+    }
+
+    #[test]
+    fn shipped_registry_invariants() {
+        let reg = parse_shipped(include_str!("../../zoid-model/models.toml")).unwrap();
+        // seven selectable providers (gemini-api landed).
+        let ids: Vec<&str> = reg.selectable().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids.len(), 7);
+        for id in [
+            "ollama-local",
+            "ollama-cloud",
+            "opencode-go",
+            "opencode-zen",
+            "anthropic-api",
+            "zai-coding-plan",
+            "gemini-api",
+        ] {
+            assert!(ids.contains(&id));
+        }
+        // key_url invariant: ollama-local None, all others Some
+        for e in reg.selectable() {
+            if e.id == "ollama-local" {
+                assert!(e.key_url.is_none());
+            } else {
+                assert!(e.key_url.is_some(), "{} must have key_url", e.id);
+            }
+        }
+        // opencode-go has 13 models
+        assert_eq!(reg.entry("opencode-go").unwrap().models.len(), 13);
+        // every opencode-zen model has explicit caps >= 128k
+        for m in &reg.entry("opencode-zen").unwrap().models {
+            assert!(m.info.context_window >= 128_000, "{} needs explicit caps", m.id);
+        }
+        // claude-sonnet-4-6 is split: anthropic-api 1M, opencode-zen 200K
+        assert_eq!(
+            reg.model_info("anthropic-api", "claude-sonnet-4-6").context_window,
+            1_000_000
+        );
+        assert_eq!(
+            reg.model_info("opencode-zen", "claude-sonnet-4-6").context_window,
+            200_000
+        );
     }
 }
