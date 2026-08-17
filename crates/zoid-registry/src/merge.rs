@@ -184,8 +184,8 @@ fn apply_patch(em: &mut ModelEntry, um: ModelPatch) {
     if let Some(v) = um.vram_curve {
         em.vram_curve = Some(v);
     }
-    if um.default == Some(true) {
-        em.default = true;
+    if let Some(v) = um.default {
+        em.default = v;
     }
 }
 
@@ -303,6 +303,27 @@ mod tests {
             .map(|m| m.id.as_str())
             .collect();
         assert_eq!(defaults, vec!["b"]);
+    }
+
+    #[test]
+    fn user_default_false_un_defaults_shipped_default() {
+        // A user who explicitly writes `default = false` on a shipped
+        // `default = true` model un-defaults it (field-by-field principle:
+        // a set field must be applied, even when false).
+        let shipped = Registry {
+            providers: vec![provider("p", vec![model("a", true, false)])],
+        };
+        let mut p = patch("a", None, None);
+        p.default = Some(false);
+        let user = RegistryPatch {
+            providers: vec![ProviderPatch {
+                id: "p".to_string(),
+                models: vec![p],
+            }],
+        };
+        let merged = merge(shipped, user);
+        let m = &merged.providers[0].models[0];
+        assert!(!m.default);
     }
 
     #[test]
