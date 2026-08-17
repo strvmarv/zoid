@@ -247,7 +247,7 @@ git commit -m "refactor(zoid-model): atomic owned-type migration (delete const r
 
 **Interfaces:**
 - Consumes: `Registry`, `ProviderEntry`, `ModelEntry`, `WireShape`, `Source` from Task 1.
-- Produces: `Registry::entry`, `Registry::models_for`, `Registry::default_base_url`, `Registry::model_info`, `Registry::selectable`, `Registry::default_model`, `Registry::wire_shape`, `Registry::canonical_id`.
+- Produces: `Registry::entry`, `Registry::models_for`, `Registry::default_base_url`, `Registry::model_info`, `Registry::selectable`, `Registry::default_model`, `Registry::wire_shape` (plus the free `canonical_id` fn, which `Registry::entry` calls — there is NO `Registry::canonical_id` associated fn).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1768,7 +1768,12 @@ let req = build_request_with_thinking(&events, &model, model_info, &tools, &conf
 3. `run_subagent` (subagent.rs:113) — add two params `reg: std::sync::Arc<zoid_model::Registry>` and `provider_id: String`; set them in the `TurnConfig` literal at subagent.rs:165. The subagent's model is `profile.model.clone().unwrap_or(default_model)` (subagent.rs:133), which may differ from the main model, so `run_turn_inner` resolves the *subagent's* caps from `config.reg.model_info(&config.provider_id, &model)` — correct because the subagent's `TurnConfig` carries the same `reg` + `provider_id`.
 4. `spawn_subagent` (spawn_subagent.rs:47) — add the same two params and forward them to `run_subagent` (spawn_subagent.rs:85).
 5. The dispatch site (agent.rs:1782, inside `run_turn_inner`) — pass `config.reg.clone()` and `config.provider_id.clone()` to `spawn_subagent`. `run_turn_inner` has `config: &TurnConfig`, so these are in scope.
-6. `build_request` (agent.rs:620) — test-only; add a `model_info: ModelInfo` parameter (or hardcode a test value) rather than "registry resolution" (it has no registry/provider in scope).
+6. **The queued-subagent dispatch site (main.rs:7504, inside `spawn_queued_subagent`)** — this is a SECOND production `spawn_subagent` call (the queued pool path, distinct from the direct dispatch in `run_turn_inner`). It must also pass `app.registry.clone()` and `app.config.provider.clone()` as the two new args. Note this site also calls `zoid_provider::model::model_info(&app.model).thinking` at main.rs:7516, which becomes `app.registry.model_info(&app.config.provider, &app.model).thinking` (enumerated in Task 11 Step 4).
+7. `build_request` (agent.rs:620) — test-only; add a `model_info: ModelInfo` parameter (or hardcode a test value) rather than "registry resolution" (it has no registry/provider in scope).
+
+**Also enumerate the test call sites** (the compiler surfaces them, but list them so none are missed):
+- `subagent.rs:623` — the `run_subagent` test call needs the two new `reg`/`provider_id` args.
+- `agent.rs:3362` — a direct `build_request_with_thinking(...)` test call needs the new `model_info` param.
 
 This keeps the leaf providers and `build_request_with_thinking` registry-agnostic, and resolves caps exactly once per turn at the boundary where `(provider, model)` is known.
 
@@ -1842,7 +1847,7 @@ fn select_provider(
             s.get(name)
         })
     };
-    let canon = zoid_model::Registry::canonical_id(&config.provider);
+    let canon = zoid_model::canonical_id(&config.provider);
     if canon == "ollama-local" {
         let base_url = effective_base_url(config);
         return (
@@ -1859,8 +1864,11 @@ fn select_provider(
     let key_env = reg.entry(canon).and_then(|e| e.key_env.clone());
     let key = key_env.as_deref().and_then(key_for);
     let Some(key) = key else {
-        // No key → offline FakeProvider (the binary always runs).
-        return (zoid_provider::default_provider(), canon.to_string(), false);
+        // No key → offline FakeProvider (the binary always runs). Use the
+        // family name (not the canonical id) for the label, matching the keyed
+        // arms below and today's `entry(...).map(|e| e.family)` behavior.
+        let name = reg.entry(canon).map(|e| e.family.as_str()).unwrap_or(canon);
+        return (zoid_provider::default_provider(), name.to_string(), false);
     };
     let reg_arc = reg.clone(); // cheap Arc clone, not a deep clone
     let (provider, name): (Arc<dyn Provider>, &str) = match canon {
@@ -1988,7 +1996,7 @@ git commit -m "feat(zoid): load registry at boot and recover from stale selectio
 
 - [ ] **Step 1: Delete the old consts and free functions**
 
-In `crates/zoid-model/src/lib.rs`, delete `PROVIDERS`, `ZEN_MODEL_IDS`, `MODEL_CAPS`, and the free functions `entry`, `models_for`, `default_base_url`, `selectable`, `model_info` (the `Registry` methods from Task 2 replace them). Keep `canonical_id` as a free fn (it's used by `config_view` and `main.rs` without a `Registry`), OR move it to `Registry::canonical_id` and update callers. Keep `DEFAULT_MODEL_INFO` (used by `Registry::model_info`).
+In `crates/zoid-model/src/lib.rs`, delete `PROVIDERS`, `ZEN_MODEL_IDS`, `MODEL_CAPS`, and the free functions `entry`, `models_for`, `default_base_url`, `selectable`, `model_info` (the `Registry` methods from Task 2 replace them). Keep `canonical_id` as a free fn — it is the **single** source of truth for alias resolution (there is no `Registry::canonical_id` associated fn; `Registry::entry` calls the free fn). Keep `DEFAULT_MODEL_INFO` (used by `Registry::model_info`).
 
 - [ ] **Step 2: Update `config_view.rs` and `render.rs`**
 
@@ -1996,7 +2004,7 @@ In `crates/zoid-model/src/lib.rs`, delete `PROVIDERS`, `ZEN_MODEL_IDS`, `MODEL_C
 
 ```rust
 pub fn provider_options(reg: &model::Registry, current_id: &str) -> Vec<PickOption> {
-    let cur = model::Registry::canonical_id(current_id);
+    let cur = model::canonical_id(current_id);
     reg.providers.iter().map(|e| { /* same body, but e.id/e.display are String */ }).collect()
 }
 
@@ -2708,3 +2716,5 @@ git add -A && git commit -m "chore: final verification fixes" || echo "nothing t
 **Second-review resolutions:** the atomic migration (B1) exposed unenumerated consumers of the deleted free fns/consts. These are now addressed: Task 8b resolves per-`(provider, model)` caps into a new `CompletionRequest.model_info` field (leaf providers read `req.model_info` instead of the global `model_info`); leaf constructors hardcode their fallback base URL; `render.rs` onboarding `entry()` calls are enumerated in Task 11; `main.rs` unlisted call sites (`base_url_write_for`, `models_for`, `model_info`, `PROVIDERS`) are covered by Task 11's build-and-fix step; `write_user_file` reads caps from `report.caps` (populated for both `added` and `updated` rows in Task 13); the new-provider merge branch demotes duplicate defaults and documents the keyless/empty-base-url limitation.
 
 **Third-review resolutions:** the subagent path (B-1) is now fully threaded — `TurnConfig` carries `reg: Arc<Registry>` + `provider_id: String` (not a pre-resolved `ModelInfo`, which has no `Default`), and the threading is enumerated across `chat_turn_config_with`, `spawn_turn`, `run_subagent`, `spawn_subagent`, and the dispatch site in `run_turn_inner`. The verification expectations (B-2) now correctly state `-p zoid` is broken until Task 11. `chat_turn_config_with` (B-3) is enumerated with `Registry::default()`/empty-string sentinels. `canonical_id` is now a single free fn (no `Registry::canonical_id` associated fn). `build_sections` and the `main.rs:7516/7619` thinking-resolution sites are enumerated.
+
+**Fourth-review resolutions:** the `Registry::canonical_id` associated-fn references (a live compile error in the plan's own samples) are corrected to the free `canonical_id` fn in all three places (Task 2 "Produces", Task 9 `select_provider`, Task 11 `provider_options`). The queued-subagent dispatch site (`main.rs:7504`, `spawn_queued_subagent`) is now enumerated as a second production `spawn_subagent` call needing the `reg`/`provider_id` args. The no-key fallback returns the family name (not the canonical id). Test call sites (`subagent.rs:623`, `agent.rs:3362`) are enumerated.
