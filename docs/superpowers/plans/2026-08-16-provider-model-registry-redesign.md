@@ -66,7 +66,7 @@ Append to the existing `#[cfg(test)] mod tests` in `crates/zoid-model/src/lib.rs
 ```rust
 #[test]
 fn registry_types_are_owned_and_cloneable() {
-    // ModelInfo is Clone (not Copy) and holds no &'static str.
+    // ModelInfo stays Copy (no string fields); ProviderEntry/Transport become owned.
     let info = ModelInfo {
         context_window: 200_000,
         max_output: 0,
@@ -102,11 +102,11 @@ fn registry_types_are_owned_and_cloneable() {
 Run: `cargo test -p zoid-model registry_types_are_owned_and_cloneable`
 Expected: FAIL — `ModelInfo`/`ProviderEntry`/`Transport` currently use `&'static str` and `Copy`; the `String`/`Vec` fields and `Clone`-only derive don't compile.
 
-- [ ] **Step 3: Rewrite the types**
+- [ ] **Step 3: Rewrite the types (atomic migration)**
 
-Replace the type definitions at the top of `crates/zoid-model/src/lib.rs` (lines 14–89) with owned versions. Keep the existing consts (`PROVIDERS`, `ZEN_MODEL_IDS`, `MODEL_CAPS`, `DEFAULT_MODEL_INFO`) and lookup fns (`canonical_id`, `entry`, `models_for`, `default_base_url`, `selectable`, `model_info`) untouched for now — they still compile against the old `&'static str` shape only if you ALSO keep the old field types. To avoid a broken tree, do this migration in two sub-steps:
+The type migration and const deletion are **one atomic change** — the existing `ProviderEntry`/`Transport` (lines 63, 79) hold `&'static str`, and the consts (`PROVIDERS`, `ZEN_MODEL_IDS`, `MODEL_CAPS`) require those `&'static str` types (a `const` cannot hold `String`/`Vec`). You cannot keep the consts while introducing owned types under the same names. Therefore this task replaces the types, deletes the consts, and rewrites the free lookup fns as `Registry` methods **in a single commit**, and the immediately-following tasks (7–9, 11) rewrite the consumers. The workspace is expected to be broken between this task and Task 11; that is the honest cost of the migration, and it is why Tasks 2–6 (which only touch `zoid-model` and the new `zoid-registry` crate) are sequenced before the consumer rewrites.
 
-**3a.** Add the NEW owned types under new names, leaving the old ones intact:
+Replace the type definitions at the top of `crates/zoid-model/src/lib.rs` (lines 14–89) with owned versions, and delete the consts + free fns in the same edit:
 
 ```rust
 /// Wire protocol a (provider, model) pair routes through.
@@ -172,20 +172,61 @@ pub enum Transport {
 pub struct Registry {
     pub providers: Vec<ProviderEntry>,
 }
+
+/// A partial override of a model row (from the user file). Every field is
+/// `Option`; `None` means "keep the shipped value". This is what makes
+/// field-level merge possible — a user who writes only `hidden = true` must
+/// not clobber the shipped caps.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModelPatch {
+    pub id: String,
+    pub display: Option<String>,
+    pub wire_shape: Option<WireShape>,
+    pub source: Option<Source>,
+    pub default: Option<bool>,
+    pub hidden: Option<bool>,
+    pub context_window: Option<u64>,
+    pub max_output: Option<u64>,
+    pub tools: Option<bool>,
+    pub prompt_cache: Option<bool>,
+    pub thinking: Option<ThinkingSupport>,
+    pub thinking_wire: Option<ThinkingWireShape>,
+    pub runtime: Option<String>,
+    pub download_source: Option<String>,
+    pub quant: Option<String>,
+    pub modelfile: Option<String>,
+    pub num_ctx: Option<u32>,
+    pub vram_curve: Option<String>,
+}
+
+/// A partial override of a provider (from the user file): its id + model patches.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderPatch {
+    pub id: String,
+    pub models: Vec<ModelPatch>,
+}
+
+/// The user-file patch: providers + model patches, merged over the shipped registry.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RegistryPatch {
+    pub providers: Vec<ProviderPatch>,
+}
 ```
+
+Delete: `PROVIDERS`, `ZEN_MODEL_IDS`, `MODEL_CAPS`, and the free fns `entry`, `models_for`, `default_base_url`, `selectable`, `model_info`. Keep `DEFAULT_MODEL_INFO` (used by `Registry::model_info` in Task 2) and keep `canonical_id` as a free fn (used by `config_view`/`main.rs` without a `Registry`).
 
 Note: `ModelInfo`, `ThinkingSupport`, `ThinkingWireShape`, `Status` are unchanged (they already hold no `&'static str`; `ModelInfo` is `Copy` and stays `Copy` — it has no string fields).
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p zoid-model registry_types_are_owned_and_cloneable`
-Expected: PASS (the new owned types compile and are cloneable).
+Expected: PASS (the owned types compile and are cloneable). Note: the crate's *other* tests that referenced the deleted consts/free fns will now fail to compile — delete or port them now (they are re-added as `zoid-registry` tests in Task 11). The `zoid-model` crate itself must compile and its remaining tests pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add crates/zoid-model/src/lib.rs
-git commit -m "feat(zoid-model): add owned registry types (WireShape, Source, ModelEntry, Registry)"
+git commit -m "refactor(zoid-model): atomic owned-type migration (delete const registry)"
 ```
 
 ---
@@ -369,8 +410,11 @@ license.workspace = true
 zoid-model = { path = "../zoid-model" }
 toml = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 anyhow = { workspace = true }
 reqwest = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -408,7 +452,7 @@ pub fn load(shipped: &Path, user: &Path) -> Result<(Registry, Option<String>)> {
         Err(_) => return Ok((shipped_reg, None)), // missing user file → shipped alone
     };
     match parse::parse_user(&user_text) {
-        Ok(user_reg) => Ok((merge::merge(shipped_reg, user_reg), None)),
+        Ok(user_patch) => Ok((merge::merge(shipped_reg, user_patch), None)),
         Err(e) => Ok((
             shipped_reg,
             Some(format!(
@@ -433,23 +477,23 @@ Create `crates/zoid-registry/src/raw.rs`, `parse.rs`, `merge.rs`, `fetch.rs`, `r
 ```rust
 //! TOML → Registry (filled in Task 4).
 use anyhow::Result;
-use zoid_model::Registry;
+use zoid_model::{Registry, RegistryPatch};
 
 pub fn parse_shipped(_text: &str) -> Result<Registry> {
     Ok(Registry::default())
 }
 
-pub fn parse_user(_text: &str) -> Result<Registry> {
-    Ok(Registry::default())
+pub fn parse_user(_text: &str) -> Result<RegistryPatch> {
+    Ok(RegistryPatch::default())
 }
 ```
 
 `merge.rs`:
 ```rust
 //! Merge user registry over shipped (filled in Task 5).
-use zoid_model::Registry;
+use zoid_model::{Registry, RegistryPatch};
 
-pub fn merge(shipped: Registry, _user: Registry) -> Registry {
+pub fn merge(shipped: Registry, _user: RegistryPatch) -> Registry {
     shipped
 }
 ```
@@ -485,8 +529,8 @@ git commit -m "feat(zoid-registry): add crate skeleton with load/parse/merge stu
 - Modify: `crates/zoid-registry/src/parse.rs`
 
 **Interfaces:**
-- Consumes: `zoid_model::{ModelInfo, ModelEntry, ProviderEntry, Registry, Source, Status, ThinkingSupport, ThinkingWireShape, Transport, WireShape}`.
-- Produces: `parse::parse_shipped(&str) -> Result<Registry>`, `parse::parse_user(&str) -> Result<Registry>`.
+- Consumes: `zoid_model::{ModelInfo, ModelEntry, ProviderEntry, Registry, RegistryPatch, Source, Status, ThinkingSupport, ThinkingWireShape, Transport, WireShape}`.
+- Produces: `parse::parse_shipped(&str) -> Result<Registry>`, `parse::parse_user(&str) -> Result<RegistryPatch>`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -564,7 +608,7 @@ Expected: FAIL — `parse_shipped` returns `Registry::default()`.
 //! conversions into the dependency-free `zoid_model` types.
 
 use serde::Deserialize;
-use zoid_model::{ModelEntry, ModelInfo, ProviderEntry, Registry, Source, Status, ThinkingSupport, ThinkingWireShape, Transport, WireShape};
+use zoid_model::{ModelEntry, ModelInfo, ModelPatch, ProviderEntry, ProviderPatch, Registry, RegistryPatch, Source, Status, ThinkingSupport, ThinkingWireShape, Transport, WireShape};
 
 #[derive(Debug, Deserialize)]
 pub struct RawRegistry {
@@ -701,7 +745,11 @@ impl TryFrom<RawRegistry> for Registry {
     type Error = anyhow::Error;
     fn try_from(raw: RawRegistry) -> anyhow::Result<Registry> {
         let mut providers = Vec::with_capacity(raw.provider.len());
+        let mut seen_providers = std::collections::HashSet::new();
         for rp in raw.provider {
+            if !seen_providers.insert(rp.id.clone()) {
+                anyhow::bail!("duplicate provider id: {}", rp.id);
+            }
             let transport = match rp.transport {
                 RawTransport::Http { default_base_url } => Transport::Http { default_base_url },
                 RawTransport::Cli { default_command } => Transport::Cli { default_command },
@@ -751,6 +799,99 @@ impl TryFrom<RawRegistry> for Registry {
         Ok(Registry { providers })
     }
 }
+
+/// A user-file model row: every field is `Option` so a partial override
+/// preserves the shipped values for anything the user didn't set.
+#[derive(Debug, Deserialize)]
+pub struct RawModelPatch {
+    pub id: String,
+    #[serde(default)]
+    pub display: Option<String>,
+    #[serde(default)]
+    pub wire_shape: Option<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub default: Option<bool>,
+    #[serde(default)]
+    pub hidden: Option<bool>,
+    #[serde(default)]
+    pub context_window: Option<u64>,
+    #[serde(default)]
+    pub max_output: Option<u64>,
+    #[serde(default)]
+    pub tools: Option<bool>,
+    #[serde(default)]
+    pub prompt_cache: Option<bool>,
+    #[serde(default)]
+    pub thinking: Option<String>,
+    #[serde(default)]
+    pub thinking_wire: Option<String>,
+    #[serde(default)]
+    pub runtime: Option<String>,
+    #[serde(default)]
+    pub download_source: Option<String>,
+    #[serde(default)]
+    pub quant: Option<String>,
+    #[serde(default)]
+    pub modelfile: Option<String>,
+    #[serde(default)]
+    pub num_ctx: Option<u32>,
+    #[serde(default)]
+    pub vram_curve: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RawProviderPatch {
+    pub id: String,
+    #[serde(default)]
+    pub model: Vec<RawModelPatch>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RawRegistryPatch {
+    #[serde(default)]
+    pub provider: Vec<RawProviderPatch>,
+}
+
+impl TryFrom<RawRegistryPatch> for RegistryPatch {
+    type Error = anyhow::Error;
+    fn try_from(raw: RawRegistryPatch) -> anyhow::Result<RegistryPatch> {
+        let mut providers = Vec::with_capacity(raw.provider.len());
+        for rp in raw.provider {
+            let mut models = Vec::with_capacity(rp.model.len());
+            let mut seen = std::collections::HashSet::new();
+            for rm in rp.model {
+                let key = rm.id.to_ascii_lowercase();
+                if !seen.insert(key) {
+                    anyhow::bail!("duplicate model id in provider {}: {}", rp.id, rm.id);
+                }
+                models.push(ModelPatch {
+                    id: rm.id,
+                    display: rm.display,
+                    wire_shape: rm.wire_shape.as_deref().map(parse_wire_shape).transpose()?,
+                    source: rm.source.as_deref().map(parse_source).transpose()?,
+                    default: rm.default,
+                    hidden: rm.hidden,
+                    context_window: rm.context_window,
+                    max_output: rm.max_output,
+                    tools: rm.tools,
+                    prompt_cache: rm.prompt_cache,
+                    thinking: rm.thinking.as_deref().map(parse_thinking).transpose()?,
+                    thinking_wire: rm.thinking_wire.as_deref().map(parse_thinking_wire).transpose()?,
+                    runtime: rm.runtime,
+                    download_source: rm.download_source,
+                    quant: rm.quant,
+                    modelfile: rm.modelfile,
+                    num_ctx: rm.num_ctx,
+                    vram_curve: rm.vram_curve,
+                });
+            }
+            providers.push(ProviderPatch { id: rp.id, models });
+        }
+        Ok(RegistryPatch { providers })
+    }
+}
 ```
 
 - [ ] **Step 4: Implement `parse.rs`**
@@ -759,9 +900,9 @@ impl TryFrom<RawRegistry> for Registry {
 //! TOML → Registry.
 
 use anyhow::Result;
-use zoid_model::Registry;
+use zoid_model::{Registry, RegistryPatch};
 
-use crate::raw::RawRegistry;
+use crate::raw::{RawRegistry, RawRegistryPatch};
 
 /// Parse the shipped registry. `source` defaults to `static`; `wire`/`user`
 /// sources are rejected here (they belong in the user file).
@@ -781,21 +922,24 @@ pub fn parse_shipped(text: &str) -> Result<Registry> {
     Ok(reg)
 }
 
-/// Parse the user registry. `source` must be `wire` or `user` (never `static`).
-pub fn parse_user(text: &str) -> Result<Registry> {
-    let raw: RawRegistry = toml::from_str(text)?;
-    let reg = Registry::try_from(raw)?;
-    for p in &reg.providers {
+/// Parse the user registry into a patch. `source` must be `wire` or `user`
+/// (never `static`); omitted `source` defaults to `user`.
+pub fn parse_user(text: &str) -> Result<RegistryPatch> {
+    let raw: RawRegistryPatch = toml::from_str(text)?;
+    let patch = RegistryPatch::try_from(raw)?;
+    for p in &patch.providers {
         for m in &p.models {
-            anyhow::ensure!(
-                m.source != zoid_model::Source::Static,
-                "user registry must not contain source = \"static\" (found {} in {})",
-                m.id,
-                p.id
-            );
+            if let Some(s) = m.source {
+                anyhow::ensure!(
+                    s != zoid_model::Source::Static,
+                    "user registry must not contain source = \"static\" (found {} in {})",
+                    m.id,
+                    p.id
+                );
+            }
         }
     }
-    Ok(reg)
+    Ok(patch)
 }
 ```
 
@@ -819,57 +963,132 @@ git commit -m "feat(zoid-registry): TOML parsing with enum validation and duplic
 - Modify: `crates/zoid-registry/src/merge.rs`
 
 **Interfaces:**
-- Consumes: `zoid_model::{Registry, ProviderEntry, ModelEntry, Source}`.
-- Produces: `merge::merge(shipped: Registry, user: Registry) -> Registry`.
+- Consumes: `zoid_model::{Registry, RegistryPatch, ProviderPatch, ModelPatch, ModelEntry, Source}`.
+- Produces: `merge::merge(shipped: Registry, user: RegistryPatch) -> Registry`.
 
 - [ ] **Step 1: Write the failing test**
 
 Replace `merge.rs` with:
 
 ```rust
-//! Merge user registry over shipped registry.
+//! Merge user registry patch over shipped registry.
 
-use zoid_model::{ModelEntry, ModelInfo, ProviderEntry, Registry, Source, Status, ThinkingSupport, ThinkingWireShape, Transport, WireShape};
+use zoid_model::{ModelEntry, ModelInfo, ModelPatch, ProviderEntry, ProviderPatch, Registry, RegistryPatch, Source, Status, ThinkingSupport, ThinkingWireShape, Transport, WireShape};
 
-/// Merge `user` over `shipped`. User rows override shipped rows by
-/// `(provider.id, model.id)` (case-insensitive on model id). A user row may
-/// add a new provider or model. `hidden = true` hides a shipped model. A user
-/// `default = true` demotes the shipped default.
-pub fn merge(shipped: Registry, user: Registry) -> Registry {
+/// Merge `user` over `shipped`. User patches override shipped rows by
+/// `(provider.id, model.id)` (case-insensitive on model id), field-by-field:
+/// only the fields the user set are applied; everything else keeps the shipped
+/// value. A user patch may add a new provider or model. `hidden = true` hides a
+/// shipped model. A user `default = true` demotes the shipped default.
+pub fn merge(shipped: Registry, user: RegistryPatch) -> Registry {
     let mut providers: Vec<ProviderEntry> = shipped.providers;
 
     for up in user.providers {
         match providers.iter_mut().find(|p| p.id == up.id) {
             Some(existing) => {
-                // Merge models: user rows override by (case-insensitive) id.
                 for um in up.models {
                     let key = um.id.to_ascii_lowercase();
                     match existing.models.iter_mut().find(|m| m.id.to_ascii_lowercase() == key) {
-                        Some(em) => {
-                            if um.default {
-                                // demote any other default in this provider
-                                for m in existing.models.iter_mut() {
-                                    m.default = false;
-                                }
-                            }
-                            *em = um;
-                        }
+                        Some(em) => apply_patch(em, um, &mut existing.models),
                         None => {
-                            if um.default {
-                                for m in existing.models.iter_mut() {
-                                    m.default = false;
-                                }
+                            // New model: build a full ModelEntry from the patch,
+                            // defaulting unset fields to conservative values.
+                            let mut entry = ModelEntry {
+                                id: um.id.clone(),
+                                display: um.display.clone(),
+                                wire_shape: um.wire_shape.unwrap_or(WireShape::OpenAIChat),
+                                source: um.source.unwrap_or(Source::User),
+                                default: um.default.unwrap_or(false),
+                                hidden: um.hidden.unwrap_or(false),
+                                info: ModelInfo {
+                                    context_window: um.context_window.unwrap_or(32_000),
+                                    max_output: um.max_output.unwrap_or(0),
+                                    tools: um.tools.unwrap_or(true),
+                                    prompt_cache: um.prompt_cache.unwrap_or(false),
+                                    thinking: um.thinking.unwrap_or(ThinkingSupport::None),
+                                    thinking_wire: um.thinking_wire.unwrap_or(ThinkingWireShape::None),
+                                },
+                                runtime: um.runtime.clone(),
+                                download_source: um.download_source.clone(),
+                                quant: um.quant.clone(),
+                                modelfile: um.modelfile.clone(),
+                                num_ctx: um.num_ctx,
+                                vram_curve: um.vram_curve.clone(),
+                            };
+                            if entry.default {
+                                for m in existing.models.iter_mut() { m.default = false; }
                             }
-                            existing.models.push(um);
+                            existing.models.push(entry);
                         }
                     }
                 }
             }
-            None => providers.push(up),
+            None => {
+                // New provider: build full ModelEntries from patches.
+                let mut models = Vec::new();
+                for um in up.models {
+                    models.push(ModelEntry {
+                        id: um.id.clone(),
+                        display: um.display.clone(),
+                        wire_shape: um.wire_shape.unwrap_or(WireShape::OpenAIChat),
+                        source: um.source.unwrap_or(Source::User),
+                        default: um.default.unwrap_or(false),
+                        hidden: um.hidden.unwrap_or(false),
+                        info: ModelInfo {
+                            context_window: um.context_window.unwrap_or(32_000),
+                            max_output: um.max_output.unwrap_or(0),
+                            tools: um.tools.unwrap_or(true),
+                            prompt_cache: um.prompt_cache.unwrap_or(false),
+                            thinking: um.thinking.unwrap_or(ThinkingSupport::None),
+                            thinking_wire: um.thinking_wire.unwrap_or(ThinkingWireShape::None),
+                        },
+                        runtime: um.runtime.clone(),
+                        download_source: um.download_source.clone(),
+                        quant: um.quant.clone(),
+                        modelfile: um.modelfile.clone(),
+                        num_ctx: um.num_ctx,
+                        vram_curve: um.vram_curve.clone(),
+                    });
+                }
+                providers.push(ProviderEntry {
+                    id: up.id.clone(),
+                    display: up.id.clone(),
+                    family: up.id.clone(),
+                    transport: Transport::Http { default_base_url: String::new() },
+                    status: Status::Available,
+                    key_url: None,
+                    key_env: None,
+                    models,
+                });
+            }
         }
     }
 
     Registry { providers }
+}
+
+/// Apply a patch to an existing model entry, field-by-field.
+fn apply_patch(em: &mut ModelEntry, um: ModelPatch, siblings: &mut [ModelEntry]) {
+    if let Some(v) = um.display { em.display = Some(v); }
+    if let Some(v) = um.wire_shape { em.wire_shape = v; }
+    if let Some(v) = um.source { em.source = v; }
+    if let Some(v) = um.hidden { em.hidden = v; }
+    if let Some(v) = um.context_window { em.info.context_window = v; }
+    if let Some(v) = um.max_output { em.info.max_output = v; }
+    if let Some(v) = um.tools { em.info.tools = v; }
+    if let Some(v) = um.prompt_cache { em.info.prompt_cache = v; }
+    if let Some(v) = um.thinking { em.info.thinking = v; }
+    if let Some(v) = um.thinking_wire { em.info.thinking_wire = v; }
+    if let Some(v) = um.runtime { em.runtime = Some(v); }
+    if let Some(v) = um.download_source { em.download_source = Some(v); }
+    if let Some(v) = um.quant { em.quant = Some(v); }
+    if let Some(v) = um.modelfile { em.modelfile = Some(v); }
+    if let Some(v) = um.num_ctx { em.num_ctx = Some(v); }
+    if let Some(v) = um.vram_curve { em.vram_curve = Some(v); }
+    if um.default == Some(true) {
+        for m in siblings.iter_mut() { m.default = false; }
+        em.default = true;
+    }
 }
 
 #[cfg(test)]
@@ -880,11 +1099,11 @@ mod tests {
         ModelEntry {
             id: id.to_string(),
             display: None,
-            wire_shape: WireShape::OpenAIChat,
+            wire_shape: WireShape::AnthropicMessages,
             source: Source::Static,
             default,
             hidden,
-            info: ModelInfo { context_window: 200_000, max_output: 0, tools: true, prompt_cache: false, thinking: ThinkingSupport::None, thinking_wire: ThinkingWireShape::None },
+            info: ModelInfo { context_window: 1_000_000, max_output: 0, tools: true, prompt_cache: true, thinking: ThinkingSupport::Budget, thinking_wire: ThinkingWireShape::Anthropic },
             runtime: None, download_source: None, quant: None, modelfile: None, num_ctx: None, vram_curve: None,
         }
     }
@@ -898,20 +1117,46 @@ mod tests {
         }
     }
 
+    fn patch(id: &str, hidden: Option<bool>, ctx: Option<u64>) -> ModelPatch {
+        ModelPatch {
+            id: id.to_string(),
+            hidden,
+            context_window: ctx,
+            ..Default::default()
+        }
+    }
+
     #[test]
-    fn user_row_overrides_shipped_by_id() {
+    fn partial_patch_preserves_shipped_caps() {
+        // A user hides a model WITHOUT setting caps — the shipped 1M/Anthropic
+        // caps must survive, not be clobbered to 32k/openai-chat.
         let shipped = Registry { providers: vec![provider("p", vec![model("a", true, false)])] };
-        let mut m = model("a", false, false);
-        m.info.context_window = 999_999;
-        let user = Registry { providers: vec![provider("p", vec![m])] };
+        let user = RegistryPatch { providers: vec![ProviderPatch { id: "p".to_string(), models: vec![patch("a", Some(true), None)] }] };
         let merged = merge(shipped, user);
-        assert_eq!(merged.providers[0].models[0].info.context_window, 999_999);
+        let m = &merged.providers[0].models[0];
+        assert!(m.hidden);
+        assert_eq!(m.info.context_window, 1_000_000);
+        assert_eq!(m.wire_shape, WireShape::AnthropicMessages);
+        assert_eq!(m.info.thinking, ThinkingSupport::Budget);
+    }
+
+    #[test]
+    fn explicit_override_changes_only_that_field() {
+        let shipped = Registry { providers: vec![provider("p", vec![model("a", true, false)])] };
+        let user = RegistryPatch { providers: vec![ProviderPatch { id: "p".to_string(), models: vec![patch("a", None, Some(999_999))] }] };
+        let merged = merge(shipped, user);
+        let m = &merged.providers[0].models[0];
+        assert_eq!(m.info.context_window, 999_999);
+        assert_eq!(m.wire_shape, WireShape::AnthropicMessages); // untouched
+        assert!(m.default); // untouched
     }
 
     #[test]
     fn user_default_demotes_shipped_default() {
         let shipped = Registry { providers: vec![provider("p", vec![model("a", true, false), model("b", false, false)])] };
-        let user = Registry { providers: vec![provider("p", vec![model("b", true, false)])] };
+        let mut p = patch("b", None, None);
+        p.default = Some(true);
+        let user = RegistryPatch { providers: vec![ProviderPatch { id: "p".to_string(), models: vec![p] }] };
         let merged = merge(shipped, user);
         let defaults: Vec<&str> = merged.providers[0].models.iter().filter(|m| m.default).map(|m| m.id.as_str()).collect();
         assert_eq!(defaults, vec!["b"]);
@@ -920,7 +1165,7 @@ mod tests {
     #[test]
     fn user_can_add_new_provider() {
         let shipped = Registry { providers: vec![provider("p", vec![]) ] };
-        let user = Registry { providers: vec![provider("q", vec![model("x", false, false)])] };
+        let user = RegistryPatch { providers: vec![ProviderPatch { id: "q".to_string(), models: vec![patch("x", None, None)] }] };
         let merged = merge(shipped, user);
         assert_eq!(merged.providers.len(), 2);
         assert!(merged.entry("q").is_some());
@@ -944,7 +1189,7 @@ Expected: PASS.
 
 ```bash
 git add crates/zoid-registry/src/merge.rs
-git commit -m "feat(zoid-registry): merge user registry over shipped with default demotion"
+git commit -m "feat(zoid-registry): field-level merge of user patch over shipped registry"
 ```
 
 ---
@@ -1142,6 +1387,7 @@ Add this test to `crates/zoid-registry/src/parse.rs` tests:
 fn shipped_models_toml_parses() {
     let text = include_str!("../../zoid-model/models.toml");
     let reg = parse_shipped(text).unwrap();
+    // 6 providers now; becomes 7 when gemini-api lands (Task 15 updates this).
     assert_eq!(reg.selectable().count(), 6);
     assert!(reg.entry("opencode-zen").unwrap().models.len() >= 52);
     assert!(reg.entry("opencode-go").unwrap().models.len() == 13);
@@ -1167,7 +1413,7 @@ git commit -m "feat: ship models.toml transcription of the const registry"
 
 **Interfaces:**
 - Consumes: `zoid_model::Registry`.
-- Produces: `context_ceiling(reg: &Registry, provider: &str, model: &str) -> u64`, `has_prompt_cache(reg: &Registry, provider: &str, model: &str) -> bool`, `default_model(reg: &Registry) -> String`, `default_provider(reg: &Registry) -> Arc<dyn Provider>`.
+- Produces: `context_ceiling(reg: &Registry, provider: &str, model: &str) -> u64`, `has_prompt_cache(reg: &Registry, provider: &str, model: &str) -> bool`, `default_model(reg: &Registry) -> String`, `default_provider() -> Arc<dyn Provider>` (unchanged signature).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1226,9 +1472,10 @@ pub fn default_model(reg: &model::Registry) -> String {
         .unwrap_or_default()
 }
 
-/// Select the provider from the environment (unchanged env-driven logic), but
-/// the default *model* comes from the registry's `default = true` flag.
-pub fn default_provider(reg: &model::Registry) -> Arc<dyn Provider> {
+/// Select the provider from the environment (unchanged env-driven logic). The
+/// default *model* comes from the registry's `default = true` flag via
+/// `default_model(reg)`; this function itself does not need the registry.
+pub fn default_provider() -> Arc<dyn Provider> {
     if let Ok(key) = std::env::var("OLLAMA_API_KEY") {
         if !key.is_empty() {
             return Arc::new(ollama::OllamaProvider::new(key));
@@ -1247,7 +1494,7 @@ pub fn default_provider(reg: &model::Registry) -> Arc<dyn Provider> {
 }
 ```
 
-Note: `default_provider`'s `reg` parameter is currently unused (env-driven provider selection is unchanged); it is accepted for signature symmetry and future use. Add `#[allow(unused_variables)]` if the compiler warns.
+Note: `default_provider()` keeps its existing no-arg signature (env-driven provider selection is unchanged); only `default_model` gains the `reg` parameter. This avoids a dead `reg` parameter.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1379,6 +1626,8 @@ fn wire_shape_for(&self, model: &str) -> WireShape {
 
 Map the four `WireShape` variants to the four sub-clients (`OpenAIChat`→OpenAICompat, `AnthropicMessages`→Anthropic, `OpenAIResponses`→OpenAIResponses, `GoogleGemini`→GoogleGemini).
 
+**Update every test call site in both files.** The existing tests call `OpenCodeGoProvider::new("k".into())` / `OpenCodeZenProvider::new("k".into())` with one arg, and the routing tests (`openai_compat_model_routes_to_chat_completions`, `anthropic_model_routes_to_messages`, `responses_model_routes_to_responses`, `gemini_model_routes_to_stream_generate_content`, `with_base_url_propagates_to_subclient`, `wire_shape_for_unknown_*`) all need the 2-arg signature AND a registry that maps their model ids to the correct `WireShape` (otherwise they route to the wrong endpoint and the `first.contains(...)` assertions fail). Build a small in-memory `Registry` helper in each test module that maps the test model ids to their expected shapes.
+
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `cargo test -p zoid-provider`
@@ -1399,8 +1648,8 @@ git commit -m "refactor(zoid-provider): route composite providers via Registry::
 - Modify: `crates/zoid/src/main.rs`
 
 **Interfaces:**
-- Consumes: `zoid_model::Registry`, `zoid_provider::{context_ceiling, has_prompt_cache, default_model}` (new signatures from Task 7), `OpenCodeGoProvider::new(key, reg)`, `OpenCodeZenProvider::new(key, reg)` (new signatures from Task 8).
-- Produces: `select_provider(config, secrets, reg: &Registry) -> (Arc<dyn Provider>, String, bool)`, `provider_for_id(id, secrets, reg: &Registry) -> Option<Arc<dyn Provider>>`, `key_env_for(id, reg: &Registry) -> Option<String>`.
+- Consumes: `zoid_model::Registry`, `zoid_provider::{context_ceiling, has_prompt_cache, default_model, default_provider}` (new signatures from Task 7), `OpenCodeGoProvider::new(key, reg)`, `OpenCodeZenProvider::new(key, reg)` (new signatures from Task 8).
+- Produces: `select_provider(config, secrets, reg: &Arc<Registry>) -> (Arc<dyn Provider>, String, bool)`, `provider_for_id(id, secrets, reg: &Arc<Registry>) -> Option<Arc<dyn Provider>>`, `key_env_for(id, reg: &Registry) -> Option<String>`.
 
 - [ ] **Step 1: Add `reg: &Registry` to the three functions and replace the `family`/`key_env_for` matches**
 
@@ -1420,13 +1669,13 @@ fn entry_requires_key(id: &str, reg: &zoid_model::Registry) -> bool {
 }
 ```
 
-`select_provider` (lines 1111–1195): add `reg: &zoid_model::Registry` parameter. Replace the `family`-based `match` with a `wire_shape`-based dispatch. The key resolution closure stays (env → secret store). The `ollama-local` special case stays. For the remaining providers, dispatch on `reg.entry(&config.provider).map(|e| e.wire_shape)` is NOT correct (wire_shape is per-model, not per-provider) — instead dispatch on the provider's `family` is ALSO not needed. The correct dispatch: each provider id maps to a concrete provider constructor. Since the registry no longer carries a "which Rust type" field, keep a small explicit match on the canonical provider id (this is the one place a per-provider constructor mapping is unavoidable):
+`select_provider` (lines 1111–1195): add `reg: &std::sync::Arc<zoid_model::Registry>` parameter. Replace the `family`-based `match` with a canonical-id match. The key resolution closure stays (env → secret store). The `ollama-local` special case stays. **Preserve the offline `FakeProvider` fallback**: when a key-requiring provider has no key, return `(default_provider(reg), name, false)` exactly as today, so the binary always runs. Clone the `Arc` (cheap refcount bump), never deep-clone the registry:
 
 ```rust
 fn select_provider(
     config: &zoid_core::config::Config,
     secrets: &Option<std::sync::Arc<zoid_core::secret::EncryptedDb>>,
-    reg: &zoid_model::Registry,
+    reg: &std::sync::Arc<zoid_model::Registry>,
 ) -> (Arc<dyn Provider>, String, bool) {
     let key_for = |name: &str| -> Option<String> {
         if let Ok(v) = std::env::var(name) {
@@ -1453,25 +1702,37 @@ fn select_provider(
     let base_url = effective_base_url(config);
     let key_env = reg.entry(canon).and_then(|e| e.key_env.clone());
     let key = key_env.as_deref().and_then(key_for);
-    let (provider, name): (Arc<dyn Provider>, &str) = match canon {
-        "opencode-go" => (Arc::new(zoid_provider::opencode_go::OpenCodeGoProvider::new(key.clone().unwrap_or_default(), Arc::new(reg.clone())).with_base_url(base_url)), "opencode-go"),
-        "opencode-zen" => (Arc::new(zoid_provider::opencode_zen::OpenCodeZenProvider::new(key.clone().unwrap_or_default(), Arc::new(reg.clone())).with_base_url(base_url)), "opencode-zen"),
-        "anthropic-api" => (Arc::new(zoid_provider::anthropic::AnthropicProvider::new(key.clone().unwrap_or_default()).with_base_url(base_url)), "anthropic"),
-        "zai-coding-plan" => (Arc::new(zoid_provider::zai::ZaiProvider::new(key.clone().unwrap_or_default()).with_base_url(base_url)), "zai"),
-        "gemini-api" => (Arc::new(zoid_provider::google_gemini::GoogleGeminiProvider::new(key.clone().unwrap_or_default()).with_base_url(base_url)), "gemini"),
-        _ => (Arc::new(zoid_provider::ollama::OllamaProvider::new(key.clone().unwrap_or_default()).with_base_url(base_url)), "ollama"),
+    let Some(key) = key else {
+        // No key → offline FakeProvider (the binary always runs).
+        return (zoid_provider::default_provider(), canon.to_string(), false);
     };
-    (provider, name.to_string(), key.is_some())
+    let reg_arc = reg.clone(); // cheap Arc clone, not a deep clone
+    let (provider, name): (Arc<dyn Provider>, &str) = match canon {
+        "opencode-go" => (Arc::new(zoid_provider::opencode_go::OpenCodeGoProvider::new(key.clone(), reg_arc.clone()).with_base_url(base_url)), "opencode-go"),
+        "opencode-zen" => (Arc::new(zoid_provider::opencode_zen::OpenCodeZenProvider::new(key.clone(), reg_arc.clone()).with_base_url(base_url)), "opencode-zen"),
+        "anthropic-api" => (Arc::new(zoid_provider::anthropic::AnthropicProvider::new(key.clone()).with_base_url(base_url)), "anthropic"),
+        "zai-coding-plan" => (Arc::new(zoid_provider::zai::ZaiProvider::new(key.clone()).with_base_url(base_url)), "zai"),
+        "gemini-api" => (Arc::new(zoid_provider::google_gemini::GoogleGeminiProvider::new(key.clone()).with_base_url(base_url)), "gemini"),
+        _ => (Arc::new(zoid_provider::ollama::OllamaProvider::new(key.clone()).with_base_url(base_url)), "ollama"),
+    };
+    (provider, name.to_string(), true)
 }
 ```
 
-Note: `reg.clone()` requires `Registry: Clone` (it is, from Task 1). The `gemini-api` arm is added now (Phase 4 wires the registry entry; the constructor already exists).
+Note: `reg.clone()` clones the `Arc` (a refcount bump), not the `Registry` data. The `gemini-api` arm is added now (Phase 4 wires the registry entry; the constructor already exists).
 
 - [ ] **Step 2: Apply the same to `provider_for_id`** (lines 1242–1292): add `reg: &Registry`, replace the `family` match with the same canonical-id match, using `reg.clone()` for the composite providers.
 
 - [ ] **Step 3: Update all call sites**
 
 `select_provider` is called at lines 2536, 4360, 4951, 4997. `provider_for_id` at 1299 (via `spawn_switch_model_fetch`). `key_env_for` at 11386–11414 (tests) and in `spawn_switch_model_fetch`/onboarding. Update each to pass `&app.registry` (or the local `reg`). Add `registry: Arc<Registry>` to the `App` struct and populate it at boot (see Task 10).
+
+**Also update the Task 7 signature-change call sites** (the compiler will surface these, but enumerate them so none are missed):
+- `default_model()` → `default_model(&app.registry)` at lines 2527 and 4343.
+- `context_ceiling(&model)` → `context_ceiling(&app.registry, &app.config.provider, &model)` at lines 2562 and 4350.
+- `has_prompt_cache(&model)` → `has_prompt_cache(&app.registry, &app.config.provider, &model)` at lines 2570 and 4363.
+- `entry_requires_key(id)` → `entry_requires_key(id, &app.registry)` at lines 5610, 12259, 12272.
+- `provider_label(provider_name, has_key)` call sites (lines 2569, 4362, 4953, 4999) now take `&provider_name` (a `String`) instead of `&'static str`.
 
 - [ ] **Step 4: Build to surface all remaining call sites**
 
@@ -1532,10 +1793,10 @@ After `select_provider` (line 2536), before building the shell, validate the sel
 let provider_stale = registry.entry(&config.provider).is_none();
 let model_stale = !provider_stale
     && !config.model.is_empty()
-    && registry
+    && !registry
         .models_for(&config.provider)
         .iter()
-        .all(|m| m.id != config.model && !m.hidden);
+        .any(|m| m.id.eq_ignore_ascii_case(&config.model) && !m.hidden);
 ```
 
 If `provider_stale || model_stale`, set a flag that (a) seeds `switch_providers`/`switch_models` from the registry, (b) opens `Overlay::ProviderSwitch`, and (c) sets a banner. On dismiss without a valid selection, run the offline `FakeProvider` and keep a persistent banner.
@@ -1857,6 +2118,9 @@ pub struct ReconcileReport {
     pub removed: Vec<(String, String)>,
     pub reported: Vec<String>,             // human-actionable notes
     pub skipped: Vec<String>,              // providers skipped (no key / error)
+    /// New caps for updated wire rows, keyed by (provider, model). Consumed by
+    /// `write_user_file` to serialize the refreshed values.
+    pub caps: HashMap<(String, String), ModelInfo>,
 }
 
 /// Seam for fetching live lists + caps (mockable in tests).
@@ -1904,6 +2168,28 @@ pub async fn reconcile(
                 let exists = p.models.iter().any(|m| m.id.to_ascii_lowercase() == id.to_ascii_lowercase());
                 if !exists {
                     report.added.push((p.id.clone(), id.clone()));
+                }
+            }
+            // update existing wire rows whose caps changed
+            for m in &p.models {
+                if m.source != Source::Wire {
+                    continue;
+                }
+                match fetcher.caps(&p.id, &base_url, key, &m.id).await {
+                    Ok(Some(new_info)) => {
+                        if new_info != m.info {
+                            report.updated.push((p.id.clone(), m.id.clone()));
+                        // The new caps are carried into the serialized output by
+                        // write_user_file (Task 14), which re-fetches or receives
+                        // the updated ModelInfo via the report.
+                        report.caps.insert((p.id.clone(), m.id.clone()), new_info);
+                    }
+                }
+                Ok(None) => {
+                    report.reported.push(format!("{}: couldn't refresh caps for {}", p.id, m.id));
+                }
+                Err(e) => {
+                    report.reported.push(format!("{}: caps fetch error for {}: {e}", p.id, m.id));
                 }
             }
             // remove wire rows absent from live
@@ -1979,13 +2265,32 @@ git commit -m "feat(zoid-registry): reconcile logic with fetcher seam"
 
 - [ ] **Step 1: Add the subcommand**
 
-In `main.rs`, before the TUI starts, check `std::env::args()` for `refresh-models`. If present, run the tool and exit:
+Add a `Cli::RefreshModels` variant to `crates/zoid/src/cli.rs` (the `Cli` enum + `parse_args` + `help_text`), then handle it in `main()`:
+
+In `cli.rs`, add to the `Cli` enum:
 
 ```rust
-if std::env::args().any(|a| a == "refresh-models") {
-    return run_refresh_models();
-}
+    /// Refresh the provider/model registry from live endpoints and exit.
+    RefreshModels,
+```
 
+In `parse_args`, add to the first-token match (alongside `update`/`uninstall`):
+
+```rust
+        Some("refresh-models") => return Cli::RefreshModels,
+```
+
+In `main()` (line 2295), add a match arm:
+
+```rust
+        zoid::cli::Cli::RefreshModels => {
+            return run_refresh_models().await;
+        }
+```
+
+Then define the tool (in `main.rs`):
+
+```rust
 async fn run_refresh_models() -> anyhow::Result<()> {
     let cfg_dir = resolve_config_dir(|k| std::env::var(k).ok());
     let shipped = cfg_dir.join("models.toml");
@@ -1993,8 +2298,9 @@ async fn run_refresh_models() -> anyhow::Result<()> {
     let (reg, _warn) = zoid_registry::load(&shipped, &user)?;
 
     // Resolve keys via env → secret store (same precedence as select_provider).
+    let db_path = db_path()?;
     let secret_key = resolve_secret_key_path(|k| std::env::var(k).ok());
-    let secrets = zoid_core::secret::EncryptedDb::open(&secret_key.to_string_lossy(), &secret_key).ok();
+    let secrets = zoid_core::secret::EncryptedDb::open(&db_path.to_string_lossy(), &secret_key).ok();
     let mut keys = std::collections::HashMap::new();
     for p in &reg.providers {
         if let Some(env) = &p.key_env {
@@ -2009,15 +2315,31 @@ async fn run_refresh_models() -> anyhow::Result<()> {
     }
 
     let report = zoid_registry::refresh::reconcile(&reg, &keys, &zoid_registry::refresh::ReqwestFetcher).await?;
-    // Write wire rows to models.user.toml (preserving user rows) — see Step 3.
+    // Write wire rows to models.user.toml (preserving user rows) — see Step 2.
     println!("{report:#?}");
     Ok(())
 }
 ```
 
-- [ ] **Step 2: Write the user-file writer**
+- [ ] **Step 2: Write the user-file writer (with a test)**
 
-Add `zoid_registry::refresh::write_user_file(user_path, &reg, &report)` that serializes the `wire` rows (added/updated) and preserves existing `user` rows. This is the inverse of `parse_user` — serialize `ModelEntry` with `source = "wire"`/`"user"` back to TOML. Add a `serialize` module or a `ToToml` impl in `raw.rs`.
+Add `zoid_registry::refresh::write_user_file(user_path: &Path, reg: &Registry, report: &ReconcileReport) -> Result<()>`. It must:
+
+1. Read the existing `models.user.toml` (if present) and preserve every `user` row verbatim.
+2. For each `report.added` entry, append a `wire` row (with caps fetched from the live list — for Ollama/Gemini, re-fetch caps via `fetch::caps`; for a model with no caps, use conservative defaults).
+3. For each `report.updated` entry, rewrite that `wire` row's caps from `report.caps`.
+4. For each `report.removed` entry, drop that `wire` row.
+5. Serialize back to TOML and write atomically (write to a temp file, then rename).
+
+Add a `Serialize`-capable mirror in `raw.rs` (a `RawModelPatch`-style struct with `#[derive(Serialize)]`) so the writer can emit TOML without hand-formatting. Write a test that round-trips: `write_user_file` → `parse_user` → `merge` yields the expected registry.
+
+```rust
+#[test]
+fn write_user_file_round_trips_wire_rows() {
+    // Build a report with one added wire row and one removed wire row,
+    // write to a temp file, parse_user it, and assert the patch matches.
+}
+```
 
 - [ ] **Step 3: Repurpose the skill**
 
@@ -2117,9 +2439,9 @@ key_env = "GEMINI_API_KEY"
   thinking_wire = "none"
 ```
 
-- [ ] **Step 2: Update the invariant test count**
+- [ ] **Step 2: Update the invariant test counts**
 
-In `crates/zoid-registry/src/parse.rs`, change `assert_eq!(ids.len(), 6)` to `assert_eq!(ids.len(), 7)` and add `"gemini-api"` to the membership list.
+In `crates/zoid-registry/src/parse.rs`, change `assert_eq!(ids.len(), 6)` to `assert_eq!(ids.len(), 7)` and add `"gemini-api"` to the membership list (in `shipped_registry_invariants`). Also change `assert_eq!(reg.selectable().count(), 6)` to `7` in `shipped_models_toml_parses`.
 
 - [ ] **Step 3: Run tests**
 
@@ -2146,6 +2468,8 @@ git commit -m "feat: add gemini-api as a first-class provider"
 **Interfaces:**
 - Consumes: nothing new (provisioning now reads the registry's `ollama-local` rows).
 - Produces: removal of the seed-only SQLite table and its callers.
+
+**Note (N8):** this task relocates the local-model data into the TOML but does not add a *consumer* that reads `ollama-local` provisioning fields (`download_source`, `modelfile`, `num_ctx`, `vram_curve`). That is intentional: today nothing reads the `local_models` table either (the spec confirms "Phase 1: nothing reads the table yet"), so the deletion is behavior-preserving. A future task that actually provisions local models from the registry is out of scope for this plan.
 
 - [ ] **Step 1: Delete `local_seed.rs`**
 
@@ -2208,4 +2532,4 @@ git add -A && git commit -m "chore: final verification fixes" || echo "nothing t
 
 **Spec coverage:** §1 (data model/file format) → Tasks 1–6; §2 (crate layout/owned migration) → Tasks 1–3, 7–11; §3 (refresh tool) → Tasks 12–14; §4 (Gemini) → Task 15; §5 (local-model) → Task 16; §6 (migration) → Tasks 6, 11; §7 (error handling) → Tasks 4, 5, 13; §8 (testing) → each task's test steps + Task 17.
 
-**Known follow-ups (not in this plan, flagged for the implementer):** the `default_provider` `reg` parameter is currently unused (env-driven provider selection is unchanged); the `gemini-api` `select_provider` arm is added in Task 9 but only becomes reachable once Task 15 ships the registry entry. Both are intentional and covered by the phase ordering.
+**Known follow-ups (not in this plan, flagged for the implementer):** the `gemini-api` `select_provider` arm is added in Task 9 but only becomes reachable once Task 15 ships the registry entry. This is intentional and covered by the phase ordering. (The `default_provider` dead-`reg` issue from the first review is resolved: `default_provider()` keeps its no-arg signature.)
