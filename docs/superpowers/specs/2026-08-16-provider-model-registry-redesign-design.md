@@ -86,8 +86,10 @@ key_env = "OPENCODE_GO_API_KEY"
 
   [[provider.model]]
   id = "claude-sonnet-4-5"
+  display = "Claude Sonnet 4.5"
   wire_shape = "anthropic-messages"
   source = "static"
+  default = true
   context_window = 200_000
   max_output = 0
   tools = true
@@ -107,21 +109,49 @@ key_env = "OPENCODE_GO_API_KEY"
 
 - **`wire_shape`** — per-model field; union of leaf clients: `openai-chat`,
   `anthropic-messages`, `openai-responses`, `google-gemini`, `ollama`. Collapses
-  `GO_MODELS`/`ZEN_MODELS` into the registry.
+  `GO_MODELS`/`ZEN_MODELS` into the registry. Only meaningful for composite
+  providers (opencode-go, opencode-zen) that route by model; for single-shape
+  providers (ollama-local, anthropic-api, zai, gemini-api) it is present but
+  ignored (the provider is constructed directly, not routed).
 - **`source`** — `static` | `wire` | `user`. In the shipped file it is always
   `static`; in the user file it is `wire` (tool-generated) or `user`
   (human-added).
+- **`default`** — optional `bool` on a model row; marks the provider's default
+  model. At most one `default = true` per provider; if none, the first row in
+  shipped order is the default (with a warning). Survives merge/reorder, and a
+  user row may override the default by setting `default = true`.
+- **`display`** — optional human-readable model name (e.g. "Claude Sonnet 4.5").
+  Falls back to the raw `id` when absent. Preserves the `display_name` that
+  `LocalModelSeed` currently carries for local models.
 - **`key_env`** — the secret env var name for the provider. Moves the
   `key_env_for()` mapping out of `main.rs`'s `match` arms and into the provider
   entry, so adding a provider no longer requires editing `main.rs`.
+- **`family`** — retained for display/grouping only (e.g. the picker's grouping
+  and the `provider_label` drawer). It is no longer read for routing after the
+  `select_provider`/`provider_for_id` `match` arms are replaced by
+  `key_env` + `wire_shape`.
 - **`thinking`** — `none` | `toggle` | `toggle-with-effort` | `budget` |
   `adaptive`.
 - **`thinking_wire`** — `none` | `anthropic` | `deepseek` | `openai` | `ollama`.
 - **`hidden`** — optional `bool` on a user-file row; hides a shipped model from
   the picker without removing it from the registry.
+- **`key_url`** — the onboarding key-acquisition URL. Keyless providers
+  (`ollama-local`) **omit** the key (or set it to the empty string); the parser
+  treats both as `None`. Key-requiring providers must set a non-empty URL.
 - **Local-model provisioning fields** (`runtime`, `download_source`, `quant`,
-  `modelfile`, `num_ctx`, `vram_curve`, `schema_version`) are optional keys,
-  only meaningful on `ollama-local` rows.
+  `modelfile`, `num_ctx`, `vram_curve`) are optional keys, only meaningful on
+  `ollama-local` rows. `schema_version` is **dropped** — it existed solely to
+  drive the SQLite seed-update mechanism, which is removed (§5).
+
+### Lookup semantics
+
+- **Model ids** are compared **case-insensitively** (preserving today's
+  `model_info` behavior); **provider ids** are compared **exactly** after
+  `canonical_id` alias resolution.
+- **`default_model(provider)`** returns the id of the row with `default = true`,
+  else the first row in shipped order (with a warning). This replaces the
+  "first entry = default" comment that lived in the deleted `ZEN_MODEL_IDS`
+  const.
 
 ### Merge semantics
 
@@ -137,8 +167,8 @@ key_env = "OPENCODE_GO_API_KEY"
 
 Three crates:
 
-- **`zoid-model`** (unchanged, dependency-free) — keeps the pure types:
-  `ModelInfo`, `ProviderEntry`, `Transport`, `Status`, `ThinkingSupport`,
+- **`zoid-model`** (dependency-free) — keeps the pure types: `ModelInfo`,
+  `ProviderEntry`, `Transport`, `Status`, `ThinkingSupport`,
   `ThinkingWireShape`, a new `WireShape`, plus a `Registry` *data* struct (no
   I/O). The `&'static` consts (`PROVIDERS`, `MODEL_CAPS`, `ZEN_MODEL_IDS`,
   `DEFAULT_MODEL_INFO`) are **removed** — they become the shipped `models.toml`.
@@ -151,6 +181,31 @@ Three crates:
 
 - **`zoid` / `zoid-core`** — load a `Registry` once at startup and thread it
   (as `Arc<Registry>`) into provider selection and model lookup.
+
+### Owned-type migration (required)
+
+The current types are `Copy` and borrow `&'static str` (`Transport::Http {
+default_base_url: &'static str }`, `ProviderEntry`'s `id`/`display`/`family`/
+`models`/`key_url`, and `ModelInfo` is `Copy`). A runtime-loaded TOML registry
+cannot populate `&'static str`, so these become **owned**:
+
+- `ProviderEntry` / `Transport` / `ModelInfo` fields become `String` /
+  `Vec<String>` / `Option<String>`; the `Copy` derive is dropped (they become
+  `Clone`).
+- Lookup methods (`entry`, `models_for`, `default_base_url`, `model_info`,
+  `selectable`) become methods on `Registry` returning `&str` / `&ModelInfo`
+  borrowed from `&self` (the registry lives for the process lifetime, held in
+  `Arc<Registry>`).
+- Functions that currently return `&'static str` become owned:
+  - `select_provider`'s `provider_name` → `String` (or `Arc<str>`).
+  - `key_env_for` → `Option<String>`.
+  - `default_model` / `default_provider` → `String` (or `Arc<str>`).
+  - `canonical_id` stays `&str`-in/`&str`-out where it only maps a borrowed
+    input to a static alias; otherwise it returns owned.
+
+This is a larger, more invasive change than "thread `Arc<Registry>`" suggests,
+and it is the bulk of Phase 2. The spec's "never a broken tree" claim (§6)
+depends on doing this migration deliberately, not incidentally.
 
 ### Loading flow
 
@@ -171,6 +226,9 @@ Three crates:
 - `main.rs`'s `key_env_for` `match` arms and the `family`-based `match` in
   `select_provider`/`provider_for_id` → replaced by `key_env` + `wire_shape`
   from the registry.
+- `zoid-provider/src/lib.rs::default_model()` / `default_provider()` → rewritten
+  to consult the registry (env-driven *provider* selection stays; the *model*
+  default comes from the `default = true` flag).
 
 ---
 
@@ -188,8 +246,12 @@ shim exposed as a `zoid` subcommand (`zoid refresh-models`) — no second binary
      parse `.data[].id`.
    - OpenAI-compat (opencode-go, opencode-zen, zai): `GET {base}{prefix}/models`
      (Bearer), parse `.data[].id`. ZAI uses `path_prefix=""`.
-   - Gemini: `GET {base}/v1beta/models`, parse `inputTokenLimit` /
-     `outputTokenLimit`.
+   - Gemini: **two fetches** — `GET {base}/v1/models` for the id list (parse
+     `.models[].name`, the existing `list_models` shape) and
+     `GET {base}/v1beta/models` for caps (parse `inputTokenLimit` /
+     `outputTokenLimit`). These are distinct endpoints with distinct response
+     shapes; the caps fetch is a new dedicated unit, not a reuse of
+     `list_models`.
 2. **Reconcile** against the merged registry:
    - **Add** new models as `source = "wire"` rows in the user file.
    - **Update** existing `wire` rows whose caps changed (Ollama `/api/show`,
@@ -204,13 +266,18 @@ shim exposed as a `zoid` subcommand (`zoid refresh-models`) — no second binary
 - **Ollama** — `/api/show` returns `context_length` (already implemented in
   `fetch_model_info`); the tool reuses this.
 - **Gemini** — `/v1beta/models` returns `inputTokenLimit`/`outputTokenLimit`
-  (new).
+  (new dedicated fetcher + parser).
 - **Anthropic / OpenAI-compat / OpenCode / ZAI** — list endpoints return only
   ids, no caps; these stay `static`/curated. The tool still fetches their id
   lists to detect additions/removals, but because it cannot derive caps, it
   **reports** new models (and absent `static` models) for a human to act on —
   it does not auto-add them. The human then adds a new model as a `static` row
   in the shipped file (or a `user` row in the user file) with researched caps.
+
+**`wire` rows only ever exist for Ollama and Gemini** — the only two providers
+with wire-derived caps. The "remove absent `wire` rows" step therefore applies
+only to those two providers; Anthropic/OpenAI-compat/OpenCode/ZAI never have
+`wire` rows to remove (their models are all `static`/`user`).
 
 ### Idempotency & safety
 
@@ -222,9 +289,13 @@ shim exposed as a `zoid` subcommand (`zoid refresh-models`) — no second binary
 
 ### Key handling
 
-Reads the same env vars the product already uses (`OLLAMA_API_KEY`,
-`ANTHROPIC_API_KEY`, `OPENCODE_GO_API_KEY`, `ZAI_API_KEY`, `GEMINI_API_KEY`),
-sourced from the `key_env` field on each provider entry rather than hardcoded.
+Resolves keys through the **same `env → EncryptedDb` precedence as
+`select_provider`** (env wins, then the encrypted secret store). The
+`zoid refresh-models` subcommand runs inside the main binary, so it reuses the
+existing `resolve_secret_key_path` / `EncryptedDb::open` path — no new key
+plumbing, and no drift from the runtime selection logic. The env var name for
+each provider comes from the `key_env` field on its registry entry (not
+hardcoded). A provider with no key in either source is skipped and reported.
 
 ### Skill repurposing
 
@@ -254,12 +325,21 @@ key_env = "GEMINI_API_KEY"
 
 **Models:** the three already in `MODEL_CAPS` (`gemini-3.5-flash`,
 `gemini-3.1-pro`, `gemini-3-flash`) as `static` rows, plus the refresh tool can
-pull the full live list from `/v1beta/models` as `wire` rows.
+pull the full live list from `/v1/models` as `wire` rows.
 
 **Wire shape:** `google-gemini` — the existing `google_gemini.rs` leaf already
 implements `stream()`/`list_models()` and is wired into Zen routing, so
 surfacing it as a first-class provider is mostly registry + selection plumbing,
 not new wire code.
+
+**Three Gemini endpoints (do not conflate):**
+
+- `GET {base}/v1/models` — model **id list** (`.models[].name`); the existing
+  `GoogleGeminiProvider::list_models` shape, used for add/remove detection.
+- `GET {base}/v1beta/models` — model **caps** (`inputTokenLimit` /
+  `outputTokenLimit`); a new dedicated fetcher + parser for the refresh tool.
+- `POST {base}/v1beta/models/{model}:streamGenerateContent` — the **streaming**
+  endpoint, already implemented in the leaf.
 
 **Caps:** the three shipped Gemini models are `static` (hand-researched), but
 because `/v1beta/models` returns `inputTokenLimit`/`outputTokenLimit`, the
@@ -291,6 +371,7 @@ id = "ollama-local"
 
   [[provider.model]]
   id = "qwythos"
+  display = "Qwythos 9B (Claude Mythos 5, 1M)"
   wire_shape = "ollama"
   source = "static"
   context_window = 1_048_576
@@ -306,13 +387,14 @@ id = "ollama-local"
   modelfile = """..."""
   num_ctx = 98_304
   vram_curve = """[...]"""
-  schema_version = 1
 ```
 
 **What changes:**
 
 - `LocalModelSeed` (in `local_seed.rs`) is **removed**; its fields become
-  optional keys on `ollama-local` model rows.
+  optional keys on `ollama-local` model rows. `display_name` becomes the
+  `display` field; `schema_version` is dropped (it only drove the SQLite
+  seed-update mechanism, which is removed).
 - The `ModelInfo` caps are shared — no more parallel string `thinking` /
   `thinking_wire` schema.
 - `store.rs::seed_local_models` and the `local_models` table are **removed**;
@@ -341,13 +423,13 @@ const-lock tests become tests against the shipped `models.toml`.
 
 1. **Phase 1 — types + registry crate.** Add `WireShape` to `zoid-model`,
    create `zoid-registry` with the `Registry` struct + TOML parsing + merge.
-   Ship `models.toml` as a faithful transcription of today's consts. No behavior
-   change yet — the consts still exist.
+   Ship `models.toml` as a transcription of today's consts. No behavior change
+   yet — the consts still exist.
 2. **Phase 2 — switch consumers.** Replace const lookups with `Registry`
    lookups, thread `Arc<Registry>` through `select_provider`/`provider_for_id`,
    replace `GO_MODELS`/`ZEN_MODELS` with `wire_shape` lookups, replace
-   `key_env_for`/`family` matches with `key_env`/`wire_shape`. Delete the
-   consts.
+   `key_env_for`/`family` matches with `key_env`/`wire_shape`, and perform the
+   owned-type migration (§2). Delete the consts.
 3. **Phase 3 — refresh tool.** Add `refresh::reconcile` + the
    `zoid refresh-models` subcommand. Repurpose the skill to point at the tool.
 4. **Phase 4 — Gemini + local-model unification.** Add the `gemini-api`
@@ -358,9 +440,17 @@ const-lock tests become tests against the shipped `models.toml`.
 
 - The shipped `models.toml` is a semantic transcription of today's consts, so
   Phase 2 is behavior-preserving (same providers, models, caps, defaults).
+- **The transcription resolves the `claude-sonnet-4-6` duplicate** by splitting
+  it into two `(provider, model)` rows with their correct per-provider windows
+  (`anthropic-api` → 1M, `opencode-zen` → 200K). This is the *intended* (not
+  accidental) behavior change of Phase 1 — it is the bug fix the redesign
+  exists to make.
 - Legacy provider id aliases (`ollama` → `ollama-cloud`, `anthropic` →
   `anthropic-api`) are preserved in the registry's `canonical_id` logic.
 - `ZOID_CONTEXT_CEILING` env override still wins over the registry (unchanged).
+- The selectable-provider count changes from 6 to 7 when `gemini-api` lands
+  (Phase 4); the ported `selectable_has_six_providers` test must assert
+  membership (including `gemini-api`) rather than a magic count.
 
 ---
 
@@ -371,7 +461,9 @@ const-lock tests become tests against the shipped `models.toml`.
 - Missing user file → treated as empty (shipped file alone is valid).
 - Malformed TOML in either file → fail loudly with a clear path + line error,
   but fall back to the shipped file alone if the *user* file is broken (a bad
-  user edit must not brick startup — it is reported and ignored).
+  user edit must not brick startup — it is reported and ignored). **Note:** a
+  broken user file also drops the user's `hidden`/`user` rows, so hidden models
+  re-appear in the picker; the warning must call this out explicitly.
 - Unknown enum string (`thinking`, `wire_shape`, `source`) → parse error with
   the offending value named, not a silent default.
 
@@ -418,6 +510,14 @@ The banner also names the non-picker recovery paths (edit `config.toml`
 directly, or un-hide the model in `models.user.toml`), and the overlay remains
 dismissible so the user can choose one of those instead.
 
+**Dismiss path (defined):** if the user dismisses the quick-switch without
+picking a valid model, the app runs with a **clearly-labeled offline
+`FakeProvider`** (the existing "offline echo" provider) and a persistent banner
+"no valid model selected — press Alt+P to choose one." The agent loop is inert
+(no real model), but the app stays navigable and the user can re-open the
+picker, edit `config.toml`, or un-hide a model at their leisure. This is neither
+a silent default nor a trap: the banner is explicit, and nothing is persisted.
+
 This validation runs at load, after the merge, and covers both the
 `config.provider` and `config.model` fields (a removed provider implies its
 model is also stale). The quick-switch reads `state.switch_providers` /
@@ -436,26 +536,36 @@ seeded before the overlay opens (the same ordering `Alt+P` already relies on).
 - Enum string parsing: valid values map correctly; invalid values error with
   the offending name.
 - Load: missing user file → shipped alone; malformed user file → fall back to
-  shipped + report.
+  shipped + report (and the report names the dropped `hidden`/`user` rows).
+- Case-insensitivity: model-id lookup is case-insensitive; provider-id lookup
+  is exact after `canonical_id`.
+- Default model: `default = true` wins; fallback to first row with a warning
+  when absent; a user row can override the default.
 - Reconcile: add new wire rows, update changed wire rows, remove absent wire
   rows, report (not delete) static/user, idempotent re-run, key-missing skip,
-  per-provider error isolation.
+  per-provider error isolation, and `wire` rows only for Ollama/Gemini.
+- Gemini caps parser: `/v1beta/models` `inputTokenLimit`/`outputTokenLimit` →
+  `context_window`/`max_output`, distinct from the `/v1/models` id-list parser.
 
 **`zoid-model`:** the pure types + `Registry` data struct compile and are
 constructible without I/O (so `zoid-provider`/`zoid-tui` tests can build a
-`Registry` in-memory).
+`Registry` in-memory). The owned-type migration (`&'static str` → `String`) is
+covered by the compile + the ported lookup tests.
 
 **`zoid-provider`:** wire-shape routing tests assert against a `Registry`
 (in-memory) instead of the deleted `GO_MODELS`/`ZEN_MODELS` consts. The existing
 routing tests (chat→`/v1/chat/completions`, anthropic→`/v1/messages`,
 responses→`/v1/responses`, gemini→`streamGenerateContent`) are preserved, fed
-from the registry.
+from the registry. `default_model`/`default_provider` are tested against the
+registry's `default = true` flag.
 
 **`zoid` / `zoid-core`:** the const-lock tests (`selectable_has_six_providers`,
 `opencode_go_model_caps_match_reconciled_table`,
 `opencode_zen_caps_match_table`, `key_url_field_present_on_all_providers`,
 `models_for_by_id_and_alias`) are ported to assert against the shipped
-`models.toml` (loaded in-test), so the invariants survive the migration.
+`models.toml` (loaded in-test), so the invariants survive the migration. The
+selectable-provider test asserts membership (including `gemini-api`) rather
+than a magic count.
 
 **Gemini:** new tests for the `gemini-api` entry (selectable, key_env,
 wire_shape), `/v1beta/models` caps parsing, and selection wiring.
@@ -467,7 +577,9 @@ that provisioning reads from the registry (replacing the deleted
 **Stale selection:** tests that a removed/hidden provider or model triggers the
 quick-switch recovery path (boot into `Overlay::ProviderSwitch` with a banner,
 not a silent fallback), that the switch panes are seeded before the overlay
-opens, and that a valid selection proceeds normally.
+opens, that a valid selection proceeds normally, and that **dismissing** the
+quick-switch without picking runs the offline `FakeProvider` with a persistent
+banner (not a silent default).
 
 **Full gate:** `cargo nextest run --workspace --features zoid/local-embed
 --no-fail-fast` (per `docs/DEVELOPMENT.md`).
