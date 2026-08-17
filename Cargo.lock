@@ -5253,6 +5253,7 @@ dependencies = [
  "tokio",
  "tracing",
  "zoid-model",
+ "zoid-registry",
 ]
 
 [[package]]

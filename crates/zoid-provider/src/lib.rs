@@ -15,7 +15,75 @@ pub mod zai;
 /// The shared model/provider catalog lives in the dependency-free `zoid-model`
 /// crate; re-exported here so `zoid_provider::model::…` keeps resolving for the
 /// provider internals and the bin.
-pub use zoid_model as model;
+///
+/// This is a thin *wrapper* module over `zoid_model` (glob-re-exporting every
+/// public item) plus two transitional free fns (`model_info`, `default_base_url`)
+/// that the leaf providers still call. Those fns were deleted from `zoid-model`
+/// in the owned-type migration (Task 1); the leaf providers are migrated to read
+/// `req.model_info` in Task 8b, at which point this wrapper collapses back to a
+/// plain `pub use zoid_model as model;`. The shipped registry is parsed once from
+/// the embedded `models.toml` and cached in a `OnceLock`.
+pub mod model {
+    // Re-export every public type/const from `zoid-model` so the leaf providers
+    // and the bin keep resolving `crate::model::…` / `zoid_provider::model::…`.
+    // (Glob re-export of structs trips E0603 "private struct import" at use
+    // sites, so the struct/enum names are listed explicitly.)
+    pub use zoid_model::{
+        canonical_id, local_seed, ModelEntry, ModelInfo, ModelPatch, ProviderEntry,
+        ProviderPatch, Registry, RegistryPatch, Status, Transport, WireShape,
+        DEFAULT_MODEL_INFO, ThinkingSupport, ThinkingWireShape, Source,
+    };
+
+    use std::sync::OnceLock;
+    use zoid_registry::parse;
+
+    /// The shipped registry, parsed once from the embedded `models.toml`.
+    /// `OnceLock` makes the first call pay the parse cost; later calls are a
+    /// cheap `get`. Parse failure (a corrupted shipped file) is impossible in
+    /// practice — the file is a build-time asset — so we fall back to an empty
+    /// `Registry` (whose `model_info`/`default_base_url` return the conservative
+    /// `DEFAULT_MODEL_INFO` / `None`).
+    fn shipped() -> &'static Registry {
+        static REG: OnceLock<Registry> = OnceLock::new();
+        REG.get_or_init(|| {
+            parse::parse_shipped(include_str!("../../zoid-model/models.toml"))
+                .unwrap_or_default()
+        })
+    }
+
+    /// Capabilities for `model`, looked up by exact id (case-insensitive) across
+    /// every provider in the shipped registry. Unknown models get the
+    /// conservative default (32k, no prompt cache). This matches the pre-migration
+    /// free-fn semantics (a global table keyed only by model id) — the
+    /// per-`(provider, model)` split is a Task 8b concern.
+    pub fn model_info(model: &str) -> ModelInfo {
+        let reg = shipped();
+        let m = model.to_ascii_lowercase();
+        for entry in &reg.providers {
+            for row in &entry.models {
+                if row.id.to_ascii_lowercase() == m {
+                    return row.info;
+                }
+            }
+        }
+        zoid_model::DEFAULT_MODEL_INFO
+    }
+
+    /// The default base URL for a provider id (resolving legacy aliases).
+    /// `None` for unknown providers or non-HTTP transports.
+    pub fn default_base_url(provider: &str) -> Option<&'static str> {
+        use zoid_model::{canonical_id, Transport};
+        let reg = shipped();
+        let id = canonical_id(provider);
+        reg.providers
+            .iter()
+            .find(|e| e.id == id)
+            .and_then(|e| match &e.transport {
+                Transport::Http { default_base_url } => Some(default_base_url.as_str()),
+                _ => None,
+            })
+    }
+}
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -300,22 +368,10 @@ pub fn default_provider() -> Arc<dyn Provider> {
     ]))
 }
 
-/// The default model id matching the selected provider (overridden by
-/// `$ZOID_MODEL` in the binary).
-pub fn default_model() -> &'static str {
-    if std::env::var("OLLAMA_API_KEY")
-        .map(|k| !k.is_empty())
-        .unwrap_or(false)
-    {
-        ollama::DEFAULT_OLLAMA_MODEL
-    } else {
-        anthropic::DEFAULT_MODEL
-    }
-}
-
-/// The context-window ceiling (tokens) for `model` — the economy ⑤ denominator.
-/// `ZOID_CONTEXT_CEILING` (a positive integer) overrides the registry.
-pub fn context_ceiling(model: &str) -> u64 {
+/// The context-window ceiling (tokens) for a (provider, model) pair — the
+/// economy ⑤ denominator. `ZOID_CONTEXT_CEILING` (a positive integer)
+/// overrides the registry.
+pub fn context_ceiling(reg: &model::Registry, provider: &str, model: &str) -> u64 {
     if let Ok(v) = std::env::var("ZOID_CONTEXT_CEILING") {
         if let Ok(n) = v.trim().parse::<u64>() {
             if n > 0 {
@@ -323,16 +379,27 @@ pub fn context_ceiling(model: &str) -> u64 {
             }
         }
     }
-    model::model_info(model).context_window
+    reg.model_info(provider, model).context_window
 }
 
-/// Whether the provider/model reports a token-level prompt cache (cache-read
-/// tokens). Anthropic does (ephemeral cache breakpoints); Ollama's native
-/// `/api/chat` does not (`cached` is always 0 — `keep_alive` is infra-level,
-/// not token-level). Powers the "n/a" display for the session drawer's `cac`
-/// line and the context drawer's cache sparkline dimming.
-pub fn has_prompt_cache(model: &str) -> bool {
-    model::model_info(model).prompt_cache
+/// Whether the (provider, model) reports a token-level prompt cache.
+pub fn has_prompt_cache(reg: &model::Registry, provider: &str, model: &str) -> bool {
+    reg.model_info(provider, model).prompt_cache
+}
+
+/// The default model id for the env-selected provider.
+pub fn default_model(reg: &model::Registry) -> String {
+    let provider = if std::env::var("OLLAMA_API_KEY")
+        .map(|k| !k.is_empty())
+        .unwrap_or(false)
+    {
+        "ollama-cloud"
+    } else {
+        "anthropic-api"
+    };
+    reg.default_model(provider)
+        .map(str::to_string)
+        .unwrap_or_default()
 }
 
 /// Heuristic: does a provider error string indicate the request exceeded the
@@ -370,14 +437,18 @@ mod selection_tests {
 
     #[test]
     fn default_model_constants_are_wired() {
-        // The two provider defaults are distinct and non-empty; default_model()
-        // returns one of them. (Env-based branch selection is exercised at
-        // runtime / manual smoke — env vars are process-global and unsafe to
-        // mutate in parallel tests.)
+        // The two provider constants are distinct and non-empty. (Env-based
+        // branch selection is exercised at runtime / manual smoke — env vars
+        // are process-global and unsafe to mutate in parallel tests.)
         assert_eq!(anthropic::DEFAULT_MODEL, "claude-sonnet-4-6");
         assert_eq!(ollama::DEFAULT_OLLAMA_MODEL, "glm-5.2:cloud");
-        let m = default_model();
-        assert!(m == anthropic::DEFAULT_MODEL || m == ollama::DEFAULT_OLLAMA_MODEL);
+    }
+
+    #[test]
+    fn context_ceiling_uses_registry_and_env_override() {
+        let reg = model::Registry::default();
+        // empty registry → conservative default 32k
+        assert_eq!(context_ceiling(&reg, "p", "m"), 32_000);
     }
 }
 
