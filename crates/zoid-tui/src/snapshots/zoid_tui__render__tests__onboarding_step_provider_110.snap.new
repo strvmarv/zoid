@@ -1,0 +1,26 @@
+---
+source: crates/zoid-tui/src/render.rs
+assertion_line: 2816
+expression: lines
+---
+  Welcome to zoid — let's connect your first LLM.
+
+  ● 1 — Choose your provider
+    › ollama · local
+        http http://localhost:11434
+      ollama · cloud
+        http https://ollama.com
+      opencode · go
+        http https://opencode.ai/zen/go
+      anthropic · api key
+        http https://api.anthropic.com
+      zai · coding plan
+        http https://api.z.ai/api/coding/paas/v4
+      opencode · zen
+        http https://opencode.ai/zen
+      gemini · api key
+        http https://generativelanguage.googleapis.com
+
+  ☐ 2 — API key  (locked)
+
+  ☐ 3 — Model  (locked)
