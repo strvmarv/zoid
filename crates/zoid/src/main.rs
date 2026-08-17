@@ -2296,11 +2296,11 @@ struct App {
     /// Encrypted secret store (None → unavailable this run; secret edits no-op
     /// with a stderr note). Shared with the provider credential lookup.
     secrets: Option<std::sync::Arc<zoid_core::secret::EncryptedDb>>,
-    /// The merged provider/model registry (shipped + user TOML). Task 10 wires
-    /// the real disk load at boot; until then this is an `Arc<Registry>`
-    /// placeholder populated from the shipped registry so provider-selection
+    /// The merged provider/model registry (shipped + user TOML), loaded at boot
+    /// from disk with an embedded fallback. Provider-selection
     /// (`select_provider`/`provider_for_id`/`key_env_for`/`entry_requires_key`)
-    /// has a `&Registry` to read. Cheap to clone (Arc refcount bump).
+    /// and the agent loop (`TurnConfig.reg`) read from this. Cheap to clone
+    /// (Arc refcount bump).
     registry: std::sync::Arc<zoid_model::Registry>,
     textarea: TextArea<'static>,
     streaming: bool,
@@ -7796,10 +7796,10 @@ fn spawn_queued_subagent(app: &mut App, qs: QueuedSubagent) {
             .then(|| std::time::Duration::from_secs(app.config.subagent.idle_timeout_secs)),
         (app.config.subagent.hard_timeout_secs > 0)
             .then(|| std::time::Duration::from_secs(app.config.subagent.hard_timeout_secs)),
-        // Task 10 adds `app.registry`; until then the merged registry isn't on
-        // `App`, so dispatch the empty default. The placeholder keeps the queued
-        // spawn's signature aligned with a direct spawn_subagent call.
-        std::sync::Arc::new(zoid_model::Registry::default()),
+        // The merged registry, threaded from `app.registry` (boot-loaded from
+        // disk + embedded fallback). Subagents inherit the same registry so
+        // per-(provider, model) caps resolve correctly.
+        app.registry.clone(),
         app.config.provider.clone(),
     );
 }
@@ -7902,10 +7902,7 @@ fn spawn_turn(app: &mut App) {
     // Resolve per-(provider, model) caps from the merged registry (Task 8b).
     // `spawn_turn` overwrites the `Registry::default()` sentinel set by
     // `chat_turn_config_with` for tests.
-    // Task 10 adds `app.registry`; until then the merged registry isn't on
-    // `App`, so fall back to the empty default (conservative 32k fallback for
-    // context-window / model-info resolution this turn).
-    turn_config.reg = std::sync::Arc::new(zoid_model::Registry::default());
+    turn_config.reg = app.registry.clone();
     turn_config.provider_id = app.config.provider.clone();
     // The live-fetched context window (from ModelInfoFetched / ctx_ceiling),
     // not the static table's conservative default. This is what the

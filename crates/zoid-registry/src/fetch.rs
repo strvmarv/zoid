@@ -186,16 +186,6 @@ pub async fn caps(
     let client = reqwest::Client::new();
     match provider_id {
         "ollama-cloud" | "ollama-local" => {
-            let _body = client
-                .post(format!("{base_url}/api/show"))
-                .header("authorization", format!("Bearer {key}"))
-                .header("content-type", "application/json")
-                .json(&serde_json::json!({ "model": model }))
-                .send()
-                .await?
-                .error_for_status()?
-                .text()
-                .await?;
             let body = client
                 .post(format!("{base_url}/api/show"))
                 .header("authorization", format!("Bearer {key}"))
