@@ -36,16 +36,24 @@
 
 **Modified files:**
 - `Cargo.toml` — add `zoid-registry` to workspace members.
-- `crates/zoid-model/src/lib.rs` — owned-type migration, add `WireShape`/`Source`/`ModelEntry`/`Registry`, delete consts.
+- `crates/zoid-model/src/lib.rs` — owned-type migration, add `WireShape`/`Source`/`ModelEntry`/`ModelPatch`/`ProviderPatch`/`RegistryPatch`/`Registry`, delete consts.
 - `crates/zoid-model/src/local_seed.rs` — DELETE (folded into TOML).
-- `crates/zoid-provider/src/lib.rs` — `context_ceiling`/`has_prompt_cache`/`default_model`/`default_provider` take a `&Registry`; re-export `Registry`.
+- `crates/zoid-provider/src/lib.rs` — `context_ceiling`/`has_prompt_cache`/`default_model` take a `&Registry`; add `model_info` to `CompletionRequest`; re-export `Registry`.
+- `crates/zoid-provider/src/anthropic/request.rs` — read `req.model_info` instead of `model_info(&req.model)`.
+- `crates/zoid-provider/src/openai_compat.rs` — same.
+- `crates/zoid-provider/src/openai_responses.rs` — same.
+- `crates/zoid-provider/src/anthropic/mod.rs`, `ollama.rs`, `zai.rs` — hardcode fallback base URL (drop `default_base_url` free-fn call).
 - `crates/zoid-provider/src/opencode_go.rs` — delete `GO_MODELS`; route via `Registry::wire_shape`.
 - `crates/zoid-provider/src/opencode_zen.rs` — delete `ZEN_MODELS`; route via `Registry::wire_shape`.
+- `crates/zoid/src/agent.rs` — populate `req.model_info` at build time; add `model_info` to `TurnConfig`.
+- `crates/zoid/src/subagent.rs` — populate `TurnConfig.model_info`.
 - `crates/zoid/src/main.rs` — thread `Arc<Registry>`; rewrite `select_provider`/`provider_for_id`/`key_env_for`; add `refresh-models` subcommand; stale-selection recovery.
+- `crates/zoid/src/cli.rs` — add `Cli::RefreshModels` variant.
 - `crates/zoid-core/src/store.rs` — delete `seed_local_models` + `local_models` table.
 - `crates/zoid-core/src/session.rs` — delete `seed_local_models` handle method.
 - `crates/zoid-core/src/skill.rs` — repurpose `refreshing-provider-models` skill body.
 - `crates/zoid-tui/src/config_view.rs` — `provider_options`/`model_options` take `&Registry`.
+- `crates/zoid-tui/src/render.rs` — `entry()` calls take `&Registry` (onboarding wizard).
 
 ---
 
@@ -1025,14 +1033,24 @@ pub fn merge(shipped: Registry, user: RegistryPatch) -> Registry {
             }
             None => {
                 // New provider: build full ModelEntries from patches.
+                // NOTE: a user-added provider is always keyless with an empty
+                // base URL (ProviderPatch carries only id + models). This is a
+                // documented limitation — user-added providers are for local/
+                // keyless use; keyed providers must be shipped. Also demote any
+                // duplicate `default = true` among the new provider's own models
+                // (keep the first, clear the rest).
                 let mut models = Vec::new();
+                let mut saw_default = false;
                 for um in up.models {
+                    let mut is_default = um.default.unwrap_or(false);
+                    if is_default && saw_default { is_default = false; }
+                    if is_default { saw_default = true; }
                     models.push(ModelEntry {
                         id: um.id.clone(),
                         display: um.display.clone(),
                         wire_shape: um.wire_shape.unwrap_or(WireShape::OpenAIChat),
                         source: um.source.unwrap_or(Source::User),
-                        default: um.default.unwrap_or(false),
+                        default: is_default,
                         hidden: um.hidden.unwrap_or(false),
                         info: ModelInfo {
                             context_window: um.context_window.unwrap_or(32_000),
@@ -1571,7 +1589,8 @@ impl OpenCodeGoProvider {
     pub fn new(api_key: String, reg: Arc<Registry>) -> Self {
         Self {
             api_key,
-            base_url: crate::model::default_base_url("opencode-go")
+            base_url: reg
+                .default_base_url("opencode-go")
                 .unwrap_or("https://opencode.ai/zen/go")
                 .to_string(),
             reg,
@@ -1611,7 +1630,7 @@ match self.wire_shape_for(&req.model) {
 
 - [ ] **Step 4: Apply the same change to `opencode_zen.rs`**
 
-Replace `ZEN_MODELS` and the local `ZenWireShape` enum with `zoid_model::WireShape`. The struct gains `reg: Arc<Registry>`; `new(api_key, reg)`. `wire_shape_for` becomes:
+Replace `ZEN_MODELS` and the local `ZenWireShape` enum with `zoid_model::WireShape`. The struct gains `reg: Arc<Registry>`; `new(api_key, reg)`. Its `new()` also uses `crate::model::default_base_url("opencode-zen")` — change it to `reg.default_base_url("opencode-zen").unwrap_or("https://opencode.ai/zen")` (same as the Go fix in Step 3). `wire_shape_for` becomes:
 
 ```rust
 fn wire_shape_for(&self, model: &str) -> WireShape {
@@ -1638,6 +1657,113 @@ Expected: PASS (routing tests now feed from the in-memory registry).
 ```bash
 git add crates/zoid-provider/src/opencode_go.rs crates/zoid-provider/src/opencode_zen.rs
 git commit -m "refactor(zoid-provider): route composite providers via Registry::wire_shape"
+```
+
+---
+
+### Task 8b: Resolve per-(provider, model) caps into `CompletionRequest`
+
+**Files:**
+- Modify: `crates/zoid-provider/src/lib.rs` (add `model_info` field to `CompletionRequest`)
+- Modify: `crates/zoid-provider/src/anthropic/request.rs` (read `req.model_info` instead of `model_info(&req.model)`)
+- Modify: `crates/zoid-provider/src/openai_compat.rs` (same)
+- Modify: `crates/zoid-provider/src/openai_responses.rs` (same)
+- Modify: `crates/zoid-provider/src/anthropic/mod.rs`, `ollama.rs`, `zai.rs` (hardcode fallback base URL; drop `default_base_url` free-fn call)
+- Modify: `crates/zoid/src/agent.rs` (populate `req.model_info` at build time)
+
+**Interfaces:**
+- Consumes: `zoid_model::ModelInfo`, `zoid_model::Registry`.
+- Produces: `CompletionRequest { model_info: ModelInfo, ... }`; leaf providers read `req.model_info`; `build_request_with_thinking` gains a `model_info: ModelInfo` parameter (or a `&Registry` + provider id).
+
+**Rationale:** the leaf providers (`anthropic/request.rs`, `openai_compat.rs`, `openai_responses.rs`) currently call the *global* `model_info(&req.model)` to derive thinking params. The new registry lookup is per-`(provider, model)` and needs a `&Registry` + provider id those leaves don't hold. Rather than thread the registry into every leaf, resolve the caps **once** at request-build time (where the provider id is in scope) and carry the resolved `ModelInfo` on the request.
+
+- [ ] **Step 1: Add `model_info` to `CompletionRequest`**
+
+In `crates/zoid-provider/src/lib.rs`, add a field to `CompletionRequest` (line 217):
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompletionRequest {
+    pub model: String,
+    /// Resolved per-(provider, model) capabilities, populated at request-build
+    /// time. Leaf providers read this instead of doing a global `model_info`
+    /// lookup (which no longer exists).
+    pub model_info: ModelInfo,
+    pub system: Option<String>,
+    pub messages: Vec<Message>,
+    pub max_tokens: u32,
+    pub tools: Vec<ToolSpec>,
+    pub thinking: ThinkingMode,
+    pub reassert: Option<String>,
+}
+```
+
+`ModelInfo` is already imported in `lib.rs` (it's `zoid_model::ModelInfo`, re-exported as `model::ModelInfo`). Add `use zoid_model::ModelInfo;` if not already in scope.
+
+- [ ] **Step 2: Update the leaf providers to read `req.model_info`**
+
+In `crates/zoid-provider/src/anthropic/request.rs` (lines 52, 108), `openai_compat.rs` (line 20), and `openai_responses.rs` (line 22), replace `crate::model::model_info(&req.model)` with `req.model_info`:
+
+```rust
+// before
+let info = crate::model::model_info(&req.model);
+// after
+let info = req.model_info;
+```
+
+- [ ] **Step 3: Hardcode the fallback base URL in leaf constructors**
+
+The leaf constructors call the deleted `default_base_url` free fn. Since `select_provider`/`provider_for_id` already pass the registry-derived base URL via `.with_base_url(...)`, the constructor's fallback can be a hardcoded literal:
+
+- `anthropic/mod.rs:53` → `base_url: "https://api.anthropic.com".to_string()`
+- `ollama.rs:352` → `base_url: "https://ollama.com".to_string()`
+- `zai.rs:23` → `base_url: "https://api.z.ai/api/coding/paas/v4".to_string()`
+
+(These literals match the current `default_base_url(...).unwrap_or(...)` fallbacks exactly.)
+
+- [ ] **Step 4: Populate `req.model_info` at build time**
+
+In `crates/zoid/src/agent.rs`, `build_request_with_thinking` (line 638) currently calls `model_info(model)` twice (lines 653, 666) to compute `max_tokens`. Change its signature to accept the resolved `ModelInfo` (or a `&Registry` + provider id) and set `req.model_info`:
+
+```rust
+pub fn build_request_with_thinking(
+    events: &crate::eventlog::EventLog,
+    model: &str,
+    model_info: zoid_provider::model::ModelInfo,
+    tools: &[Box<dyn Tool>],
+    system: &str,
+    thinking: ThinkingMode,
+    reassert: Option<String>,
+    active_branch: &zoid_core::event::BranchId,
+) -> CompletionRequest {
+    // ... use `model_info` instead of `zoid_provider::model::model_info(model)` ...
+    CompletionRequest {
+        model: model.to_string(),
+        model_info,
+        system: Some(system),
+        // ...
+    }
+}
+```
+
+The callers of `build_request_with_thinking` (agent.rs:892, 3362) and `build_request` (agent.rs:620) must resolve `model_info` from the registry. `run_turn_inner` (line 892) has `config: &TurnConfig` and `model: String`; add a `provider_id: &str` (or `model_info: ModelInfo`) to `TurnConfig` so the call site can resolve `reg.model_info(provider_id, &model)`. The `run_agent_turn*` entry points (main.rs:7658, subagent.rs:202) already have access to `app.config.provider` / the registry, so they can populate `TurnConfig.model_info` (or pass the resolved `ModelInfo`).
+
+**Simplest path:** add `pub model_info: ModelInfo` to `TurnConfig` (agent.rs:184), populate it in `spawn_turn` (main.rs, where `app.config.provider` + `app.registry` are in scope) and in `subagent.rs` (where the subagent's provider/model are known), and have `run_turn_inner` pass `config.model_info` into `build_request_with_thinking`. This keeps the leaf providers and `build_request_with_thinking` registry-agnostic.
+
+- [ ] **Step 5: Update all `CompletionRequest { ... }` literals in tests**
+
+Every test that constructs a `CompletionRequest` literal (see the grep list: `anthropic/mod.rs`, `anthropic/request.rs`, `opencode_go.rs`, `zai.rs`, `google_gemini.rs`, `lib.rs`, `ollama.rs`, `openai_compat.rs`) must add a `model_info: ModelInfo { ... }` field. Add a test helper `fn test_model_info() -> ModelInfo` in each test module (or a shared one in `lib.rs` tests) to reduce churn.
+
+- [ ] **Step 6: Run tests**
+
+Run: `cargo test -p zoid-provider -p zoid`
+Expected: PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add crates/zoid-provider/src crates/zoid/src/agent.rs crates/zoid/src/main.rs crates/zoid/src/subagent.rs
+git commit -m "refactor: resolve per-(provider, model) caps into CompletionRequest"
 ```
 
 ---
@@ -1824,6 +1950,7 @@ git commit -m "feat(zoid): load registry at boot and recover from stale selectio
 **Files:**
 - Modify: `crates/zoid-model/src/lib.rs` (delete `PROVIDERS`, `ZEN_MODEL_IDS`, `MODEL_CAPS`, and the old `&'static str` `ProviderEntry`/`Transport`/`entry`/`models_for`/`default_base_url`/`selectable`/`model_info` free fns)
 - Modify: `crates/zoid-tui/src/config_view.rs` (`provider_options`/`model_options` take `&Registry`)
+- Modify: `crates/zoid-tui/src/render.rs` (`entry()` calls at lines 1900/1946 take `&Registry`)
 
 **Interfaces:**
 - Consumes: `Registry` methods from Task 2.
@@ -1833,7 +1960,7 @@ git commit -m "feat(zoid): load registry at boot and recover from stale selectio
 
 In `crates/zoid-model/src/lib.rs`, delete `PROVIDERS`, `ZEN_MODEL_IDS`, `MODEL_CAPS`, and the free functions `entry`, `models_for`, `default_base_url`, `selectable`, `model_info` (the `Registry` methods from Task 2 replace them). Keep `canonical_id` as a free fn (it's used by `config_view` and `main.rs` without a `Registry`), OR move it to `Registry::canonical_id` and update callers. Keep `DEFAULT_MODEL_INFO` (used by `Registry::model_info`).
 
-- [ ] **Step 2: Update `config_view.rs`**
+- [ ] **Step 2: Update `config_view.rs` and `render.rs`**
 
 `provider_options` and `model_options` take `&Registry`:
 
@@ -1855,6 +1982,8 @@ pub fn model_options(reg: &model::Registry, provider_id: &str, current_model: &s
     }).collect()
 }
 ```
+
+In `crates/zoid-tui/src/render.rs`, the onboarding wizard calls `zoid_model::entry(&onb.chosen_provider)` at lines 1900 and 1946. These need a `&Registry`. The onboarding wizard's render path (`render_onboarding`) must receive the registry (thread it through the `ShellState` or pass it as a parameter from the bin, which already holds `app.registry`). Replace `zoid_model::entry(...)` with `reg.entry(...)`.
 
 - [ ] **Step 3: Port the lock tests**
 
@@ -2163,11 +2292,17 @@ pub async fn reconcile(
         let live_lower: Vec<String> = live.iter().map(|s| s.to_ascii_lowercase()).collect();
 
         if wire_capable(&p.id) {
-            // add new wire rows
+            // add new wire rows (and fetch their caps so write_user_file can
+            // serialize them without re-fetching)
             for id in &live {
                 let exists = p.models.iter().any(|m| m.id.to_ascii_lowercase() == id.to_ascii_lowercase());
                 if !exists {
                     report.added.push((p.id.clone(), id.clone()));
+                    match fetcher.caps(&p.id, &base_url, key, id).await {
+                        Ok(Some(info)) => { report.caps.insert((p.id.clone(), id.clone()), info); }
+                        Ok(None) => { report.reported.push(format!("{}: no caps for new model {} (using defaults)", p.id, id)); }
+                        Err(e) => { report.reported.push(format!("{}: caps fetch error for new model {}: {e}", p.id, id)); }
+                    }
                 }
             }
             // update existing wire rows whose caps changed
@@ -2179,17 +2314,15 @@ pub async fn reconcile(
                     Ok(Some(new_info)) => {
                         if new_info != m.info {
                             report.updated.push((p.id.clone(), m.id.clone()));
-                        // The new caps are carried into the serialized output by
-                        // write_user_file (Task 14), which re-fetches or receives
-                        // the updated ModelInfo via the report.
-                        report.caps.insert((p.id.clone(), m.id.clone()), new_info);
+                            report.caps.insert((p.id.clone(), m.id.clone()), new_info);
+                        }
                     }
-                }
-                Ok(None) => {
-                    report.reported.push(format!("{}: couldn't refresh caps for {}", p.id, m.id));
-                }
-                Err(e) => {
-                    report.reported.push(format!("{}: caps fetch error for {}: {e}", p.id, m.id));
+                    Ok(None) => {
+                        report.reported.push(format!("{}: couldn't refresh caps for {}", p.id, m.id));
+                    }
+                    Err(e) => {
+                        report.reported.push(format!("{}: caps fetch error for {}: {e}", p.id, m.id));
+                    }
                 }
             }
             // remove wire rows absent from live
@@ -2326,7 +2459,7 @@ async fn run_refresh_models() -> anyhow::Result<()> {
 Add `zoid_registry::refresh::write_user_file(user_path: &Path, reg: &Registry, report: &ReconcileReport) -> Result<()>`. It must:
 
 1. Read the existing `models.user.toml` (if present) and preserve every `user` row verbatim.
-2. For each `report.added` entry, append a `wire` row (with caps fetched from the live list — for Ollama/Gemini, re-fetch caps via `fetch::caps`; for a model with no caps, use conservative defaults).
+2. For each `report.added` entry, append a `wire` row using the caps already stored in `report.caps` (populated by `reconcile` in Task 13 — no re-fetch needed; if absent, use conservative defaults).
 3. For each `report.updated` entry, rewrite that `wire` row's caps from `report.caps`.
 4. For each `report.removed` entry, drop that `wire` row.
 5. Serialize back to TOML and write atomically (write to a temp file, then rename).
@@ -2533,3 +2666,5 @@ git add -A && git commit -m "chore: final verification fixes" || echo "nothing t
 **Spec coverage:** §1 (data model/file format) → Tasks 1–6; §2 (crate layout/owned migration) → Tasks 1–3, 7–11; §3 (refresh tool) → Tasks 12–14; §4 (Gemini) → Task 15; §5 (local-model) → Task 16; §6 (migration) → Tasks 6, 11; §7 (error handling) → Tasks 4, 5, 13; §8 (testing) → each task's test steps + Task 17.
 
 **Known follow-ups (not in this plan, flagged for the implementer):** the `gemini-api` `select_provider` arm is added in Task 9 but only becomes reachable once Task 15 ships the registry entry. This is intentional and covered by the phase ordering. (The `default_provider` dead-`reg` issue from the first review is resolved: `default_provider()` keeps its no-arg signature.)
+
+**Second-review resolutions:** the atomic migration (B1) exposed unenumerated consumers of the deleted free fns/consts. These are now addressed: Task 8b resolves per-`(provider, model)` caps into a new `CompletionRequest.model_info` field (leaf providers read `req.model_info` instead of the global `model_info`); leaf constructors hardcode their fallback base URL; `render.rs` onboarding `entry()` calls are enumerated in Task 11; `main.rs` unlisted call sites (`base_url_write_for`, `models_for`, `model_info`, `PROVIDERS`) are covered by Task 11's build-and-fix step; `write_user_file` reads caps from `report.caps` (populated for both `added` and `updated` rows in Task 13); the new-provider merge branch demotes duplicate defaults and documents the keyless/empty-base-url limitation.
