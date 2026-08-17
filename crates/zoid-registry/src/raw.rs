@@ -267,7 +267,11 @@ impl TryFrom<RawRegistryPatch> for RegistryPatch {
     type Error = anyhow::Error;
     fn try_from(raw: RawRegistryPatch) -> anyhow::Result<RegistryPatch> {
         let mut providers = Vec::with_capacity(raw.provider.len());
+        let mut seen_providers = std::collections::HashSet::new();
         for rp in raw.provider {
+            if !seen_providers.insert(rp.id.clone()) {
+                anyhow::bail!("duplicate provider id: {}", rp.id);
+            }
             let mut models = Vec::with_capacity(rp.model.len());
             let mut seen = std::collections::HashSet::new();
             for rm in rp.model {

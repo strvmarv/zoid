@@ -101,4 +101,60 @@ key_env = "ANTHROPIC_API_KEY"
         );
         assert!(parse_shipped(&dup).is_err());
     }
+
+    const USER: &str = r#"
+[[provider]]
+id = "anthropic-api"
+
+  [[provider.model]]
+  id = "claude-sonnet-4-6"
+  source = "wire"
+"#;
+
+    #[test]
+    fn parse_user_rejects_static_source() {
+        let bad = USER.replace("source = \"wire\"", "source = \"static\"");
+        assert!(parse_user(&bad).is_err());
+    }
+
+    #[test]
+    fn parse_user_omitted_source_is_none() {
+        let raw = r#"
+[[provider]]
+id = "anthropic-api"
+
+  [[provider.model]]
+  id = "claude-sonnet-4-6"
+"#;
+        let patch = parse_user(raw).unwrap();
+        assert_eq!(patch.providers.len(), 1);
+        let m = &patch.providers[0].models[0];
+        assert_eq!(m.id, "claude-sonnet-4-6");
+        assert!(m.source.is_none());
+    }
+
+    #[test]
+    fn parse_user_accepts_wire_and_user_sources() {
+        let wire = r#"
+[[provider]]
+id = "anthropic-api"
+
+  [[provider.model]]
+  id = "claude-sonnet-4-6"
+  source = "wire"
+"#;
+        let patch = parse_user(wire).unwrap();
+        assert_eq!(patch.providers[0].models[0].source, Some(zoid_model::Source::Wire));
+
+        let user = r#"
+[[provider]]
+id = "anthropic-api"
+
+  [[provider.model]]
+  id = "claude-sonnet-4-6"
+  source = "user"
+"#;
+        let patch = parse_user(user).unwrap();
+        assert_eq!(patch.providers[0].models[0].source, Some(zoid_model::Source::User));
+    }
 }
