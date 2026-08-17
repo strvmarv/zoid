@@ -29,7 +29,7 @@ pub mod model {
     // (Glob re-export of structs trips E0603 "private struct import" at use
     // sites, so the struct/enum names are listed explicitly.)
     pub use zoid_model::{
-        canonical_id, local_seed, ModelEntry, ModelInfo, ModelPatch, ProviderEntry,
+        canonical_id, ModelEntry, ModelInfo, ModelPatch, ProviderEntry,
         ProviderPatch, Registry, RegistryPatch, Status, Transport, WireShape,
         DEFAULT_MODEL_INFO, ThinkingSupport, ThinkingWireShape, Source,
     };

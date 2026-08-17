@@ -17,8 +17,6 @@
 //! lookup methods are added in Task 2. Downstream consumers are rewritten in
 //! Tasks 7–9 and 11 — the workspace is intentionally broken in the interim.
 
-pub mod local_seed;
-
 /// Stable, model-agnostic capabilities of a model. No cost fields by design.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModelInfo {
