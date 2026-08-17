@@ -546,7 +546,7 @@ pub struct ShellState {
     /// (e.g. `"ANTHROPIC_API_KEY"`), or `None` when not prompting. Set when a
     /// selected provider needs a key we don't have yet (Task 15 gate); cleared
     /// on commit or cancel.
-    pub config_key_prompt: Option<&'static str>,
+    pub config_key_prompt: Option<String>,
     /// Compact elapsed-time-in-session label (e.g. "12m", "1h3m").
     pub duration: String,
     /// Thinking mode label for the session drawer (e.g. "thinking high").

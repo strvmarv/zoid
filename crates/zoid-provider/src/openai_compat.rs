@@ -997,8 +997,8 @@ mod tests {
     #[test]
     fn openai_body_emits_reasoning_effort_when_auto() {
         let req = CompletionRequest {
-            model: "o3".into(),
-            model_info: crate::model::model_info("o3"),
+            model: "gpt-5.5".into(),
+            model_info: crate::model::model_info("gpt-5.5"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 4096,
@@ -1017,8 +1017,8 @@ mod tests {
     #[test]
     fn openai_body_emits_xhigh_for_max() {
         let req = CompletionRequest {
-            model: "o3".into(),
-            model_info: crate::model::model_info("o3"),
+            model: "gpt-5.5".into(),
+            model_info: crate::model::model_info("gpt-5.5"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 4096,

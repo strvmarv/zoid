@@ -56,6 +56,7 @@ pub fn render_shell(
     frame: &mut Frame,
     state: &ShellState,
     economy: &EconomyView,
+    reg: &zoid_model::Registry,
     msgs: &[ChatMsg],
     // The pre-rendered conversation body (full, `reveal == None`), when the caller
     // has cached it (the hot path — `conversation_view` is the expensive wrap +
@@ -256,7 +257,7 @@ pub fn render_shell(
             }
         }
     } else if state.overlay == Overlay::Onboarding {
-        render_onboarding(frame, state, frame.area());
+        render_onboarding(frame, reg, state, frame.area());
     }
 
     conv_max_scroll
@@ -1506,7 +1507,7 @@ pub fn render_config(
     // (the current field is the provider/model row, not a `FieldKind::Secret`
     // row, so the normal per-row masking below wouldn't apply here).
     let field_w = cols[1].width as usize;
-    let fields: Vec<Line> = if let Some(env) = state.config_key_prompt {
+    let fields: Vec<Line> = if let Some(ref env) = state.config_key_prompt {
         let buf = state.config_edit.as_deref().unwrap_or("");
         let masked = glyph::MASK.to_string().repeat(buf.chars().count());
         vec![
@@ -1666,7 +1667,7 @@ fn picker_lines(
 /// The onboarding wizard overlay (`Overlay::Onboarding`). A full-frame
 /// single-column card with a 3-step rail (Provider → API key → Model). The
 /// active step is expanded; inactive steps are collapsed to dim lines.
-pub fn render_onboarding(frame: &mut Frame, state: &ShellState, area: Rect) {
+pub fn render_onboarding(frame: &mut Frame, reg: &zoid_model::Registry, state: &ShellState, area: Rect) {
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::widgets::{Block, BorderType, Borders, Clear};
 
@@ -1700,7 +1701,7 @@ pub fn render_onboarding(frame: &mut Frame, state: &ShellState, area: Rect) {
     let body = rows[0];
     let foot = rows[1];
 
-    let lines = onboarding_lines(state, body.width as usize);
+    let lines = onboarding_lines(reg, state, body.width as usize);
 
     // Render the body lines (clamped to the body height — extra lines clip).
     let body_height = body.height as usize;
@@ -1727,8 +1728,9 @@ pub fn render_onboarding(frame: &mut Frame, state: &ShellState, area: Rect) {
 /// Pure line-builder for the onboarding wizard (testable without a terminal).
 /// Produces the body lines (no card chrome or footer) for a body `width` in
 /// columns. `render_onboarding` paints these into the card body; the snapshot
-/// tests join them to a string.
-fn onboarding_lines(state: &ShellState, width: usize) -> Vec<Line<'static>> {
+/// tests join them to a string. `reg` supplies the chosen provider's family
+/// + key_url for the API-key step (step 2).
+fn onboarding_lines(reg: &zoid_model::Registry, state: &ShellState, width: usize) -> Vec<Line<'static>> {
     let onb = match &state.onboarding {
         Some(o) => o,
         None => return Vec::new(),
@@ -1786,7 +1788,7 @@ fn onboarding_lines(state: &ShellState, width: usize) -> Vec<Line<'static>> {
         indent,
     );
     if onb.step == OnboardingStep::ApiKey {
-        render_api_key_input(&mut lines, onb, indent, width);
+        render_api_key_input(reg, &mut lines, onb, indent, width);
     }
 
     // Step 3 — Model.
@@ -1888,6 +1890,7 @@ fn render_pick_list(
 
 /// Render the masked API-key input box + help lines.
 fn render_api_key_input(
+    reg: &zoid_model::Registry,
     lines: &mut Vec<Line<'static>>,
     onb: &crate::state::OnboardingState,
     indent: &str,
@@ -1897,8 +1900,9 @@ fn render_api_key_input(
     // "Enter your {Provider} API key" — friendly name from the registry family
     // (capitalized), not the picker label ("anthropic · api key") which would
     // render "Enter your anthropic · api key API key".
-    let provider_display = zoid_model::entry(&onb.chosen_provider)
-        .map(|e| e.family)
+    let provider_display = reg
+        .entry(&onb.chosen_provider)
+        .map(|e| e.family.as_str())
         .unwrap_or(&onb.chosen_provider);
     let friendly = capitalize_first(provider_display);
     lines.push(Line::from(Span::styled(
@@ -1941,9 +1945,9 @@ fn render_api_key_input(
     )));
 
     // Key URL help line. zoid-tui depends on zoid-model (not zoid-provider),
-    // so use zoid_model::entry directly (S2 — zoid_provider::model::entry would
-    // not resolve in this crate).
-    let key_url = zoid_model::entry(&onb.chosen_provider).and_then(|e| e.key_url);
+    // so read the chosen provider's `key_url` straight off the `Registry`
+    // threaded in from the bin (which holds `app.registry`).
+    let key_url = reg.entry(&onb.chosen_provider).and_then(|e| e.key_url.as_deref());
     if let Some(url) = key_url {
         lines.push(Line::from(Span::styled(
             format!("{indent}  Get one at {url}"),
@@ -1962,8 +1966,8 @@ fn render_api_key_input(
 /// snapshot testing (no terminal backend required). Test-only: the live
 /// renderer paints `onboarding_lines` into the card body directly.
 #[cfg(test)]
-fn render_onboarding_lines(state: &ShellState, width: usize) -> String {
-    onboarding_lines(state, width)
+fn render_onboarding_lines(reg: &zoid_model::Registry, state: &ShellState, width: usize) -> String {
+    onboarding_lines(reg, state, width)
         .iter()
         .map(|l| {
             l.spans
@@ -2800,14 +2804,15 @@ mod tests {
     fn onboarding_step_provider_snapshot() {
         use crate::config_view::provider_options;
         use crate::state::{OnboardingState, OnboardingStep, Overlay};
+        let reg = crate::test_reg::shipped();
         let mut state = ShellState::new();
         state.overlay = Overlay::Onboarding;
         state.onboarding = Some(OnboardingState {
             step: OnboardingStep::Provider,
-            options: provider_options(""),
+            options: provider_options(&reg, ""),
             ..Default::default()
         });
-        let lines = render_onboarding_lines(&state, 110);
+        let lines = render_onboarding_lines(&reg, &state, 110);
         insta::assert_snapshot!("onboarding_step_provider_110", lines);
     }
 
@@ -2815,16 +2820,17 @@ mod tests {
     fn onboarding_step_api_key_snapshot() {
         use crate::config_view::provider_options;
         use crate::state::{OnboardingState, OnboardingStep, Overlay};
+        let reg = crate::test_reg::shipped();
         let mut state = ShellState::new();
         state.overlay = Overlay::Onboarding;
         state.onboarding = Some(OnboardingState {
             step: OnboardingStep::ApiKey,
             chosen_provider: "anthropic-api".into(),
             key_buffer: "sk-ant-test123".into(),
-            options: provider_options(""),
+            options: provider_options(&reg, ""),
             ..Default::default()
         });
-        let lines = render_onboarding_lines(&state, 110);
+        let lines = render_onboarding_lines(&reg, &state, 110);
         insta::assert_snapshot!("onboarding_step_api_key_110", lines);
     }
 
@@ -2832,6 +2838,7 @@ mod tests {
     fn onboarding_step_model_snapshot() {
         use crate::config_view::model_options;
         use crate::state::{OnboardingState, OnboardingStep, Overlay};
+        let reg = crate::test_reg::shipped();
         let mut state = ShellState::new();
         state.overlay = Overlay::Onboarding;
         state.onboarding = Some(OnboardingState {
@@ -2841,7 +2848,7 @@ mod tests {
             // handle_onboarding_submit_key prepends it (S3 — the snapshot must
             // match what the user sees at runtime, not the raw model_options output).
             options: {
-                let mut o = model_options("anthropic-api", "");
+                let mut o = model_options(&reg, "anthropic-api", "");
                 o.insert(
                     0,
                     crate::config_view::PickOption {
@@ -2856,7 +2863,7 @@ mod tests {
             },
             ..Default::default()
         });
-        let lines = render_onboarding_lines(&state, 110);
+        let lines = render_onboarding_lines(&reg, &state, 110);
         insta::assert_snapshot!("onboarding_step_model_110", lines);
     }
 
@@ -2864,14 +2871,15 @@ mod tests {
     fn onboarding_floor_width_no_overflow() {
         use crate::config_view::provider_options;
         use crate::state::{OnboardingState, OnboardingStep, Overlay};
+        let reg = crate::test_reg::shipped();
         let mut state = ShellState::new();
         state.overlay = Overlay::Onboarding;
         state.onboarding = Some(OnboardingState {
             step: OnboardingStep::Provider,
-            options: provider_options(""),
+            options: provider_options(&reg, ""),
             ..Default::default()
         });
-        let lines = onboarding_lines(&state, 51);
+        let lines = onboarding_lines(&reg, &state, 51);
         for line in &lines {
             let w: usize = line
                 .spans
@@ -2886,15 +2894,16 @@ mod tests {
     fn onboarding_step_provider_env_shadow_snapshot() {
         use crate::config_view::provider_options;
         use crate::state::{OnboardingState, OnboardingStep, Overlay};
+        let reg = crate::test_reg::shipped();
         let mut state = ShellState::new();
         state.overlay = Overlay::Onboarding;
         state.onboarding = Some(OnboardingState {
             step: OnboardingStep::Provider,
-            options: provider_options(""),
+            options: provider_options(&reg, ""),
             env_shadow: Some("ollama-cloud".into()),
             ..Default::default()
         });
-        let lines = render_onboarding_lines(&state, 110);
+        let lines = render_onboarding_lines(&reg, &state, 110);
         insta::assert_snapshot!("onboarding_step_provider_env_shadow_110", lines);
     }
 }

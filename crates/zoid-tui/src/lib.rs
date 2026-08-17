@@ -26,6 +26,9 @@ pub mod tokens;
 #[cfg(feature = "web-capture")]
 pub mod web_capture;
 
+#[cfg(test)]
+mod test_reg;
+
 pub use economy_view::EconomyView;
 pub use motion::{
     caret_on, ease_out_cubic, reveal_count, spinner_frame, zoom_reveal, Anim, MOTION_FPS,

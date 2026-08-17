@@ -28,7 +28,6 @@ use zoid_core::event::{Event, EventKind};
 use zoid_core::projection::conversation;
 use zoid_core::session::SessionHandle;
 use zoid_provider::Provider;
-use zoid_provider::{default_model, default_provider};
 use zoid_tui::chat::ChatView;
 use zoid_tui::layout::compute;
 use zoid_tui::render_shell;
@@ -2939,7 +2938,7 @@ async fn main() -> Result<()> {
         app.shell.onboarding = Some(zoid_tui::state::OnboardingState {
             step: zoid_tui::state::OnboardingStep::Provider,
             chosen_provider: String::new(),
-            options: zoid_tui::config_view::provider_options(""),
+            options: zoid_tui::config_view::provider_options(&app.registry, ""),
             env_shadow,
             ..Default::default()
         });
@@ -3515,6 +3514,7 @@ where
                 f,
                 &app.shell,
                 &economy,
+                &app.registry,
                 &app.proj.msgs,
                 Some(body),
                 task_items,
@@ -4448,7 +4448,7 @@ fn refresh_config_sections(app: &mut App) {
         ("ZAI_API_KEY", status("ZAI_API_KEY")),
     ];
     app.shell.config_sections =
-        zoid_tui::config_view::build_sections(&app.config, &app.prov, &key_status);
+        zoid_tui::config_view::build_sections(&app.registry, &app.config, &app.prov, &key_status);
 }
 
 /// Set (or remove, for `Unset`) a dotted key in the TOML file at `path`,
@@ -5116,7 +5116,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 }
                 if let Some(s) = &app.secrets {
                     use zoid_core::secret::SecretStore;
-                    if let Err(e) = s.set(env, key) {
+                    if let Err(e) = s.set(&env, key) {
                         eprintln!("zoid: secret set failed for {env}: {e}");
                     }
                 } else {
@@ -5138,7 +5138,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                     app.shell.config_field = mi;
                 }
                 app.shell.config_picker =
-                    zoid_tui::config_view::model_options(&app.config.provider, &app.config.model);
+                    zoid_tui::config_view::model_options(&app.registry, &app.config.provider, &app.config.model);
                 app.shell.config_picker_sel = 0;
                 app.shell.config_col = if app.shell.config_picker.is_empty() {
                     zoid_tui::state::ConfigCol::Fields
@@ -5210,8 +5210,9 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             use zoid_tui::state::ConfigCol;
             if let Some((label, _, _)) = current_config_field(app) {
                 app.shell.config_picker = match label {
-                    "provider" => zoid_tui::config_view::provider_options(&app.config.provider),
+                    "provider" => zoid_tui::config_view::provider_options(&app.registry, &app.config.provider),
                     "model" => zoid_tui::config_view::model_options(
+                        &app.registry,
                         &app.config.provider,
                         &app.config.model,
                     ),
@@ -5343,6 +5344,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                             app.shell.config_field = mi;
                         }
                         app.shell.config_picker = zoid_tui::config_view::model_options(
+                            &app.registry,
                             &app.config.provider,
                             &app.config.model,
                         );
@@ -5464,7 +5466,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             use zoid_tui::state::{Overlay, SwitchPane};
             app.shell.overlay = Overlay::ProviderSwitch;
             app.shell.switch_providers =
-                zoid_tui::config_view::provider_options(&app.config.provider);
+                zoid_tui::config_view::provider_options(&app.registry, &app.config.provider);
             app.shell.switch_provider_sel = app
                 .shell
                 .switch_providers
@@ -5480,7 +5482,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 .map(|o| o.id.clone())
                 .unwrap_or_else(|| app.config.provider.clone());
             app.shell.switch_models =
-                zoid_tui::config_view::model_options(&highlighted_provider_id, &app.config.model);
+                zoid_tui::config_view::model_options(&app.registry, &highlighted_provider_id, &app.config.model);
             // Live-fetch the highlighted provider's real model list (Ollama
             // `/api/tags`, Anthropic `/v1/models`); the static list above is the
             // offline fallback until the fetch lands.
@@ -5513,6 +5515,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                             .id
                             .clone();
                         app.shell.switch_models = zoid_tui::config_view::model_options(
+                            &app.registry,
                             &highlighted_provider_id,
                             &app.config.model,
                         );
@@ -5761,7 +5764,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             if let Some(o) = app.shell.onboarding.as_mut() {
                 let prev = o.chosen_provider.clone();
                 o.step = zoid_tui::state::OnboardingStep::Provider;
-                o.options = zoid_tui::config_view::provider_options("");
+                o.options = zoid_tui::config_view::provider_options(&app.registry, "");
                 o.list_sel = o.options.iter().position(|opt| opt.id == prev).unwrap_or(0);
                 o.key_buffer.clear();
             }
@@ -5865,12 +5868,12 @@ fn handle_onboarding_submit_key(app: &mut App) -> Result<bool> {
     app.secrets
         .as_ref()
         .expect("wizard gate guarantees secrets available")
-        .set(key_env, &key_val)?;
+        .set(&key_env, &key_val)?;
 
     // Advance to step 3 (if >1 model) or DONE.
     let model_count = app.registry.models_for(&provider_id).len();
     if model_count > 1 {
-        let mut options = zoid_tui::config_view::model_options(&provider_id, "");
+        let mut options = zoid_tui::config_view::model_options(&app.registry, &provider_id, "");
         // Prepend the "use default" synthetic row at index 0.
         options.insert(
             0,
@@ -10144,7 +10147,7 @@ mod tests {
         app.shell.config_field = field;
         assert_eq!(current_config_field(&app).map(|(l, _, _)| l), Some("model"));
         app.shell.config_picker =
-            zoid_tui::config_view::model_options(&app.config.provider, &app.config.model);
+            zoid_tui::config_view::model_options(&app.registry, &app.config.provider, &app.config.model);
         app.shell.config_col = zoid_tui::state::ConfigCol::Picker;
         assert!(app.shell.config_picker_open());
 
@@ -10179,7 +10182,7 @@ mod tests {
 
         let mut app = test_app().await;
         app.shell.overlay = Overlay::ProviderSwitch;
-        app.shell.switch_providers = provider_options(&app.config.provider);
+        app.shell.switch_providers = provider_options(&app.registry, &app.config.provider);
         // Highlight ollama-cloud explicitly (regardless of the default active).
         let sel = app
             .shell
@@ -10189,7 +10192,7 @@ mod tests {
             .expect("registry must offer ollama-cloud");
         app.shell.switch_provider_sel = sel;
         app.shell.switch_models =
-            zoid_tui::config_view::model_options("ollama-cloud", &app.config.model);
+            zoid_tui::config_view::model_options(&app.registry, "ollama-cloud", &app.config.model);
         app.shell.switch_model_sel = 0;
         let fallback_len = app.shell.switch_models.len();
 
@@ -10258,7 +10261,7 @@ mod tests {
         app.shell.config_section = section;
         app.shell.config_field = field;
         app.shell.config_picker =
-            zoid_tui::config_view::model_options(&app.config.provider, &app.config.model);
+            zoid_tui::config_view::model_options(&app.registry, &app.config.provider, &app.config.model);
         app.shell.config_col = zoid_tui::state::ConfigCol::Picker;
         assert!(app.shell.config_picker_open());
         let before = app.shell.config_picker.clone();
@@ -11534,7 +11537,7 @@ mod tests {
     #[tokio::test]
     async fn blank_key_commit_does_not_store_or_ready() {
         let mut app = test_app().await;
-        app.shell.config_key_prompt = Some("ANTHROPIC_API_KEY");
+        app.shell.config_key_prompt = Some("ANTHROPIC_API_KEY".into());
         app.shell.config_edit = Some("   ".to_string());
 
         let quit = handle_action(&mut app, zoid_tui::route::Action::ConfigCommitEdit)
@@ -12676,7 +12679,7 @@ mod onboarding_tests {
         // returning Some. A keyless provider (key_url: None) must return None.
         let reg = zoid_provider::model::shipped_registry();
         for e in reg.providers.iter() {
-            let key_env = key_env_for(e.id, reg);
+            let key_env = key_env_for(&e.id, reg);
             if e.key_url.is_some() {
                 assert!(
                     key_env.is_some(),
@@ -12685,7 +12688,7 @@ mod onboarding_tests {
                     e.id
                 );
                 assert!(
-                    entry_requires_key(e.id, reg),
+                    entry_requires_key(&e.id, reg),
                     "{} has key_url: Some but entry_requires_key returned false",
                     e.id
                 );
@@ -12698,7 +12701,7 @@ mod onboarding_tests {
                     key_env
                 );
                 assert!(
-                    !entry_requires_key(e.id, reg),
+                    !entry_requires_key(&e.id, reg),
                     "{} has key_url: None but entry_requires_key returned true",
                     e.id
                 );

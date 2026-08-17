@@ -14,6 +14,13 @@ use zoid_tui::render_shell;
 use zoid_tui::state::{DrawerId, McpStatusRow, Overlay, ShellState, SwitchPane, Zoom};
 use zoid_tui::{onboarding, EconomyView};
 
+/// The shipped registry parsed from `crates/zoid-model/models.toml`, so the
+/// rendered scenes show real provider/model rows (same data the app sees).
+pub fn shipped_registry() -> zoid_model::Registry {
+    zoid_registry::parse::parse_shipped(include_str!("../../../zoid-model/models.toml"))
+        .expect("shipped models.toml must parse")
+}
+
 pub fn seeded() -> Vec<ChatMsg> {
     vec![
         ChatMsg::User {
@@ -418,9 +425,10 @@ pub fn render_one(
         reveal: None,
         tz_offset_secs: 0,
     };
+    let reg = shipped_registry();
     terminal
         .draw(|f| {
-            render_shell(f, state, economy, msgs, body, tasks, &input, false, &view);
+            render_shell(f, state, economy, &reg, msgs, body, tasks, &input, false, &view);
         })
         .unwrap();
     terminal.backend().buffer().clone()

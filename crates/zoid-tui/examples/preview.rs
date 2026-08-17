@@ -50,7 +50,8 @@ fn main() {
     };
     terminal
         .draw(|f| {
-            render_shell(f, &state, &economy, &msgs, None, &[], &input, false, &view);
+            let reg = scenes::shipped_registry();
+            render_shell(f, &state, &economy, &reg, &msgs, None, &[], &input, false, &view);
         })
         .unwrap();
 

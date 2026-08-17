@@ -5326,6 +5326,7 @@ dependencies = [
  "unicode-width",
  "zoid-core",
  "zoid-model",
+ "zoid-registry",
  "zoid-syntax",
 ]
 

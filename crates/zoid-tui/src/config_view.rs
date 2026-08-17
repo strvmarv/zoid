@@ -3,7 +3,7 @@
 
 use zoid_core::config::{Config, Provenance, Source};
 use zoid_core::secret::SecretStatus;
-use zoid_model::{self as model, Status, Transport};
+use zoid_model::{self as model, Registry, Status, Transport};
 
 /// How a config field is edited/displayed (text, uint, bool, picker, or write-only secret).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,14 +28,14 @@ pub struct PickOption {
 
 /// The provider picker options (all registry entries; `[planned]` shown but
 /// not selectable), each annotated with its transport endpoint/command.
-pub fn provider_options(current_id: &str) -> Vec<PickOption> {
+pub fn provider_options(reg: &Registry, current_id: &str) -> Vec<PickOption> {
     let cur = model::canonical_id(current_id);
-    model::PROVIDERS
+    reg.providers
         .iter()
         .map(|e| {
-            let (kind, endpoint) = match e.transport {
-                Transport::Http { default_base_url } => ("http", default_base_url.to_string()),
-                Transport::Cli { default_command } => ("cli", default_command.to_string()),
+            let (kind, endpoint) = match &e.transport {
+                Transport::Http { default_base_url } => ("http", default_base_url.clone()),
+                Transport::Cli { default_command } => ("cli", default_command.clone()),
                 Transport::Sdk => ("sdk", "—".to_string()),
             };
             let planned = e.status == Status::Planned;
@@ -44,8 +44,8 @@ pub fn provider_options(current_id: &str) -> Vec<PickOption> {
                 detail.push_str("  planned");
             }
             PickOption {
-                id: e.id.to_string(),
-                label: e.display.to_string(),
+                id: e.id.clone(),
+                label: e.display.clone(),
                 detail,
                 selectable: !planned,
                 is_current: e.id == cur,
@@ -55,18 +55,22 @@ pub fn provider_options(current_id: &str) -> Vec<PickOption> {
 }
 
 /// The model picker options for a provider (registry convenience list),
-/// sorted alphabetically by name for easy scanning.
-pub fn model_options(provider_id: &str, current_model: &str) -> Vec<PickOption> {
-    let mut models: Vec<&str> = model::models_for(provider_id).to_vec();
-    models.sort();
+/// sorted alphabetically by name for easy scanning. Hidden rows are excluded.
+pub fn model_options(reg: &Registry, provider_id: &str, current_model: &str) -> Vec<PickOption> {
+    let mut models: Vec<&model::ModelEntry> = reg
+        .models_for(provider_id)
+        .iter()
+        .filter(|m| !m.hidden)
+        .collect();
+    models.sort_by(|a, b| a.id.cmp(&b.id));
     models
         .iter()
         .map(|m| PickOption {
-            id: (*m).to_string(),
-            label: (*m).to_string(),
+            id: m.id.clone(),
+            label: m.display.clone().unwrap_or_else(|| m.id.clone()),
             detail: String::new(),
             selectable: true,
-            is_current: *m == current_model,
+            is_current: m.id == current_model,
         })
         .collect()
 }
@@ -107,6 +111,7 @@ fn friendly_secret_label(name: &'static str) -> (&'static str, Option<&'static s
 /// Build the four config sections (Provider & Model, Economy, Interface, Secrets) from a
 /// resolved Config + Provenance + secret statuses. Pure; no IO.
 pub fn build_sections(
+    reg: &Registry,
     cfg: &Config,
     prov: &Provenance,
     key_status: &[(&'static str, SecretStatus)],
@@ -120,8 +125,8 @@ pub fn build_sections(
     };
     let opt = |o: &Option<u64>| o.map(|n| n.to_string()).unwrap_or_else(|| "(none)".into());
 
-    let active = model::entry(&cfg.provider);
-    let connection_row = match active.map(|e| e.transport) {
+    let active = reg.entry(&cfg.provider);
+    let connection_row = match active.map(|e| &e.transport) {
         Some(Transport::Cli { .. }) => FieldRow {
             label: "command",
             value: cfg.base_url.clone().unwrap_or_default(), // reuses base_url slot until CLI impl adds `command`
@@ -298,9 +303,11 @@ pub fn build_sections(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_reg::shipped;
 
     #[test]
     fn builds_four_sections_with_env_shadow() {
+        let reg = shipped();
         let cfg = Config::default();
         // Inline provenance: all Default except `model` and `auto_evict_cold` shadowed
         // by env. `auto_evict_cold` was previously hardcoded to `env_shadowed: false` in
@@ -334,7 +341,7 @@ mod tests {
             ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
             ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
         ];
-        let sections = build_sections(&cfg, &prov, &ks);
+        let sections = build_sections(&reg, &cfg, &prov, &ks);
         assert_eq!(sections.len(), 4);
         let model_row = &sections[0].rows[1];
         assert_eq!(model_row.label, "model");
@@ -357,7 +364,8 @@ mod tests {
 
     #[test]
     fn provider_options_annotate_endpoints_and_mark_planned() {
-        let opts = provider_options("ollama-cloud");
+        let reg = shipped();
+        let opts = provider_options(&reg, "ollama-cloud");
         let cloud = opts.iter().find(|o| o.id == "ollama-cloud").unwrap();
         assert!(cloud.is_current);
         assert!(cloud.selectable);
@@ -384,7 +392,8 @@ mod tests {
 
     #[test]
     fn model_options_list_registry_models() {
-        let opts = model_options("anthropic-api", "claude-opus-4-8");
+        let reg = shipped();
+        let opts = model_options(&reg, "anthropic-api", "claude-opus-4-8");
         assert!(opts
             .iter()
             .any(|o| o.id == "claude-sonnet-4-6" && o.selectable));
@@ -394,6 +403,7 @@ mod tests {
 
     #[test]
     fn provider_and_model_rows_are_pick_kind() {
+        let reg = shipped();
         let cfg = Config::default();
         let prov = Provenance {
             provider: Source::Default,
@@ -420,7 +430,7 @@ mod tests {
             companion_enabled: Source::Default,
             eviction_enabled: Source::Default,
         };
-        let sections = build_sections(&cfg, &prov, &[]);
+        let sections = build_sections(&reg, &cfg, &prov, &[]);
         let pm = &sections[0];
         assert_eq!(pm.rows[0].label, "provider");
         assert!(matches!(pm.rows[0].kind, FieldKind::Pick));

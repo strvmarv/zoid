@@ -4,6 +4,7 @@ use zoid_core::context::ContextWindow;
 use zoid_core::economy::ChurnTimeline;
 use zoid_core::projection::ChatMsg;
 use zoid_core::tasks::{TaskItem, TaskStatus};
+use zoid_model::Registry;
 use zoid_tui::chat::ChatView;
 use zoid_tui::render_shell;
 use zoid_tui::state::{ShellState, Zoom};
@@ -46,6 +47,7 @@ fn draw_at(state: &ShellState, tasks: &[TaskItem], w: u16, h: u16) -> String {
                 f,
                 &state,
                 &empty_economy(),
+                &Registry::default(),
                 &msgs,
                 None,
                 tasks,

@@ -3,10 +3,20 @@ use ratatui_textarea::TextArea;
 use zoid_core::context::ContextWindow;
 use zoid_core::economy::ChurnTimeline;
 use zoid_core::projection::ChatMsg;
+use zoid_model::Registry;
 use zoid_tui::chat::ChatView;
 use zoid_tui::render_shell;
 use zoid_tui::state::{DrawerId, Focus, Overlay, ShellState, Zoom};
 use zoid_tui::EconomyView;
+
+/// The shipped registry parsed from `crates/zoid-model/models.toml`, so the
+/// config-overlay tests exercise `build_sections`/`provider_options`/`model_options`
+/// against the same data the app sees (an empty `Registry::default()` would
+/// yield no provider/model rows and the picker snapshots would be blank).
+fn shipped() -> Registry {
+    zoid_registry::parse::parse_shipped(include_str!("../../zoid-model/models.toml"))
+        .expect("shipped models.toml must parse")
+}
 
 fn normal_view() -> ChatView {
     ChatView {
@@ -35,6 +45,7 @@ fn draw_econ(state: &ShellState, econ: &EconomyView, msgs: &[ChatMsg], w: u16, h
                 f,
                 state,
                 econ,
+                &Registry::default(),
                 msgs,
                 None,
                 &[],
@@ -84,6 +95,7 @@ fn draw_body(
                 f,
                 state,
                 &empty_economy(),
+                &Registry::default(),
                 msgs,
                 body,
                 &[],
@@ -376,6 +388,7 @@ fn long_turn_wraps_instead_of_clipping() {
                 f,
                 &s,
                 &empty_economy(),
+                &Registry::default(),
                 &msgs,
                 None,
                 &[],
@@ -517,6 +530,7 @@ fn economy_drawer_selection_highlights_only_when_rail_focused() {
                     f,
                     &s,
                     &seeded_economy(),
+                    &Registry::default(),
                     &seeded(),
                     None,
                     &[],
@@ -646,6 +660,7 @@ fn draw_zoom(zoom: Zoom, w: u16, h: u16) -> String {
                 f,
                 &s,
                 &empty_economy(),
+                &Registry::default(),
                 &seeded_detail(),
                 None,
                 &[],
@@ -727,6 +742,7 @@ fn draw_overlay(overlay: Overlay, w: u16, h: u16) -> String {
                 f,
                 &s,
                 &empty_economy(),
+                &Registry::default(),
                 &seeded_objects(),
                 None,
                 &[],
@@ -794,6 +810,7 @@ fn growing_message_box_frame() {
                 f,
                 &s,
                 &empty_economy(),
+                &Registry::default(),
                 &seeded(),
                 None,
                 &[],
@@ -832,6 +849,7 @@ fn markdown_message_frame() {
                 f,
                 &s,
                 &empty_economy(),
+                &Registry::default(),
                 &seeded_markdown(),
                 None,
                 &[],
@@ -862,6 +880,7 @@ fn running_title_frame() {
                 f,
                 &s,
                 &empty_economy(),
+                &Registry::default(),
                 &seeded(),
                 None,
                 &[],
@@ -898,6 +917,7 @@ fn draw_delegated(w: u16, h: u16) -> String {
                 f,
                 &s,
                 &empty_economy(),
+                &Registry::default(),
                 &seeded_delegated(),
                 None,
                 &[],
@@ -964,7 +984,8 @@ fn config_overlay_frame() {
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
         ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
     ];
-    let sections = build_sections(&cfg, &prov, &ks);
+    let reg = shipped();
+    let sections = build_sections(&reg, &cfg, &prov, &ks);
     insta::assert_snapshot!(draw_config(&s, &sections, 160, 40));
 }
 
@@ -980,7 +1001,7 @@ fn config_key_prompt_masks_entry() {
 
     let mut s = ShellState::new();
     s.overlay = Overlay::Config;
-    s.config_key_prompt = Some("ANTHROPIC_API_KEY");
+    s.config_key_prompt = Some("ANTHROPIC_API_KEY".into());
     s.config_edit = Some("sk-secret".to_string());
     let cfg = Config::default();
     let prov = Provenance {
@@ -1012,7 +1033,8 @@ fn config_key_prompt_masks_entry() {
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
         ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
     ];
-    let sections = build_sections(&cfg, &prov, &ks);
+    let reg = shipped();
+    let sections = build_sections(&reg, &cfg, &prov, &ks);
     let snapshot = draw_config(&s, &sections, 160, 40);
     assert!(
         !snapshot.contains("sk-secret"),
@@ -1069,8 +1091,9 @@ fn config_overlay_provider_picker() {
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
         ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
     ];
-    let sections = build_sections(&cfg, &prov, &ks);
-    s.config_picker = provider_options(&cfg.provider);
+    let reg = shipped();
+    let sections = build_sections(&reg, &cfg, &prov, &ks);
+    s.config_picker = provider_options(&reg, &cfg.provider);
     s.config_picker_sel = 0;
     insta::assert_snapshot!(draw_config(&s, &sections, 160, 40));
 }
@@ -1135,8 +1158,9 @@ fn config_overlay_provider_picker_selection_styles() {
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
         ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
     ];
-    let sections = build_sections(&cfg, &prov, &ks);
-    s.config_picker = provider_options(&cfg.provider);
+    let reg = shipped();
+    let sections = build_sections(&reg, &cfg, &prov, &ks);
+    s.config_picker = provider_options(&reg, &cfg.provider);
     s.config_picker_sel = 0;
 
     // The fixture's selected row must be selectable so the SEL_BG
@@ -1223,8 +1247,9 @@ fn config_overlay_narrow_degrades() {
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
         ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
     ];
-    let sections = build_sections(&cfg, &prov, &ks);
-    s.config_picker = provider_options(&cfg.provider);
+    let reg = shipped();
+    let sections = build_sections(&reg, &cfg, &prov, &ks);
+    s.config_picker = provider_options(&reg, &cfg.provider);
     s.config_picker_sel = 0;
     insta::assert_snapshot!(draw_config(&s, &sections, 80, 24));
 }
@@ -1278,7 +1303,8 @@ fn config_overlay_narrow_degrades_respects_focus() {
         ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
         ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
     ];
-    let sections = build_sections(&cfg, &prov, &ks);
+    let reg = shipped();
+    let sections = build_sections(&reg, &cfg, &prov, &ks);
 
     let sel_bg_count = |config_col: ConfigCol| {
         let mut s = ShellState::new();
@@ -1286,7 +1312,7 @@ fn config_overlay_narrow_degrades_respects_focus() {
         s.config_section = 0;
         s.config_field = 0; // "provider" row
         s.config_col = config_col;
-        s.config_picker = provider_options(&cfg.provider);
+        s.config_picker = provider_options(&reg, &cfg.provider);
         s.config_picker_sel = 0;
 
         let backend = TestBackend::new(80, 24);
@@ -1335,8 +1361,9 @@ fn provider_switch_card() {
 
     let mut s = ShellState::new();
     s.overlay = Overlay::ProviderSwitch;
-    s.switch_providers = provider_options("ollama-cloud");
-    s.switch_models = model_options("anthropic-api", "");
+    let reg = shipped();
+    s.switch_providers = provider_options(&reg, "ollama-cloud");
+    s.switch_models = model_options(&reg, "anthropic-api", "");
     s.switch_provider_sel = 0;
     s.switch_model_sel = 0;
     s.switch_pane = SwitchPane::Provider;
