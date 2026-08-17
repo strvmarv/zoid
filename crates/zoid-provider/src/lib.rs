@@ -51,6 +51,14 @@ pub mod model {
         })
     }
 
+    /// The shipped registry, parsed once from the embedded `models.toml`.
+    /// Public so the bin's boot path and tests can read the merged-registry
+    /// fallback without re-parsing. (Task 10 wires the real on-disk merge;
+    /// this is the shipped-only fallback when no user file is present.)
+    pub fn shipped_registry() -> &'static Registry {
+        shipped()
+    }
+
     /// Capabilities for `model`, looked up by exact id (case-insensitive) across
     /// every provider in the shipped registry. Unknown models get the
     /// conservative default (32k, no prompt cache). This matches the pre-migration

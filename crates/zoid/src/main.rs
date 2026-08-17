@@ -1083,23 +1083,15 @@ fn wizard_needed(
 /// Whether a provider id needs an API key to be usable. Derived from the
 /// registry's `key_url` field: `None` = keyless, `Some` = key required.
 /// Unknown provider ids default to key-required (safe).
-fn entry_requires_key(id: &str) -> bool {
-    zoid_provider::model::entry(id)
-        .map(|e| e.key_url.is_some())
-        .unwrap_or(true)
+fn entry_requires_key(id: &str, reg: &zoid_model::Registry) -> bool {
+    reg.entry(id).map(|e| e.key_url.is_some()).unwrap_or(true)
 }
 
 /// The secret env name a provider id needs, or `None` if it needs no key.
-fn key_env_for(id: &str) -> Option<&'static str> {
-    if !entry_requires_key(id) {
-        return None;
-    }
-    match zoid_provider::model::entry(id).map(|e| e.family) {
-        Some("opencode-go") | Some("opencode-zen") => Some("OPENCODE_GO_API_KEY"),
-        Some("anthropic") => Some("ANTHROPIC_API_KEY"),
-        Some("zai") => Some("ZAI_API_KEY"),
-        _ => Some("OLLAMA_API_KEY"),
-    }
+/// Reads the registry entry's `key_env` field directly (the TOML file is the
+/// single source of truth for which env var each provider reads).
+fn key_env_for(id: &str, reg: &zoid_model::Registry) -> Option<String> {
+    reg.entry(id).and_then(|e| e.key_env.clone())
 }
 
 /// Provider + credential from `config.provider` + the secret store (env wins
@@ -1108,10 +1100,16 @@ fn key_env_for(id: &str) -> Option<&'static str> {
 /// exact selection so the drawer never disagrees with reality. Shared by
 /// startup and by live config-save re-selection (`apply_config_write`) so
 /// both paths pick the provider identically.
+///
+/// The `match` dispatches on the canonical provider id (`canon`), not the
+/// family. The no-key fallback returns the family name (not the canonical id)
+/// so the drawer label matches the keyed arms. `reg.clone()` is a cheap
+/// `Arc` refcount bump, never a deep clone of the registry.
 fn select_provider(
     config: &zoid_core::config::Config,
     secrets: &Option<std::sync::Arc<zoid_core::secret::EncryptedDb>>,
-) -> (Arc<dyn Provider>, &'static str, bool) {
+    reg: &std::sync::Arc<zoid_model::Registry>,
+) -> (Arc<dyn Provider>, String, bool) {
     let key_for = |name: &str| -> Option<String> {
         // env wins, and must work even if the encrypted secret store failed to open
         if let Ok(v) = std::env::var(name) {
@@ -1124,8 +1122,9 @@ fn select_provider(
             s.get(name)
         })
     };
+    let canon = zoid_model::canonical_id(&config.provider);
     // ollama-local: usable without a key (localhost, no auth). Construct directly.
-    if zoid_provider::model::canonical_id(&config.provider) == "ollama-local" {
+    if canon == "ollama-local" {
         let base_url = effective_base_url(config);
         return (
             Arc::new(
@@ -1135,63 +1134,60 @@ fn select_provider(
                         config.economy.num_ctx,
                     )),
             ),
-            "ollama",
+            "ollama".to_string(),
             true, // no key required → treat as ready
         );
     }
     let base_url = effective_base_url(config);
-    let family = zoid_provider::model::entry(&config.provider)
-        .map(|e| e.family)
-        .unwrap_or("ollama");
-    match family {
-        "opencode-go" => match key_for("OPENCODE_GO_API_KEY") {
-            Some(k) => (
-                Arc::new(
-                    zoid_provider::opencode_go::OpenCodeGoProvider::new(k).with_base_url(base_url),
-                ),
-                "opencode-go",
-                true,
+    let key_env = reg.entry(canon).and_then(|e| e.key_env.clone());
+    let key = key_env.as_deref().and_then(key_for);
+    let Some(key) = key else {
+        // No key → offline FakeProvider (the binary always runs). Use the
+        // family name (not the canonical id) for the label, matching the keyed
+        // arms below and today's `entry(...).map(|e| e.family)` behavior.
+        let name = reg.entry(canon).map(|e| e.family.as_str()).unwrap_or(canon);
+        return (zoid_provider::default_provider(), name.to_string(), false);
+    };
+    let reg_arc = reg.clone(); // cheap Arc clone, not a deep clone
+    let (provider, name): (Arc<dyn Provider>, &str) = match canon {
+        "opencode-go" => (
+            Arc::new(
+                zoid_provider::opencode_go::OpenCodeGoProvider::new(key.clone(), reg_arc.clone())
+                    .with_base_url(base_url),
             ),
-            None => (default_provider(), "opencode-go", false),
-        },
-        "opencode-zen" => match key_for("OPENCODE_GO_API_KEY") {
-            Some(k) => (
-                Arc::new(
-                    zoid_provider::opencode_zen::OpenCodeZenProvider::new(k)
-                        .with_base_url(base_url),
-                ),
-                "opencode-zen",
-                true,
+            "opencode-go",
+        ),
+        "opencode-zen" => (
+            Arc::new(
+                zoid_provider::opencode_zen::OpenCodeZenProvider::new(key.clone(), reg_arc.clone())
+                    .with_base_url(base_url),
             ),
-            None => (default_provider(), "opencode-zen", false),
-        },
-        "anthropic" => match key_for("ANTHROPIC_API_KEY") {
-            Some(k) => (
-                Arc::new(
-                    zoid_provider::anthropic::AnthropicProvider::new(k).with_base_url(base_url),
-                ),
-                "anthropic",
-                true,
+            "opencode-zen",
+        ),
+        "anthropic-api" => (
+            Arc::new(
+                zoid_provider::anthropic::AnthropicProvider::new(key.clone())
+                    .with_base_url(base_url),
             ),
-            None => (default_provider(), "anthropic", false),
-        },
-        "zai" => match key_for("ZAI_API_KEY") {
-            Some(k) => (
-                Arc::new(zoid_provider::zai::ZaiProvider::new(k).with_base_url(base_url)),
-                "zai",
-                true,
+            "anthropic",
+        ),
+        "zai-coding-plan" => (
+            Arc::new(zoid_provider::zai::ZaiProvider::new(key.clone()).with_base_url(base_url)),
+            "zai",
+        ),
+        "gemini-api" => (
+            Arc::new(
+                zoid_provider::google_gemini::GoogleGeminiProvider::new(key.clone())
+                    .with_base_url(base_url),
             ),
-            None => (default_provider(), "zai", false),
-        },
-        _ => match key_for("OLLAMA_API_KEY") {
-            Some(k) => (
-                Arc::new(zoid_provider::ollama::OllamaProvider::new(k).with_base_url(base_url)),
-                "ollama",
-                true,
-            ),
-            None => (default_provider(), "ollama", false),
-        },
-    }
+            "gemini",
+        ),
+        _ => (
+            Arc::new(zoid_provider::ollama::OllamaProvider::new(key.clone()).with_base_url(base_url)),
+            "ollama",
+        ),
+    };
+    (provider, name.to_string(), true)
 }
 
 /// Spawn a background fetch of the active model's capabilities (context window,
@@ -1239,12 +1235,18 @@ fn spawn_model_fetch(
 /// provider's `base_url` override) plus the family's key from env / secret
 /// store. Returns `None` when a key-requiring provider has no key available
 /// (nothing to fetch with → keep the static registry list).
+///
+/// Dispatches on the canonical provider id (`canon`), not the family. The
+/// composite providers (`opencode-go`/`opencode-zen`) take an `Arc<Registry>`
+/// clone (cheap refcount bump), not a deep copy.
 fn provider_for_id(
     id: &str,
     secrets: &Option<std::sync::Arc<zoid_core::secret::EncryptedDb>>,
+    reg: &std::sync::Arc<zoid_model::Registry>,
 ) -> Option<Arc<dyn Provider>> {
-    let canon = zoid_provider::model::canonical_id(id);
-    let base_url = zoid_provider::model::default_base_url(canon)
+    let canon = zoid_model::canonical_id(id);
+    let base_url = reg
+        .default_base_url(canon)
         .map(str::to_string)
         .unwrap_or_default();
     let key_for = |name: &str| -> Option<String> {
@@ -1263,32 +1265,37 @@ fn provider_for_id(
             zoid_provider::ollama::OllamaProvider::new(String::new()).with_base_url(base_url),
         ));
     }
-    let family = zoid_provider::model::entry(canon)
-        .map(|e| e.family)
-        .unwrap_or("ollama");
-    match family {
-        "opencode-go" => key_for("OPENCODE_GO_API_KEY").map(|k| {
-            Arc::new(zoid_provider::opencode_go::OpenCodeGoProvider::new(k).with_base_url(base_url))
-                as Arc<dyn Provider>
-        }),
-        "opencode-zen" => key_for("OPENCODE_GO_API_KEY").map(|k| {
-            Arc::new(
-                zoid_provider::opencode_zen::OpenCodeZenProvider::new(k).with_base_url(base_url),
-            ) as Arc<dyn Provider>
-        }),
-        "anthropic" => key_for("ANTHROPIC_API_KEY").map(|k| {
-            Arc::new(zoid_provider::anthropic::AnthropicProvider::new(k).with_base_url(base_url))
-                as Arc<dyn Provider>
-        }),
-        "zai" => key_for("ZAI_API_KEY").map(|k| {
-            Arc::new(zoid_provider::zai::ZaiProvider::new(k).with_base_url(base_url))
-                as Arc<dyn Provider>
-        }),
-        _ => key_for("OLLAMA_API_KEY").map(|k| {
-            Arc::new(zoid_provider::ollama::OllamaProvider::new(k).with_base_url(base_url))
-                as Arc<dyn Provider>
-        }),
-    }
+    let key_env = reg.entry(canon).and_then(|e| e.key_env.clone());
+    let key = key_env.as_deref().and_then(key_for);
+    let Some(key) = key else {
+        // Key-requiring provider with no key → nothing to fetch with.
+        return None;
+    };
+    let reg_arc = reg.clone(); // cheap Arc clone, not a deep clone
+    let provider: Arc<dyn Provider> = match canon {
+        "opencode-go" => Arc::new(
+            zoid_provider::opencode_go::OpenCodeGoProvider::new(key.clone(), reg_arc.clone())
+                .with_base_url(base_url),
+        ),
+        "opencode-zen" => Arc::new(
+            zoid_provider::opencode_zen::OpenCodeZenProvider::new(key.clone(), reg_arc.clone())
+                .with_base_url(base_url),
+        ),
+        "anthropic-api" => Arc::new(
+            zoid_provider::anthropic::AnthropicProvider::new(key.clone()).with_base_url(base_url),
+        ),
+        "zai-coding-plan" => Arc::new(
+            zoid_provider::zai::ZaiProvider::new(key.clone()).with_base_url(base_url),
+        ),
+        "gemini-api" => Arc::new(
+            zoid_provider::google_gemini::GoogleGeminiProvider::new(key.clone())
+                .with_base_url(base_url),
+        ),
+        _ => Arc::new(
+            zoid_provider::ollama::OllamaProvider::new(key.clone()).with_base_url(base_url),
+        ),
+    };
+    Some(provider)
 }
 
 /// Spawn a live model fetch for the quick-switch's currently-highlighted
@@ -1296,7 +1303,7 @@ fn provider_for_id(
 /// `AgentUpdate::ModelsFetched` and are routed into `switch_models` by
 /// `apply_switch_models_fetched`. No-op for a `Planned`/unbuildable provider.
 fn spawn_switch_model_fetch(app: &App, provider_id: &str) {
-    if let Some(p) = provider_for_id(provider_id, &app.secrets) {
+    if let Some(p) = provider_for_id(provider_id, &app.secrets, &app.registry) {
         spawn_model_fetch(p, provider_id.to_string(), app.ui_tx.clone());
     }
 }
@@ -2134,6 +2141,12 @@ struct App {
     /// Encrypted secret store (None → unavailable this run; secret edits no-op
     /// with a stderr note). Shared with the provider credential lookup.
     secrets: Option<std::sync::Arc<zoid_core::secret::EncryptedDb>>,
+    /// The merged provider/model registry (shipped + user TOML). Task 10 wires
+    /// the real disk load at boot; until then this is an `Arc<Registry>`
+    /// placeholder populated from the shipped registry so provider-selection
+    /// (`select_provider`/`provider_for_id`/`key_env_for`/`entry_requires_key`)
+    /// has a `&Registry` to read. Cheap to clone (Arc refcount bump).
+    registry: std::sync::Arc<zoid_model::Registry>,
     textarea: TextArea<'static>,
     streaming: bool,
     shell: zoid_tui::ShellState,
@@ -2523,8 +2536,13 @@ async fn main() -> Result<()> {
     events.clear_compacted_bodies();
 
     let (config, prov, cfg_warnings) = load_config();
+    // Task 10 wires the real merged-registry disk load here; until then the
+    // shipped registry is the fallback. Provider selection, key-env lookup,
+    // and caps resolution all read from `&reg` (an `Arc<Registry>`).
+    let reg: std::sync::Arc<zoid_model::Registry> =
+        std::sync::Arc::new(zoid_provider::model::shipped_registry().clone());
     let model = if config.model.is_empty() {
-        default_model().to_string()
+        zoid_provider::default_model(&reg)
     } else {
         config.model.clone()
     };
@@ -2533,7 +2551,7 @@ async fn main() -> Result<()> {
         .map(std::sync::Arc::new)
         .ok(); // None → secrets unavailable this run (non-fatal)
 
-    let (provider, provider_name, has_key) = select_provider(&config, &secrets);
+    let (provider, provider_name, has_key) = select_provider(&config, &secrets, &reg);
 
     let mut shell = zoid_tui::ShellState::new();
     shell.reduced_motion = config.reduced_motion;
@@ -2559,15 +2577,15 @@ async fn main() -> Result<()> {
     // target (ZOID_CONTEXT_CEILING → config.economy.context_target) is a
     // separate soft knob, defaulted to min(capacity, 300_000) when unset.
     // Constant for the process lifetime, so set once here rather than per frame.
-    let capacity = zoid_provider::context_ceiling(&model);
+    let capacity = zoid_provider::context_ceiling(&reg, &config.provider, &model);
     let context_target = config
         .economy
         .context_target
         .unwrap_or(300_000)
         .min(capacity);
     shell.ctx_ceiling = capacity;
-    shell.provider = provider_label(provider_name, has_key);
-    shell.cache_supported = zoid_provider::has_prompt_cache(&model);
+    shell.provider = provider_label(&provider_name, has_key);
+    shell.cache_supported = zoid_provider::has_prompt_cache(&reg, &config.provider, &model);
     shell.cwd = root.clone();
     // Frozen at boot — the onboarding wizard + post-wizard empty-state copy
     // depend on first_time_user not being recomputed mid-session (a session
@@ -2732,6 +2750,7 @@ async fn main() -> Result<()> {
         yolo: config.approval.yolo || cli_yolo,
         prov,
         secrets: secrets.clone(),
+        registry: reg,
         textarea: make_input(TextArea::default()),
         streaming: false,
         shell,
@@ -4340,14 +4359,14 @@ fn apply_config_write(
     // from config) before recomputing ctx_ceiling, so the ceiling denominator and
     // the drawer label both reflect the newly-saved model.
     let new_model = if app.config.model.is_empty() {
-        default_model().to_string()
+        zoid_provider::default_model(&app.registry)
     } else {
         app.config.model.clone()
     };
     app.model = new_model.clone();
     app.shell.model = new_model;
     // Capacity is always the model window; the target is the separate soft knob.
-    app.shell.ctx_ceiling = zoid_provider::context_ceiling(&app.model);
+    app.shell.ctx_ceiling = zoid_provider::context_ceiling(&app.registry, &app.config.provider, &app.model);
     app.context_target = app
         .config
         .economy
@@ -4357,10 +4376,10 @@ fn apply_config_write(
     // Live-apply the provider (same selection as startup) so a provider change
     // takes effect on the next turn, and keep the cached drawer label truthful
     // (shell.provider is set once at startup, not recomputed per frame).
-    let (provider, provider_name, has_key) = select_provider(&app.config, &app.secrets);
+    let (provider, provider_name, has_key) = select_provider(&app.config, &app.secrets, &app.registry);
     app.provider = provider;
-    app.shell.provider = provider_label(provider_name, has_key);
-    app.shell.cache_supported = zoid_provider::has_prompt_cache(&app.model);
+    app.shell.provider = provider_label(&provider_name, has_key);
+    app.shell.cache_supported = zoid_provider::has_prompt_cache(&app.registry, &app.config.provider, &app.model);
     // Fetch the new model's capabilities from the provider; the static table
     // is the fallback until the fetch lands.
     spawn_model_info_fetch(app.provider.clone(), app.model.clone(), app.ui_tx.clone());
@@ -4948,9 +4967,9 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 // Re-select with the new key (the key lives in the secret store, not
                 // config, so apply_config_write's auto-reselect never ran), then
                 // advance to the model picker + fetch.
-                let (provider, name, has_key) = select_provider(&app.config, &app.secrets);
+                let (provider, name, has_key) = select_provider(&app.config, &app.secrets, &app.registry);
                 app.provider = provider;
-                app.shell.provider = provider_label(name, has_key);
+                app.shell.provider = provider_label(&name, has_key);
                 if let Some(mi) = app
                     .shell
                     .config_sections
@@ -4994,9 +5013,9 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                         // live provider client so the new credential takes effect on
                         // the next turn without a restart (mirrors the key-prompt
                         // commit path above).
-                        let (provider, name, has_key) = select_provider(&app.config, &app.secrets);
+                        let (provider, name, has_key) = select_provider(&app.config, &app.secrets, &app.registry);
                         app.provider = provider;
-                        app.shell.provider = provider_label(name, has_key);
+                        app.shell.provider = provider_label(&name, has_key);
                     }
                     Some(FieldTarget::Toml { key, ty }) => {
                         if let Some(value) = value_from_buffer(&ty, &buffer) {
@@ -5141,7 +5160,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                     // until the user picks one from the (auto-opened) picker.
                     apply_config_write(app, "model", TomlValue::Unset, false);
                     // Key gate: if this provider needs a key we don't have, prompt first.
-                    let needs_key = key_env_for(&id).filter(|env| {
+                    let needs_key = key_env_for(&id, &app.registry).filter(|env| {
                         use zoid_core::secret::{SecretStatus, SecretStore};
                         app.secrets
                             .as_ref()
@@ -5607,7 +5626,7 @@ fn handle_onboarding_select(app: &mut App) -> Result<bool> {
             apply_config_write(app, "provider", TomlValue::Str(chosen_id.clone()), false);
             apply_config_write(app, "base_url", base_url_write_for(&chosen_id), false);
             apply_config_write(app, "model", TomlValue::Unset, false);
-            if entry_requires_key(&chosen_id) {
+            if entry_requires_key(&chosen_id, &app.registry) {
                 // Key required → advance to step 2.
                 app.shell.onboarding = Some(OnboardingState {
                     step: OnboardingStep::ApiKey,
@@ -5656,7 +5675,7 @@ fn handle_onboarding_submit_key(app: &mut App) -> Result<bool> {
         return Ok(false);
     }
     let provider_id = onb.chosen_provider.clone();
-    let key_env = key_env_for(&provider_id).expect(
+    let key_env = key_env_for(&provider_id, &app.registry).expect(
         "wizard only reaches step 2 for key-requiring providers; \
          the lockstep test (Task 4 Step 6) guarantees a key_env_for arm \
          for every registered provider with key_url: Some",
@@ -5670,7 +5689,7 @@ fn handle_onboarding_submit_key(app: &mut App) -> Result<bool> {
         .set(key_env, &key_val)?;
 
     // Advance to step 3 (if >1 model) or DONE.
-    let model_count = zoid_provider::model::models_for(&provider_id).len();
+    let model_count = app.registry.models_for(&provider_id).len();
     if model_count > 1 {
         let mut options = zoid_tui::config_view::model_options(&provider_id, "");
         // Prepend the "use default" synthetic row at index 0.
@@ -11383,57 +11402,66 @@ mod tests {
     #[test]
     fn ollama_local_needs_no_key() {
         // ollama-local is usable with no OLLAMA_API_KEY (localhost, no auth).
-        assert!(!entry_requires_key("ollama-local"));
-        assert!(entry_requires_key("ollama-cloud"));
-        assert!(entry_requires_key("anthropic-api"));
+        let reg = zoid_provider::model::shipped_registry();
+        assert!(!entry_requires_key("ollama-local", reg));
+        assert!(entry_requires_key("ollama-cloud", reg));
+        assert!(entry_requires_key("anthropic-api", reg));
     }
 
     #[test]
     fn key_env_for_family() {
-        assert_eq!(key_env_for("anthropic-api"), Some("ANTHROPIC_API_KEY"));
-        assert_eq!(key_env_for("ollama-cloud"), Some("OLLAMA_API_KEY"));
-        assert_eq!(key_env_for("ollama-local"), None); // no key needed
+        let reg = zoid_provider::model::shipped_registry();
+        assert_eq!(key_env_for("anthropic-api", reg).as_deref(), Some("ANTHROPIC_API_KEY"));
+        assert_eq!(key_env_for("ollama-cloud", reg).as_deref(), Some("OLLAMA_API_KEY"));
+        assert_eq!(key_env_for("ollama-local", reg), None); // no key needed
     }
 
     #[test]
     fn key_env_for_opencode_go_is_opencode_go_api_key() {
-        assert_eq!(key_env_for("opencode-go"), Some("OPENCODE_GO_API_KEY"));
+        let reg = zoid_provider::model::shipped_registry();
+        assert_eq!(key_env_for("opencode-go", reg).as_deref(), Some("OPENCODE_GO_API_KEY"));
     }
 
     #[test]
     fn key_env_for_opencode_zen_maps_to_shared_go_key() {
-        assert_eq!(key_env_for("opencode-zen"), Some("OPENCODE_GO_API_KEY"));
+        let reg = zoid_provider::model::shipped_registry();
+        assert_eq!(key_env_for("opencode-zen", reg).as_deref(), Some("OPENCODE_GO_API_KEY"));
         // sanity: Go unchanged
-        assert_eq!(key_env_for("opencode-go"), Some("OPENCODE_GO_API_KEY"));
+        assert_eq!(key_env_for("opencode-go", reg).as_deref(), Some("OPENCODE_GO_API_KEY"));
     }
 
     #[test]
     fn entry_requires_key_opencode_zen_is_true() {
-        assert!(entry_requires_key("opencode-zen"));
+        let reg = zoid_provider::model::shipped_registry();
+        assert!(entry_requires_key("opencode-zen", reg));
     }
 
     #[test]
     fn key_env_for_zai_coding_plan_is_zai_api_key() {
-        assert_eq!(key_env_for("zai-coding-plan"), Some("ZAI_API_KEY"));
+        let reg = zoid_provider::model::shipped_registry();
+        assert_eq!(key_env_for("zai-coding-plan", reg).as_deref(), Some("ZAI_API_KEY"));
     }
 
     #[test]
     fn entry_requires_key_zai_coding_plan_is_true() {
-        assert!(entry_requires_key("zai-coding-plan"));
+        let reg = zoid_provider::model::shipped_registry();
+        assert!(entry_requires_key("zai-coding-plan", reg));
     }
 
     #[test]
     fn entry_requires_key_opencode_go_is_true() {
-        assert!(entry_requires_key("opencode-go"));
+        let reg = zoid_provider::model::shipped_registry();
+        assert!(entry_requires_key("opencode-go", reg));
     }
 
     #[test]
     fn select_provider_ollama_local_is_ready_without_key() {
+        let reg = std::sync::Arc::new(zoid_provider::model::shipped_registry().clone());
         let config = zoid_core::config::Config {
             provider: "ollama-local".to_string(),
             ..Default::default()
         };
-        let (_provider, name, has_key) = select_provider(&config, &None);
+        let (_provider, name, has_key) = select_provider(&config, &None, &reg);
         assert_eq!(name, "ollama");
         assert!(has_key, "ollama-local must be usable (ready) with no key");
     }
@@ -12259,8 +12287,9 @@ mod onboarding_tests {
     fn key_url_and_key_env_for_are_in_lockstep() {
         // Every key-requiring provider (key_url: Some) must have a key_env_for arm
         // returning Some. A keyless provider (key_url: None) must return None.
-        for e in zoid_provider::model::PROVIDERS.iter() {
-            let key_env = key_env_for(e.id);
+        let reg = zoid_provider::model::shipped_registry();
+        for e in reg.providers.iter() {
+            let key_env = key_env_for(e.id, reg);
             if e.key_url.is_some() {
                 assert!(
                     key_env.is_some(),
@@ -12269,7 +12298,7 @@ mod onboarding_tests {
                     e.id
                 );
                 assert!(
-                    entry_requires_key(e.id),
+                    entry_requires_key(e.id, reg),
                     "{} has key_url: Some but entry_requires_key returned false",
                     e.id
                 );
@@ -12282,7 +12311,7 @@ mod onboarding_tests {
                     key_env
                 );
                 assert!(
-                    !entry_requires_key(e.id),
+                    !entry_requires_key(e.id, reg),
                     "{} has key_url: None but entry_requires_key returned true",
                     e.id
                 );
