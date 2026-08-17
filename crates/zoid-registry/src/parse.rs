@@ -157,4 +157,14 @@ id = "anthropic-api"
         let patch = parse_user(user).unwrap();
         assert_eq!(patch.providers[0].models[0].source, Some(zoid_model::Source::User));
     }
+
+    #[test]
+    fn shipped_models_toml_parses() {
+        let text = include_str!("../../zoid-model/models.toml");
+        let reg = parse_shipped(text).unwrap();
+        // 6 providers now; becomes 7 when gemini-api lands (Task 15 updates this).
+        assert_eq!(reg.selectable().count(), 6);
+        assert!(reg.entry("opencode-zen").unwrap().models.len() >= 52);
+        assert!(reg.entry("opencode-go").unwrap().models.len() == 13);
+    }
 }
