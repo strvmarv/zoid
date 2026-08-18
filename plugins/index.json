@@ -30,12 +30,12 @@
       "description": "Multi-tiered memory and knowledge base with semantic search, auto-compaction, and built-in evaluation, over MCP (stdio)."
     },
     {
-      "id": "total-recall-mode",
-      "name": "Total Recall",
+      "id": "total-recall-skills",
+      "name": "Total Recall Skills",
       "kind": [
-        "mode"
+        "skills"
       ],
-      "description": "Total Recall — session bootstrap and slash-command skills for the total-recall memory system (semantic search, auto-compaction, knowledge base), imported from strvmarv/total-recall.",
+      "description": "Session bootstrap and slash-command skills for the total-recall memory system, imported from strvmarv/total-recall.",
       "source": {
         "repo": "strvmarv/total-recall",
         "ref": "5842c523f8c7583bbda85334d2f3ca1b0111b6f2"
