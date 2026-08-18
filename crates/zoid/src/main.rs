@@ -2704,6 +2704,74 @@ async fn main() -> Result<()> {
             tracing::warn!(error = %e, path = %shipped_path.display(), "failed to write shipped models.toml; using embedded copy");
         }
     }
+    // Seed a skeleton models.user.toml with a commented-out example so users
+    // can discover the schema without reading the source.
+    if !user_path.exists() {
+        let skeleton = "# User overrides for the provider/model registry.\n\
+            # This file is merged over the shipped models.toml at boot.\n\
+            # The `zoid refresh-models` tool writes `wire` rows here automatically\n\
+            # (Ollama + Gemini). You can add `user` rows to override caps or add\n\
+            # custom models.\n\
+            #\n\
+            # Fields you omit keep the shipped value (partial override). Only set\n\
+            # the fields you want to change.\n\
+            #\n\
+            # Example — hide a shipped model from the picker:\n\
+            #\n\
+            # [[provider]]\n\
+            # id = \"opencode-zen\"\n\
+            #\n\
+            #   [[provider.model]]\n\
+            #   id = \"big-pickle\"\n\
+            #   source = \"user\"\n\
+            #   hidden = true\n\
+            #\n\
+            # Example — override a model's context window:\n\
+            #\n\
+            # [[provider]]\n\
+            # id = \"anthropic-api\"\n\
+            #\n\
+            #   [[provider.model]]\n\
+            #   id = \"claude-sonnet-4-6\"\n\
+            #   source = \"user\"\n\
+            #   context_window = 200000\n\
+            #\n\
+            # Example — add a custom model:\n\
+            #\n\
+            # [[provider]]\n\
+            # id = \"ollama-local\"\n\
+            #\n\
+            #   [[provider.model]]\n\
+            #   id = \"my-custom-model\"\n\
+            #   source = \"user\"\n\
+            #   wire_shape = \"ollama\"\n\
+            #   context_window = 32768\n\
+            #   tools = true\n\
+            #   prompt_cache = false\n\
+            #   thinking = \"toggle\"\n\
+            #   thinking_wire = \"ollama\"\n\
+            #   runtime = \"ollama\"\n\
+            #   download_source = \"hf.co/org/my-model-GGUF:Q4_K_M\"\n\
+            #   quant = \"Q4_K_M\"\n\
+            #   num_ctx = 32768\n\
+            #\n\
+            # Schema reference:\n\
+            #   source:          \"user\" (this file) or \"wire\" (tool-generated)\n\
+            #   wire_shape:      \"openai-chat\", \"anthropic-messages\",\n\
+            #                    \"openai-responses\", \"google-gemini\", \"ollama\"\n\
+            #   thinking:        \"none\", \"toggle\", \"toggle-with-effort\",\n\
+            #                    \"budget\", \"adaptive\"\n\
+            #   thinking_wire:   \"none\", \"anthropic\", \"deepseek\", \"openai\", \"ollama\"\n\
+            #   hidden:          true to hide from the picker (default false)\n\
+            #   default:         true to make this the provider's default model\n\
+            #   context_window:  max input tokens\n\
+            #   max_output:      max output tokens (0 = provider default)\n\
+            #   tools:           tool/function calling (default true)\n\
+            #   prompt_cache:    prompt caching support (default false)\n";
+        if let Err(e) = std::fs::write(&user_path, skeleton) {
+            tracing::warn!(error = %e, path = %user_path.display(), "failed to seed models.user.toml skeleton");
+        }
+    }
     let (registry, reg_warning) = match zoid_registry::load(&shipped_path, &user_path) {
         Ok((r, w)) => (r, w),
         Err(e) => {
