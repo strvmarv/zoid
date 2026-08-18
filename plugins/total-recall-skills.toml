@@ -1,0 +1,18 @@
+[plugin]
+id = "total-recall-skills"
+schema = 1
+kind = ["skills"]
+name = "Total Recall Skills"
+description = "Session bootstrap and slash-command skills for the total-recall memory system, imported from strvmarv/total-recall."
+
+[source]
+repo = "strvmarv/total-recall"
+ref = "5842c523f8c7583bbda85334d2f3ca1b0111b6f2"
+subtree = "skills"
+
+[[install]]
+effect = "activate"
+
+[[install]]
+effect = "onboarding_hint"
+text = "total-recall skills installed (restart zoid to load them). Install the total-recall MCP plugin too (:plugin install total-recall) for memory features to work."
