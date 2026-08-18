@@ -384,6 +384,7 @@ mod tests {
             name: name.into(),
             output: body,
             is_error: false,
+            error_kind: None,
         })
     }
 
@@ -551,6 +552,7 @@ mod tests {
                     name: "search".into(),
                     output: "x".repeat(2000),
                     is_error: false,
+                    error_kind: None,
                 },
             ));
             // Pre-compact every tool result so layer 1 has nothing to do,
@@ -605,6 +607,7 @@ mod tests {
                     name: "search".into(),
                     output: "x".repeat(2000),
                     is_error: false,
+                    error_kind: None,
                 },
             ));
         }
@@ -651,6 +654,7 @@ mod tests {
                     name: "search".into(),
                     output: format!("output {i}").repeat(100),
                     is_error: false,
+                    error_kind: None,
                 },
             ));
         }

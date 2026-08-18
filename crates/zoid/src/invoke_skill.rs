@@ -11,6 +11,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use zoid_core::agent_profile::AgentRegistry;
 use zoid_core::skill::SkillRegistry;
+use zoid_core::ErrorKind;
 use zoid_provider::ToolSpec;
 use zoid_tools::{Tool, ToolOutput};
 
@@ -51,18 +52,24 @@ impl Tool for InvokeSkillTool {
         let name = match args.get("name").and_then(|v| v.as_str()) {
             Some(n) if !n.is_empty() => n,
             _ => {
-                return ToolOutput::err(format!(
-                    "invoke_skill: missing or empty 'name'. Available: {}",
-                    self.skills.names().join(", ")
-                ))
+                return ToolOutput::err_kind(
+                    ErrorKind::InvalidInput,
+                    format!(
+                        "invoke_skill: missing or empty 'name'. Available: {}",
+                        self.skills.names().join(", ")
+                    ),
+                )
             }
         };
         match self.skills.get(name) {
             Some(skill) => ToolOutput::ok(body_with_anchor(skill)),
-            None => ToolOutput::err(format!(
-                "unknown skill '{name}'. Available: {}",
-                self.skills.names().join(", ")
-            )),
+            None => ToolOutput::err_kind(
+                ErrorKind::NotFound,
+                format!(
+                    "invoke_skill: unknown skill '{name}'. Available: {}",
+                    self.skills.names().join(", ")
+                ),
+            ),
         }
     }
 }
@@ -146,6 +153,7 @@ mod tests {
         assert!(out.is_error);
         assert!(out.text.contains("unknown skill 'nope'"));
         assert!(out.text.contains("spike-plan"));
+        assert_eq!(out.error_kind, Some(ErrorKind::NotFound));
     }
 
     #[test]
@@ -153,6 +161,7 @@ mod tests {
         let out = tool().run(&json!({}), Path::new("."));
         assert!(out.is_error);
         assert!(out.text.contains("missing or empty 'name'"));
+        assert_eq!(out.error_kind, Some(ErrorKind::InvalidInput));
     }
 
     #[test]

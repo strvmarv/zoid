@@ -1,6 +1,7 @@
 use crate::{str_arg, Tool, ToolOutput};
 use serde_json::{json, Value};
 use std::path::Path;
+use zoid_core::ErrorKind;
 use zoid_provider::ToolSpec;
 
 /// Write (create or overwrite) a UTF-8 text file relative to the working dir.
@@ -48,7 +49,14 @@ impl Tool for Write {
                 );
                 ToolOutput::ok(format!("wrote {} bytes to {path}", content.len())).with_diff(fd)
             }
-            Err(e) => ToolOutput::err(format!("write({path}): {e}")),
+            Err(e) => {
+                let kind = match e.kind() {
+                    std::io::ErrorKind::NotFound => ErrorKind::NotFound,
+                    std::io::ErrorKind::PermissionDenied => ErrorKind::PermissionDenied,
+                    _ => ErrorKind::Internal,
+                };
+                ToolOutput::err_kind(kind, format!("write({path}): {e}"))
+            }
         }
     }
 }
@@ -80,6 +88,7 @@ mod tests {
         );
         assert!(out.is_error);
         assert!(out.text.contains("content"));
+        assert_eq!(out.error_kind, Some(ErrorKind::InvalidInput));
     }
 
     #[test]

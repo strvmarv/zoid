@@ -45,7 +45,17 @@ thiserror = "2"
 opt-level = "z"
 lto = true
 strip = true
-panic = "abort"
+# panic = "abort" (removed 2026-08-16): Tokio isolates a panicking task by
+# catch_unwind-ing around its poll — a task that panics fails its own
+# JoinHandle without taking the runtime down. `panic = "abort"` disables
+# unwinding for the WHOLE process, which silently defeats that isolation
+# everywhere, not just for subagents: any panic anywhere (a stray unwrap, an
+# index out of bounds) aborts the entire zoid process, killing the main
+# session and every other in-flight subagent along with it. This was a
+# binary-size micro-optimization (paired with opt-level/lto/strip below) that
+# nobody had connected to the concurrent-subagent-pool feature added later —
+# the tradeoff is no longer worth it. Default panic strategy is "unwind";
+# leaving this line out restores it.
 codegen-units = 1
 
 # The profile that 'dist' will build with

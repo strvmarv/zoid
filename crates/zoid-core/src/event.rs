@@ -1,6 +1,52 @@
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
+/// Machine-readable error category for tool failures. Propagated from
+/// `ToolOutput` through `EventKind::ToolResult` to the projection/UI. The
+/// model sees a rendered `[error: <kind>]` prefix in the tool-result text;
+/// the loop and UI get the enum directly for future retry logic and display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ErrorKind {
+    /// External service down or returned an error page (web_search DDG
+    /// outage, web_fetch non-2xx or unparseable 2xx body).
+    BackendUnavailable,
+    /// Operation exceeded a time limit (network connect timeout).
+    Timeout,
+    /// File, path, or resource does not exist.
+    NotFound,
+    /// Bad arguments from the model (missing arg, wrong type, empty query,
+    /// limit < 1, offset past end, bad URL scheme).
+    InvalidInput,
+    /// OS-level permission failure (write to read-only path, dir read denied).
+    PermissionDenied,
+    /// Ambiguous or precondition failure (edit: `old_string` ambiguous or not
+    /// found).
+    Conflict,
+    /// The working directory was deleted out from under the agent. Recovery:
+    /// call exit_worktree (if in a worktree) or navigate to an existing
+    /// directory.
+    CwdDeleted,
+    /// Unexpected internal error (serialization failure, spawn failure,
+    /// anything that doesn't fit above).
+    Internal,
+}
+
+impl ErrorKind {
+    /// Canonical snake_case string for the `[error: <kind>]` prefix.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ErrorKind::BackendUnavailable => "backend_unavailable",
+            ErrorKind::Timeout => "timeout",
+            ErrorKind::NotFound => "not_found",
+            ErrorKind::InvalidInput => "invalid_input",
+            ErrorKind::PermissionDenied => "permission_denied",
+            ErrorKind::Conflict => "conflict",
+            ErrorKind::CwdDeleted => "cwd_deleted",
+            ErrorKind::Internal => "internal",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BranchId(pub String);
 
@@ -98,6 +144,8 @@ pub enum EventKind {
         name: String,
         output: String,
         is_error: bool,
+        #[serde(default)]
+        error_kind: Option<ErrorKind>,
     },
     /// A turn's token usage. The numbers live in `Event.tokens`; this variant
     /// is the carrier so the economy projections can sum real counts. Ignored
@@ -331,6 +379,7 @@ mod tests {
                 name: "read_file".into(),
                 output: "data".into(),
                 is_error: false,
+                error_kind: None,
             },
         );
         for ev in [call, res] {
@@ -516,5 +565,22 @@ mod tests {
         let json = serde_json::to_string(&ev).unwrap();
         let back: Event = serde_json::from_str(&json).unwrap();
         assert_eq!(back.kind, k);
+    }
+
+    #[test]
+    fn tool_result_deserializes_without_error_kind() {
+        // Legacy JSON from before error_kind was added — must still load.
+        let json = r#"{"ToolResult":{"id":"tc1","name":"read","output":"ok","is_error":false}}"#;
+        let kind: EventKind = serde_json::from_str(json).unwrap();
+        match kind {
+            EventKind::ToolResult { id, error_kind, .. } => {
+                assert_eq!(id, "tc1");
+                assert_eq!(
+                    error_kind, None,
+                    "legacy ToolResult must deserialize error_kind as None"
+                );
+            }
+            _ => panic!("expected ToolResult"),
+        }
     }
 }

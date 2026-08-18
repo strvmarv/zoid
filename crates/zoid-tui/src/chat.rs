@@ -1314,6 +1314,7 @@ mod tests {
                 name: "read_file".into(),
                 output: "fn parse(s: &str) -> u32 {\n    let n = 42;\n    n\n}\n".into(),
                 is_error: false,
+                error_kind: None,
                 compacted: false,
                 ts: 0,
             },
@@ -1637,6 +1638,7 @@ mod tests {
             name: "edit".into(),
             output: "edited f.rs (1 change(s))".into(),
             is_error: false,
+            error_kind: None,
             compacted: false,
             ts: 0,
         }];
@@ -1686,6 +1688,7 @@ mod tests {
             name: "edit".into(),
             output: "edited f.rs (1 change)".into(),
             is_error: false,
+            error_kind: None,
             compacted: false,
             ts: 0,
         }];
@@ -1811,6 +1814,7 @@ mod tests {
             name: "edit".into(),
             output: "edited f.rs (1 change)".into(),
             is_error: false,
+            error_kind: None,
             compacted: false,
             ts: 0,
         }];
@@ -1865,6 +1869,7 @@ mod tests {
             name: "edit".into(),
             output: "edited f.rs".into(),
             is_error: false,
+            error_kind: None,
             compacted: false,
             ts: 0,
         }];
@@ -1915,6 +1920,7 @@ mod tests {
             name: "edit".into(),
             output: "edited".into(),
             is_error: false,
+            error_kind: None,
             compacted: false,
             ts: 0,
         };
@@ -2144,6 +2150,7 @@ mod tests {
             name: "shell".into(),
             output: "   Compiling zoid-core v0.5.0 (/home/gomanjoe/source/zoid)".into(),
             is_error: false,
+            error_kind: None,
             compacted: false,
             ts: 0,
         }];
@@ -2164,6 +2171,7 @@ mod tests {
             name: "shell".into(),
             output: long_output,
             is_error: false,
+            error_kind: None,
             compacted: false,
             ts: 0,
         }];
