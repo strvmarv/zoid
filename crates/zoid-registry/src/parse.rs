@@ -164,8 +164,8 @@ id = "anthropic-api"
         let reg = parse_shipped(text).unwrap();
         // 7 selectable providers (gemini-api landed).
         assert_eq!(reg.selectable().count(), 7);
-        assert!(reg.entry("opencode-zen").unwrap().models.len() >= 52);
-        assert!(reg.entry("opencode-go").unwrap().models.len() == 13);
+        assert!(reg.entry("opencode-zen").unwrap().models.len() >= 62);
+        assert!(reg.entry("opencode-go").unwrap().models.len() == 26);
     }
 
     #[test]
@@ -193,8 +193,8 @@ id = "anthropic-api"
                 assert!(e.key_url.is_some(), "{} must have key_url", e.id);
             }
         }
-        // opencode-go has 13 models
-        assert_eq!(reg.entry("opencode-go").unwrap().models.len(), 13);
+        // opencode-go has 26 models
+        assert_eq!(reg.entry("opencode-go").unwrap().models.len(), 26);
         // every opencode-zen model has explicit caps >= 128k
         for m in &reg.entry("opencode-zen").unwrap().models {
             assert!(m.info.context_window >= 128_000, "{} needs explicit caps", m.id);

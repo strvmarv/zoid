@@ -1,5 +1,6 @@
 ---
 source: crates/zoid-tui/tests/shell_snapshot.rs
+assertion_line: 1379
 expression: terminal.backend().to_string()
 ---
 "                                                                                                                                                                "
@@ -12,16 +13,16 @@ expression: terminal.backend().to_string()
 "                                                                                                                                                                "
 "                                ╭ zoid · quick switch ─────────────────────────────────────────────────────────────────────────╮                                "
 "                                │ Provider                                       Model                                         │                                "
-"                                │   ollama · local  http  http://localhost:11…     claude-opus-4-8                             │                                "
-"                                │ ▸ ollama · cloud  http  https://ollama.com       claude-sonnet-4-6                           │                                "
-"                                │   opencode · go  http  https://opencode.ai/…                                                 │                                "
-"                                │   anthropic · api key  http  https://api.an…                                                 │                                "
-"                                │   zai · coding plan  http  https://api.z.ai…                                                 │                                "
-"                                │   opencode · zen  http  https://opencode.ai…                                                 │                                "
-"                                │   gemini · api key  http  https://generativ…                                                 │                                "
-"                                │                                                                                              │                                "
-"                                │                                                                                              │                                "
-"                                │                                                                                              │                                "
+"                                │   ollama · local  http  http://localhost:11…     claude-fable-5                              │                                "
+"                                │ ▸ ollama · cloud  http  https://ollama.com       claude-haiku-4-5-20251001                   │                                "
+"                                │   opencode · go  http  https://opencode.ai/…     claude-opus-4-5-20251101                    │                                "
+"                                │   anthropic · api key  http  https://api.an…     claude-opus-4-6                             │                                "
+"                                │   zai · coding plan  http  https://api.z.ai…     claude-opus-4-7                             │                                "
+"                                │   opencode · zen  http  https://opencode.ai…     claude-opus-4-8                             │                                "
+"                                │   gemini · api key  http  https://generativ…     claude-opus-5                               │                                "
+"                                │                                                  claude-sonnet-4-5-20250929                  │                                "
+"                                │                                                  claude-sonnet-4-6                           │                                "
+"                                │                                                  claude-sonnet-5                             │                                "
 "                                │                                                                                              │                                "
 "                                │                                                                                              │                                "
 "                                │ Left/Right pane · Up/Down move · Enter apply · Esc cancel                                    │                                "
