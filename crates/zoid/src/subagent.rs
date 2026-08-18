@@ -170,7 +170,7 @@ pub async fn run_subagent(
     session.append(seed.clone()).await?;
 
     let config = TurnConfig {
-        system: profile.system_prompt.clone(),
+        system: crate::agent::append_agents_md(&profile.system_prompt, &cwd),
         cwd,
         branch: branch.clone(),
         policy: subagent_policy(),
