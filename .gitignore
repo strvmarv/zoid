@@ -23,3 +23,7 @@ spikes/dotnet-spike/out-aot
 # macOS
 .DS_Store
 rust_out
+*.snap.new
+spikes/*/target/
+spikes/*/*/target/
+spikes/embed-rerank-eval/target*/

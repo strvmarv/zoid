@@ -49,7 +49,7 @@ pub fn build(req: &CompletionRequest) -> AnthropicRequest {
 
 /// Map `ThinkingMode` + model capability → `ThinkingConfig` (or `None`).
 fn build_thinking(req: &CompletionRequest) -> Option<ThinkingConfig> {
-    let info = crate::model::model_info(&req.model);
+    let info = req.model_info;
     match req.thinking {
         crate::ThinkingMode::Off => None,
         crate::ThinkingMode::Auto => match info.thinking {
@@ -105,7 +105,7 @@ fn build_thinking(req: &CompletionRequest) -> Option<ThinkingConfig> {
 
 /// The beta flags needed for thinking on this model, if any.
 pub fn thinking_betas(req: &CompletionRequest) -> Vec<String> {
-    let info = crate::model::model_info(&req.model);
+    let info = req.model_info;
     match req.thinking {
         crate::ThinkingMode::Off => Vec::new(),
         crate::ThinkingMode::Auto | crate::ThinkingMode::Effort(_) => match info.thinking {
@@ -198,6 +198,7 @@ mod tests {
     ) -> CompletionRequest {
         CompletionRequest {
             model: "claude-sonnet-4-6".into(),
+            model_info: crate::model::model_info("claude-sonnet-4-6"),
             system: system.map(String::from),
             messages,
             max_tokens: 1024,
@@ -439,6 +440,7 @@ mod tests {
     fn thinking_auto_budget_model_emits_enabled_with_budget() {
         let r = CompletionRequest {
             model: "claude-sonnet-4-6".into(),
+            model_info: crate::model::model_info("claude-sonnet-4-6"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 16000,
@@ -457,6 +459,7 @@ mod tests {
     fn thinking_auto_adaptive_model_emits_adaptive() {
         let r = CompletionRequest {
             model: "claude-opus-4-8".into(),
+            model_info: crate::model::model_info("claude-opus-4-8"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 16000,
@@ -473,6 +476,7 @@ mod tests {
     fn thinking_effort_high_budget_model_maps_to_60pct() {
         let r = CompletionRequest {
             model: "claude-sonnet-4-6".into(),
+            model_info: crate::model::model_info("claude-sonnet-4-6"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 10000,
@@ -490,6 +494,7 @@ mod tests {
     fn thinking_effort_max_adaptive_model_emits_effort() {
         let r = CompletionRequest {
             model: "claude-opus-4-8".into(),
+            model_info: crate::model::model_info("claude-opus-4-8"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 16000,
@@ -506,6 +511,7 @@ mod tests {
     fn thinking_betas_returns_extended_thinking_for_budget_models() {
         let req = CompletionRequest {
             model: "claude-sonnet-4-6".into(),
+            model_info: crate::model::model_info("claude-sonnet-4-6"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 16000,
@@ -521,6 +527,7 @@ mod tests {
     fn thinking_betas_empty_when_off() {
         let req = CompletionRequest {
             model: "claude-sonnet-4-6".into(),
+            model_info: crate::model::model_info("claude-sonnet-4-6"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 16000,

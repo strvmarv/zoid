@@ -57,6 +57,8 @@ async fn delegated_result_folds_into_main_conversation() {
         tokio_util::sync::CancellationToken::new(),
         tokio_util::sync::CancellationToken::new(),
         std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        std::sync::Arc::new(zoid_model::Registry::default()),
+        "glm".to_string(),
     )
     .await
     .unwrap();
@@ -132,6 +134,8 @@ async fn delegation_spend_lands_in_the_session_ledger() {
         tokio_util::sync::CancellationToken::new(),
         tokio_util::sync::CancellationToken::new(),
         std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+        std::sync::Arc::new(zoid_model::Registry::default()),
+        "glm".to_string(),
     )
     .await
     .unwrap();

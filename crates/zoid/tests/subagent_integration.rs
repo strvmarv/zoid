@@ -106,6 +106,8 @@ async fn subagent_writes_inside_its_worktree_not_the_main_copy() {
             tokio_util::sync::CancellationToken::new(),
             tokio_util::sync::CancellationToken::new(),
             std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            std::sync::Arc::new(zoid_model::Registry::default()),
+            "glm".to_string(),
         )
         .await
         .unwrap();

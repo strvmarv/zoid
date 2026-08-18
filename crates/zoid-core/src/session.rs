@@ -104,8 +104,6 @@ enum Cmd {
         id: Ulid,
         reply: oneshot::Sender<Result<()>>,
     },
-    /// Create/refresh the `local_models` table (curated seed). Boot-time, once.
-    SeedLocalModels { reply: oneshot::Sender<Result<()>> },
     /// Write one log entry to the `logs` table.
     WriteLog {
         row: crate::store::LogRow,
@@ -261,9 +259,6 @@ impl SessionHandle {
                     } => {
                         let _ = reply.send(store.events_by_ids(&ids, session_id));
                     }
-                    Cmd::SeedLocalModels { reply } => {
-                        let _ = reply.send(store.seed_local_models());
-                    }
                     Cmd::WriteLog { row, reply } => {
                         let _ = reply.send(store.write_log(&row));
                     }
@@ -364,21 +359,6 @@ impl SessionHandle {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(Cmd::DeleteSession { id, reply })
-            .await
-            .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
-        rx.await
-            .map_err(|_| anyhow::anyhow!("session actor dropped reply"))?
-    }
-
-    /// Create the `local_models` table (if absent) and seed curated entries
-    /// from `zoid_model::local_seed::CURATED_LOCAL_MODELS`. Idempotent. Boot
-    /// hook: the bin calls this once after opening the session store. The
-    /// caller decides how to handle a failure (the bin logs a warning and
-    /// continues — a seed failure must not block startup).
-    pub async fn seed_local_models(&self) -> Result<()> {
-        let (reply, rx) = oneshot::channel();
-        self.tx
-            .send(Cmd::SeedLocalModels { reply })
             .await
             .map_err(|_| anyhow::anyhow!("session actor stopped"))?;
         rx.await
@@ -817,32 +797,6 @@ mod tests {
             .unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got.get(&Ulid::from(10u128)).unwrap(), &vec![1.0, 0.0]);
-    }
-
-    /// Boot-path wiring: `SessionHandle::seed_local_models` (called from the
-    /// bin after `spawn`) must create the table and seed qwythos on the actor
-    /// thread, and be idempotent across calls. Verifies the persisted rows via
-    /// a fresh `EventStore::open` read on the same file.
-    #[tokio::test]
-    async fn seed_local_models_via_handle_creates_and_seeds() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = dir.path().join("boot.db");
-        let h = SessionHandle::spawn(db.to_str().unwrap()).unwrap();
-        h.seed_local_models().await.unwrap();
-        // Idempotent: a second boot must not duplicate or error.
-        h.seed_local_models().await.unwrap();
-        drop(h); // let the writer thread flush + close the connection
-
-        let store = EventStore::open(db.to_str().unwrap()).unwrap();
-        assert_eq!(
-            store.local_model_count("qwythos"),
-            1,
-            "qwythos seeded exactly once via the actor"
-        );
-        assert_eq!(
-            store.local_model_source("qwythos").as_deref(),
-            Some("curated")
-        );
     }
 
     #[tokio::test]

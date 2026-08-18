@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 /// `model_info(model).thinking_wire == OpenAI`), matching `openai_compat.rs`'s
 /// `thinking_params()` pattern. Non-reasoning models get no `reasoning` field.
 fn reasoning_params(req: &CompletionRequest) -> Option<Value> {
-    let info = crate::model::model_info(&req.model);
+    let info = req.model_info;
     if info.thinking_wire != crate::model::ThinkingWireShape::OpenAI {
         return None;
     }
@@ -415,6 +415,7 @@ mod tests {
     fn body_has_model_input_instructions_stream() {
         let req = CompletionRequest {
             model: "gpt-5.4".into(),
+            model_info: crate::model::model_info("gpt-5.4"),
             system: Some("be terse".into()),
             messages: vec![Message::user("hi")],
             max_tokens: 1024,
@@ -435,6 +436,7 @@ mod tests {
     fn body_with_tool_message_uses_input_array_with_function_call_output() {
         let req = CompletionRequest {
             model: "m".into(),
+            model_info: crate::model::model_info("m"),
             system: None,
             messages: vec![
                 Message::user("call the tool"),
@@ -472,6 +474,7 @@ mod tests {
     fn body_includes_tools_array_when_present() {
         let req = CompletionRequest {
             model: "m".into(),
+            model_info: crate::model::model_info("m"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 8,
@@ -493,6 +496,7 @@ mod tests {
     fn body_emits_reasoning_effort_for_auto() {
         let req = CompletionRequest {
             model: "gpt-5.4".into(),
+            model_info: crate::model::model_info("gpt-5.4"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 8,
@@ -508,6 +512,7 @@ mod tests {
     fn body_emits_xhigh_for_max_effort() {
         let req = CompletionRequest {
             model: "gpt-5.4".into(),
+            model_info: crate::model::model_info("gpt-5.4"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 8,
@@ -526,6 +531,7 @@ mod tests {
         // enabling reasoning for non-reasoning models (review B1).
         let req = CompletionRequest {
             model: "ollama-model".into(),
+            model_info: crate::model::model_info("ollama-model"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 8,

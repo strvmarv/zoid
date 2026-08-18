@@ -3,6 +3,7 @@ use ratatui_textarea::TextArea;
 use zoid_core::context::ContextWindow;
 use zoid_core::economy::ChurnTimeline;
 use zoid_core::projection::ChatMsg;
+use zoid_model::Registry;
 use zoid_tui::chat::ChatView;
 use zoid_tui::render_shell;
 use zoid_tui::state::{Overlay, ShellState, Zoom};
@@ -31,6 +32,7 @@ fn draw(state: &ShellState, msgs: &[ChatMsg], w: u16, h: u16) -> String {
                 f,
                 state,
                 &empty_economy(),
+                &Registry::default(),
                 msgs,
                 None,
                 &[],

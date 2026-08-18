@@ -15,6 +15,8 @@ path = "src/main.rs"
 
 [dependencies]
 zoid-core = { path = "../zoid-core" }
+zoid-model = { path = "../zoid-model" }
+zoid-registry = { path = "../zoid-registry" }
 zoid-plugin = { path = "../zoid-plugin" }
 zoid-provider = { path = "../zoid-provider" }
 zoid-tools = { path = "../zoid-tools" }

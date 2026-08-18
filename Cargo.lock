@@ -5113,7 +5113,7 @@ checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 [[package]]
 name = "zoid"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5144,8 +5144,10 @@ dependencies = [
  "zoid-core",
  "zoid-embed",
  "zoid-mcp",
+ "zoid-model",
  "zoid-plugin",
  "zoid-provider",
+ "zoid-registry",
  "zoid-testkit",
  "zoid-tools",
  "zoid-tui",
@@ -5153,7 +5155,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-companion"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -5162,7 +5164,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5185,7 +5187,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-embed"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -5201,7 +5203,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-mcp"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -5215,11 +5217,11 @@ dependencies = [
 
 [[package]]
 name = "zoid-model"
-version = "1.0.0"
+version = "1.1.0"
 
 [[package]]
 name = "zoid-plugin"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -5229,7 +5231,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-plugin-import"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "reqwest",
@@ -5241,7 +5243,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-provider"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5253,11 +5255,27 @@ dependencies = [
  "tokio",
  "tracing",
  "zoid-model",
+ "zoid-registry",
+]
+
+[[package]]
+name = "zoid-registry"
+version = "1.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "zoid-model",
 ]
 
 [[package]]
 name = "zoid-syntax"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "proptest",
  "tree-sitter",
@@ -5271,7 +5289,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-testkit"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "serde_json",
  "ulid",
@@ -5281,7 +5299,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-tools"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "globset",
  "nix",
@@ -5297,7 +5315,7 @@ dependencies = [
 
 [[package]]
 name = "zoid-tui"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "insta",
  "pulldown-cmark",
@@ -5308,12 +5326,13 @@ dependencies = [
  "unicode-width",
  "zoid-core",
  "zoid-model",
+ "zoid-registry",
  "zoid-syntax",
 ]
 
 [[package]]
 name = "zoid-web"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "htmd",

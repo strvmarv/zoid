@@ -3,7 +3,7 @@
 
 use zoid_core::config::{Config, Provenance, Source};
 use zoid_core::secret::SecretStatus;
-use zoid_model::{self as model, Status, Transport};
+use zoid_model::{self as model, Registry, Status, Transport};
 
 /// How a config field is edited/displayed (text, uint, bool, picker, or write-only secret).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,14 +28,14 @@ pub struct PickOption {
 
 /// The provider picker options (all registry entries; `[planned]` shown but
 /// not selectable), each annotated with its transport endpoint/command.
-pub fn provider_options(current_id: &str) -> Vec<PickOption> {
+pub fn provider_options(reg: &Registry, current_id: &str) -> Vec<PickOption> {
     let cur = model::canonical_id(current_id);
-    model::PROVIDERS
+    reg.providers
         .iter()
         .map(|e| {
-            let (kind, endpoint) = match e.transport {
-                Transport::Http { default_base_url } => ("http", default_base_url.to_string()),
-                Transport::Cli { default_command } => ("cli", default_command.to_string()),
+            let (kind, endpoint) = match &e.transport {
+                Transport::Http { default_base_url } => ("http", default_base_url.clone()),
+                Transport::Cli { default_command } => ("cli", default_command.clone()),
                 Transport::Sdk => ("sdk", "—".to_string()),
             };
             let planned = e.status == Status::Planned;
@@ -44,8 +44,8 @@ pub fn provider_options(current_id: &str) -> Vec<PickOption> {
                 detail.push_str("  planned");
             }
             PickOption {
-                id: e.id.to_string(),
-                label: e.display.to_string(),
+                id: e.id.clone(),
+                label: e.display.clone(),
                 detail,
                 selectable: !planned,
                 is_current: e.id == cur,
@@ -55,18 +55,22 @@ pub fn provider_options(current_id: &str) -> Vec<PickOption> {
 }
 
 /// The model picker options for a provider (registry convenience list),
-/// sorted alphabetically by name for easy scanning.
-pub fn model_options(provider_id: &str, current_model: &str) -> Vec<PickOption> {
-    let mut models: Vec<&str> = model::models_for(provider_id).to_vec();
-    models.sort();
+/// sorted alphabetically by name for easy scanning. Hidden rows are excluded.
+pub fn model_options(reg: &Registry, provider_id: &str, current_model: &str) -> Vec<PickOption> {
+    let mut models: Vec<&model::ModelEntry> = reg
+        .models_for(provider_id)
+        .iter()
+        .filter(|m| !m.hidden)
+        .collect();
+    models.sort_by(|a, b| a.id.cmp(&b.id));
     models
         .iter()
         .map(|m| PickOption {
-            id: (*m).to_string(),
-            label: (*m).to_string(),
+            id: m.id.clone(),
+            label: m.display.clone().unwrap_or_else(|| m.id.clone()),
             detail: String::new(),
             selectable: true,
-            is_current: *m == current_model,
+            is_current: m.id == current_model,
         })
         .collect()
 }
@@ -74,7 +78,7 @@ pub fn model_options(provider_id: &str, current_model: &str) -> Vec<PickOption> 
 /// One rendered config row: label, current value, edit kind, provenance source, and whether an env var shadows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldRow {
-    pub label: &'static str,
+    pub label: String,
     pub value: String,
     pub kind: FieldKind,
     pub source: Source,
@@ -82,7 +86,7 @@ pub struct FieldRow {
     /// The secret-store key for `FieldKind::Secret` rows. When set, the row
     /// renders `label` (a friendly name) but the edit/clear flows key the
     /// secret store by `secret_key`. `None` for non-secret rows.
-    pub secret_key: Option<&'static str>,
+    pub secret_key: Option<String>,
 }
 
 /// A titled group of config rows shown in the left-nav / right-detail panes.
@@ -94,12 +98,13 @@ pub struct Section {
 
 /// Map a secret env-var name to a friendly display label + the (unchanged)
 /// secret-store key. Unknown env vars fall back to the raw name as both.
-fn friendly_secret_label(name: &'static str) -> (&'static str, Option<&'static str>) {
+fn friendly_secret_label(name: &str) -> (&str, Option<&str>) {
     match name {
         "OPENCODE_GO_API_KEY" => ("opencode", Some("OPENCODE_GO_API_KEY")),
         "OLLAMA_API_KEY" => ("ollama", Some("OLLAMA_API_KEY")),
         "ANTHROPIC_API_KEY" => ("anthropic", Some("ANTHROPIC_API_KEY")),
         "ZAI_API_KEY" => ("zai", Some("ZAI_API_KEY")),
+        "GEMINI_API_KEY" => ("gemini", Some("GEMINI_API_KEY")),
         other => (other, None),
     }
 }
@@ -107,9 +112,10 @@ fn friendly_secret_label(name: &'static str) -> (&'static str, Option<&'static s
 /// Build the four config sections (Provider & Model, Economy, Interface, Secrets) from a
 /// resolved Config + Provenance + secret statuses. Pure; no IO.
 pub fn build_sections(
+    reg: &Registry,
     cfg: &Config,
     prov: &Provenance,
-    key_status: &[(&'static str, SecretStatus)],
+    key_status: &[(String, SecretStatus)],
 ) -> Vec<Section> {
     let onoff = |b: bool| {
         if b {
@@ -120,10 +126,10 @@ pub fn build_sections(
     };
     let opt = |o: &Option<u64>| o.map(|n| n.to_string()).unwrap_or_else(|| "(none)".into());
 
-    let active = model::entry(&cfg.provider);
-    let connection_row = match active.map(|e| e.transport) {
+    let active = reg.entry(&cfg.provider);
+    let connection_row = match active.map(|e| &e.transport) {
         Some(Transport::Cli { .. }) => FieldRow {
-            label: "command",
+            label: "command".to_string(),
             value: cfg.base_url.clone().unwrap_or_default(), // reuses base_url slot until CLI impl adds `command`
             kind: FieldKind::Text,
             source: prov.base_url,
@@ -132,7 +138,7 @@ pub fn build_sections(
         },
         // Http (and Sdk, which simply shows an empty base_url) → base_url row.
         _ => FieldRow {
-            label: "base_url",
+            label: "base_url".to_string(),
             value: cfg.base_url.clone().unwrap_or_default(),
             kind: FieldKind::Text,
             source: prov.base_url,
@@ -144,7 +150,7 @@ pub fn build_sections(
         title: "Provider & Model".into(),
         rows: vec![
             FieldRow {
-                label: "provider",
+                label: "provider".to_string(),
                 value: cfg.provider.clone(),
                 kind: FieldKind::Pick,
                 source: prov.provider,
@@ -152,7 +158,7 @@ pub fn build_sections(
                 secret_key: None,
             },
             FieldRow {
-                label: "model",
+                label: "model".to_string(),
                 value: cfg.model.clone(),
                 kind: FieldKind::Pick,
                 source: prov.model,
@@ -161,7 +167,7 @@ pub fn build_sections(
             },
             connection_row,
             FieldRow {
-                label: "thinking",
+                label: "thinking".to_string(),
                 value: onoff(cfg.thinking.enabled),
                 kind: FieldKind::Bool,
                 source: prov.thinking_enabled,
@@ -169,7 +175,7 @@ pub fn build_sections(
                 secret_key: None,
             },
             FieldRow {
-                label: "effort",
+                label: "effort".to_string(),
                 value: cfg
                     .thinking
                     .effort
@@ -186,7 +192,7 @@ pub fn build_sections(
         title: "Economy".into(),
         rows: vec![
             FieldRow {
-                label: "eviction",
+                label: "eviction".to_string(),
                 value: onoff(cfg.eviction.enabled),
                 kind: FieldKind::Bool,
                 source: prov.eviction_enabled,
@@ -194,7 +200,7 @@ pub fn build_sections(
                 secret_key: None,
             },
             FieldRow {
-                label: "context target",
+                label: "context target".to_string(),
                 value: opt(&cfg.economy.context_target),
                 kind: FieldKind::Uint,
                 source: prov.context_target,
@@ -202,7 +208,7 @@ pub fn build_sections(
                 secret_key: None,
             },
             FieldRow {
-                label: "auto-evict cold",
+                label: "auto-evict cold".to_string(),
                 value: onoff(cfg.economy.auto_evict_cold),
                 kind: FieldKind::Bool,
                 source: prov.auto_evict_cold,
@@ -210,7 +216,7 @@ pub fn build_sections(
                 secret_key: None,
             },
             FieldRow {
-                label: "compact at %",
+                label: "compact at %".to_string(),
                 value: cfg.economy.compact_threshold_pct.to_string(),
                 kind: FieldKind::Uint,
                 source: prov.compact_threshold_pct,
@@ -218,7 +224,7 @@ pub fn build_sections(
                 secret_key: None,
             },
             FieldRow {
-                label: "band headroom %",
+                label: "band headroom %".to_string(),
                 value: cfg.economy.band_headroom_pct.to_string(),
                 kind: FieldKind::Uint,
                 source: prov.band_headroom_pct,
@@ -226,7 +232,7 @@ pub fn build_sections(
                 secret_key: None,
             },
             FieldRow {
-                label: "protected turns",
+                label: "protected turns".to_string(),
                 value: cfg.economy.min_protected_turns.to_string(),
                 kind: FieldKind::Uint,
                 source: prov.min_protected_turns,
@@ -234,7 +240,7 @@ pub fn build_sections(
                 secret_key: None,
             },
             FieldRow {
-                label: "protection %",
+                label: "protection %".to_string(),
                 value: cfg.economy.protection_pct.to_string(),
                 kind: FieldKind::Uint,
                 source: prov.protection_pct,
@@ -247,7 +253,7 @@ pub fn build_sections(
         title: "Interface".into(),
         rows: vec![
             FieldRow {
-                label: "reduced motion",
+                label: "reduced motion".to_string(),
                 value: onoff(cfg.reduced_motion),
                 kind: FieldKind::Bool,
                 source: prov.reduced_motion,
@@ -255,7 +261,7 @@ pub fn build_sections(
                 secret_key: None,
             },
             FieldRow {
-                label: "companion",
+                label: "companion".to_string(),
                 value: onoff(cfg.companion.enabled),
                 kind: FieldKind::Bool,
                 source: prov.companion_enabled,
@@ -278,7 +284,7 @@ pub fn build_sections(
                 // `source` is inert for secret rows: nothing reads it, only `env_shadowed`
                 // drives the [env] marker.
                 FieldRow {
-                    label: friendly_label,
+                    label: friendly_label.to_string(),
                     value,
                     kind: FieldKind::Secret,
                     source: if shadowed {
@@ -287,7 +293,7 @@ pub fn build_sections(
                         Source::Default
                     },
                     env_shadowed: shadowed,
-                    secret_key: friendly_sk,
+                    secret_key: friendly_sk.map(str::to_string),
                 }
             })
             .collect(),
@@ -298,9 +304,11 @@ pub fn build_sections(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_reg::shipped;
 
     #[test]
     fn builds_four_sections_with_env_shadow() {
+        let reg = shipped();
         let cfg = Config::default();
         // Inline provenance: all Default except `model` and `auto_evict_cold` shadowed
         // by env. `auto_evict_cold` was previously hardcoded to `env_shadowed: false` in
@@ -330,11 +338,14 @@ mod tests {
             companion_enabled: Source::Default,
             eviction_enabled: Source::Default,
         };
-        let ks = [
-            ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
-            ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
+        let ks: Vec<(String, SecretStatus)> = vec![
+            (
+                "OLLAMA_API_KEY".to_string(),
+                SecretStatus::Set { from_env: true },
+            ),
+            ("ANTHROPIC_API_KEY".to_string(), SecretStatus::NotSet),
         ];
-        let sections = build_sections(&cfg, &prov, &ks);
+        let sections = build_sections(&reg, &cfg, &prov, &ks);
         assert_eq!(sections.len(), 4);
         let model_row = &sections[0].rows[1];
         assert_eq!(model_row.label, "model");
@@ -357,7 +368,8 @@ mod tests {
 
     #[test]
     fn provider_options_annotate_endpoints_and_mark_planned() {
-        let opts = provider_options("ollama-cloud");
+        let reg = shipped();
+        let opts = provider_options(&reg, "ollama-cloud");
         let cloud = opts.iter().find(|o| o.id == "ollama-cloud").unwrap();
         assert!(cloud.is_current);
         assert!(cloud.selectable);
@@ -370,7 +382,10 @@ mod tests {
         // (ollama-local, ollama-cloud, opencode-go, anthropic-api,
         // zai-coding-plan) and that anthropic-api + zai-coding-plan are
         // present + selectable.
-        assert_eq!(opts.len(), 6);
+        assert_eq!(opts.len(), 7);
+        let gemini = opts.iter().find(|o| o.id == "gemini-api").unwrap();
+        assert!(gemini.selectable);
+        assert!(gemini.detail.contains("generativelanguage.googleapis.com"));
         let zen = opts.iter().find(|o| o.id == "opencode-zen").unwrap();
         assert!(zen.selectable);
         assert!(zen.detail.contains("https://opencode.ai/zen"));
@@ -384,7 +399,8 @@ mod tests {
 
     #[test]
     fn model_options_list_registry_models() {
-        let opts = model_options("anthropic-api", "claude-opus-4-8");
+        let reg = shipped();
+        let opts = model_options(&reg, "anthropic-api", "claude-opus-4-8");
         assert!(opts
             .iter()
             .any(|o| o.id == "claude-sonnet-4-6" && o.selectable));
@@ -394,6 +410,7 @@ mod tests {
 
     #[test]
     fn provider_and_model_rows_are_pick_kind() {
+        let reg = shipped();
         let cfg = Config::default();
         let prov = Provenance {
             provider: Source::Default,
@@ -420,7 +437,7 @@ mod tests {
             companion_enabled: Source::Default,
             eviction_enabled: Source::Default,
         };
-        let sections = build_sections(&cfg, &prov, &[]);
+        let sections = build_sections(&reg, &cfg, &prov, &[]);
         let pm = &sections[0];
         assert_eq!(pm.rows[0].label, "provider");
         assert!(matches!(pm.rows[0].kind, FieldKind::Pick));

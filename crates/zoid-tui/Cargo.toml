@@ -32,3 +32,7 @@ required-features = ["web-capture"]
 
 [dev-dependencies]
 insta = { workspace = true }
+# Test-only: lets the config_view/render tests build a real shipped `Registry`
+# (the lib itself never parses TOML — it only takes `&Registry`). Kept out of
+# `[dependencies]` so the runtime binary stays light.
+zoid-registry = { path = "../zoid-registry" }

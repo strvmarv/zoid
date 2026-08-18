@@ -546,7 +546,7 @@ pub struct ShellState {
     /// (e.g. `"ANTHROPIC_API_KEY"`), or `None` when not prompting. Set when a
     /// selected provider needs a key we don't have yet (Task 15 gate); cleared
     /// on commit or cancel.
-    pub config_key_prompt: Option<&'static str>,
+    pub config_key_prompt: Option<String>,
     /// Compact elapsed-time-in-session label (e.g. "12m", "1h3m").
     pub duration: String,
     /// Thinking mode label for the session drawer (e.g. "thinking high").
@@ -646,6 +646,13 @@ pub struct ShellState {
     /// bin clamps the upper bound per-frame against the real rect height
     /// (mirrors `conv_max_scroll`). Reset to 0 in `close_overlay`.
     pub help_scroll: usize,
+    /// A persistent, prominent banner shown above the input bar, set by the
+    /// bin for boot-time recovery flows (e.g. stale provider/model selection).
+    /// `None` normally; when set it stays until the user resolves the condition
+    /// (picks a valid model in the quick-switch, or edits `config.toml`).
+    /// Distinct from the transient one-line `status_hint` — this is a
+    /// multi-line, attention-grabbing message that names the recovery paths.
+    pub banner: Option<String>,
 }
 
 impl ShellState {
@@ -754,6 +761,7 @@ impl ShellState {
             switch_models: Vec::new(),
             mcp_status: Vec::new(),
             plugin_catalog: None,
+            banner: None,
         }
     }
 

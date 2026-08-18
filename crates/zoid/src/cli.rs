@@ -22,6 +22,8 @@ pub enum Cli {
     /// Remove zoid's data (sessions, config, cache, secrets); with `purge`,
     /// also delete the binary. Exits after running.
     Uninstall { purge: bool },
+    /// Refresh the provider/model registry from live endpoints and exit.
+    RefreshModels,
     /// Unrecognised argument; carries the offending token.
     Unknown(String),
 }
@@ -39,6 +41,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Cli {
         Some("--version") | Some("-V") => return Cli::Version,
         Some("--help") | Some("-h") => return Cli::Help,
         Some("update") => return Cli::Update,
+        Some("refresh-models") => return Cli::RefreshModels,
         Some("uninstall") => {
             // Only `--purge` may follow; anything else is an error.
             let mut purge = false;
@@ -106,6 +109,7 @@ USAGE:
     zoid --companion          Launch with the companion browser view enabled
     zoid --yolo               Disable all approval prompts (dangerous)
     zoid update               Download and install the latest release
+    zoid refresh-models       Refresh the provider/model registry from live endpoints
     zoid uninstall            Remove zoid's data (sessions, config, cache)
     zoid uninstall --purge    Also delete the zoid binary
     zoid --version            Print version
@@ -264,6 +268,14 @@ mod tests {
         assert!(
             matches!(r, super::Cli::Unknown(_)),
             "unknown uninstall flag must error"
+        );
+    }
+
+    #[test]
+    fn parses_refresh_models() {
+        assert_eq!(
+            super::parse_args(vec!["refresh-models".to_string()]),
+            super::Cli::RefreshModels
         );
     }
 }

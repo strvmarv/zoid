@@ -1,7 +1,8 @@
-//! The dedicated OpenCode Zen provider: holds a static per-model wire-shape map
-//! and delegates `stream()`/`list_models()` to one of four sub-clients
+//! The dedicated OpenCode Zen provider: holds an `Arc<Registry>` and delegates
+//! `stream()`/`list_models()` to one of four sub-clients
 //! (OpenAICompatProvider, AnthropicProvider, OpenAIResponsesProvider,
-//! GoogleGeminiProvider) based on the active model id.
+//! GoogleGeminiProvider) based on the (provider, model) wire shape resolved
+//! from the registry via `Registry::wire_shape("opencode-zen", model)`.
 
 use crate::anthropic::AnthropicProvider;
 use crate::google_gemini::GoogleGeminiProvider;
@@ -10,91 +11,29 @@ use crate::openai_responses::OpenAIResponsesProvider;
 use crate::{CompletionRequest, Provider, ProviderEvent};
 use anyhow::Result;
 use async_trait::async_trait;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ZenWireShape {
-    OpenAIChat,
-    AnthropicMessages,
-    OpenAIResponses,
-    GoogleGemini,
-}
-
-const ZEN_MODELS: &[(&str, ZenWireShape)] = &[
-    // --- Anthropic Messages (13) ---
-    ("claude-sonnet-4-5", ZenWireShape::AnthropicMessages),
-    ("claude-fable-5", ZenWireShape::AnthropicMessages),
-    ("claude-opus-4-8", ZenWireShape::AnthropicMessages),
-    ("claude-opus-4-7", ZenWireShape::AnthropicMessages),
-    ("claude-opus-4-6", ZenWireShape::AnthropicMessages),
-    ("claude-opus-4-5", ZenWireShape::AnthropicMessages),
-    ("claude-sonnet-5", ZenWireShape::AnthropicMessages),
-    ("claude-sonnet-4-6", ZenWireShape::AnthropicMessages),
-    ("claude-haiku-4-5", ZenWireShape::AnthropicMessages),
-    ("qwen3.7-max", ZenWireShape::AnthropicMessages),
-    ("qwen3.7-plus", ZenWireShape::AnthropicMessages),
-    ("qwen3.6-plus", ZenWireShape::AnthropicMessages),
-    ("qwen3.5-plus", ZenWireShape::AnthropicMessages),
-    // --- OpenAI Responses (17) ---
-    ("gpt-5.5", ZenWireShape::OpenAIResponses),
-    ("gpt-5.5-pro", ZenWireShape::OpenAIResponses),
-    ("gpt-5.4", ZenWireShape::OpenAIResponses),
-    ("gpt-5.4-pro", ZenWireShape::OpenAIResponses),
-    ("gpt-5.4-mini", ZenWireShape::OpenAIResponses),
-    ("gpt-5.4-nano", ZenWireShape::OpenAIResponses),
-    ("gpt-5.3-codex", ZenWireShape::OpenAIResponses),
-    ("gpt-5.3-codex-spark", ZenWireShape::OpenAIResponses),
-    ("gpt-5.2", ZenWireShape::OpenAIResponses),
-    ("gpt-5.2-codex", ZenWireShape::OpenAIResponses),
-    ("gpt-5.1", ZenWireShape::OpenAIResponses),
-    ("gpt-5.1-codex-max", ZenWireShape::OpenAIResponses),
-    ("gpt-5.1-codex", ZenWireShape::OpenAIResponses),
-    ("gpt-5.1-codex-mini", ZenWireShape::OpenAIResponses),
-    ("gpt-5", ZenWireShape::OpenAIResponses),
-    ("gpt-5-codex", ZenWireShape::OpenAIResponses),
-    ("gpt-5-nano", ZenWireShape::OpenAIResponses),
-    // --- OpenAI Chat Completions (19) ---
-    ("deepseek-v4-pro", ZenWireShape::OpenAIChat),
-    ("deepseek-v4-flash", ZenWireShape::OpenAIChat),
-    ("deepseek-v4-flash-free", ZenWireShape::OpenAIChat),
-    ("glm-5.2", ZenWireShape::OpenAIChat),
-    ("glm-5.1", ZenWireShape::OpenAIChat),
-    ("glm-5", ZenWireShape::OpenAIChat),
-    ("grok-4.5", ZenWireShape::OpenAIChat),
-    ("grok-build-0.1", ZenWireShape::OpenAIChat),
-    ("kimi-k2.5", ZenWireShape::OpenAIChat),
-    ("kimi-k2.6", ZenWireShape::OpenAIChat),
-    ("kimi-k2.7-code", ZenWireShape::OpenAIChat),
-    ("minimax-m3", ZenWireShape::OpenAIChat),
-    ("minimax-m2.7", ZenWireShape::OpenAIChat),
-    ("minimax-m2.5", ZenWireShape::OpenAIChat),
-    ("big-pickle", ZenWireShape::OpenAIChat),
-    ("hy3-free", ZenWireShape::OpenAIChat),
-    ("mimo-v2.5-free", ZenWireShape::OpenAIChat),
-    ("north-mini-code-free", ZenWireShape::OpenAIChat),
-    ("nemotron-3-ultra-free", ZenWireShape::OpenAIChat),
-    // --- Google Gemini (3) ---
-    ("gemini-3.5-flash", ZenWireShape::GoogleGemini),
-    ("gemini-3.1-pro", ZenWireShape::GoogleGemini),
-    ("gemini-3-flash", ZenWireShape::GoogleGemini),
-];
+use zoid_model::{Registry, WireShape};
 
 pub struct OpenCodeZenProvider {
     api_key: String,
     base_url: String,
+    reg: Arc<Registry>,
     #[allow(dead_code)]
     client: reqwest::Client,
     idle_timeout: Duration,
 }
 
 impl OpenCodeZenProvider {
-    pub fn new(api_key: String) -> Self {
+    pub fn new(api_key: String, reg: Arc<Registry>) -> Self {
         Self {
             api_key,
-            base_url: crate::model::default_base_url("opencode-zen")
+            base_url: reg
+                .default_base_url("opencode-zen")
                 .unwrap_or("https://opencode.ai/zen")
                 .to_string(),
+            reg,
             client: crate::http_client(),
             idle_timeout: crate::stream_idle_timeout(),
         }
@@ -112,17 +51,16 @@ impl OpenCodeZenProvider {
         self
     }
 
-    fn wire_shape_for(&self, model: &str) -> ZenWireShape {
-        match ZEN_MODELS.iter().find(|(id, _)| *id == model) {
-            Some((_, shape)) => *shape,
-            None => {
+    fn wire_shape_for(&self, model: &str) -> WireShape {
+        self.reg
+            .wire_shape("opencode-zen", model)
+            .unwrap_or_else(|| {
                 tracing::warn!(
                     model = %model,
-                    "opencode-zen: model not in wire-shape map; defaulting to OpenAIChat"
+                    "opencode-zen: model not in registry; defaulting to OpenAIChat"
                 );
-                ZenWireShape::OpenAIChat
-            }
-        }
+                WireShape::OpenAIChat
+            })
     }
 }
 
@@ -134,29 +72,40 @@ impl Provider for OpenCodeZenProvider {
         sink: mpsc::Sender<ProviderEvent>,
     ) -> Result<()> {
         match self.wire_shape_for(&req.model) {
-            ZenWireShape::OpenAIChat => {
+            WireShape::OpenAIChat => {
                 OpenAICompatProvider::new(self.api_key.clone())
                     .with_base_url(&self.base_url)
                     .with_idle_timeout(self.idle_timeout)
                     .stream(req, sink)
                     .await
             }
-            ZenWireShape::AnthropicMessages => {
+            WireShape::AnthropicMessages => {
                 AnthropicProvider::new(self.api_key.clone())
                     .with_base_url(&self.base_url)
                     .with_idle_timeout(self.idle_timeout)
                     .stream(req, sink)
                     .await
             }
-            ZenWireShape::OpenAIResponses => {
+            WireShape::OpenAIResponses => {
                 OpenAIResponsesProvider::new(self.api_key.clone())
                     .with_base_url(&self.base_url)
                     .with_idle_timeout(self.idle_timeout)
                     .stream(req, sink)
                     .await
             }
-            ZenWireShape::GoogleGemini => {
+            WireShape::GoogleGemini => {
                 GoogleGeminiProvider::new(self.api_key.clone())
+                    .with_base_url(&self.base_url)
+                    .with_idle_timeout(self.idle_timeout)
+                    .stream(req, sink)
+                    .await
+            }
+            other => {
+                tracing::warn!(
+                    shape = ?other,
+                    "opencode-zen: unexpected wire shape; defaulting to OpenAIChat"
+                );
+                OpenAICompatProvider::new(self.api_key.clone())
                     .with_base_url(&self.base_url)
                     .with_idle_timeout(self.idle_timeout)
                     .stream(req, sink)
@@ -179,24 +128,86 @@ impl Provider for OpenCodeZenProvider {
 mod tests {
     use super::*;
     use crate::Message;
+    use zoid_model::{
+        ModelEntry, ModelInfo, ProviderEntry, Source, Status, ThinkingSupport, ThinkingWireShape,
+        Transport,
+    };
+
+    /// Build an in-memory `Registry` whose `opencode-zen` provider maps the
+    /// given `(model id, WireShape)` rows. The composite provider routes
+    /// `stream()` off these rows; tests assert the recorded request line.
+    fn test_reg(rows: &[(&str, WireShape)]) -> Arc<Registry> {
+        Arc::new(Registry {
+            providers: vec![ProviderEntry {
+                id: "opencode-zen".to_string(),
+                display: "zen".into(),
+                family: "opencode-zen".into(),
+                transport: Transport::Http {
+                    default_base_url: "https://opencode.ai/zen".into(),
+                },
+                status: Status::Available,
+                key_url: Some("https://x".into()),
+                key_env: Some("OPENCODE_GO_API_KEY".into()),
+                models: rows
+                    .iter()
+                    .map(|(id, shape)| ModelEntry {
+                        id: id.to_string(),
+                        display: None,
+                        wire_shape: *shape,
+                        source: Source::Static,
+                        default: false,
+                        hidden: false,
+                        info: ModelInfo {
+                            context_window: 200_000,
+                            max_output: 0,
+                            tools: false,
+                            prompt_cache: true,
+                            thinking: ThinkingSupport::None,
+                            thinking_wire: ThinkingWireShape::None,
+                        },
+                        runtime: None,
+                        download_source: None,
+                        quant: None,
+                        modelfile: None,
+                        num_ctx: None,
+                        vram_curve: None,
+                    })
+                    .collect(),
+            }],
+        })
+    }
 
     #[test]
-    fn wire_shape_for_known_models_matches_table() {
-        for (id, shape) in ZEN_MODELS {
-            let p = OpenCodeZenProvider::new("k".into());
-            assert_eq!(p.wire_shape_for(id), *shape, "mismatch for {id}");
-        }
+    fn routes_via_registry_wire_shape() {
+        let reg = test_reg(&[
+            ("glm-5.2", WireShape::OpenAIChat),
+            ("claude-sonnet-4-5", WireShape::AnthropicMessages),
+            ("gpt-5.4", WireShape::OpenAIResponses),
+            ("gemini-3-flash", WireShape::GoogleGemini),
+        ]);
+        let p = OpenCodeZenProvider::new("k".into(), reg);
+        assert_eq!(p.wire_shape_for("glm-5.2"), WireShape::OpenAIChat);
+        assert_eq!(
+            p.wire_shape_for("claude-sonnet-4-5"),
+            WireShape::AnthropicMessages
+        );
+        assert_eq!(p.wire_shape_for("gpt-5.4"), WireShape::OpenAIResponses);
+        assert_eq!(p.wire_shape_for("gemini-3-flash"), WireShape::GoogleGemini);
+        assert_eq!(p.wire_shape_for("unknown"), WireShape::OpenAIChat);
     }
 
     #[test]
     fn wire_shape_for_unknown_defaults_to_openai_chat() {
-        let p = OpenCodeZenProvider::new("k".into());
-        assert_eq!(p.wire_shape_for("unknown-model"), ZenWireShape::OpenAIChat);
+        let reg = test_reg(&[]);
+        let p = OpenCodeZenProvider::new("k".into(), reg);
+        assert_eq!(p.wire_shape_for("unknown-model"), WireShape::OpenAIChat);
     }
 
     #[test]
     fn with_base_url_propagates_to_subclient() {
-        let p = OpenCodeZenProvider::new("k".into()).with_base_url("https://example.test/zen/");
+        let reg = test_reg(&[]);
+        let p =
+            OpenCodeZenProvider::new("k".into(), reg).with_base_url("https://example.test/zen/");
         assert_eq!(p.base_url, "https://example.test/zen");
     }
 
@@ -231,6 +242,7 @@ mod tests {
     fn zen_req(model: &str) -> CompletionRequest {
         CompletionRequest {
             model: model.into(),
+            model_info: crate::test_model_info(),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 8,
@@ -243,7 +255,8 @@ mod tests {
     #[tokio::test]
     async fn chat_model_routes_to_chat_completions() {
         let (addr, recorded) = spawn_recording_server().await;
-        let provider = OpenCodeZenProvider::new("k".into())
+        let reg = test_reg(&[("glm-5.2", WireShape::OpenAIChat)]);
+        let provider = OpenCodeZenProvider::new("k".into(), reg)
             .with_base_url(format!("http://{addr}"))
             .with_idle_timeout(Duration::from_secs(2));
         let (tx, _rx) = mpsc::channel::<ProviderEvent>(16);
@@ -258,7 +271,8 @@ mod tests {
     #[tokio::test]
     async fn anthropic_model_routes_to_messages() {
         let (addr, recorded) = spawn_recording_server().await;
-        let provider = OpenCodeZenProvider::new("k".into())
+        let reg = test_reg(&[("claude-sonnet-4-5", WireShape::AnthropicMessages)]);
+        let provider = OpenCodeZenProvider::new("k".into(), reg)
             .with_base_url(format!("http://{addr}"))
             .with_idle_timeout(Duration::from_secs(2));
         let (tx, _rx) = mpsc::channel::<ProviderEvent>(16);
@@ -273,7 +287,8 @@ mod tests {
     #[tokio::test]
     async fn responses_model_routes_to_responses() {
         let (addr, recorded) = spawn_recording_server().await;
-        let provider = OpenCodeZenProvider::new("k".into())
+        let reg = test_reg(&[("gpt-5.4", WireShape::OpenAIResponses)]);
+        let provider = OpenCodeZenProvider::new("k".into(), reg)
             .with_base_url(format!("http://{addr}"))
             .with_idle_timeout(Duration::from_secs(2));
         let (tx, _rx) = mpsc::channel::<ProviderEvent>(16);
@@ -288,7 +303,8 @@ mod tests {
     #[tokio::test]
     async fn gemini_model_routes_to_stream_generate_content() {
         let (addr, recorded) = spawn_recording_server().await;
-        let provider = OpenCodeZenProvider::new("k".into())
+        let reg = test_reg(&[("gemini-3-flash", WireShape::GoogleGemini)]);
+        let provider = OpenCodeZenProvider::new("k".into(), reg)
             .with_base_url(format!("http://{addr}"))
             .with_idle_timeout(Duration::from_secs(2));
         let (tx, _rx) = mpsc::channel::<ProviderEvent>(16);

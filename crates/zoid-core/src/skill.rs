@@ -138,90 +138,92 @@ user asks.
 ";
 
 /// The body of the built-in `refreshing-provider-models` skill. Guides an
-/// agent to refresh the static provider/model registry in `zoid-model` against
-/// live provider endpoints, add MODEL_CAPS entries for new models, and verify.
+/// agent through the full model-sync workflow: run the tool, research new
+/// models, update the on-disk models.toml with researched caps.
 const REFRESHING_PROVIDER_MODELS_BODY: &str = concat!(
     "# Refreshing Provider Models\n\n",
-    "Refresh the static provider/model registry in `crates/zoid-model/src/lib.rs`\n",
-    "against live provider endpoints. Three targets: `PROVIDERS` model id arrays,\n",
-    "`ZEN_MODEL_IDS`, and `MODEL_CAPS` (per-model capabilities).\n\n",
-    "## Phase 1 — Fetch live model lists\n\n",
-    "Run a `curl` GET per provider. Skip providers whose key is missing.\n\n",
-    "| Provider id | Secret env var | Endpoint | Auth | Response path | Registry field |\n",
-    "|---|---|---|---|---|---|\n",
-    "| `ollama-local` | (keyless) | `{base}/api/tags` | Bearer (opt) | `.models[].name` | skip (free-text) |\n",
-    "| `ollama-cloud` | `OLLAMA_API_KEY` | `https://ollama.com/api/tags` | Bearer | `.models[].name` | `ollama-cloud` models (curated) |\n",
-    "| `opencode-go` | `OPENCODE_GO_API_KEY` | `https://opencode.ai/zen/go/v1/models` | Bearer | `.data[].id` | `opencode-go` models |\n",
-    "| `opencode-zen` | `OPENCODE_GO_API_KEY` | `https://opencode.ai/zen/v1/models` | Bearer | `.data[].id` | `ZEN_MODEL_IDS` |\n",
-    "| `anthropic-api` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com/v1/models` | `x-api-key` + `anthropic-version: 2023-06-01` | `.data[].id` | `anthropic-api` models |\n",
-    "| `zai-coding-plan` | `ZAI_API_KEY` | `https://api.z.ai/api/coding/paas/v4/models` | Bearer | `.data[].id` | `zai-coding-plan` models |\n\n",
-    "**Critical:** `ollama-local` and `ollama-cloud` share `OllamaProvider` — both\n",
-    "hit `/api/tags` and parse `.models[].name`. Neither is OpenAI-compat. Do not\n",
-    "use `/v1/models` or `.data[].id` for either Ollama flavor.\n\n",
+    "The provider/model registry is a TOML file, not Rust code. This skill\n",
+    "syncs it against live provider endpoints.\n\n",
+    "## Step 1 — Run the tool\n\n",
     "```bash\n",
-    "# ollama-cloud (native Ollama API, not OpenAI-compat)\n",
-    "curl -s -H \"Authorization: Bearer $OLLAMA_API_KEY\" https://ollama.com/api/tags | jq -r '.models[].name'\n",
-    "# anthropic-api (NOT Bearer — uses x-api-key)\n",
-    "curl -s -H \"x-api-key: $ANTHROPIC_API_KEY\" -H \"anthropic-version: 2023-06-01\" https://api.anthropic.com/v1/models | jq -r '.data[].id'\n",
-    "# opencode-zen\n",
-    "curl -s -H \"Authorization: Bearer $OPENCODE_GO_API_KEY\" https://opencode.ai/zen/v1/models | jq -r '.data[].id'\n",
+    "zoid refresh-models\n",
+    "```\n",
+    "(If testing from source: `cargo run -p zoid -- refresh-models`)\n\n",
+    "The tool fetches live model lists from each provider that has a key. It\n",
+    "auto-writes `wire` rows to `models.user.toml` for Ollama and Gemini (the\n",
+    "only two providers with wire-derived caps endpoints). For all other\n",
+    "providers (Anthropic, OpenAI-compat, opencode-go, opencode-zen, zai), it\n",
+    "reports new and retired models but does NOT write them — those need\n",
+    "manual caps research and `static` rows in `models.toml`.\n\n",
+    "Report the output to the user: what was added, updated, removed, and what\n",
+    "needs manual attention.\n\n",
+    "**Important:** the registry is loaded at boot. After the tool writes new\n",
+    "wire rows to `models.user.toml`, the running zoid instance won't see them\n",
+    "until restart. Tell the user to restart zoid for the new models to appear\n",
+    "in the picker with correct caps.\n\n",
+    "## Step 2 — Research new models\n\n",
+    "For each model in the report's `reported` list that says \"new model\"\n",
+    "(needs manual caps), research its metadata:\n",
+    "- `context_window` — max input tokens\n",
+    "- `max_output` — max output tokens (0 = provider default)\n",
+    "- `tools` — does it support tool/function calling? (default true)\n",
+    "- `prompt_cache` — does it support prompt caching? (default false)\n",
+    "- `thinking` — thinking support: `none`, `toggle`, `toggle-with-effort`,\n",
+    "  `budget`, or `adaptive`\n",
+    "- `thinking_wire` — thinking wire protocol: `none`, `anthropic`,\n",
+    "  `deepseek`, `openai`, or `ollama`\n\n",
+    "Use web_search to find the model's spec page (provider docs, API reference).\n",
+    "If you can't find exact numbers, use conservative defaults from a sibling\n",
+    "model in the same family (e.g. glm-5.3 → same caps as glm-5.2).\n\n",
+    "## Step 3 — Update models.toml\n\n",
+    "Add `static` rows to the shipped `models.toml` for each new model. The\n",
+    "file lives at `~/.config/zoid/models.toml` (the on-disk copy seeded from\n",
+    "the embedded version at boot). Edit it directly.\n\n",
+    "Infer the `wire_shape` from the model family:\n\n",
+    "| Model family | wire_shape |\n",
+    "|---|---|\n",
+    "| Claude (claude-*) | `anthropic-messages` |\n",
+    "| GPT (gpt-5.*) | `openai-responses` |\n",
+    "| GLM (glm-*) | `openai-chat` |\n",
+    "| Grok (grok-*) | `openai-chat` |\n",
+    "| Kimi (kimi-*) | `openai-chat` |\n",
+    "| Deepseek (deepseek-*) | `openai-chat` |\n",
+    "| Mimo (mimo-*) | `openai-chat` |\n",
+    "| Minimax (minimax-*) on opencode-go | `anthropic-messages` |\n",
+    "| Minimax (minimax-*) on opencode-zen | `openai-chat` |\n",
+    "| Qwen (qwen3.*) on opencode-go | `anthropic-messages` |\n",
+    "| Qwen (qwen3.*) on opencode-zen | `anthropic-messages` |\n",
+    "| Gemini (gemini-*) | `google-gemini` |\n",
+    "| Ollama (ollama-*) | `ollama` |\n",
+    "| Other/unknown | `openai-chat` (conservative default) |\n\n",
+    "TOML format for each row:\n\n",
+    "```toml\n",
+    "  [[provider.model]]\n",
+    "  id = \"model-id\"\n",
+    "  wire_shape = \"openai-chat\"\n",
+    "  source = \"static\"\n",
+    "  context_window = 1000000\n",
+    "  max_output = 0\n",
+    "  tools = true\n",
+    "  prompt_cache = true\n",
+    "  thinking = \"toggle-with-effort\"\n",
+    "  thinking_wire = \"deepseek\"\n",
     "```\n\n",
-    "## Phase 2 — Diff and update\n\n",
-    "### 2a. Model id lists\n\n",
-    "- Add ids present live but missing. Remove ids absent live (retired).\n",
-    "- Preserve `PROVIDERS` order — picker display order (convention). Insert new\n",
-    "  ids grouped with siblings.\n",
-    "- `ollama-local` stays `&[]` — never populate it.\n",
-    "- `ollama-cloud` is **curated** (`&[\"glm-5.2:cloud\"]`), not a live-list\n",
-    "  mirror. Preserve the `:cloud` suffix; new cloud ids need MODEL_CAPS entries.\n",
-    "- `ZEN_MODEL_IDS` first entry is the default model — a **product decision**,\n",
-    "  not endpoint-derivable. Do not change without explicit instruction. The\n",
-    "  `// All NN Zen model ids` count comment (currently 52: 13 Anthropic +\n",
-    "  17 OpenAI Responses + 19 OpenAI Chat + 3 Gemini) must be updated to match.\n",
-    "- Cross-array duplication is expected (`glm-5.2` appears in Zen, Go, ZAI).\n",
-    "  Dedup matters only within `MODEL_CAPS` (case-insensitive), not across\n",
-    "  provider id arrays.\n\n",
-    "### 2b. MODEL_CAPS for new ids\n\n",
-    "All unknowns fall back to `DEFAULT_MODEL_INFO` (`lib.rs:640`): 32k / 0 /\n",
-    "tools=true / prompt_cache=false / None / None.\n\n",
-    "**Exception:** `opencode_zen_model_caps_present` asserts every `opencode-zen`\n",
-    "model has `context_window >= 128_000` — the 32k default is not acceptable for\n",
-    "selectable Zen/Go models. New Zen/Go ids must have an explicit researched\n",
-    "entry. (The `opencode_zen_caps_match_table` lock test has 39 cases — the 13\n",
-    "that overlap with Go are excluded; it doesn't auto-catch *new* ids, but\n",
-    "`opencode_zen_model_caps_present` does via the >=128k gate.)\n\n",
-    "`ModelInfo` fields (see struct at `lib.rs:15`): `context_window` (u64),\n",
-    "`max_output` (u64, 0 = provider default), `tools` (bool), `prompt_cache`\n",
-    "(bool), `thinking` (ThinkingSupport), `thinking_wire` (ThinkingWireShape).\n\n",
-    "**`thinking_wire` is per-model, not per-family.** Many Anthropic-routed Go/Zen\n",
-    "models have `thinking_wire: None`. Copy from a researched sibling of the same\n",
-    "family/variant where one exists; otherwise `None`.\n\n",
-    "Do not duplicate `MODEL_CAPS` entries — lookup is case-insensitive, duplicates\n",
-    "silently shadow.\n\n",
-    "### 2c. Provider metadata\n\n",
-    "Verify `default_base_url` still resolves (Phase 1 proved reachability). Verify\n",
-    "`key_url` is still valid — `ollama-local` must be `None`, all others `Some(_)`\n",
-    "(the test is keyed on provider id). Flag dark providers, do not remove without\n",
-    "confirmation.\n\n",
-    "## Phase 3 — Verify\n\n",
-    "```bash\n",
-    "cargo test -p zoid-model    # registry invariants\n",
-    "cargo build -p zoid-provider # re-exports compile\n",
-    "cargo test -p zoid-provider  # wire-shape routing tables\n",
-    "```\n\n",
-    "**Wire-shape routing tables:** Adding a new id to `ZEN_MODEL_IDS` requires a\n",
-    "matching entry in `opencode_zen.rs::ZEN_MODELS`, or it silently defaults to\n",
-    "`OpenAIChat` (wrong wire shape, no test failure). Likewise, new `opencode-go`\n",
-    "ids need an entry in `opencode_go.rs::GO_MODELS`. These are in\n",
-    "`crates/zoid-provider/src/`, separate from the registry's `models` arrays.\n\n",
-    "Key test invariants:\n",
-    "- `selectable_has_six_providers` — exactly six selectable providers.\n",
-    "- `opencode_go_entry_unchanged` — Go has exactly 13 models (update the\n",
-    "  literal if adding/removing Go ids).\n",
-    "- `opencode_go_model_caps_match_reconciled_table` — locks all 13 Go caps.\n",
-    "- `opencode_zen_model_caps_present` — every Zen model >= 128k context.\n",
-    "- `key_url_field_present_on_all_providers` — ollama-local=None, rest=Some.\n",
-    "- `model_info_unknown_falls_back_to_conservative_default` — unknown -> 32k.\n",
+    "Do NOT add `default = true` unless the user explicitly asks to change the\n",
+    "provider's default model.\n\n",
+    "After editing, summarize the changes for the user: which models were added\n",
+    "and removed, with their researched caps. The user can confirm or ask for\n",
+    "adjustments.\n\n",
+    "Note: `~/.config/zoid/models.toml` is overwritten on the next zoid upgrade\n",
+    "(the new binary ships a newer embedded copy). Changes you want to survive\n",
+    "upgrades should go in `~/.config/zoid/models.user.toml` as `user` rows\n",
+    "instead — that file is never overwritten.\n\n",
+    "## What NOT to do\n\n",
+    "- Do NOT add `wire` rows to `models.toml` — the shipped file is\n",
+    "  `static` rows only. `wire` rows go in `models.user.toml` (written\n",
+    "  automatically by the tool for Ollama + Gemini).\n",
+    "- Do NOT run `cargo test` or commit — that's the user's workflow, not\n",
+    "  the skill's.\n",
 );
 
 impl SkillRegistry {
@@ -281,10 +283,11 @@ impl SkillRegistry {
             },
             Skill {
                 name: "refreshing-provider-models".into(),
-                description: "Use when refreshing zoid's static provider/model \
-                    registry against live provider endpoints, adding new models \
-                    to MODEL_CAPS, reconciling model id drift, or updating \
-                    provider metadata across the six supported providers".into(),
+                description: "Sync zoid's provider/model registry against live \
+                    endpoints: run `zoid refresh-models`, research new models, \
+                    and update crates/zoid-model/models.toml with researched \
+                    caps. Use when adding new models, removing retired ones, \
+                    or updating provider metadata.".into(),
                 body: REFRESHING_PROVIDER_MODELS_BODY.into(),
                 base_dir: None,
             },
@@ -473,32 +476,37 @@ mod tests {
             .get("refreshing-provider-models")
             .expect("refreshing-provider-models must be a built-in skill");
         assert!(
-            s.description.starts_with("Use when"),
-            "description must start with 'Use when'"
+            s.description.contains("zoid refresh-models"),
+            "description must mention the `zoid refresh-models` tool"
         );
         assert!(
-            s.body.contains("ollama-cloud"),
-            "skill body must mention ollama-cloud"
+            s.body.contains("zoid refresh-models"),
+            "skill body must point at the `zoid refresh-models` tool"
         );
         assert!(
-            s.body.contains("/api/tags"),
-            "skill body must mention /api/tags for Ollama"
+            s.body.contains("models.user.toml"),
+            "skill body must name the models.user.toml output file"
         );
         assert!(
-            s.body.contains("anthropic-version"),
-            "skill body must mention anthropic-version header"
+            s.body.contains("models.toml"),
+            "skill body must name the shipped models.toml file"
         );
         assert!(
-            s.body.contains("MODEL_CAPS"),
-            "skill body must reference MODEL_CAPS"
+            s.body.contains("wire_shape"),
+            "skill body must include wire_shape inference guidance"
         );
         assert!(
-            s.body.contains("opencode_zen_model_caps_present"),
-            "skill body must reference the Zen caps invariant test"
+            s.body.contains("context_window"),
+            "skill body must guide caps research"
+        );
+        // The repurposed body must NOT still describe the old hand-edit workflow.
+        assert!(
+            !s.body.contains("MODEL_CAPS"),
+            "repurposed skill must not reference the old MODEL_CAPS table"
         );
         assert!(
-            s.body.contains("thinking_wire"),
-            "skill body must reference thinking_wire"
+            !s.body.contains("/api/tags"),
+            "repurposed skill must not describe the old curl /api/tags workflow"
         );
         assert!(s.base_dir.is_none(), "built-in skills have no base_dir");
     }

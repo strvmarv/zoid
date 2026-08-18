@@ -73,6 +73,8 @@ async fn hard_token_stops_subagent_parked_in_streaming() {
             CancellationToken::new(), // cancel — never fired; subagents don't use it
             hard_for_run,
             Arc::new(AtomicI64::new(0)),
+            std::sync::Arc::new(zoid_model::Registry::default()),
+            "glm".to_string(),
         )
         .await
     });

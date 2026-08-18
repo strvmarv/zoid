@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 /// params. Returns `None` for models without thinking support (defensive —
 /// the capability gate should have caught this earlier).
 fn thinking_params(req: &CompletionRequest) -> Option<Vec<(&'static str, Value)>> {
-    let info = crate::model::model_info(&req.model);
+    let info = req.model_info;
     let wire = info.thinking_wire;
     match wire {
         crate::model::ThinkingWireShape::DeepSeek => {
@@ -476,6 +476,7 @@ mod tests {
     fn body_has_stream_options_and_system_leading_message() {
         let req = CompletionRequest {
             model: "glm-5.2".into(),
+            model_info: crate::model::model_info("glm-5.2"),
             system: Some("be terse".into()),
             messages: vec![Message::user("hi")],
             max_tokens: 1024,
@@ -501,6 +502,7 @@ mod tests {
     fn body_without_system_has_no_system_message() {
         let req = CompletionRequest {
             model: "m".into(),
+            model_info: crate::model::model_info("m"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 8,
@@ -518,6 +520,7 @@ mod tests {
     fn assistant_with_tool_calls_emits_arguments_as_json_string() {
         let req = CompletionRequest {
             model: "m".into(),
+            model_info: crate::model::model_info("m"),
             system: None,
             messages: vec![Message {
                 role: MsgRole::Assistant,
@@ -551,6 +554,7 @@ mod tests {
     fn tool_message_emits_tool_call_id() {
         let req = CompletionRequest {
             model: "m".into(),
+            model_info: crate::model::model_info("m"),
             system: None,
             messages: vec![Message::tool_with_call_id("read_file", "call-1", "body")],
             max_tokens: 8,
@@ -569,6 +573,7 @@ mod tests {
     fn body_includes_tools_array_when_present() {
         let req = CompletionRequest {
             model: "m".into(),
+            model_info: crate::model::model_info("m"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 8,
@@ -594,6 +599,7 @@ mod tests {
     fn body_without_tools_omits_tools_key() {
         let req = CompletionRequest {
             model: "m".into(),
+            model_info: crate::model::model_info("m"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 8,
@@ -754,6 +760,7 @@ mod tests {
     fn deepseek_body_emits_thinking_and_effort_when_auto() {
         let req = CompletionRequest {
             model: "deepseek-v4-pro".into(),
+            model_info: crate::model::model_info("deepseek-v4-pro"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 4096,
@@ -770,6 +777,7 @@ mod tests {
     fn glm_5_2_thinking_off_emits_disabled_no_effort() {
         let req = CompletionRequest {
             model: "glm-5.2".into(),
+            model_info: crate::model::model_info("glm-5.2"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 16,
@@ -786,6 +794,7 @@ mod tests {
     fn glm_5_2_thinking_auto_emits_enabled_high() {
         let req = CompletionRequest {
             model: "glm-5.2".into(),
+            model_info: crate::model::model_info("glm-5.2"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 16,
@@ -802,6 +811,7 @@ mod tests {
     fn glm_5_2_thinking_max_emits_enabled_max() {
         let req = CompletionRequest {
             model: "glm-5.2".into(),
+            model_info: crate::model::model_info("glm-5.2"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 16,
@@ -818,6 +828,7 @@ mod tests {
     fn glm_5_turbo_thinking_off_emits_disabled_no_effort() {
         let req = CompletionRequest {
             model: "glm-5-turbo".into(),
+            model_info: crate::model::model_info("glm-5-turbo"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 16,
@@ -834,6 +845,7 @@ mod tests {
     fn glm_5_turbo_thinking_auto_emits_enabled_high() {
         let req = CompletionRequest {
             model: "glm-5-turbo".into(),
+            model_info: crate::model::model_info("glm-5-turbo"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 16,
@@ -850,6 +862,7 @@ mod tests {
     fn glm_5_turbo_thinking_max_emits_enabled_max() {
         let req = CompletionRequest {
             model: "glm-5-turbo".into(),
+            model_info: crate::model::model_info("glm-5-turbo"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 16,
@@ -866,6 +879,7 @@ mod tests {
     fn glm_4_7_thinking_off_emits_disabled_no_effort() {
         let req = CompletionRequest {
             model: "glm-4.7".into(),
+            model_info: crate::model::model_info("glm-4.7"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 16,
@@ -882,6 +896,7 @@ mod tests {
     fn glm_4_7_thinking_auto_emits_enabled_high() {
         let req = CompletionRequest {
             model: "glm-4.7".into(),
+            model_info: crate::model::model_info("glm-4.7"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 16,
@@ -898,6 +913,7 @@ mod tests {
     fn glm_4_7_thinking_max_emits_enabled_max() {
         let req = CompletionRequest {
             model: "glm-4.7".into(),
+            model_info: crate::model::model_info("glm-4.7"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 16,
@@ -914,6 +930,7 @@ mod tests {
     fn deepseek_body_emits_disabled_when_off() {
         let req = CompletionRequest {
             model: "deepseek-v4-flash".into(),
+            model_info: crate::model::model_info("deepseek-v4-flash"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 4096,
@@ -930,6 +947,7 @@ mod tests {
     fn deepseek_body_emits_max_effort() {
         let req = CompletionRequest {
             model: "deepseek-v4-pro".into(),
+            model_info: crate::model::model_info("deepseek-v4-pro"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 4096,
@@ -946,6 +964,7 @@ mod tests {
     fn deepseek_body_low_effort_maps_to_high() {
         let req = CompletionRequest {
             model: "deepseek-v4-pro".into(),
+            model_info: crate::model::model_info("deepseek-v4-pro"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 4096,
@@ -961,6 +980,7 @@ mod tests {
     fn deepseek_v4_pro_off_silently_becomes_auto() {
         let req = CompletionRequest {
             model: "deepseek-v4-pro".into(),
+            model_info: crate::model::model_info("deepseek-v4-pro"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 4096,
@@ -977,7 +997,8 @@ mod tests {
     #[test]
     fn openai_body_emits_reasoning_effort_when_auto() {
         let req = CompletionRequest {
-            model: "o3".into(),
+            model: "gpt-5.5".into(),
+            model_info: crate::model::model_info("gpt-5.5"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 4096,
@@ -996,7 +1017,8 @@ mod tests {
     #[test]
     fn openai_body_emits_xhigh_for_max() {
         let req = CompletionRequest {
-            model: "o3".into(),
+            model: "gpt-5.5".into(),
+            model_info: crate::model::model_info("gpt-5.5"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 4096,
@@ -1012,6 +1034,7 @@ mod tests {
     fn non_thinking_model_emits_nothing_when_off() {
         let req = CompletionRequest {
             model: "mimo-v2.5".into(),
+            model_info: crate::model::model_info("mimo-v2.5"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 4096,
@@ -1028,6 +1051,7 @@ mod tests {
     fn non_thinking_model_emits_nothing_even_when_thinking_on() {
         let req = CompletionRequest {
             model: "mimo-v2.5".into(),
+            model_info: crate::model::model_info("mimo-v2.5"),
             system: None,
             messages: vec![Message::user("x")],
             max_tokens: 4096,
@@ -1044,6 +1068,7 @@ mod tests {
     fn reassert_pushes_trailing_system_message_openai() {
         let mut req = CompletionRequest {
             model: "m".into(),
+            model_info: crate::model::model_info("m"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 16,
@@ -1114,6 +1139,7 @@ mod tests {
     fn probe_req() -> CompletionRequest {
         CompletionRequest {
             model: "m".into(),
+            model_info: crate::model::model_info("m"),
             system: None,
             messages: vec![Message::user("hi")],
             max_tokens: 8,
@@ -1277,6 +1303,7 @@ mod tests {
             .with_idle_timeout(std::time::Duration::from_secs(2));
         let req = CompletionRequest {
             model: "m".into(),
+            model_info: crate::model::model_info("m"),
             system: None,
             messages: vec![crate::Message::user("hi")],
             max_tokens: 8,

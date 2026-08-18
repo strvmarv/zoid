@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 zoid-model = { path = "../zoid-model" }
+zoid-registry = { path = "../zoid-registry" }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }

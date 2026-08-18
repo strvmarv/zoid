@@ -5,7 +5,7 @@ expression: "draw_overlay(Overlay::Objects, 160, 40)"
 Buffer {
     area: Rect { x: 0, y: 0, width: 160, height: 40 },
     content: [
-        "v1.0.0                                                                        zoid                                        Esc interrupt · : command · ^P palette",
+        "v1.1.0                                                                        zoid                                        Esc interrupt · : command · ^P palette",
         "    ● read_file(path: src/ast.rs)                                                                                 █ ╭ ▾ repo ─────────────────────────────────╮ ",
         "    ✓ read_file → fn parse() {}                                                                                   █ │📦 repo   ⎇ main                         │ ", // hidden by multi-width symbols: [(118, " ")]
         "    ⚠ shell → FAILED                                                                                              █ │🔧 worktree (none)                       │ ", // hidden by multi-width symbols: [(118, " ")]

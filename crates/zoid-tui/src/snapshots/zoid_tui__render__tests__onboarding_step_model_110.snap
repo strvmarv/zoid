@@ -1,5 +1,6 @@
 ---
 source: crates/zoid-tui/src/render.rs
+assertion_line: 2867
 expression: lines
 ---
   Welcome to zoid — let's connect your first LLM.
@@ -10,5 +11,13 @@ expression: lines
 
   ● 3 — Model
     › use default
+      claude-fable-5
+      claude-haiku-4-5-20251001
+      claude-opus-4-5-20251101
+      claude-opus-4-6
+      claude-opus-4-7
       claude-opus-4-8
+      claude-opus-5
+      claude-sonnet-4-5-20250929
       claude-sonnet-4-6
+      claude-sonnet-5

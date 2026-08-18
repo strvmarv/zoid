@@ -1,0 +1,1365 @@
+# Shipped provider/model registry. Replaced wholesale on upgrade; never edited
+# by the tool or user in normal operation. User overrides live in models.user.toml.
+#
+# Faithful transcription of the deleted Rust consts (PROVIDERS, ZEN_MODEL_IDS,
+# MODEL_CAPS) plus the curated local-model seed (qwythos). Wire shapes come
+# from GO_MODELS/ZEN_MODELS; caps come from MODEL_CAPS (keyed by model id, so a
+# model that appears under several providers keeps the same caps in each row).
+#
+# One intended bug fix: `claude-sonnet-4-6` previously had a single MODEL_CAPS
+# entry (1M, Budget/Anthropic, researched for anthropic-api) that opencode-zen
+# also picked up. It is now split into two rows:
+#   - anthropic-api  -> 1M,  Budget/Anthropic  (the researched Anthropic caps)
+#   - opencode-zen   -> 200K, None/None        (the standard zen Anthropic shape)
+
+# ---------------------------------------------------------------------------
+# ollama · local (keyless; free-text local tags + one curated seed model)
+# ---------------------------------------------------------------------------
+[[provider]]
+id = "ollama-local"
+display = "ollama · local"
+family = "ollama"
+transport = { kind = "http", default_base_url = "http://localhost:11434" }
+status = "available"
+
+  [[provider.model]]
+  id = "qwythos"
+  display = "Qwythos 9B (Claude Mythos 5, 1M)"
+  wire_shape = "ollama"
+  source = "static"
+  context_window = 1048576
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "toggle"
+  thinking_wire = "ollama"
+  runtime = "ollama"
+  download_source = "hf.co/empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF:Q4_K_M"
+  quant = "Q4_K_M"
+  modelfile = """FROM hf.co/empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF:Q4_K_M
+TEMPLATE \"\"\"{{ if .System }}<|im_start|>system
+{{ .System }}<|im_end|>{{ end }}<|im_start|>user
+{{ .Prompt }}<|im_end|>
+<|im_start|>assistant\"\"\"
+PARAMETER stop <|im_end|>
+PARAMETER stop <|im_start|>"""
+  num_ctx = 98304
+  vram_curve = """[{"num_ctx":32768,"vram_mb":7000},{"num_ctx":65536,"vram_mb":8500},{"num_ctx":98304,"vram_mb":10000},{"num_ctx":131072,"vram_mb":12000}]"""
+
+# ---------------------------------------------------------------------------
+# ollama · cloud
+# ---------------------------------------------------------------------------
+[[provider]]
+id = "ollama-cloud"
+display = "ollama · cloud"
+family = "ollama"
+transport = { kind = "http", default_base_url = "https://ollama.com" }
+status = "available"
+key_url = "https://ollama.com"
+key_env = "OLLAMA_API_KEY"
+
+  [[provider.model]]
+  id = "glm-5.2:cloud"
+  wire_shape = "ollama"
+  source = "static"
+  default = true
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+# ---------------------------------------------------------------------------
+# opencode · go (26 models; first = default)
+# ---------------------------------------------------------------------------
+[[provider]]
+id = "opencode-go"
+display = "opencode · go"
+family = "opencode-go"
+transport = { kind = "http", default_base_url = "https://opencode.ai/zen/go" }
+status = "available"
+key_url = "https://opencode.ai"
+key_env = "OPENCODE_GO_API_KEY"
+
+  [[provider.model]]
+  id = "glm-5.2"
+  wire_shape = "openai-chat"
+  source = "static"
+  default = true
+  context_window = 1000000
+  max_output = 131072
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "glm-5.1"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "kimi-k2.7-code"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 262144
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "kimi-k2.6"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 262144
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "deepseek-v4-pro"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 1000000
+  max_output = 384000
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "deepseek-v4-flash"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 1000000
+  max_output = 384000
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "mimo-v2.5"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 128000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "mimo-v2.5-pro"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 128000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "minimax-m3"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = false
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "minimax-m2.7"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = false
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "minimax-m2.5"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = false
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "qwen3.7-max"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 256000
+  max_output = 0
+  tools = false
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "qwen3.7-plus"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 256000
+  max_output = 0
+  tools = false
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "glm-5.3"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 1000000
+  max_output = 131072
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "glm-5"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 1000000
+  max_output = 131072
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "kimi-k3"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "kimi-k2.5"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 256000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "qwen3.8-max"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 256000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "qwen3.6-plus"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 256000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "qwen3.5-plus"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 256000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "mimo-v2-pro"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "mimo-v2-omni"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "hy3"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "hy3-preview"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "gpt-5.6-luna"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 272000
+  max_output = 128000
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "grok-4.5"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 500000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+# ---------------------------------------------------------------------------
+# anthropic · api key (2 models; first = default)
+# ---------------------------------------------------------------------------
+[[provider]]
+id = "anthropic-api"
+display = "anthropic · api key"
+family = "anthropic"
+transport = { kind = "http", default_base_url = "https://api.anthropic.com" }
+status = "available"
+key_url = "https://console.anthropic.com/settings/keys"
+key_env = "ANTHROPIC_API_KEY"
+
+  [[provider.model]]
+  id = "claude-sonnet-4-6"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  default = true
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "budget"
+  thinking_wire = "anthropic"
+
+  [[provider.model]]
+  id = "claude-opus-4-8"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "adaptive"
+  thinking_wire = "anthropic"
+
+  [[provider.model]]
+  id = "claude-opus-5"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 1000000
+  max_output = 128000
+  tools = true
+  prompt_cache = true
+  thinking = "adaptive"
+  thinking_wire = "anthropic"
+
+  [[provider.model]]
+  id = "claude-sonnet-5"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 1000000
+  max_output = 128000
+  tools = true
+  prompt_cache = true
+  thinking = "adaptive"
+  thinking_wire = "anthropic"
+
+  [[provider.model]]
+  id = "claude-fable-5"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 1000000
+  max_output = 128000
+  tools = true
+  prompt_cache = true
+  thinking = "adaptive"
+  thinking_wire = "anthropic"
+
+  [[provider.model]]
+  id = "claude-opus-4-7"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "budget"
+  thinking_wire = "anthropic"
+
+  [[provider.model]]
+  id = "claude-opus-4-6"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "budget"
+  thinking_wire = "anthropic"
+
+  [[provider.model]]
+  id = "claude-opus-4-5-20251101"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "budget"
+  thinking_wire = "anthropic"
+
+  [[provider.model]]
+  id = "claude-haiku-4-5-20251001"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 200000
+  max_output = 64000
+  tools = true
+  prompt_cache = true
+  thinking = "toggle"
+  thinking_wire = "anthropic"
+
+  [[provider.model]]
+  id = "claude-sonnet-4-5-20250929"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "toggle"
+  thinking_wire = "anthropic"
+
+# ---------------------------------------------------------------------------
+# zai · coding plan (3 models; first = default)
+# ---------------------------------------------------------------------------
+[[provider]]
+id = "zai-coding-plan"
+display = "zai · coding plan"
+family = "zai"
+transport = { kind = "http", default_base_url = "https://api.z.ai/api/coding/paas/v4" }
+status = "available"
+key_url = "https://z.ai"
+key_env = "ZAI_API_KEY"
+
+  [[provider.model]]
+  id = "glm-5.2"
+  wire_shape = "openai-chat"
+  source = "static"
+  default = true
+  context_window = 1000000
+  max_output = 131072
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "glm-5-turbo"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 262144
+  max_output = 131072
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "glm-4.7"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 200000
+  max_output = 131072
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "glm-4.5"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 1000000
+  max_output = 131072
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "glm-4.5-air"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 1000000
+  max_output = 131072
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "glm-4.6"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 1000000
+  max_output = 131072
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "glm-5"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 1000000
+  max_output = 131072
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "glm-5.1"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 1000000
+  max_output = 131072
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "glm-5.3"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 1000000
+  max_output = 131072
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+# ---------------------------------------------------------------------------
+# opencode · zen (62 models across four wire shapes; first = default)
+# ---------------------------------------------------------------------------
+[[provider]]
+id = "opencode-zen"
+display = "opencode · zen"
+family = "opencode-zen"
+transport = { kind = "http", default_base_url = "https://opencode.ai/zen" }
+status = "available"
+key_url = "https://opencode.ai"
+key_env = "OPENCODE_GO_API_KEY"
+
+  # --- Anthropic Messages (13) ---
+  [[provider.model]]
+  id = "claude-sonnet-4-5"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  default = true
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "claude-fable-5"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  # claude-opus-4-8 overlaps with anthropic-api and keeps its researched
+  # MODEL_CAPS entry (1M, Adaptive/Anthropic).
+  [[provider.model]]
+  id = "claude-opus-4-8"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "adaptive"
+  thinking_wire = "anthropic"
+
+  [[provider.model]]
+  id = "claude-opus-4-7"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "claude-opus-4-6"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "claude-opus-4-5"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "claude-sonnet-5"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  # claude-sonnet-4-6: the intended bug fix. The old single MODEL_CAPS entry
+  # (1M, Budget/Anthropic) was wrong for zen; this row uses the standard zen
+  # Anthropic shape (200K, None/None). anthropic-api keeps the researched row.
+  [[provider.model]]
+  id = "claude-sonnet-4-6"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "claude-haiku-4-5"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "claude-opus-5"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "claude-sonnet-4"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  # qwen3.6-plus / qwen3.5-plus overlap with opencode-go and keep their
+  # researched MODEL_CAPS.
+  [[provider.model]]
+  id = "qwen3.6-plus"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "qwen3.5-plus"
+  wire_shape = "anthropic-messages"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  # --- OpenAI Responses (17) ---
+  [[provider.model]]
+  id = "gpt-5.5"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "gpt-5.5-pro"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "gpt-5.4"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "gpt-5.4-pro"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "gpt-5.4-mini"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "gpt-5.4-nano"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "gpt-5.3-codex"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "gpt-5.3-codex-spark"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "gpt-5.2"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "gpt-5.2-codex"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "gpt-5.1"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "gpt-5.1-codex-max"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "gpt-5.1-codex"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "gpt-5.1-codex-mini"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "gpt-5"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "gpt-5-codex"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "gpt-5-nano"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "gpt-5.6-sol"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 272000
+  max_output = 128000
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "gpt-5.6-terra"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 272000
+  max_output = 128000
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "gpt-5.6-luna"
+  wire_shape = "openai-responses"
+  source = "static"
+  context_window = 272000
+  max_output = 128000
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  # --- OpenAI Chat Completions (19) ---
+  # deepseek-v4-pro / deepseek-v4-flash overlap with opencode-go and keep their
+  # researched MODEL_CAPS (1M, 384K, ToggleWithEffort/DeepSeek).
+  [[provider.model]]
+  id = "deepseek-v4-pro"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 1000000
+  max_output = 384000
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "deepseek-v4-flash"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 1000000
+  max_output = 384000
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "deepseek-v4-flash-free"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 128000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "none"
+  thinking_wire = "none"
+
+  # glm-5.2 / glm-5.1 overlap with opencode-go (and glm-5.2 with zai) and keep
+  # their researched MODEL_CAPS.
+  [[provider.model]]
+  id = "glm-5.2"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 1000000
+  max_output = 131072
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "glm-5.1"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "glm-5"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 128000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "grok-4.5"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 128000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "grok-build-0.1"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 128000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "kimi-k2.5"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 128000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "none"
+  thinking_wire = "none"
+
+  # kimi-k2.6 / kimi-k2.7-code overlap with opencode-go and keep their researched
+  # MODEL_CAPS (262144, prompt_cache=true).
+  [[provider.model]]
+  id = "kimi-k2.6"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 262144
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "kimi-k2.7-code"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 262144
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  # minimax-m3 / minimax-m2.7 / minimax-m2.5 overlap with opencode-go and keep
+  # their researched MODEL_CAPS (200K, tools=false, prompt_cache=true).
+  [[provider.model]]
+  id = "minimax-m3"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = false
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "minimax-m2.7"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = false
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "minimax-m2.5"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = false
+  prompt_cache = true
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "big-pickle"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 128000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "hy3-free"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 128000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "mimo-v2.5-free"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 128000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "nemotron-3-ultra-free"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 128000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "grok-4.6"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 500000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "openai"
+
+  [[provider.model]]
+  id = "muse-spark-1.2"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "kimi-k3"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = true
+  thinking = "toggle-with-effort"
+  thinking_wire = "deepseek"
+
+  [[provider.model]]
+  id = "nemotron-3.5-lightning-free"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "none"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "laguna-s-2.1-free"
+  wire_shape = "openai-chat"
+  source = "static"
+  context_window = 200000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "none"
+  thinking_wire = "none"
+
+  # --- Google Gemini (3) ---
+  [[provider.model]]
+  id = "gemini-3.5-flash"
+  wire_shape = "google-gemini"
+  source = "static"
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "gemini-3.1-pro"
+  wire_shape = "google-gemini"
+  source = "static"
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "gemini-3-flash"
+  wire_shape = "google-gemini"
+  source = "static"
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "gemini-3.6-flash"
+  wire_shape = "google-gemini"
+  source = "static"
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "gemini-3.7-flash"
+  wire_shape = "google-gemini"
+  source = "static"
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "gemini-3.5-flash-lite"
+  wire_shape = "google-gemini"
+  source = "static"
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle"
+  thinking_wire = "none"
+
+# ---------------------------------------------------------------------------
+# gemini · api key (3 models; first = default)
+# ---------------------------------------------------------------------------
+[[provider]]
+id = "gemini-api"
+display = "gemini · api key"
+family = "gemini"
+transport = { kind = "http", default_base_url = "https://generativelanguage.googleapis.com" }
+status = "available"
+key_url = "https://aistudio.google.com/app/apikey"
+key_env = "GEMINI_API_KEY"
+
+  [[provider.model]]
+  id = "gemini-3.5-flash"
+  wire_shape = "google-gemini"
+  source = "static"
+  default = true
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "gemini-3.1-pro"
+  wire_shape = "google-gemini"
+  source = "static"
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle"
+  thinking_wire = "none"
+
+  [[provider.model]]
+  id = "gemini-3-flash"
+  wire_shape = "google-gemini"
+  source = "static"
+  context_window = 1000000
+  max_output = 0
+  tools = true
+  prompt_cache = false
+  thinking = "toggle"
+  thinking_wire = "none"
