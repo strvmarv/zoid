@@ -2,6 +2,7 @@ name: catalog-index
 on:
   push:
     paths: [ "plugins/*.toml" ]
+  workflow_dispatch: {}
 permissions:
   contents: write
 jobs:
