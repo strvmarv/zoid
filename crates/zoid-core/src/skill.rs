@@ -137,25 +137,83 @@ Never call `submit_feedback` twice for the same issue in one session unless the
 user asks.
 ";
 
-/// The body of the built-in `refreshing-provider-models` skill. A slim pointer
-/// to the `zoid refresh-models` subcommand — the registry is now a TOML file
-/// (not Rust code), so the agent runs the tool instead of hand-editing
-/// `MODEL_CAPS` / provider arrays.
+/// The body of the built-in `refreshing-provider-models` skill. Guides an
+/// agent through the full model-sync workflow: run the tool, research new
+/// models, update the shipped models.toml with researched caps.
 const REFRESHING_PROVIDER_MODELS_BODY: &str = concat!(
     "# Refreshing Provider Models\n\n",
-    "The provider/model registry is a TOML file, not Rust code. To refresh it,\n",
-    "run the built-in tool for the user:\n\n",
+    "The provider/model registry is a TOML file (`crates/zoid-model/models.toml`),\n",
+    "not Rust code. This skill syncs it against live provider endpoints.\n\n",
+    "## Step 1 — Run the tool\n\n",
     "```bash\n",
     "zoid refresh-models\n",
+    "```\n",
+    "(If testing from source: `cargo run -p zoid -- refresh-models`)\n\n",
+    "The tool fetches live model lists from each provider that has a key. It\n",
+    "auto-writes `wire` rows to `models.user.toml` for Ollama and Gemini (the\n",
+    "only two providers with wire-derived caps endpoints). For all other\n",
+    "providers (Anthropic, OpenAI-compat, opencode-go, opencode-zen, zai), it\n",
+    "reports new and retired models but does NOT write them — those need\n",
+    "manual caps research and `static` rows in the shipped `models.toml`.\n\n",
+    "Report the output to the user: what was added, updated, removed, and what\n",
+    "needs manual attention.\n\n",
+    "## Step 2 — Research new models\n\n",
+    "For each model in the report's `reported` list that says \"new model\"\n",
+    "(needs manual caps), research its metadata:\n",
+    "- `context_window` — max input tokens\n",
+    "- `max_output` — max output tokens (0 = provider default)\n",
+    "- `tools` — does it support tool/function calling? (default true)\n",
+    "- `prompt_cache` — does it support prompt caching? (default false)\n",
+    "- `thinking` — thinking support: `none`, `toggle`, `toggle-with-effort`,\n",
+    "  `budget`, or `adaptive`\n",
+    "- `thinking_wire` — thinking wire protocol: `none`, `anthropic`,\n",
+    "  `deepseek`, `openai`, or `ollama`\n\n",
+    "Use web_search to find the model's spec page (provider docs, API reference).\n",
+    "If you can't find exact numbers, use conservative defaults from a sibling\n",
+    "model in the same family (e.g. glm-5.3 → same caps as glm-5.2).\n\n",
+    "## Step 3 — Update models.toml\n\n",
+    "Add `static` rows to `crates/zoid-model/models.toml` for each new model.\n",
+    "Infer the `wire_shape` from the model family:\n\n",
+    "| Model family | wire_shape |\n",
+    "|---|---|\n",
+    "| Claude (claude-*) | `anthropic-messages` |\n",
+    "| GPT (gpt-5.*) | `openai-responses` |\n",
+    "| GLM (glm-*) | `openai-chat` |\n",
+    "| Grok (grok-*) | `openai-chat` |\n",
+    "| Kimi (kimi-*) | `openai-chat` |\n",
+    "| Deepseek (deepseek-*) | `openai-chat` |\n",
+    "| Mimo (mimo-*) | `openai-chat` |\n",
+    "| Minimax (minimax-*) on opencode-go | `anthropic-messages` |\n",
+    "| Minimax (minimax-*) on opencode-zen | `openai-chat` |\n",
+    "| Qwen (qwen3.*) on opencode-go | `anthropic-messages` |\n",
+    "| Qwen (qwen3.*) on opencode-zen | `anthropic-messages` |\n",
+    "| Gemini (gemini-*) | `google-gemini` |\n",
+    "| Ollama (ollama-*) | `ollama` |\n",
+    "| Other/unknown | `openai-chat` (conservative default) |\n\n",
+    "TOML format for each row:\n\n",
+    "```toml\n",
+    "  [[provider.model]]\n",
+    "  id = \"model-id\"\n",
+    "  wire_shape = \"openai-chat\"\n",
+    "  source = \"static\"\n",
+    "  context_window = 1000000\n",
+    "  max_output = 0\n",
+    "  tools = true\n",
+    "  prompt_cache = true\n",
+    "  thinking = \"toggle-with-effort\"\n",
+    "  thinking_wire = \"deepseek\"\n",
     "```\n\n",
-    "This fetches live model lists from each provider that has a key, adds/updates\n",
-    "`wire` rows (Ollama + Gemini only), removes retired `wire` rows, and reports\n",
-    "(never deletes) `static`/`user` rows that are absent live. It writes results\n",
-    "to `models.user.toml`.\n\n",
-    "After running it, report the diff to the user: which models were added,\n",
-    "updated, removed, and which need manual attention (new models on providers\n",
-    "without wire-derived caps).\n\n",
-    "Do NOT hand-edit the registry TOML to add models — run the tool instead.\n",
+    "Do NOT add `default = true` unless the user explicitly asks to change the\n",
+    "provider's default model.\n\n",
+    "For retired models (the report says \"absent from live\"), remove their\n",
+    "`static` rows from `models.toml`.\n\n",
+    "## What NOT to do\n\n",
+    "- Do NOT hand-edit `models.user.toml` to add models — that file is\n",
+    "  tool-generated (wire rows) and user-managed (user rows).\n",
+    "- Do NOT add `wire` rows to `models.toml` — the shipped file is\n",
+    "  `static` rows only.\n",
+    "- Do NOT run `cargo test` or commit — that's the user's workflow, not\n",
+    "  the skill's.\n",
 );
 
 impl SkillRegistry {
@@ -215,10 +273,11 @@ impl SkillRegistry {
             },
             Skill {
                 name: "refreshing-provider-models".into(),
-                description: "Run `zoid refresh-models` to refresh the provider/model \
-                    registry from live endpoints (adds/updates/removes wire rows in \
-                    models.user.toml, reports static/user drift). Use whenever the \
-                    user wants to update zoid's known models.".into(),
+                description: "Sync zoid's provider/model registry against live \
+                    endpoints: run `zoid refresh-models`, research new models, \
+                    and update crates/zoid-model/models.toml with researched \
+                    caps. Use when adding new models, removing retired ones, \
+                    or updating provider metadata.".into(),
                 body: REFRESHING_PROVIDER_MODELS_BODY.into(),
                 base_dir: None,
             },
@@ -419,8 +478,16 @@ mod tests {
             "skill body must name the models.user.toml output file"
         );
         assert!(
-            s.body.contains("Do NOT hand-edit"),
-            "skill body must instruct the agent not to hand-edit the registry"
+            s.body.contains("models.toml"),
+            "skill body must name the shipped models.toml file"
+        );
+        assert!(
+            s.body.contains("wire_shape"),
+            "skill body must include wire_shape inference guidance"
+        );
+        assert!(
+            s.body.contains("context_window"),
+            "skill body must guide caps research"
         );
         // The repurposed body must NOT still describe the old hand-edit workflow.
         assert!(
