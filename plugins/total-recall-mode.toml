@@ -1,0 +1,35 @@
+[plugin]
+id = "total-recall-mode"
+schema = 1
+kind = ["mode"]
+name = "Total Recall"
+description = "Total Recall — session bootstrap and slash-command skills for the total-recall memory system (semantic search, auto-compaction, knowledge base), imported from strvmarv/total-recall."
+
+[source]
+repo = "strvmarv/total-recall"
+ref = "5842c523f8c7583bbda85334d2f3ca1b0111b6f2"
+subtree = "skills"
+
+[mode]
+loader = "using-total-recall/SKILL.md"
+strip_prefix = "skills/"
+body = "from-skill-frontmatter"
+description = "Total Recall — session bootstrap and slash-command skills for the total-recall memory system, imported from strvmarv/total-recall."
+body_intro = """
+You are operating in "Total Recall" mode, imported from strvmarv/total-recall.
+
+This mode requires the separate `total-recall` MCP plugin (`:plugin install total-recall`) — without it, the tools referenced below don't exist.
+
+Before any task, check if an available skill applies and invoke it with invoke_skill. The skills are:
+"""
+body_outro = """
+
+Always check for an applicable skill before starting work. If session_start reports the MCP server isn't reachable, proceed without memory features rather than blocking on it.
+"""
+
+[[install]]
+effect = "activate"
+
+[[install]]
+effect = "onboarding_hint"
+text = "Total Recall mode installed. Install the total-recall MCP plugin too (:plugin install total-recall) for memory features to work."
