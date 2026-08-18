@@ -20,6 +20,26 @@
         "repo": "obra/superpowers",
         "ref": "d884ae04edebef577e82ff7c4e143debd0bbec99"
       }
+    },
+    {
+      "id": "total-recall",
+      "name": "Total Recall",
+      "kind": [
+        "mcp"
+      ],
+      "description": "Multi-tiered memory and knowledge base with semantic search, auto-compaction, and built-in evaluation, over MCP (stdio)."
+    },
+    {
+      "id": "total-recall-skills",
+      "name": "Total Recall Skills",
+      "kind": [
+        "skills"
+      ],
+      "description": "Session bootstrap and slash-command skills for the total-recall memory system, imported from strvmarv/total-recall.",
+      "source": {
+        "repo": "strvmarv/total-recall",
+        "ref": "5842c523f8c7583bbda85334d2f3ca1b0111b6f2"
+      }
     }
   ]
 }
