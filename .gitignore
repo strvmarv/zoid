@@ -25,4 +25,5 @@ spikes/dotnet-spike/out-aot
 rust_out
 *.snap.new
 spikes/*/target/
+spikes/*/*/target/
 spikes/embed-rerank-eval/target*/

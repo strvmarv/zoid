@@ -4,6 +4,103 @@ All notable changes to zoid are documented here. Each `## X.Y.Z` section
 matches a released version tag; `cargo-dist` parses the section matching the
 tag being released and uses it as that release's announcement notes.
 
+## 1.1.0
+
+TOML-driven provider/model registry, Gemini as a first-class provider,
+structured tool-error diagnostics, and AGENTS.md auto-inclusion. 101
+commits since v1.0.0.
+
+### Provider/model registry redesign (spec:
+2026-08-16-provider-model-registry-redesign-design.md; plan:
+b4fe381a).
+
+The static `const` provider/model catalog in `zoid-model` is replaced
+by a TOML-driven registry that ships with the binary and is overridable
+on disk.
+
+- **New `zoid-registry` crate** (`crates/zoid-registry`): loads and parses
+  a shipped `models.toml` (embedded at compile time), merges a user
+  `models.user.toml` patch with field-level precedence, validates enum
+  fields, and rejects duplicate provider IDs. The merged registry is the
+  single source of truth for provider entries, model lists, wire shapes,
+  context windows, prompt-cache support, and default models.
+- **`zoid-model` owned-type migration**: the `const` registry is deleted;
+  `Registry` lookup methods (`model_info`, `entry_requires_key`,
+  `key_env_for`, `default_model`, `wire_shape`, …) replace the old
+  static accessors throughout the workspace.
+- **`zoid-provider` rewired**: `Registry` is threaded through
+  `context_ceiling` / `has_prompt_cache` / `default_model`. Composite
+  providers route via `Registry::wire_shape`. A `model_info` field is
+  added to `CompletionRequest` so leaf providers read resolved model
+  metadata off the request instead of re-resolving; base URLs fall back
+  to hardcoded defaults when the registry is absent.
+- **Gemini (`gemini-api`) is a first-class provider**
+  (`crates/zoid-provider/src/google_gemini.rs`): streaming via
+  `streamGenerateContent`, `GEMINI_API_KEY` secret, and Gemini models in
+  the shipped `models.toml`. The settings UI derives its secret-status
+  list from the registry, so the Gemini key row appears automatically.
+- **`zoid refresh-models` subcommand** + repurposed
+  `refreshing-provider-models` skill: the agent edits the on-disk
+  `models.toml` / `models.user.toml` directly and the user confirms;
+  the skill notes upgrade-overwrite semantics (shipped `models.toml` is
+  replaced on upgrade; `models.user.toml` persists) and warns that a
+  registry reload requires a restart.
+- **Boot-time provisioning**: on boot, the embedded `models.toml` is
+  seeded/upgraded on disk if missing or stale, and a `models.user.toml`
+  skeleton with schema examples is seeded on first boot. SQLite
+  local-model seeding is removed — provisioning now reads from the
+  registry.
+- **Stale-selection recovery**: if the configured provider/model is no
+  longer in the registry, zoid hard-stops and offers a quick-switch
+  overlay to pick a valid provider/model.
+- **Ollama `/api/show` caps fix**: family-prefixed `context_length` and
+  the thinking toggle are now read correctly from `/api/show`.
+
+### Tool error diagnostics (spec:
+2026-08-06-tool-error-diagnostics-design.md).
+
+Tool results now carry a structured `ErrorKind` so the TUI can render a
+human-readable `[error: kind]` prefix instead of a bare error string.
+
+- **`ErrorKind` enum** (`zoid-core`): propagated through
+  `EventKind::ToolResult` and `ChatMsg::ToolResult`; the TUI
+  (`render.rs`) renders the `[error: kind]` prefix in `map_msg`.
+- **Categorized error paths** across `read`, `ls`, `write`, `edit`,
+  `shell`, `git_context`, `web_search`, `web_fetch`, `subagent_diff`,
+  and chat-only `Emitting` tool errors, using `io::ErrorKind` inspection
+  where applicable. Worktree-conflict and turn-control kinds added;
+  `read`/`edit` `InvalidInput` rows collapsed; `web_fetch` arms
+  collapsed.
+- **Web fetch hardening**: DuckDuckGo error pages and empty-extraction
+  2xx responses are now detected and surfaced as errors rather than
+  silently passing through.
+- **Subagent dispatch hardening**: duplicate `(agent, task)` dispatches
+  are rejected before the pool-capacity check; a turn-scoped latch caps
+  runaway post-dispatch narration (60-token budget, guarded so a
+  compliant ack+dispatch+follow-up is never falsely capped); a TOCTOU
+  fix stops hard-cancellation from clobbering a real subagent success.
+- **CWD-deleted pre-check**: the agent loop detects a deleted CWD before
+  each turn and emits recovery instructions instead of failing opaquely
+  on the next tool call.
+- **Release profile**: `panic = "abort"` dropped from the release
+  profile (was breaking panic-catching paths).
+
+### AGENTS.md auto-inclusion
+
+- `zoid/src/agent.rs`: if the working directory contains an `AGENTS.md`,
+  its contents are appended to the system prompt tail under a
+  `## Project instructions (AGENTS.md)` heading (capped at
+  `AGENTS_MD_MAX_BYTES`, truncated with a notice when exceeded). This
+  replaces the prior softer "read AGENTS.md before touching anything"
+  directive with the actual contents inlined into the prompt.
+
+### Repo hygiene
+
+- Untracked ~4000 committed `target/` build artifacts under
+  `spikes/embed-rerank-eval/{candle-bench,minilm-rerank-bench,vecstore-bench}/`;
+  added `spikes/*/*/target/` to `.gitignore` so nested bench build
+  output stays untracked.
+
 ## 1.0.0
 
 zoid is now open source under MIT OR Apache-2.0. The source repo
