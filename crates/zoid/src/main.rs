@@ -10202,7 +10202,7 @@ mod tests {
             .expect("config sections must include a \"model\" row");
         app.shell.config_section = section;
         app.shell.config_field = field;
-        assert_eq!(current_config_field(&app).map(|(l, _, _)| l), Some("model"));
+        assert_eq!(current_config_field(&app).map(|(l, _, _)| l), Some("model".to_string()));
         app.shell.config_picker =
             zoid_tui::config_view::model_options(&app.registry, &app.config.provider, &app.config.model);
         app.shell.config_col = zoid_tui::state::ConfigCol::Picker;

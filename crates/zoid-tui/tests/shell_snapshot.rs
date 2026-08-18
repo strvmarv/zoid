@@ -980,9 +980,9 @@ fn config_overlay_frame() {
         companion_enabled: Source::Default,
         eviction_enabled: Source::Default,
     };
-    let ks = [
-        ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
-        ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
+    let ks: Vec<(String, SecretStatus)> = vec![
+        ("OLLAMA_API_KEY".to_string(), SecretStatus::Set { from_env: true }),
+        ("ANTHROPIC_API_KEY".to_string(), SecretStatus::NotSet),
     ];
     let reg = shipped();
     let sections = build_sections(&reg, &cfg, &prov, &ks);
@@ -1029,9 +1029,9 @@ fn config_key_prompt_masks_entry() {
         companion_enabled: Source::Default,
         eviction_enabled: Source::Default,
     };
-    let ks = [
-        ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
-        ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
+    let ks: Vec<(String, SecretStatus)> = vec![
+        ("OLLAMA_API_KEY".to_string(), SecretStatus::Set { from_env: true }),
+        ("ANTHROPIC_API_KEY".to_string(), SecretStatus::NotSet),
     ];
     let reg = shipped();
     let sections = build_sections(&reg, &cfg, &prov, &ks);
@@ -1087,9 +1087,9 @@ fn config_overlay_provider_picker() {
         companion_enabled: Source::Default,
         eviction_enabled: Source::Default,
     };
-    let ks = [
-        ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
-        ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
+    let ks: Vec<(String, SecretStatus)> = vec![
+        ("OLLAMA_API_KEY".to_string(), SecretStatus::Set { from_env: true }),
+        ("ANTHROPIC_API_KEY".to_string(), SecretStatus::NotSet),
     ];
     let reg = shipped();
     let sections = build_sections(&reg, &cfg, &prov, &ks);
@@ -1154,9 +1154,9 @@ fn config_overlay_provider_picker_selection_styles() {
         companion_enabled: Source::Default,
         eviction_enabled: Source::Default,
     };
-    let ks = [
-        ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
-        ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
+    let ks: Vec<(String, SecretStatus)> = vec![
+        ("OLLAMA_API_KEY".to_string(), SecretStatus::Set { from_env: true }),
+        ("ANTHROPIC_API_KEY".to_string(), SecretStatus::NotSet),
     ];
     let reg = shipped();
     let sections = build_sections(&reg, &cfg, &prov, &ks);
@@ -1243,9 +1243,9 @@ fn config_overlay_narrow_degrades() {
         companion_enabled: Source::Default,
         eviction_enabled: Source::Default,
     };
-    let ks = [
-        ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
-        ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
+    let ks: Vec<(String, SecretStatus)> = vec![
+        ("OLLAMA_API_KEY".to_string(), SecretStatus::Set { from_env: true }),
+        ("ANTHROPIC_API_KEY".to_string(), SecretStatus::NotSet),
     ];
     let reg = shipped();
     let sections = build_sections(&reg, &cfg, &prov, &ks);
@@ -1299,9 +1299,9 @@ fn config_overlay_narrow_degrades_respects_focus() {
         companion_enabled: Source::Default,
         eviction_enabled: Source::Default,
     };
-    let ks = [
-        ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
-        ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
+    let ks: Vec<(String, SecretStatus)> = vec![
+        ("OLLAMA_API_KEY".to_string(), SecretStatus::Set { from_env: true }),
+        ("ANTHROPIC_API_KEY".to_string(), SecretStatus::NotSet),
     ];
     let reg = shipped();
     let sections = build_sections(&reg, &cfg, &prov, &ks);

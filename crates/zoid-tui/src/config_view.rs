@@ -338,9 +338,9 @@ mod tests {
             companion_enabled: Source::Default,
             eviction_enabled: Source::Default,
         };
-        let ks = [
-            ("OLLAMA_API_KEY", SecretStatus::Set { from_env: true }),
-            ("ANTHROPIC_API_KEY", SecretStatus::NotSet),
+        let ks: Vec<(String, SecretStatus)> = vec![
+            ("OLLAMA_API_KEY".to_string(), SecretStatus::Set { from_env: true }),
+            ("ANTHROPIC_API_KEY".to_string(), SecretStatus::NotSet),
         ];
         let sections = build_sections(&reg, &cfg, &prov, &ks);
         assert_eq!(sections.len(), 4);

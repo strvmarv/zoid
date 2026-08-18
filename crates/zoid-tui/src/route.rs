@@ -735,7 +735,7 @@ mod tests {
         s.config_sections = vec![Section {
             title: "Provider & Model".into(),
             rows: vec![FieldRow {
-                label: "provider",
+                label: "provider".to_string(),
                 value: "ollama-cloud".into(),
                 kind: FieldKind::Pick,
                 source: Source::Default,
@@ -1665,7 +1665,7 @@ mod tests {
         s.config_sections = vec![Section {
             title: "Interface".into(),
             rows: vec![FieldRow {
-                label: "reduced motion",
+                label: "reduced motion".to_string(),
                 value: "off".into(),
                 kind: FieldKind::Bool,
                 source: Source::Default,
@@ -1695,7 +1695,7 @@ mod tests {
         s.config_sections = vec![Section {
             title: "Provider & Model".into(),
             rows: vec![FieldRow {
-                label: "provider",
+                label: "provider".to_string(),
                 value: "ollama".into(),
                 kind: FieldKind::Pick,
                 source: Source::Default,
