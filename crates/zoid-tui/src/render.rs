@@ -1558,7 +1558,7 @@ pub fn render_config(
                 String::new()
             };
             let marker = if cur { glyph::COLLAPSED } else { ' ' };
-            let left = format!(" {marker} {}", pad_to(r.label, 12));
+            let left = format!(" {marker} {}", pad_to(&r.label, 12));
             let fixed = left.width() + tag_txt.width() + warn.width();
             let mid = field_w.saturating_sub(fixed + 2).max(1); // +2 gap between label and value
             let val_shown = pad_to(&truncate(&val, mid), mid);

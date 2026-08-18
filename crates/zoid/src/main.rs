@@ -4398,15 +4398,15 @@ fn current_write(
 fn current_config_field(
     app: &App,
 ) -> Option<(
-    &'static str,
+    String,
     zoid_tui::config_view::FieldKind,
-    Option<&'static str>,
+    Option<String>,
 )> {
     app.shell
         .config_sections
         .get(app.shell.config_section)
         .and_then(|s| s.rows.get(app.shell.config_field))
-        .map(|r| (r.label, r.kind.clone(), r.secret_key))
+        .map(|r| (r.label.clone(), r.kind.clone(), r.secret_key.clone()))
 }
 
 /// Replace an OPEN model picker's options with a freshly-fetched live list.
@@ -4421,7 +4421,7 @@ fn apply_models_fetched(app: &mut App, provider: String, mut models: Vec<String>
     if models.is_empty() || !app.shell.config_picker_open() {
         return;
     }
-    if current_config_field(app).map(|(l, _, _)| l) != Some("model") {
+    if current_config_field(app).map(|(l, _, _)| l) != Some("model".to_string()) {
         return;
     }
     let cur = app.config.model.clone();
@@ -4500,12 +4500,13 @@ fn refresh_config_sections(app: &mut App) {
             .map(|s| s.status(name))
             .unwrap_or(SecretStatus::NotSet)
     };
-    let key_status = [
-        ("OLLAMA_API_KEY", status("OLLAMA_API_KEY")),
-        ("ANTHROPIC_API_KEY", status("ANTHROPIC_API_KEY")),
-        ("OPENCODE_GO_API_KEY", status("OPENCODE_GO_API_KEY")),
-        ("ZAI_API_KEY", status("ZAI_API_KEY")),
-    ];
+    // Derive the secret-status list from the registry's key_env fields,
+    // so new providers (e.g. gemini-api) appear automatically.
+    let key_status: Vec<(String, SecretStatus)> = app
+        .registry
+        .selectable()
+        .filter_map(|p| p.key_env.as_ref().map(|k| (k.clone(), status(k))))
+        .collect();
     app.shell.config_sections =
         zoid_tui::config_view::build_sections(&app.registry, &app.config, &app.prov, &key_status);
 }
@@ -5214,12 +5215,12 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             if let (Some((label, kind, secret_key)), Some(buffer)) =
                 (current_config_field(app), app.shell.config_edit.clone())
             {
-                match field_target(label, &kind) {
+                match field_target(&label, &kind) {
                     Some(FieldTarget::Secret) => {
-                        let key = secret_key.unwrap_or(label);
+                        let key = secret_key.unwrap_or(label.clone());
                         if let Some(s) = &app.secrets {
                             use zoid_core::secret::SecretStore;
-                            if let Err(e) = s.set(key, &buffer) {
+                            if let Err(e) = s.set(&key, &buffer) {
                                 eprintln!("zoid: secret set failed for {key}: {e}");
                             }
                         } else {
@@ -5249,7 +5250,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::ConfigToggle => {
             use zoid_core::config::TomlValue;
             if let Some((label, _kind, _)) = current_config_field(app) {
-                let write = match label {
+                let write = match label.as_str() {
                     "eviction" => Some(("eviction.enabled", !app.config.eviction.enabled)),
                     "auto-evict cold" => Some((
                         "economy.auto_evict_cold",
@@ -5268,7 +5269,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::ConfigDrillOpen => {
             use zoid_tui::state::ConfigCol;
             if let Some((label, _, _)) = current_config_field(app) {
-                app.shell.config_picker = match label {
+                app.shell.config_picker = match label.as_str() {
                     "provider" => zoid_tui::config_view::provider_options(&app.registry, &app.config.provider),
                     "model" => zoid_tui::config_view::model_options(
                         &app.registry,
@@ -5365,7 +5366,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 .get(app.shell.config_picker_sel)
                 .filter(|o| o.selectable)
                 .map(|o| o.id.clone());
-            let label = current_config_field(app).map(|(l, _, _)| l).unwrap_or("");
+            let label = current_config_field(app).map(|(l, _, _)| l).unwrap_or_default();
             if let Some(id) = chosen {
                 if label == "provider" {
                     // Write provider, then seed base_url from the registry.
@@ -5437,7 +5438,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
         Action::ConfigSaveToRepo => {
             use zoid_tui::config_view::FieldKind;
             if let Some((label, kind, _)) = current_config_field(app) {
-                match current_write(app, label, &kind) {
+                match current_write(app, &label, &kind) {
                     Some((key, value)) => apply_config_write(app, key, value, true),
                     None => {
                         if matches!(kind, FieldKind::Secret) {
@@ -5453,10 +5454,10 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             use zoid_tui::config_view::FieldKind;
             if let Some((label, kind, secret_key)) = current_config_field(app) {
                 if matches!(kind, FieldKind::Secret) {
-                    let key = secret_key.unwrap_or(label);
+                    let key = secret_key.unwrap_or(label.clone());
                     if let Some(s) = &app.secrets {
                         use zoid_core::secret::SecretStore;
-                        if let Err(e) = s.clear(key) {
+                        if let Err(e) = s.clear(&key) {
                             eprintln!("zoid: secret clear failed for {key}: {e}");
                         }
                     } else {
@@ -10094,7 +10095,7 @@ mod tests {
         );
         assert!(!activated, "a skills install activates no mode");
         assert!(!app.installing_plugin, "guard must clear");
-        let hint = app.shell.status_hint.as_deref().unwrap_or("");
+        let hint = app.shell.status_hint.as_deref().unwrap_or_default();
         assert!(
             hint.contains("Restart") && hint.contains("installed"),
             "got: {hint}"
