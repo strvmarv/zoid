@@ -143,22 +143,14 @@ async fn run_refresh_models() -> Result<()> {
     let cfg_dir = resolve_config_dir(|k| std::env::var(k).ok());
     let shipped = cfg_dir.join("models.toml");
     let user = cfg_dir.join("models.user.toml");
-    // Fall back to the embedded shipped file if the on-disk one is absent
-    // (same pattern as the boot path).
-    let (reg, _warn) = match zoid_registry::load(&shipped, &user) {
-        Ok(r) => r,
-        Err(_) => {
-            let shipped_text = include_str!("../../zoid-model/models.toml");
-            let shipped_reg = zoid_registry::parse::parse_shipped(shipped_text)?;
-            match std::fs::read_to_string(&user) {
-                Ok(user_text) => {
-                    let patch = zoid_registry::parse::parse_user(&user_text)?;
-                    (zoid_registry::merge::merge(shipped_reg, patch), None)
-                }
-                Err(_) => (shipped_reg, None),
-            }
-        }
-    };
+    // Seed/upgrade the on-disk shipped file from the embedded copy (same
+    // pattern as the boot path).
+    let embedded = include_str!("../../zoid-model/models.toml");
+    let on_disk = std::fs::read_to_string(&shipped).unwrap_or_default();
+    if on_disk != embedded {
+        let _ = std::fs::write(&shipped, embedded);
+    }
+    let (reg, _warn) = zoid_registry::load(&shipped, &user)?;
 
     // Resolve keys via env → secret store (same precedence as select_provider).
     let db = db_path()?;
@@ -2700,13 +2692,24 @@ async fn main() -> Result<()> {
     let cfg_dir = resolve_config_dir(|k: &str| std::env::var(k).ok());
     let shipped_path = cfg_dir.join("models.toml");
     let user_path = cfg_dir.join("models.user.toml");
+    // Seed or upgrade the on-disk shipped file from the embedded copy:
+    // - First boot: file doesn't exist → write it.
+    // - Upgrade: file exists but differs from the embedded copy → overwrite
+    //   with the newer version (preserving the "upgrade-replaceable" property
+    //   without a separate install step).
+    let embedded = include_str!("../../zoid-model/models.toml");
+    let on_disk = std::fs::read_to_string(&shipped_path).unwrap_or_default();
+    if on_disk != embedded {
+        if let Err(e) = std::fs::write(&shipped_path, embedded) {
+            tracing::warn!(error = %e, path = %shipped_path.display(), "failed to write shipped models.toml; using embedded copy");
+        }
+    }
     let (registry, reg_warning) = match zoid_registry::load(&shipped_path, &user_path) {
         Ok((r, w)) => (r, w),
         Err(e) => {
             tracing::warn!(error = %e, "failed to load registry; using embedded default");
-            let shipped = include_str!("../../zoid-model/models.toml");
             (
-                zoid_registry::parse::parse_shipped(shipped).unwrap_or_default(),
+                zoid_registry::parse::parse_shipped(embedded).unwrap_or_default(),
                 Some(e.to_string()),
             )
         }
