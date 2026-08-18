@@ -29,9 +29,9 @@ pub mod model {
     // (Glob re-export of structs trips E0603 "private struct import" at use
     // sites, so the struct/enum names are listed explicitly.)
     pub use zoid_model::{
-        canonical_id, ModelEntry, ModelInfo, ModelPatch, ProviderEntry,
-        ProviderPatch, Registry, RegistryPatch, Status, Transport, WireShape,
-        DEFAULT_MODEL_INFO, ThinkingSupport, ThinkingWireShape, Source,
+        canonical_id, ModelEntry, ModelInfo, ModelPatch, ProviderEntry, ProviderPatch, Registry,
+        RegistryPatch, Source, Status, ThinkingSupport, ThinkingWireShape, Transport, WireShape,
+        DEFAULT_MODEL_INFO,
     };
 
     use std::sync::OnceLock;
@@ -46,8 +46,7 @@ pub mod model {
     fn shipped() -> &'static Registry {
         static REG: OnceLock<Registry> = OnceLock::new();
         REG.get_or_init(|| {
-            parse::parse_shipped(include_str!("../../zoid-model/models.toml"))
-                .unwrap_or_default()
+            parse::parse_shipped(include_str!("../../zoid-model/models.toml")).unwrap_or_default()
         })
     }
 

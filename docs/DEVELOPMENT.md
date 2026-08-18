@@ -56,6 +56,14 @@ cargo nextest run --workspace --features zoid/local-embed --no-fail-fast
 as a fallback if nextest is not installed. Use `--no-fail-fast` so one
 failing test doesn't hide others.
 
+CI also gates on clippy and rustfmt (`ci.yml`), both with zero tolerance —
+run these locally before committing:
+
+```bash
+cargo clippy --workspace --all-targets --features zoid/local-embed -- -D warnings
+cargo fmt --all -- --check
+```
+
 ### TUI snapshot tests
 
 The TUI uses insta snapshots. If a UI change modifies rendered output:

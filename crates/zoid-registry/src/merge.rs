@@ -51,7 +51,9 @@ pub fn merge(shipped: Registry, user: RegistryPatch) -> Registry {
                                     tools: um.tools.unwrap_or(true),
                                     prompt_cache: um.prompt_cache.unwrap_or(false),
                                     thinking: um.thinking.unwrap_or(ThinkingSupport::None),
-                                    thinking_wire: um.thinking_wire.unwrap_or(ThinkingWireShape::None),
+                                    thinking_wire: um
+                                        .thinking_wire
+                                        .unwrap_or(ThinkingWireShape::None),
                                 },
                                 runtime: um.runtime.clone(),
                                 download_source: um.download_source.clone(),
@@ -285,7 +287,10 @@ mod tests {
     #[test]
     fn user_default_demotes_shipped_default() {
         let shipped = Registry {
-            providers: vec![provider("p", vec![model("a", true, false), model("b", false, false)])],
+            providers: vec![provider(
+                "p",
+                vec![model("a", true, false), model("b", false, false)],
+            )],
         };
         let mut p = patch("b", None, None);
         p.default = Some(true);

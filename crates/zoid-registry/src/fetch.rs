@@ -148,9 +148,21 @@ pub async fn list_models(provider_id: &str, base_url: &str, key: &str) -> Result
             "authorization",
             format!("Bearer {key}"),
         ),
-        "anthropic-api" => (format!("{base_url}/v1/models"), "x-api-key", key.to_string()),
-        "gemini-api" => (format!("{base_url}/v1/models"), "x-goog-api-key", key.to_string()),
-        "zai-coding-plan" => (format!("{base_url}/models"), "authorization", format!("Bearer {key}")),
+        "anthropic-api" => (
+            format!("{base_url}/v1/models"),
+            "x-api-key",
+            key.to_string(),
+        ),
+        "gemini-api" => (
+            format!("{base_url}/v1/models"),
+            "x-goog-api-key",
+            key.to_string(),
+        ),
+        "zai-coding-plan" => (
+            format!("{base_url}/models"),
+            "authorization",
+            format!("Bearer {key}"),
+        ),
         _ => (
             format!("{base_url}/v1/models"),
             "authorization",

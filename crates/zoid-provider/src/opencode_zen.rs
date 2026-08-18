@@ -206,7 +206,8 @@ mod tests {
     #[test]
     fn with_base_url_propagates_to_subclient() {
         let reg = test_reg(&[]);
-        let p = OpenCodeZenProvider::new("k".into(), reg).with_base_url("https://example.test/zen/");
+        let p =
+            OpenCodeZenProvider::new("k".into(), reg).with_base_url("https://example.test/zen/");
         assert_eq!(p.base_url, "https://example.test/zen");
     }
 

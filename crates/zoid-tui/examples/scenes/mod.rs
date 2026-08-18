@@ -428,7 +428,9 @@ pub fn render_one(
     let reg = shipped_registry();
     terminal
         .draw(|f| {
-            render_shell(f, state, economy, &reg, msgs, body, tasks, &input, false, &view);
+            render_shell(
+                f, state, economy, &reg, msgs, body, tasks, &input, false, &view,
+            );
         })
         .unwrap();
     terminal.backend().buffer().clone()

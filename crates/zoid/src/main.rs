@@ -1238,7 +1238,9 @@ fn select_provider(
             "gemini",
         ),
         _ => (
-            Arc::new(zoid_provider::ollama::OllamaProvider::new(key.clone()).with_base_url(base_url)),
+            Arc::new(
+                zoid_provider::ollama::OllamaProvider::new(key.clone()).with_base_url(base_url),
+            ),
             "ollama",
         ),
     };
@@ -1339,9 +1341,9 @@ fn provider_for_id(
         "anthropic-api" => Arc::new(
             zoid_provider::anthropic::AnthropicProvider::new(key.clone()).with_base_url(base_url),
         ),
-        "zai-coding-plan" => Arc::new(
-            zoid_provider::zai::ZaiProvider::new(key.clone()).with_base_url(base_url),
-        ),
+        "zai-coding-plan" => {
+            Arc::new(zoid_provider::zai::ZaiProvider::new(key.clone()).with_base_url(base_url))
+        }
         "gemini-api" => Arc::new(
             zoid_provider::google_gemini::GoogleGeminiProvider::new(key.clone())
                 .with_base_url(base_url),
@@ -1416,10 +1418,7 @@ fn switch_model_options(
     rows.iter()
         .map(|m| zoid_tui::config_view::PickOption {
             id: m.id.clone(),
-            label: m
-                .display
-                .clone()
-                .unwrap_or_else(|| m.id.clone()),
+            label: m.display.clone().unwrap_or_else(|| m.id.clone()),
             detail: String::new(),
             selectable: true,
             is_current: m.id.eq_ignore_ascii_case(current_model),
@@ -4468,11 +4467,7 @@ fn current_write(
 /// The (label, kind) of the row under the config cursor, if any.
 fn current_config_field(
     app: &App,
-) -> Option<(
-    String,
-    zoid_tui::config_view::FieldKind,
-    Option<String>,
-)> {
+) -> Option<(String, zoid_tui::config_view::FieldKind, Option<String>)> {
     app.shell
         .config_sections
         .get(app.shell.config_section)
@@ -4656,7 +4651,8 @@ fn apply_config_write(
     app.model = new_model.clone();
     app.shell.model = new_model;
     // Capacity is always the model window; the target is the separate soft knob.
-    app.shell.ctx_ceiling = zoid_provider::context_ceiling(&app.registry, &app.config.provider, &app.model);
+    app.shell.ctx_ceiling =
+        zoid_provider::context_ceiling(&app.registry, &app.config.provider, &app.model);
     app.context_target = app
         .config
         .economy
@@ -4666,10 +4662,12 @@ fn apply_config_write(
     // Live-apply the provider (same selection as startup) so a provider change
     // takes effect on the next turn, and keep the cached drawer label truthful
     // (shell.provider is set once at startup, not recomputed per frame).
-    let (provider, provider_name, has_key) = select_provider(&app.config, &app.secrets, &app.registry);
+    let (provider, provider_name, has_key) =
+        select_provider(&app.config, &app.secrets, &app.registry);
     app.provider = provider;
     app.shell.provider = provider_label(&provider_name, has_key);
-    app.shell.cache_supported = zoid_provider::has_prompt_cache(&app.registry, &app.config.provider, &app.model);
+    app.shell.cache_supported =
+        zoid_provider::has_prompt_cache(&app.registry, &app.config.provider, &app.model);
     // Fetch the new model's capabilities from the provider; the static table
     // is the fallback until the fetch lands.
     spawn_model_info_fetch(app.provider.clone(), app.model.clone(), app.ui_tx.clone());
@@ -5257,7 +5255,8 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 // Re-select with the new key (the key lives in the secret store, not
                 // config, so apply_config_write's auto-reselect never ran), then
                 // advance to the model picker + fetch.
-                let (provider, name, has_key) = select_provider(&app.config, &app.secrets, &app.registry);
+                let (provider, name, has_key) =
+                    select_provider(&app.config, &app.secrets, &app.registry);
                 app.provider = provider;
                 app.shell.provider = provider_label(&name, has_key);
                 if let Some(mi) = app
@@ -5268,8 +5267,11 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 {
                     app.shell.config_field = mi;
                 }
-                app.shell.config_picker =
-                    zoid_tui::config_view::model_options(&app.registry, &app.config.provider, &app.config.model);
+                app.shell.config_picker = zoid_tui::config_view::model_options(
+                    &app.registry,
+                    &app.config.provider,
+                    &app.config.model,
+                );
                 app.shell.config_picker_sel = 0;
                 app.shell.config_col = if app.shell.config_picker.is_empty() {
                     zoid_tui::state::ConfigCol::Fields
@@ -5303,7 +5305,8 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                         // live provider client so the new credential takes effect on
                         // the next turn without a restart (mirrors the key-prompt
                         // commit path above).
-                        let (provider, name, has_key) = select_provider(&app.config, &app.secrets, &app.registry);
+                        let (provider, name, has_key) =
+                            select_provider(&app.config, &app.secrets, &app.registry);
                         app.provider = provider;
                         app.shell.provider = provider_label(&name, has_key);
                     }
@@ -5341,7 +5344,9 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             use zoid_tui::state::ConfigCol;
             if let Some((label, _, _)) = current_config_field(app) {
                 app.shell.config_picker = match label.as_str() {
-                    "provider" => zoid_tui::config_view::provider_options(&app.registry, &app.config.provider),
+                    "provider" => {
+                        zoid_tui::config_view::provider_options(&app.registry, &app.config.provider)
+                    }
                     "model" => zoid_tui::config_view::model_options(
                         &app.registry,
                         &app.config.provider,
@@ -5437,7 +5442,9 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 .get(app.shell.config_picker_sel)
                 .filter(|o| o.selectable)
                 .map(|o| o.id.clone());
-            let label = current_config_field(app).map(|(l, _, _)| l).unwrap_or_default();
+            let label = current_config_field(app)
+                .map(|(l, _, _)| l)
+                .unwrap_or_default();
             if let Some(id) = chosen {
                 if label == "provider" {
                     // Write provider, then seed base_url from the registry.
@@ -5612,8 +5619,11 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
                 .get(app.shell.switch_provider_sel)
                 .map(|o| o.id.clone())
                 .unwrap_or_else(|| app.config.provider.clone());
-            app.shell.switch_models =
-                zoid_tui::config_view::model_options(&app.registry, &highlighted_provider_id, &app.config.model);
+            app.shell.switch_models = zoid_tui::config_view::model_options(
+                &app.registry,
+                &highlighted_provider_id,
+                &app.config.model,
+            );
             // Live-fetch the highlighted provider's real model list (Ollama
             // `/api/tags`, Anthropic `/v1/models`); the static list above is the
             // offline fallback until the fetch lands.
@@ -5715,8 +5725,7 @@ async fn handle_action(app: &mut App, action: zoid_tui::route::Action) -> Result
             // and the user can re-open the picker (Alt+P), edit config.toml, or
             // un-hide a model at their leisure. Nothing is persisted.
             if app.stale_selection {
-                app.provider =
-                    Arc::new(zoid_provider::FakeProvider::new(Vec::new()));
+                app.provider = Arc::new(zoid_provider::FakeProvider::new(Vec::new()));
                 app.shell.provider = "offline (no model)".to_string();
                 app.shell.banner = Some(
                     "No valid model selected — press Alt+P to choose one. \
@@ -10276,9 +10285,15 @@ mod tests {
             .expect("config sections must include a \"model\" row");
         app.shell.config_section = section;
         app.shell.config_field = field;
-        assert_eq!(current_config_field(&app).map(|(l, _, _)| l), Some("model".to_string()));
-        app.shell.config_picker =
-            zoid_tui::config_view::model_options(&app.registry, &app.config.provider, &app.config.model);
+        assert_eq!(
+            current_config_field(&app).map(|(l, _, _)| l),
+            Some("model".to_string())
+        );
+        app.shell.config_picker = zoid_tui::config_view::model_options(
+            &app.registry,
+            &app.config.provider,
+            &app.config.model,
+        );
         app.shell.config_col = zoid_tui::state::ConfigCol::Picker;
         assert!(app.shell.config_picker_open());
 
@@ -10391,8 +10406,11 @@ mod tests {
             .expect("config sections must include a \"model\" row");
         app.shell.config_section = section;
         app.shell.config_field = field;
-        app.shell.config_picker =
-            zoid_tui::config_view::model_options(&app.registry, &app.config.provider, &app.config.model);
+        app.shell.config_picker = zoid_tui::config_view::model_options(
+            &app.registry,
+            &app.config.provider,
+            &app.config.model,
+        );
         app.shell.config_col = zoid_tui::state::ConfigCol::Picker;
         assert!(app.shell.config_picker_open());
         let before = app.shell.config_picker.clone();
@@ -11726,23 +11744,38 @@ mod tests {
     #[test]
     fn key_env_for_family() {
         let reg = zoid_provider::model::shipped_registry();
-        assert_eq!(key_env_for("anthropic-api", reg).as_deref(), Some("ANTHROPIC_API_KEY"));
-        assert_eq!(key_env_for("ollama-cloud", reg).as_deref(), Some("OLLAMA_API_KEY"));
+        assert_eq!(
+            key_env_for("anthropic-api", reg).as_deref(),
+            Some("ANTHROPIC_API_KEY")
+        );
+        assert_eq!(
+            key_env_for("ollama-cloud", reg).as_deref(),
+            Some("OLLAMA_API_KEY")
+        );
         assert_eq!(key_env_for("ollama-local", reg), None); // no key needed
     }
 
     #[test]
     fn key_env_for_opencode_go_is_opencode_go_api_key() {
         let reg = zoid_provider::model::shipped_registry();
-        assert_eq!(key_env_for("opencode-go", reg).as_deref(), Some("OPENCODE_GO_API_KEY"));
+        assert_eq!(
+            key_env_for("opencode-go", reg).as_deref(),
+            Some("OPENCODE_GO_API_KEY")
+        );
     }
 
     #[test]
     fn key_env_for_opencode_zen_maps_to_shared_go_key() {
         let reg = zoid_provider::model::shipped_registry();
-        assert_eq!(key_env_for("opencode-zen", reg).as_deref(), Some("OPENCODE_GO_API_KEY"));
+        assert_eq!(
+            key_env_for("opencode-zen", reg).as_deref(),
+            Some("OPENCODE_GO_API_KEY")
+        );
         // sanity: Go unchanged
-        assert_eq!(key_env_for("opencode-go", reg).as_deref(), Some("OPENCODE_GO_API_KEY"));
+        assert_eq!(
+            key_env_for("opencode-go", reg).as_deref(),
+            Some("OPENCODE_GO_API_KEY")
+        );
     }
 
     #[test]
@@ -11754,7 +11787,10 @@ mod tests {
     #[test]
     fn key_env_for_zai_coding_plan_is_zai_api_key() {
         let reg = zoid_provider::model::shipped_registry();
-        assert_eq!(key_env_for("zai-coding-plan", reg).as_deref(), Some("ZAI_API_KEY"));
+        assert_eq!(
+            key_env_for("zai-coding-plan", reg).as_deref(),
+            Some("ZAI_API_KEY")
+        );
     }
 
     #[test]
@@ -11844,20 +11880,19 @@ mod tests {
     fn stale_model_removed_or_hidden_is_stale() {
         let reg = stale_test_registry();
         let is_stale = |model: &str| {
-            !reg
-                .models_for("anthropic-api")
+            !reg.models_for("anthropic-api")
                 .iter()
                 .any(|m| m.id.eq_ignore_ascii_case(model) && !m.hidden)
         };
-        assert!(!is_stale("claude-real"), "present visible model is not stale");
+        assert!(
+            !is_stale("claude-real"),
+            "present visible model is not stale"
+        );
         assert!(
             is_stale("claude-hidden"),
             "hidden model is stale (hidden flag excludes it)"
         );
-        assert!(
-            is_stale("claude-gone"),
-            "absent model is stale"
-        );
+        assert!(is_stale("claude-gone"), "absent model is stale");
     }
 
     /// The boot stale-check helper mirrors the boot inline computation: assert
@@ -11892,10 +11927,7 @@ mod tests {
         assert_eq!(shell.switch_providers[0].id, "anthropic-api");
         // The model pane excludes hidden rows.
         assert!(
-            shell
-                .switch_models
-                .iter()
-                .any(|o| o.id == "claude-real"),
+            shell.switch_models.iter().any(|o| o.id == "claude-real"),
             "visible model is seeded in the model pane"
         );
         assert!(

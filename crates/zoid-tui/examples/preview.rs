@@ -51,7 +51,18 @@ fn main() {
     terminal
         .draw(|f| {
             let reg = scenes::shipped_registry();
-            render_shell(f, &state, &economy, &reg, &msgs, None, &[], &input, false, &view);
+            render_shell(
+                f,
+                &state,
+                &economy,
+                &reg,
+                &msgs,
+                None,
+                &[],
+                &input,
+                false,
+                &view,
+            );
         })
         .unwrap();
 

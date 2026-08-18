@@ -152,7 +152,9 @@ impl Registry {
 
     /// The model entries for a provider (empty for unknown ids).
     pub fn models_for(&self, provider: &str) -> &[ModelEntry] {
-        self.entry(provider).map(|e| e.models.as_slice()).unwrap_or(&[])
+        self.entry(provider)
+            .map(|e| e.models.as_slice())
+            .unwrap_or(&[])
     }
 
     /// The default base URL for an HTTP-transport provider, else `None`.
@@ -165,7 +167,9 @@ impl Registry {
 
     /// Iterator over selectable (Available) entries.
     pub fn selectable(&self) -> impl Iterator<Item = &ProviderEntry> {
-        self.providers.iter().filter(|e| e.status == Status::Available)
+        self.providers
+            .iter()
+            .filter(|e| e.status == Status::Available)
     }
 
     /// The default model id for a provider: the `default = true` row, else the
@@ -280,7 +284,7 @@ mod tests {
             thinking: ThinkingSupport::None,
             thinking_wire: ThinkingWireShape::None,
         };
-        let _clone = info.clone();
+        let _clone = info;
 
         // ProviderEntry owns Strings.
         let entry = ProviderEntry {
@@ -296,9 +300,12 @@ mod tests {
             models: vec![],
         };
         assert_eq!(entry.id, "opencode-zen");
-        assert_eq!(entry.transport, Transport::Http {
-            default_base_url: "https://opencode.ai/zen".to_string()
-        });
+        assert_eq!(
+            entry.transport,
+            Transport::Http {
+                default_base_url: "https://opencode.ai/zen".to_string()
+            }
+        );
     }
 
     #[test]
@@ -332,35 +339,63 @@ mod tests {
                 id: "anthropic-api".to_string(),
                 display: "anthropic · api key".to_string(),
                 family: "anthropic".to_string(),
-                transport: Transport::Http { default_base_url: "https://api.anthropic.com".to_string() },
+                transport: Transport::Http {
+                    default_base_url: "https://api.anthropic.com".to_string(),
+                },
                 status: Status::Available,
                 key_url: Some("https://console.anthropic.com".to_string()),
                 key_env: Some("ANTHROPIC_API_KEY".to_string()),
-                models: vec![
-                    ModelEntry {
-                        id: "claude-sonnet-4-6".to_string(),
-                        display: None,
-                        wire_shape: WireShape::AnthropicMessages,
-                        source: Source::Static,
-                        default: true,
-                        hidden: false,
-                        info: ModelInfo { context_window: 1_000_000, max_output: 0, tools: true, prompt_cache: true, thinking: ThinkingSupport::Budget, thinking_wire: ThinkingWireShape::Anthropic },
-                        runtime: None, download_source: None, quant: None, modelfile: None, num_ctx: None, vram_curve: None,
+                models: vec![ModelEntry {
+                    id: "claude-sonnet-4-6".to_string(),
+                    display: None,
+                    wire_shape: WireShape::AnthropicMessages,
+                    source: Source::Static,
+                    default: true,
+                    hidden: false,
+                    info: ModelInfo {
+                        context_window: 1_000_000,
+                        max_output: 0,
+                        tools: true,
+                        prompt_cache: true,
+                        thinking: ThinkingSupport::Budget,
+                        thinking_wire: ThinkingWireShape::Anthropic,
                     },
-                ],
+                    runtime: None,
+                    download_source: None,
+                    quant: None,
+                    modelfile: None,
+                    num_ctx: None,
+                    vram_curve: None,
+                }],
             }],
         };
 
         assert!(reg.entry("anthropic-api").is_some());
         assert!(reg.entry("ANTHROPIC-API").is_none()); // provider ids are exact
         assert_eq!(reg.models_for("anthropic-api").len(), 1);
-        assert_eq!(reg.default_base_url("anthropic-api"), Some("https://api.anthropic.com"));
-        assert_eq!(reg.default_model("anthropic-api"), Some("claude-sonnet-4-6"));
-        assert_eq!(reg.wire_shape("anthropic-api", "claude-sonnet-4-6"), Some(WireShape::AnthropicMessages));
+        assert_eq!(
+            reg.default_base_url("anthropic-api"),
+            Some("https://api.anthropic.com")
+        );
+        assert_eq!(
+            reg.default_model("anthropic-api"),
+            Some("claude-sonnet-4-6")
+        );
+        assert_eq!(
+            reg.wire_shape("anthropic-api", "claude-sonnet-4-6"),
+            Some(WireShape::AnthropicMessages)
+        );
         // model id lookup is case-insensitive
-        assert_eq!(reg.model_info("anthropic-api", "CLAUDE-SONNET-4-6").context_window, 1_000_000);
+        assert_eq!(
+            reg.model_info("anthropic-api", "CLAUDE-SONNET-4-6")
+                .context_window,
+            1_000_000
+        );
         // unknown model → conservative default
-        assert_eq!(reg.model_info("anthropic-api", "nope").context_window, 32_000);
+        assert_eq!(
+            reg.model_info("anthropic-api", "nope").context_window,
+            32_000
+        );
         assert_eq!(reg.selectable().count(), 1);
     }
 }

@@ -1667,7 +1667,12 @@ fn picker_lines(
 /// The onboarding wizard overlay (`Overlay::Onboarding`). A full-frame
 /// single-column card with a 3-step rail (Provider → API key → Model). The
 /// active step is expanded; inactive steps are collapsed to dim lines.
-pub fn render_onboarding(frame: &mut Frame, reg: &zoid_model::Registry, state: &ShellState, area: Rect) {
+pub fn render_onboarding(
+    frame: &mut Frame,
+    reg: &zoid_model::Registry,
+    state: &ShellState,
+    area: Rect,
+) {
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::widgets::{Block, BorderType, Borders, Clear};
 
@@ -1730,7 +1735,11 @@ pub fn render_onboarding(frame: &mut Frame, reg: &zoid_model::Registry, state: &
 /// columns. `render_onboarding` paints these into the card body; the snapshot
 /// tests join them to a string. `reg` supplies the chosen provider's family
 /// + key_url for the API-key step (step 2).
-fn onboarding_lines(reg: &zoid_model::Registry, state: &ShellState, width: usize) -> Vec<Line<'static>> {
+fn onboarding_lines(
+    reg: &zoid_model::Registry,
+    state: &ShellState,
+    width: usize,
+) -> Vec<Line<'static>> {
     let onb = match &state.onboarding {
         Some(o) => o,
         None => return Vec::new(),
@@ -1947,7 +1956,9 @@ fn render_api_key_input(
     // Key URL help line. zoid-tui depends on zoid-model (not zoid-provider),
     // so read the chosen provider's `key_url` straight off the `Registry`
     // threaded in from the bin (which holds `app.registry`).
-    let key_url = reg.entry(&onb.chosen_provider).and_then(|e| e.key_url.as_deref());
+    let key_url = reg
+        .entry(&onb.chosen_provider)
+        .and_then(|e| e.key_url.as_deref());
     if let Some(url) = key_url {
         lines.push(Line::from(Span::styled(
             format!("{indent}  Get one at {url}"),

@@ -85,7 +85,10 @@ key_env = "ANTHROPIC_API_KEY"
         assert!(m.default);
         assert_eq!(m.info.context_window, 1_000_000);
         assert_eq!(m.info.thinking, zoid_model::ThinkingSupport::Budget);
-        assert_eq!(m.info.thinking_wire, zoid_model::ThinkingWireShape::Anthropic);
+        assert_eq!(
+            m.info.thinking_wire,
+            zoid_model::ThinkingWireShape::Anthropic
+        );
     }
 
     #[test]
@@ -144,7 +147,10 @@ id = "anthropic-api"
   source = "wire"
 "#;
         let patch = parse_user(wire).unwrap();
-        assert_eq!(patch.providers[0].models[0].source, Some(zoid_model::Source::Wire));
+        assert_eq!(
+            patch.providers[0].models[0].source,
+            Some(zoid_model::Source::Wire)
+        );
 
         let user = r#"
 [[provider]]
@@ -155,7 +161,10 @@ id = "anthropic-api"
   source = "user"
 "#;
         let patch = parse_user(user).unwrap();
-        assert_eq!(patch.providers[0].models[0].source, Some(zoid_model::Source::User));
+        assert_eq!(
+            patch.providers[0].models[0].source,
+            Some(zoid_model::Source::User)
+        );
     }
 
     #[test]
@@ -197,15 +206,21 @@ id = "anthropic-api"
         assert_eq!(reg.entry("opencode-go").unwrap().models.len(), 26);
         // every opencode-zen model has explicit caps >= 128k
         for m in &reg.entry("opencode-zen").unwrap().models {
-            assert!(m.info.context_window >= 128_000, "{} needs explicit caps", m.id);
+            assert!(
+                m.info.context_window >= 128_000,
+                "{} needs explicit caps",
+                m.id
+            );
         }
         // claude-sonnet-4-6 is split: anthropic-api 1M, opencode-zen 200K
         assert_eq!(
-            reg.model_info("anthropic-api", "claude-sonnet-4-6").context_window,
+            reg.model_info("anthropic-api", "claude-sonnet-4-6")
+                .context_window,
             1_000_000
         );
         assert_eq!(
-            reg.model_info("opencode-zen", "claude-sonnet-4-6").context_window,
+            reg.model_info("opencode-zen", "claude-sonnet-4-6")
+                .context_window,
             200_000
         );
     }

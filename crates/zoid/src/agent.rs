@@ -678,6 +678,10 @@ pub fn build_request(
     )
 }
 
+// 8 params thread the full request-build context (events, model, model_info,
+// tools, system, thinking, reassert, active_branch); a params struct would
+// add indirection without adding clarity.
+#[allow(clippy::too_many_arguments)]
 pub fn build_request_with_thinking(
     events: &crate::eventlog::EventLog,
     model: &str,

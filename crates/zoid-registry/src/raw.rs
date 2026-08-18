@@ -291,7 +291,11 @@ impl TryFrom<RawRegistryPatch> for RegistryPatch {
                     tools: rm.tools,
                     prompt_cache: rm.prompt_cache,
                     thinking: rm.thinking.as_deref().map(parse_thinking).transpose()?,
-                    thinking_wire: rm.thinking_wire.as_deref().map(parse_thinking_wire).transpose()?,
+                    thinking_wire: rm
+                        .thinking_wire
+                        .as_deref()
+                        .map(parse_thinking_wire)
+                        .transpose()?,
                     runtime: rm.runtime,
                     download_source: rm.download_source,
                     quant: rm.quant,

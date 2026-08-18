@@ -119,9 +119,7 @@ pub async fn reconcile(
         let live = match fetcher.list(&p.id, &base_url, key).await {
             Ok(l) => l,
             Err(e) => {
-                report
-                    .skipped
-                    .push(format!("{}: fetch error: {e}", p.id));
+                report.skipped.push(format!("{}: fetch error: {e}", p.id));
                 continue;
             }
         };
@@ -130,10 +128,7 @@ pub async fn reconcile(
         if wire_capable(&p.id) {
             // --- Add: new live models become wire rows (with caps). ---
             for id in &live {
-                let exists = p
-                    .models
-                    .iter()
-                    .any(|m| m.id.eq_ignore_ascii_case(id));
+                let exists = p.models.iter().any(|m| m.id.eq_ignore_ascii_case(id));
                 if !exists {
                     report.added.push((p.id.clone(), id.clone()));
                     match fetcher.caps(&p.id, &base_url, key, id).await {
@@ -141,9 +136,10 @@ pub async fn reconcile(
                             report.caps.insert((p.id.clone(), id.clone()), info);
                         }
                         Ok(None) => {
-                            report
-                                .reported
-                                .push(format!("{}: no caps for new model {} (using defaults)", p.id, id));
+                            report.reported.push(format!(
+                                "{}: no caps for new model {} (using defaults)",
+                                p.id, id
+                            ));
                         }
                         Err(e) => {
                             report.reported.push(format!(
@@ -189,10 +185,7 @@ pub async fn reconcile(
         } else {
             // --- Report-only: new live models + absent static/user models. ---
             for id in &live {
-                let exists = p
-                    .models
-                    .iter()
-                    .any(|m| m.id.eq_ignore_ascii_case(id));
+                let exists = p.models.iter().any(|m| m.id.eq_ignore_ascii_case(id));
                 if !exists {
                     report
                         .reported
@@ -232,11 +225,7 @@ pub async fn reconcile(
 /// to look up the existing wire row's `wire_shape` for `added`/`updated` rows
 /// (the shape is provider/model metadata, not endpoint-derived, and lives in
 /// the shipped file for the curated providers).
-pub fn write_user_file(
-    user_path: &Path,
-    reg: &Registry,
-    report: &ReconcileReport,
-) -> Result<()> {
+pub fn write_user_file(user_path: &Path, reg: &Registry, report: &ReconcileReport) -> Result<()> {
     // Index the report entries for O(1) lookup by (provider, model).
     let updated: HashMap<(String, String), ()> =
         report.updated.iter().cloned().map(|k| (k, ())).collect();
@@ -249,9 +238,7 @@ pub fn write_user_file(
     let existing: zoid_model::RegistryPatch = match std::fs::read_to_string(user_path) {
         Ok(text) => crate::parse::parse_user(&text)
             .with_context(|| format!("parsing existing user file {}", user_path.display()))?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            zoid_model::RegistryPatch::default()
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => zoid_model::RegistryPatch::default(),
         Err(e) => return Err(anyhow::anyhow!("read {}: {e}", user_path.display())),
     };
 
@@ -314,16 +301,15 @@ pub fn write_user_file(
     }
 
     let ser = RawRegistrySer { provider: out };
-    let text = toml::to_string_pretty(&ser)
-        .context("serializing refreshed user registry to TOML")?;
+    let text =
+        toml::to_string_pretty(&ser).context("serializing refreshed user registry to TOML")?;
 
     // Atomic write: temp file in the same directory, then rename.
     let dir = user_path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(dir)
-        .with_context(|| format!("creating {}", dir.display()))?;
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let tmp = dir.join(format!(
         ".{}.tmp",
         user_path
@@ -343,13 +329,16 @@ pub fn write_user_file(
 /// though in practice `added` only fires for wire-capable providers, which
 /// always have a curated shape in the shipped file).
 fn wire_shape_for(reg: &Registry, provider: &str, model: &str) -> WireShape {
-    reg.wire_shape(provider, model).unwrap_or(WireShape::OpenAIChat)
+    reg.wire_shape(provider, model)
+        .unwrap_or(WireShape::OpenAIChat)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zoid_model::{ModelEntry, ModelInfo, ProviderEntry, Registry, Source, Status, Transport, WireShape};
+    use zoid_model::{
+        ModelEntry, ModelInfo, ProviderEntry, Registry, Source, Status, Transport, WireShape,
+    };
 
     /// A minimal `ModelInfo` for tests (zeroed caps).
     fn info() -> ModelInfo {
@@ -419,14 +408,8 @@ mod tests {
         // (report-only) has one existing static model plus a new live model.
         let reg = Registry {
             providers: vec![
-                http_provider(
-                    "ollama-cloud",
-                    vec![static_model("glm-5.2:cloud")],
-                ),
-                http_provider(
-                    "anthropic-api",
-                    vec![static_model("claude-sonnet-4-6")],
-                ),
+                http_provider("ollama-cloud", vec![static_model("glm-5.2:cloud")]),
+                http_provider("anthropic-api", vec![static_model("claude-sonnet-4-6")]),
             ],
         };
 
@@ -448,22 +431,29 @@ mod tests {
             ("anthropic-api".to_string(), "k".to_string()),
         ]);
 
-        let report = reconcile(&reg, &keys, &MockFetcher { lists, caps_map: HashMap::new() })
-            .await
-            .unwrap();
+        let report = reconcile(
+            &reg,
+            &keys,
+            &MockFetcher {
+                lists,
+                caps_map: HashMap::new(),
+            },
+        )
+        .await
+        .unwrap();
 
         // ollama-cloud: the new live model is added as a wire row.
         assert!(report
             .added
             .contains(&("ollama-cloud".to_string(), "new-cloud-model".to_string())));
         // The existing static model is NOT re-added (it's already present).
-        assert!(!report
-            .added
-            .iter()
-            .any(|(_, m)| m == "glm-5.2:cloud"));
+        assert!(!report.added.iter().any(|(_, m)| m == "glm-5.2:cloud"));
 
         // anthropic-api: the new model is reported, NOT added.
-        assert!(report.reported.iter().any(|s| s.contains("new-anthropic-model")));
+        assert!(report
+            .reported
+            .iter()
+            .any(|s| s.contains("new-anthropic-model")));
         assert!(!report.added.iter().any(|(p, _)| p == "anthropic-api"));
 
         // The existing static model on anthropic-api is present in live, so it
@@ -480,13 +470,20 @@ mod tests {
             providers: vec![http_provider("ollama-cloud", vec![])],
         };
         let keys = HashMap::new();
-        let report = reconcile(&reg, &keys, &MockFetcher {
-            lists: HashMap::new(),
-            caps_map: HashMap::new(),
-        })
+        let report = reconcile(
+            &reg,
+            &keys,
+            &MockFetcher {
+                lists: HashMap::new(),
+                caps_map: HashMap::new(),
+            },
+        )
         .await
         .unwrap();
-        assert!(report.skipped.iter().any(|s| s.contains("ollama-cloud") && s.contains("no key")));
+        assert!(report
+            .skipped
+            .iter()
+            .any(|s| s.contains("ollama-cloud") && s.contains("no key")));
         assert!(report.added.is_empty());
     }
 
@@ -499,7 +496,13 @@ mod tests {
             async fn list(&self, _p: &str, _b: &str, _k: &str) -> Result<Vec<String>> {
                 anyhow::bail!("network down")
             }
-            async fn caps(&self, _p: &str, _b: &str, _k: &str, _m: &str) -> Result<Option<ModelInfo>> {
+            async fn caps(
+                &self,
+                _p: &str,
+                _b: &str,
+                _k: &str,
+                _m: &str,
+            ) -> Result<Option<ModelInfo>> {
                 Ok(None)
             }
         }
@@ -508,7 +511,10 @@ mod tests {
         };
         let keys = HashMap::from([("ollama-cloud".to_string(), "k".to_string())]);
         let report = reconcile(&reg, &keys, &ErrorFetcher).await.unwrap();
-        assert!(report.skipped.iter().any(|s| s.contains("fetch error") && s.contains("network down")));
+        assert!(report
+            .skipped
+            .iter()
+            .any(|s| s.contains("fetch error") && s.contains("network down")));
         assert!(report.added.is_empty());
     }
 
@@ -521,12 +527,24 @@ mod tests {
             providers: vec![http_provider("ollama-cloud", vec![wire_row])],
         };
         let mut lists = HashMap::new();
-        lists.insert("ollama-cloud".to_string(), vec!["some-other-model".to_string()]);
+        lists.insert(
+            "ollama-cloud".to_string(),
+            vec!["some-other-model".to_string()],
+        );
         let keys = HashMap::from([("ollama-cloud".to_string(), "k".to_string())]);
-        let report = reconcile(&reg, &keys, &MockFetcher { lists, caps_map: HashMap::new() })
-            .await
-            .unwrap();
-        assert!(report.removed.contains(&("ollama-cloud".to_string(), "ghost-model".to_string())));
+        let report = reconcile(
+            &reg,
+            &keys,
+            &MockFetcher {
+                lists,
+                caps_map: HashMap::new(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(report
+            .removed
+            .contains(&("ollama-cloud".to_string(), "ghost-model".to_string())));
     }
 
     #[tokio::test]
@@ -539,7 +557,10 @@ mod tests {
             providers: vec![http_provider("ollama-cloud", vec![wire_row])],
         };
         let mut lists = HashMap::new();
-        lists.insert("ollama-cloud".to_string(), vec!["glm-5.2:cloud".to_string()]);
+        lists.insert(
+            "ollama-cloud".to_string(),
+            vec!["glm-5.2:cloud".to_string()],
+        );
         let mut caps_map = HashMap::new();
         caps_map.insert(
             "ollama-cloud/glm-5.2:cloud".to_string(),
@@ -549,8 +570,12 @@ mod tests {
             },
         );
         let keys = HashMap::from([("ollama-cloud".to_string(), "k".to_string())]);
-        let report = reconcile(&reg, &keys, &MockFetcher { lists, caps_map }).await.unwrap();
-        assert!(report.updated.contains(&("ollama-cloud".to_string(), "glm-5.2:cloud".to_string())));
+        let report = reconcile(&reg, &keys, &MockFetcher { lists, caps_map })
+            .await
+            .unwrap();
+        assert!(report
+            .updated
+            .contains(&("ollama-cloud".to_string(), "glm-5.2:cloud".to_string())));
         let caps = report
             .caps
             .get(&("ollama-cloud".to_string(), "glm-5.2:cloud".to_string()))
@@ -566,12 +591,17 @@ mod tests {
             providers: vec![http_provider("ollama-cloud", vec![wire_row.clone()])],
         };
         let mut lists = HashMap::new();
-        lists.insert("ollama-cloud".to_string(), vec!["glm-5.2:cloud".to_string()]);
+        lists.insert(
+            "ollama-cloud".to_string(),
+            vec!["glm-5.2:cloud".to_string()],
+        );
         // Return the SAME caps as the registry row.
         let mut caps_map = HashMap::new();
         caps_map.insert("ollama-cloud/glm-5.2:cloud".to_string(), wire_row.info);
         let keys = HashMap::from([("ollama-cloud".to_string(), "k".to_string())]);
-        let report = reconcile(&reg, &keys, &MockFetcher { lists, caps_map }).await.unwrap();
+        let report = reconcile(&reg, &keys, &MockFetcher { lists, caps_map })
+            .await
+            .unwrap();
         assert!(report.updated.is_empty());
     }
 
@@ -579,14 +609,27 @@ mod tests {
     async fn reconcile_reports_absent_static_model_on_report_only_provider() {
         // anthropic-api (report-only) has a static model NOT in the live list.
         let reg = Registry {
-            providers: vec![http_provider("anthropic-api", vec![static_model("old-model")])],
+            providers: vec![http_provider(
+                "anthropic-api",
+                vec![static_model("old-model")],
+            )],
         };
         let mut lists = HashMap::new();
-        lists.insert("anthropic-api".to_string(), vec!["claude-sonnet-4-6".to_string()]);
+        lists.insert(
+            "anthropic-api".to_string(),
+            vec!["claude-sonnet-4-6".to_string()],
+        );
         let keys = HashMap::from([("anthropic-api".to_string(), "k".to_string())]);
-        let report = reconcile(&reg, &keys, &MockFetcher { lists, caps_map: HashMap::new() })
-            .await
-            .unwrap();
+        let report = reconcile(
+            &reg,
+            &keys,
+            &MockFetcher {
+                lists,
+                caps_map: HashMap::new(),
+            },
+        )
+        .await
+        .unwrap();
         assert!(report
             .reported
             .iter()
@@ -637,27 +680,39 @@ id = "ollama-cloud"
         .unwrap();
 
         // The merged registry the refresh tool loaded (shipped + user file).
-        let user_patch = crate::parse::parse_user(&std::fs::read_to_string(&user_path).unwrap())
-            .unwrap();
-        let reg = crate::merge::merge(
-            shipped.clone(),
-            user_patch,
-        );
+        let user_patch =
+            crate::parse::parse_user(&std::fs::read_to_string(&user_path).unwrap()).unwrap();
+        let reg = crate::merge::merge(shipped.clone(), user_patch);
 
         // Report: add new-wire (with caps), update upd-wire (new caps), remove
         // old-wire. keep-static and user-keep are untouched.
         let mut report = ReconcileReport::default();
-        report.added.push(("ollama-cloud".to_string(), "new-wire".to_string()));
+        report
+            .added
+            .push(("ollama-cloud".to_string(), "new-wire".to_string()));
         report.caps.insert(
             ("ollama-cloud".to_string(), "new-wire".to_string()),
-            ModelInfo { context_window: 131_072, max_output: 0, tools: true, prompt_cache: true, ..info() },
+            ModelInfo {
+                context_window: 131_072,
+                max_output: 0,
+                tools: true,
+                prompt_cache: true,
+                ..info()
+            },
         );
-        report.updated.push(("ollama-cloud".to_string(), "upd-wire".to_string()));
+        report
+            .updated
+            .push(("ollama-cloud".to_string(), "upd-wire".to_string()));
         report.caps.insert(
             ("ollama-cloud".to_string(), "upd-wire".to_string()),
-            ModelInfo { context_window: 65_536, ..info() },
+            ModelInfo {
+                context_window: 65_536,
+                ..info()
+            },
         );
-        report.removed.push(("ollama-cloud".to_string(), "old-wire".to_string()));
+        report
+            .removed
+            .push(("ollama-cloud".to_string(), "old-wire".to_string()));
 
         write_user_file(&user_path, &reg, &report).unwrap();
 
@@ -684,7 +739,10 @@ id = "ollama-cloud"
         assert_eq!(uw.source, Source::Wire);
         assert_eq!(uw.info.context_window, 65_536);
         // keep-static untouched.
-        assert!(p.models.iter().any(|m| m.id == "keep-static" && m.source == Source::Static));
+        assert!(p
+            .models
+            .iter()
+            .any(|m| m.id == "keep-static" && m.source == Source::Static));
     }
 
     #[test]
@@ -698,10 +756,15 @@ id = "ollama-cloud"
         let user_path = dir.path().join("models.user.toml");
 
         let mut report = ReconcileReport::default();
-        report.added.push(("ollama-cloud".to_string(), "solo-wire".to_string()));
+        report
+            .added
+            .push(("ollama-cloud".to_string(), "solo-wire".to_string()));
         report.caps.insert(
             ("ollama-cloud".to_string(), "solo-wire".to_string()),
-            ModelInfo { context_window: 4096, ..info() },
+            ModelInfo {
+                context_window: 4096,
+                ..info()
+            },
         );
 
         write_user_file(&user_path, &reg, &report).unwrap();
@@ -729,7 +792,9 @@ id = "ollama-cloud"
 
         let mut report = ReconcileReport::default();
         // Added with NO caps entry — reconcile reports this case via `reported`.
-        report.added.push(("ollama-cloud".to_string(), "no-caps".to_string()));
+        report
+            .added
+            .push(("ollama-cloud".to_string(), "no-caps".to_string()));
 
         write_user_file(&user_path, &reg, &report).unwrap();
         let written = std::fs::read_to_string(&user_path).unwrap();
@@ -737,6 +802,9 @@ id = "ollama-cloud"
         let m = &patch.providers[0].models[0];
         assert_eq!(m.id, "no-caps");
         assert_eq!(m.source, Some(Source::Wire));
-        assert_eq!(m.context_window, Some(zoid_model::DEFAULT_MODEL_INFO.context_window));
+        assert_eq!(
+            m.context_window,
+            Some(zoid_model::DEFAULT_MODEL_INFO.context_window)
+        );
     }
 }
