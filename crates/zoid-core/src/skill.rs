@@ -139,11 +139,11 @@ user asks.
 
 /// The body of the built-in `refreshing-provider-models` skill. Guides an
 /// agent through the full model-sync workflow: run the tool, research new
-/// models, update the shipped models.toml with researched caps.
+/// models, update the on-disk models.toml with researched caps.
 const REFRESHING_PROVIDER_MODELS_BODY: &str = concat!(
     "# Refreshing Provider Models\n\n",
-    "The provider/model registry is a TOML file (`crates/zoid-model/models.toml`),\n",
-    "not Rust code. This skill syncs it against live provider endpoints.\n\n",
+    "The provider/model registry is a TOML file, not Rust code. This skill\n",
+    "syncs it against live provider endpoints.\n\n",
     "## Step 1 — Run the tool\n\n",
     "```bash\n",
     "zoid refresh-models\n",
@@ -154,7 +154,7 @@ const REFRESHING_PROVIDER_MODELS_BODY: &str = concat!(
     "only two providers with wire-derived caps endpoints). For all other\n",
     "providers (Anthropic, OpenAI-compat, opencode-go, opencode-zen, zai), it\n",
     "reports new and retired models but does NOT write them — those need\n",
-    "manual caps research and `static` rows in the shipped `models.toml`.\n\n",
+    "manual caps research and `static` rows in `models.toml`.\n\n",
     "Report the output to the user: what was added, updated, removed, and what\n",
     "needs manual attention.\n\n",
     "## Step 2 — Research new models\n\n",
@@ -172,7 +172,9 @@ const REFRESHING_PROVIDER_MODELS_BODY: &str = concat!(
     "If you can't find exact numbers, use conservative defaults from a sibling\n",
     "model in the same family (e.g. glm-5.3 → same caps as glm-5.2).\n\n",
     "## Step 3 — Update models.toml\n\n",
-    "Add `static` rows to `crates/zoid-model/models.toml` for each new model.\n",
+    "Add `static` rows to the shipped `models.toml` for each new model. The\n",
+    "file lives at `~/.config/zoid/models.toml` (the on-disk copy seeded from\n",
+    "the embedded version at boot). Edit it directly.\n\n",
     "Infer the `wire_shape` from the model family:\n\n",
     "| Model family | wire_shape |\n",
     "|---|---|\n",
@@ -207,11 +209,14 @@ const REFRESHING_PROVIDER_MODELS_BODY: &str = concat!(
     "provider's default model.\n\n",
     "For retired models (the report says \"absent from live\"), remove their\n",
     "`static` rows from `models.toml`.\n\n",
+    "Note: `~/.config/zoid/models.toml` is overwritten on the next zoid upgrade\n",
+    "(the new binary ships a newer embedded copy). Changes you want to survive\n",
+    "upgrades should go in `~/.config/zoid/models.user.toml` as `user` rows\n",
+    "instead — that file is never overwritten.\n\n",
     "## What NOT to do\n\n",
-    "- Do NOT hand-edit `models.user.toml` to add models — that file is\n",
-    "  tool-generated (wire rows) and user-managed (user rows).\n",
     "- Do NOT add `wire` rows to `models.toml` — the shipped file is\n",
-    "  `static` rows only.\n",
+    "  `static` rows only. `wire` rows go in `models.user.toml` (written\n",
+    "  automatically by the tool for Ollama + Gemini).\n",
     "- Do NOT run `cargo test` or commit — that's the user's workflow, not\n",
     "  the skill's.\n",
 );
