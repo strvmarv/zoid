@@ -7934,6 +7934,9 @@ fn spawn_turn(app: &mut App) {
     if let Some(wt) = &app.active_worktree {
         turn_config.cwd = wt.path.clone();
     }
+    // Tail-inject AGENTS.md (if present) after cwd is final, so a worktree's
+    // own AGENTS.md wins over the parent session's.
+    turn_config.system = zoid::agent::append_agents_md(&turn_config.system, &turn_config.cwd);
     turn_config.mcp = app.mcp.clone();
     turn_config.embed = app.embed_index.clone();
     turn_config.embedder = app.embedder.clone();

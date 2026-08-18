@@ -2,7 +2,7 @@
 //! working directory, record everything as events, and re-request until the
 //! model stops calling tools (or the iteration cap trips).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -48,9 +48,9 @@ pub const SYSTEM_PROMPT: &str =
      check on a subagent you dispatched. When waiting on something, schedule \
      exactly one wake — never schedule duplicate wakes for the same event, and \
      cancel a pending wake before scheduling a replacement. \
-     If the working directory has an AGENTS.md file, read it before touching \
-     anything — it carries project-specific rules (test commands, release \
-     flow, constraints) you must follow.";
+     If the working directory has an AGENTS.md file, its contents are \
+     appended at the end of this prompt — it carries project-specific rules \
+     (test commands, release flow, constraints) you must follow.";
 
 /// Wrap the system prompt as a standing, tail-injected reminder. The pre/post
 /// framing is the only added text; `system` is verbatim (zero drift). The
@@ -64,6 +64,38 @@ pub fn wrap_reassertion(system: &str) -> String {
          response to seeing this; continue the current work and keep following \
          these instructions:]\n\n{system}\n\n[End of reminder — resume the task in progress.]"
     )
+}
+
+/// Hard cap on how much of AGENTS.md gets inlined into the system prompt.
+/// Unlike a one-off `read` tool call, this content is resent on every turn,
+/// so an unexpectedly huge file shouldn't silently inflate every request.
+const AGENTS_MD_MAX_BYTES: usize = 8 * 1024;
+
+/// If `cwd` has an AGENTS.md file, append its contents to `system` under a
+/// header so project-specific rules ride along on every turn instead of
+/// costing a tool round-trip to fetch. Absent or unreadable file → `system`
+/// unchanged. Oversized file → truncated to `AGENTS_MD_MAX_BYTES` (on a char
+/// boundary) with a truncation notice.
+pub fn append_agents_md(system: &str, cwd: &Path) -> String {
+    let Ok(contents) = std::fs::read_to_string(cwd.join("AGENTS.md")) else {
+        return system.to_string();
+    };
+    if contents.trim().is_empty() {
+        return system.to_string();
+    }
+    if contents.len() <= AGENTS_MD_MAX_BYTES {
+        format!("{system}\n\n## Project instructions (AGENTS.md)\n{contents}")
+    } else {
+        let mut end = AGENTS_MD_MAX_BYTES;
+        while end > 0 && !contents.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!(
+            "{system}\n\n## Project instructions (AGENTS.md)\n{}\n\n\
+             [truncated: AGENTS.md exceeds {AGENTS_MD_MAX_BYTES} bytes]",
+            &contents[..end]
+        )
+    }
 }
 
 /// The default Chat mode profile: the standard zoid system prompt with an
@@ -3529,6 +3561,47 @@ mod tests {
         assert!(out.contains("BEHAVIORAL RULES"));
         assert!(out.contains("NOT a signal that anything is complete"));
         assert!(out.contains("resume the task"));
+    }
+
+    #[test]
+    fn append_agents_md_returns_system_unchanged_when_file_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = append_agents_md("BASE SYSTEM", tmp.path());
+        assert_eq!(out, "BASE SYSTEM");
+    }
+
+    #[test]
+    fn append_agents_md_returns_system_unchanged_when_file_is_blank() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("AGENTS.md"), "   \n\n  \n").unwrap();
+        let out = append_agents_md("BASE SYSTEM", tmp.path());
+        assert_eq!(out, "BASE SYSTEM");
+    }
+
+    #[test]
+    fn append_agents_md_appends_file_contents_under_header() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("AGENTS.md"),
+            "Run `cargo test` before committing.\n",
+        )
+        .unwrap();
+        let out = append_agents_md("BASE SYSTEM", tmp.path());
+        assert!(out.starts_with("BASE SYSTEM"));
+        assert!(out.contains("## Project instructions (AGENTS.md)"));
+        assert!(out.contains("Run `cargo test` before committing."));
+    }
+
+    #[test]
+    fn append_agents_md_truncates_oversized_file_with_notice() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut huge = "x".repeat(AGENTS_MD_MAX_BYTES);
+        huge.push_str("OVERFLOW-MARKER");
+        std::fs::write(tmp.path().join("AGENTS.md"), &huge).unwrap();
+        let out = append_agents_md("BASE SYSTEM", tmp.path());
+        assert!(out.contains("truncated"));
+        // Content past the cap must not appear.
+        assert!(!out.contains("OVERFLOW-MARKER"));
     }
 
     #[tokio::test]
