@@ -402,6 +402,12 @@ const DISPATCH_NARRATION_BUDGET_TOKENS: u64 = 60;
 /// the request as too large. Each retry forces an eviction wave before
 /// re-sending, so this also bounds the number of forced eviction waves per turn.
 pub const MAX_CONTEXT_RETRIES: u32 = 3;
+/// Bound on the empty-response retry: when a provider returns a clean `Done`
+/// with no content (a degraded upstream model returning 200 with `content:""`
+/// and `done_reason:"stop"`), re-request up to this many times before surfacing
+/// the ⚠ empty-response warning. Turn-scoped like `MAX_CONTEXT_RETRIES` — a
+/// fresh user turn gets a fresh budget.
+pub const MAX_EMPTY_RETRIES: u32 = 3;
 
 /// Ensure a tool call has a stable, unique internal id. Some providers
 /// (Ollama native) emit tool calls with an empty id; propagating "" would make
@@ -928,14 +934,8 @@ async fn run_turn_inner(
     let turn_start = std::time::Instant::now();
     let mut iterations: u32 = 0;
     let mut context_retries: u32 = 0;
+    let mut empty_retries: u32 = 0;
     let mut outcome: &'static str = "completed";
-    // Whether the model produced any user-visible output (streamed text or a
-    // tool call) at any point this turn. When a turn ends cleanly having produced
-    // nothing — the signature of an empty upstream completion (e.g. a degraded
-    // model returning 200 with `content:""` and `done_reason:"stop"`) — we surface
-    // a ⚠ message instead of ending silently and leaving the UI to snap back to
-    // idle with no explanation.
-    let mut turn_produced_content = false;
     // Working directory for tool execution. TURN-scoped on purpose, not
     // sub-turn-scoped: `enter_worktree`/`exit_worktree` repoint this mid-turn
     // and the relocation must survive the sub-turn boundary. Re-initializing it
@@ -1019,6 +1019,11 @@ async fn run_turn_inner(
         let mut narration_capped = false;
         let mut narration_tokens: u64 = 0;
         let mut tool_call_seen_this_sub_turn = false;
+        // Whether THIS sub-turn produced any user-visible output (streamed text
+        // or a tool call). Unlike the old turn-scoped flag, this resets each
+        // sub-turn so a later empty completion (e.g. after a tool call) is also
+        // detected and retried, not silently stalled.
+        let mut sub_turn_produced_content = false;
         loop {
             let pe = tokio::select! {
                 biased;
@@ -1037,7 +1042,7 @@ async fn run_turn_inner(
             };
             match pe {
                 ProviderEvent::TextDelta(s) => {
-                    turn_produced_content = true;
+                    sub_turn_produced_content = true;
                     if dispatched_this_turn && !tool_call_seen_this_sub_turn {
                         narration_tokens += zoid_core::economy::estimate_tokens(&s);
                     }
@@ -1063,7 +1068,7 @@ async fn run_turn_inner(
                 ProviderEvent::ToolCall(mut tc) => {
                     tool_call_seen_this_sub_turn = true;
                     tc.id = ensure_tool_call_id(std::mem::take(&mut tc.id));
-                    turn_produced_content = true;
+                    sub_turn_produced_content = true;
                     emit(
                         &session,
                         &mut events,
@@ -1217,28 +1222,10 @@ async fn run_turn_inner(
         }
         let _ = stream_task.await;
 
-        // Marker only on a clean stream close: the context-length `continue
-        // 'turn` above and the error/abort `break 'turn` paths all exit before
-        // this point, so a rejected re-floor does not burn its interval.
-        if will_reassert {
-            let at = zoid_core::reassert::cumulative_appended(events.iter());
-            emit(
-                &session,
-                &mut events,
-                ui,
-                &config.branch,
-                EventKind::DirectiveReasserted { at_cumulative: at },
-                session_id,
-                now,
-            )
-            .await?;
-            let _ = ui
-                .send(AgentUpdate::DirectiveReasserted { at_cumulative: at })
-                .await;
-            tracing::info!(kind = "reassert", at, "re-floor fired");
-        }
-
         // Record the sub-turn's token usage so the economy ledger is live.
+        // Emitted BEFORE the empty-response retry below so an empty sub-turn's
+        // input tokens (prompt evaluation still costs tokens even when the model
+        // returns no content) are not silently dropped from the ledger.
         if turn_usage != zoid_core::event::TokenStat::default() {
             emit_with_tokens(
                 &session,
@@ -1276,6 +1263,51 @@ async fn run_turn_inner(
         )
         .await?;
 
+        // Empty upstream completion: the stream ended cleanly with no text, no
+        // tool call, and nothing pending. A degraded model often recovers on a
+        // re-request, so retry up to MAX_EMPTY_RETRIES before surfacing the ⚠
+        // warning. Placed before the reassert marker so a retried turn doesn't
+        // burn the re-floor interval (same rule as the context-length retry).
+        if pending.is_empty() && !sub_turn_produced_content && empty_retries < MAX_EMPTY_RETRIES {
+            empty_retries += 1;
+            thinking_buf.clear();
+            tracing::warn!(
+                ctx = "provider",
+                "empty response; retrying ({empty_retries}/{MAX_EMPTY_RETRIES})"
+            );
+            log_turn_warn(
+                &session,
+                "warn",
+                session_id,
+                &format!("empty response; retrying ({empty_retries}/{MAX_EMPTY_RETRIES})"),
+                None,
+            )
+            .await;
+            continue 'turn;
+        }
+
+        // Marker only on a clean stream close: the context-length and
+        // empty-response `continue 'turn` paths above and the error/abort
+        // `break 'turn` paths all exit before this point, so a rejected re-floor
+        // does not burn its interval.
+        if will_reassert {
+            let at = zoid_core::reassert::cumulative_appended(events.iter());
+            emit(
+                &session,
+                &mut events,
+                ui,
+                &config.branch,
+                EventKind::DirectiveReasserted { at_cumulative: at },
+                session_id,
+                now,
+            )
+            .await?;
+            let _ = ui
+                .send(AgentUpdate::DirectiveReasserted { at_cumulative: at })
+                .await;
+            tracing::info!(kind = "reassert", at, "re-floor fired");
+        }
+
         if pending.is_empty() {
             // Final answer: flush reasoning as ephemeral ModelThinking.
             if !thinking_buf.is_empty() {
@@ -1291,10 +1323,10 @@ async fn run_turn_inner(
                 )
                 .await?;
             }
-            // The turn ended without ever producing streamed text or a tool call:
+            // This sub-turn ended without producing streamed text or a tool call:
             // an empty upstream completion. Surface it so the UI doesn't just snap
             // back to idle with no explanation (spec: no silent turns).
-            if !turn_produced_content {
+            if !sub_turn_produced_content {
                 emit(
                     &session,
                     &mut events,
@@ -4297,15 +4329,221 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn empty_completion_retries_then_recovers() {
+        use ulid::Ulid;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::ProviderEvent;
+        // A degraded model returns an empty completion on the first request but a
+        // real reply on the retry. The turn must re-request (bounded) and surface
+        // the recovered text, not the ⚠ empty-response warning.
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "are you there?".into(),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![ProviderEvent::Done],
+            vec![ProviderEvent::TextDelta("hi".into()), ProviderEvent::Done],
+        ]));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider.clone(),
+            std::sync::Arc::new(zoid_tools::registry()),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::new(),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+        assert!(
+            out.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::ModelDelta { text } if text == "hi"
+            )),
+            "the retry must surface the recovered reply"
+        );
+        assert!(
+            !out.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::AssistantMessage { text }
+                    if text.starts_with(WARN_GLYPH) && text.contains("empty response")
+            )),
+            "a recovered retry must not surface the ⚠ empty-response warning"
+        );
+        assert_eq!(
+            provider.call_count(),
+            2,
+            "one empty response + one recovered reply = exactly two requests"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_completion_retries_are_bounded() {
+        use ulid::Ulid;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::ProviderEvent;
+        // A persistently-degraded model returns an empty completion on every
+        // request. The turn must retry exactly MAX_EMPTY_RETRIES times (so
+        // MAX_EMPTY_RETRIES + 1 total requests) and then surface the ⚠ warning.
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "are you there?".into(),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            vec![ProviderEvent::Done],
+            vec![ProviderEvent::Done],
+            vec![ProviderEvent::Done],
+            vec![ProviderEvent::Done],
+            // A fifth script would be consumed only if the retry were unbounded.
+            vec![ProviderEvent::TextDelta("late".into()), ProviderEvent::Done],
+        ]));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider.clone(),
+            std::sync::Arc::new(zoid_tools::registry()),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::new(),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+        assert!(
+            out.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::AssistantMessage { text }
+                    if text.starts_with(WARN_GLYPH) && text.contains("empty response")
+            )),
+            "a persistently-empty model must surface the ⚠ empty-response warning"
+        );
+        assert_eq!(
+            provider.call_count(),
+            MAX_EMPTY_RETRIES as usize + 1,
+            "the retry must be bounded to MAX_EMPTY_RETRIES + 1 total requests"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_completion_after_tool_call_is_retried() {
+        use ulid::Ulid;
+        use zoid_core::event::{Event, EventKind};
+        use zoid_provider::{ProviderEvent, ToolCall};
+        // A turn that already produced content (a tool call) can still hit an
+        // empty completion on a LATER sub-turn. The per-sub-turn flag must catch
+        // it and retry, rather than silently stalling (the old turn-scoped flag
+        // latched true on the first tool call and skipped both retry and warning).
+        let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
+        let seed = vec![Event::new(
+            Ulid::from(1u128),
+            None,
+            1,
+            EventKind::UserMessage {
+                text: "check git".into(),
+            },
+        )];
+        for e in &seed {
+            session.append(e.clone()).await.unwrap();
+        }
+        let provider = std::sync::Arc::new(SequencedProvider::new(vec![
+            // Sub-turn 1: a tool call (produces content, then a ToolResult).
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "g1".into(),
+                    name: "git_context".into(),
+                    args: serde_json::json!({}),
+                }),
+                ProviderEvent::Done,
+            ],
+            // Sub-turn 2: empty completion — must be retried.
+            vec![ProviderEvent::Done],
+            // Sub-turn 3: recovered reply.
+            vec![
+                ProviderEvent::TextDelta("clean".into()),
+                ProviderEvent::Done,
+            ],
+        ]));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let out = run_agent_turn(
+            chat_turn_config(),
+            provider.clone(),
+            std::sync::Arc::new(zoid_tools::registry()),
+            std::sync::Arc::new(zoid_tools::AllowAll),
+            session,
+            crate::eventlog::EventLog::from_vec(seed),
+            "m".into(),
+            tx,
+            Ulid::new(),
+            zoid_companion::CompanionHub::new(),
+            || 0,
+        )
+        .await
+        .unwrap();
+        assert!(
+            out.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::ModelDelta { text } if text == "clean"
+            )),
+            "a later empty sub-turn must be retried and recover"
+        );
+        assert!(
+            !out.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::AssistantMessage { text }
+                    if text.starts_with(WARN_GLYPH) && text.contains("empty response")
+            )),
+            "a recovered later sub-turn must not surface the ⚠ empty-response warning"
+        );
+        assert_eq!(
+            provider.call_count(),
+            3,
+            "tool call + empty retry + recovered reply = exactly three requests"
+        );
+    }
+
     // Test double: replays a different script per stream() call (retry / multi-request turns).
     struct SequencedProvider {
         scripts: std::sync::Mutex<std::collections::VecDeque<Vec<zoid_provider::ProviderEvent>>>,
+        calls: std::sync::atomic::AtomicUsize,
     }
     impl SequencedProvider {
         fn new(scripts: Vec<Vec<zoid_provider::ProviderEvent>>) -> Self {
             Self {
                 scripts: std::sync::Mutex::new(scripts.into_iter().collect()),
+                calls: std::sync::atomic::AtomicUsize::new(0),
             }
+        }
+        fn call_count(&self) -> usize {
+            self.calls.load(std::sync::atomic::Ordering::Relaxed)
         }
     }
     #[async_trait::async_trait]
@@ -4315,6 +4553,8 @@ mod tests {
             _req: &zoid_provider::CompletionRequest,
             sink: tokio::sync::mpsc::Sender<zoid_provider::ProviderEvent>,
         ) -> anyhow::Result<()> {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let script = self.scripts.lock().unwrap().pop_front().unwrap_or_default();
             for ev in script {
                 if sink.send(ev).await.is_err() {
