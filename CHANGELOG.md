@@ -4,6 +4,16 @@ All notable changes to zoid are documented here. Each `## X.Y.Z` section
 matches a released version tag; `cargo-dist` parses the section matching the
 tag being released and uses it as that release's announcement notes.
 
+## 1.1.1
+
+Retry empty model responses instead of stalling the loop. A degraded
+upstream model (e.g. Ollama Cloud `glm-5.2` returning 200 with
+`content:""` and `done_reason:"stop"`) yields a clean `Done` with no text
+or tool call; the agent now re-requests up to three times before surfacing
+the ⚠ empty-response warning, and detects emptiness per sub-turn so a later
+empty completion after a tool call is also retried. Also fixes a clippy
+lint in the embedding store.
+
 ## 1.1.0
 
 TOML-driven provider/model registry, Gemini as a first-class provider,
