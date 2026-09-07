@@ -94,7 +94,11 @@ pub fn conversation_lines_with_diffs(
 
 /// The clickable code-block map (line ranges + source) for the same inputs
 /// `conversation_lines` would render at Normal altitude. Called on demand (on a
-/// click), so the extra build cost is paid then, not every frame.
+/// click), so the extra build cost is paid then, not every frame. The
+/// edit-diff cache + inline-K window MUST match what the bin passed to the
+/// rendered body: inline diff lines occupy transcript rows, so a mismatch
+/// here shifts every later code block's line range and the click test misses.
+#[allow(clippy::too_many_arguments)]
 pub fn code_hits(
     msgs: &[ChatMsg],
     streaming: bool,
@@ -102,6 +106,8 @@ pub fn code_hits(
     tz_offset_secs: i32,
     width: usize,
     question: Option<&crate::question::QuestionState>,
+    edit_diffs: &[(String, crate::state::RenderDiff)],
+    inline_k: usize,
 ) -> Vec<CodeHit> {
     let mut hits = Vec::new();
     build_conversation(
@@ -112,8 +118,8 @@ pub fn code_hits(
             tz_offset_secs,
             width,
             question,
-            edit_diffs: &[],
-            inline_k: 0,
+            edit_diffs,
+            inline_k,
         },
         &mut hits,
         &mut Vec::new(),
@@ -125,6 +131,9 @@ pub fn code_hits(
 /// The clickable choice-row map for an open question card, like `code_hits`.
 /// Returns one entry per rendered choice line in the open card, so a click can
 /// select+submit it. Empty if no question is open or the card is answered.
+/// The edit-diff cache + inline-K window must match the rendered body for the
+/// same reason as `code_hits`: inline diff lines shift the card's line indices.
+#[allow(clippy::too_many_arguments)]
 pub fn question_choice_hits(
     msgs: &[ChatMsg],
     streaming: bool,
@@ -132,6 +141,8 @@ pub fn question_choice_hits(
     tz_offset_secs: i32,
     width: usize,
     question: Option<&crate::question::QuestionState>,
+    edit_diffs: &[(String, crate::state::RenderDiff)],
+    inline_k: usize,
 ) -> Vec<QuestionChoiceHit> {
     let mut choices = Vec::new();
     build_conversation(
@@ -142,8 +153,8 @@ pub fn question_choice_hits(
             tz_offset_secs,
             width,
             question,
-            edit_diffs: &[],
-            inline_k: 0,
+            edit_diffs,
+            inline_k,
         },
         &mut Vec::new(),
         &mut Vec::new(),
@@ -1495,7 +1506,7 @@ mod tests {
                 ts: 0,
             },
         ];
-        let hits = code_hits(&msgs, false, true, 0, 80, None);
+        let hits = code_hits(&msgs, false, true, 0, 80, None, &[], 0);
         assert_eq!(hits.len(), 2, "one hit per top-level block");
         assert!(hits[0].source.contains("let a = 1;"));
         assert!(hits[1].source.contains("let b = 2;"));
@@ -1532,7 +1543,7 @@ mod tests {
                 ts: 0,
             },
         ];
-        let hits = code_hits(&msgs, false, true, 0, 80, None);
+        let hits = code_hits(&msgs, false, true, 0, 80, None, &[], 0);
         // Only the second (non-bailed) block is clickable…
         assert_eq!(hits.len(), 1, "bailed message emits no clickable block");
         // …and it copies its OWN source, never the phantom from the bailed fence.
@@ -1543,6 +1554,82 @@ mod tests {
         assert!(
             !hits[0].source.contains("PHANTOM"),
             "no phantom source leaked from the bailed message"
+        );
+    }
+
+    // Regression (v1.1.0+): the bin renders the transcript WITH inline edit-diff
+    // lines (edit_diffs + inline_k), but code_hits built its click map with an
+    // empty diff cache. Every code block after an inline diff shifted by the
+    // diff's row count, so clicking it missed the hit test — copy silently
+    // stopped working for blocks below any recent edit/write result. The fix
+    // threads the SAME diffs + window through code_hits, so here the hit must
+    // be built from the same inputs the body was.
+    #[test]
+    fn code_hits_match_inline_diff_shifted_blocks() {
+        use crate::state::{RenderDiff, RenderDiffKind, RenderDiffLine};
+        use zoid_core::projection::ChatMsg;
+        let msgs = vec![
+            ChatMsg::ToolResult {
+                id: "tc1".into(),
+                name: "edit".into(),
+                output: "edited f.rs (1 change(s))".into(),
+                is_error: false,
+                error_kind: None,
+                compacted: false,
+                ts: 0,
+            },
+            ChatMsg::Assistant {
+                thinking: None,
+                text: "after the edit:\n\n```rust\nlet x = 42;\n```".into(),
+                tool_calls: vec![],
+                ts: 0,
+            },
+        ];
+        let diff = RenderDiff {
+            path: "f.rs".into(),
+            added: 2,
+            removed: 1,
+            truncated_by: 0,
+            lines: vec![
+                RenderDiffLine {
+                    old_no: Some(2),
+                    new_no: None,
+                    kind: RenderDiffKind::Del,
+                    text: "b".into(),
+                },
+                RenderDiffLine {
+                    old_no: None,
+                    new_no: Some(2),
+                    kind: RenderDiffKind::Add,
+                    text: "B".into(),
+                },
+            ],
+        };
+        let cache = vec![("tc1".to_string(), diff)];
+        // The rendered body (what the user sees and clicks on) includes the
+        // 2 inline diff rows.
+        let body = conversation_lines_with_diffs(&msgs, false, true, 0, 80, None, &cache, 5);
+        // The click map must be built from the same inputs.
+        let hits = code_hits(&msgs, false, true, 0, 80, None, &cache, 5);
+        assert_eq!(hits.len(), 1, "one clickable block after the diff");
+        let h = &hits[0];
+        assert!(h.source.contains("let x = 42;"));
+        // The hit's header row must fall inside the rendered body…
+        assert!(
+            h.header_line < body.len(),
+            "header row {h:?} must index the rendered body ({} lines)",
+            body.len()
+        );
+        // …and its row must actually be the block's header (the row carrying
+        // the raw source text), not a diff row above it.
+        let header_row: String = body[h.header_line]
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(
+            header_row.contains("rust"),
+            "clicked row must be the ```rust panel header, got: {header_row:?}"
         );
     }
 
