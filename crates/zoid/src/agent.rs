@@ -283,6 +283,10 @@ pub struct TurnConfig {
     pub reg: std::sync::Arc<zoid_model::Registry>,
     /// The provider id this turn runs under (e.g. "opencode-go"). Empty in tests.
     pub provider_id: String,
+    /// Base backoff between empty-response nudges. `None` = the default
+    /// exponential backoff (`BASE_EMPTY_BACKOFF` doubling, capped at
+    /// `MAX_EMPTY_BACKOFF`). Tests set `Some(Duration::ZERO)` to skip the sleep.
+    pub empty_backoff_base: Option<std::time::Duration>,
 }
 
 // Manual `Debug`: `embed`/`embedder` hold a trait object (`dyn Embedder`) and
@@ -312,6 +316,7 @@ impl std::fmt::Debug for TurnConfig {
             .field("agents", &self.agents.is_some())
             .field("reg", &self.reg)
             .field("provider_id", &self.provider_id)
+            .field("empty_backoff_base", &self.empty_backoff_base)
             .finish()
     }
 }
@@ -374,6 +379,7 @@ pub fn chat_turn_config_with(profile: &AgentProfile, skill_menu: &str) -> TurnCo
         max_concurrent: 3,
         reg: std::sync::Arc::new(zoid_model::Registry::default()),
         provider_id: String::new(),
+        empty_backoff_base: None,
     }
 }
 
@@ -402,12 +408,23 @@ const DISPATCH_NARRATION_BUDGET_TOKENS: u64 = 60;
 /// the request as too large. Each retry forces an eviction wave before
 /// re-sending, so this also bounds the number of forced eviction waves per turn.
 pub const MAX_CONTEXT_RETRIES: u32 = 3;
-/// Bound on the empty-response retry: when a provider returns a clean `Done`
+/// Bound on the empty-response nudge: when a provider returns a clean `Done`
 /// with no content (a degraded upstream model returning 200 with `content:""`
-/// and `done_reason:"stop"`), re-request up to this many times before surfacing
-/// the ⚠ empty-response warning. Turn-scoped like `MAX_CONTEXT_RETRIES` — a
-/// fresh user turn gets a fresh budget.
-pub const MAX_EMPTY_RETRIES: u32 = 3;
+/// and `done_reason:"stop"`), inject a short "your response was empty" user
+/// message and continue the loop up to this many times before surfacing the
+/// ⚠ empty-response warning. Each nudge is a distinct persisted event, so the
+/// model sees it in context on the next sub-turn (unlike a blind re-request of
+/// the identical prompt). Turn-scoped like `MAX_CONTEXT_RETRIES` — a fresh user
+/// turn gets a fresh budget. Kept small (5) so a persistently-degraded model
+/// doesn't burn tokens on an unbounded loop.
+pub const MAX_EMPTY_RETRIES: u32 = 5;
+
+/// Base backoff between empty-response nudges. Each successive nudge waits
+/// `BASE_EMPTY_BACKOFF * 2^(n-1)` (capped at `MAX_EMPTY_BACKOFF`) so a
+/// transient upstream blip has time to clear before the next request, without
+/// stalling a genuinely-degraded model for long.
+const BASE_EMPTY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(500);
+const MAX_EMPTY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(4);
 
 /// Ensure a tool call has a stable, unique internal id. Some providers
 /// (Ollama native) emit tool calls with an empty id; propagating "" would make
@@ -1264,25 +1281,52 @@ async fn run_turn_inner(
         .await?;
 
         // Empty upstream completion: the stream ended cleanly with no text, no
-        // tool call, and nothing pending. A degraded model often recovers on a
-        // re-request, so retry up to MAX_EMPTY_RETRIES before surfacing the ⚠
-        // warning. Placed before the reassert marker so a retried turn doesn't
-        // burn the re-floor interval (same rule as the context-length retry).
+        // tool call, and nothing pending. A degraded model often recovers when
+        // told its reply was empty, so inject a short user message and continue
+        // the loop up to MAX_EMPTY_RETRIES before surfacing the ⚠ warning. The
+        // nudge is a persisted UserMessage, so the next sub-turn's request
+        // carries it in context — unlike a blind re-request of the identical
+        // prompt, which deterministically fails again. Placed before the
+        // reassert marker so a nudged turn doesn't burn the re-floor interval
+        // (same rule as the context-length retry).
         if pending.is_empty() && !sub_turn_produced_content && empty_retries < MAX_EMPTY_RETRIES {
             empty_retries += 1;
             thinking_buf.clear();
             tracing::warn!(
                 ctx = "provider",
-                "empty response; retrying ({empty_retries}/{MAX_EMPTY_RETRIES})"
+                "empty response; nudging ({empty_retries}/{MAX_EMPTY_RETRIES})"
             );
             log_turn_warn(
                 &session,
                 "warn",
                 session_id,
-                &format!("empty response; retrying ({empty_retries}/{MAX_EMPTY_RETRIES})"),
+                &format!("empty response; nudging ({empty_retries}/{MAX_EMPTY_RETRIES})"),
                 None,
             )
             .await;
+            // Back off before re-requesting so a transient upstream blip can
+            // clear. Exponential with a cap: 0.5s, 1s, 2s, 4s, 4s. Tests inject
+            // `Some(Duration::ZERO)` to skip the sleep.
+            let base = config.empty_backoff_base.unwrap_or(BASE_EMPTY_BACKOFF);
+            let backoff = base
+                .saturating_mul(2u32.pow(empty_retries.saturating_sub(1)))
+                .min(MAX_EMPTY_BACKOFF);
+            tokio::time::sleep(backoff).await;
+            emit(
+                &session,
+                &mut events,
+                ui,
+                &config.branch,
+                EventKind::UserMessage {
+                    text: format!(
+                        "[system] your previous response was empty — please continue \
+                         (attempt {empty_retries}/{MAX_EMPTY_RETRIES})."
+                    ),
+                },
+                session_id,
+                now,
+            )
+            .await?;
             continue 'turn;
         }
 
@@ -4304,8 +4348,10 @@ mod tests {
             std::sync::Arc::new(zoid_provider::FakeProvider::new(vec![ProviderEvent::Done]));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let mut cfg = chat_turn_config();
+        cfg.empty_backoff_base = Some(std::time::Duration::ZERO);
         let out = run_agent_turn(
-            chat_turn_config(),
+            cfg,
             provider,
             std::sync::Arc::new(zoid_tools::registry()),
             std::sync::Arc::new(zoid_tools::AllowAll),
@@ -4355,8 +4401,10 @@ mod tests {
         ]));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let mut cfg = chat_turn_config();
+        cfg.empty_backoff_base = Some(std::time::Duration::ZERO);
         let out = run_agent_turn(
-            chat_turn_config(),
+            cfg,
             provider.clone(),
             std::sync::Arc::new(zoid_tools::registry()),
             std::sync::Arc::new(zoid_tools::AllowAll),
@@ -4398,7 +4446,7 @@ mod tests {
         use zoid_core::event::{Event, EventKind};
         use zoid_provider::ProviderEvent;
         // A persistently-degraded model returns an empty completion on every
-        // request. The turn must retry exactly MAX_EMPTY_RETRIES times (so
+        // request. The turn must nudge exactly MAX_EMPTY_RETRIES times (so
         // MAX_EMPTY_RETRIES + 1 total requests) and then surface the ⚠ warning.
         let session = zoid_core::session::SessionHandle::spawn(":memory:").unwrap();
         let seed = vec![Event::new(
@@ -4417,13 +4465,17 @@ mod tests {
             vec![ProviderEvent::Done],
             vec![ProviderEvent::Done],
             vec![ProviderEvent::Done],
-            // A fifth script would be consumed only if the retry were unbounded.
+            vec![ProviderEvent::Done],
+            vec![ProviderEvent::Done],
+            // A seventh script would be consumed only if the nudge were unbounded.
             vec![ProviderEvent::TextDelta("late".into()), ProviderEvent::Done],
         ]));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let mut cfg = chat_turn_config();
+        cfg.empty_backoff_base = Some(std::time::Duration::ZERO);
         let out = run_agent_turn(
-            chat_turn_config(),
+            cfg,
             provider.clone(),
             std::sync::Arc::new(zoid_tools::registry()),
             std::sync::Arc::new(zoid_tools::AllowAll),
@@ -4448,7 +4500,23 @@ mod tests {
         assert_eq!(
             provider.call_count(),
             MAX_EMPTY_RETRIES as usize + 1,
-            "the retry must be bounded to MAX_EMPTY_RETRIES + 1 total requests"
+            "the nudge must be bounded to MAX_EMPTY_RETRIES + 1 total requests"
+        );
+        // Each nudge is a persisted UserMessage, so the model sees it in context
+        // on the next sub-turn (not a blind re-request of the identical prompt).
+        let nudges = out
+            .iter()
+            .filter(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::UserMessage { text }
+                        if text.starts_with("[system] your previous response was empty")
+                )
+            })
+            .count();
+        assert_eq!(
+            nudges, MAX_EMPTY_RETRIES as usize,
+            "exactly MAX_EMPTY_RETRIES nudge messages must be injected"
         );
     }
 
@@ -4493,8 +4561,10 @@ mod tests {
         ]));
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let mut cfg = chat_turn_config();
+        cfg.empty_backoff_base = Some(std::time::Duration::ZERO);
         let out = run_agent_turn(
-            chat_turn_config(),
+            cfg,
             provider.clone(),
             std::sync::Arc::new(zoid_tools::registry()),
             std::sync::Arc::new(zoid_tools::AllowAll),

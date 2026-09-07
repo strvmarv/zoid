@@ -192,6 +192,7 @@ pub async fn run_subagent(
         max_concurrent: 3, // subagents never dispatch; pool size is irrelevant
         reg,
         provider_id,
+        empty_backoff_base: None,
     };
     // Subagents have no session-scoped companion (the `show` tool is chat-only
     // and is never in the subagent tool registry), so this hub is never
