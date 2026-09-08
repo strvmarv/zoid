@@ -1,0 +1,10 @@
+[plugin]
+id = "total-recall"
+schema = 1
+kind = ["mcp"]
+name = "Total Recall"
+description = "Multi-tiered memory and knowledge base with semantic search, auto-compaction, and built-in evaluation, over MCP (stdio)."
+
+[mcp.servers.total-recall]
+command = "npx"
+args = ["-y", "@strvmarv/total-recall"]
