@@ -1304,14 +1304,11 @@ async fn run_turn_inner(
                 None,
             )
             .await;
-            // Back off before re-requesting so a transient upstream blip can
-            // clear. Exponential with a cap: 0.5s, 1s, 2s, 4s, 4s. Tests inject
-            // `Some(Duration::ZERO)` to skip the sleep.
-            let base = config.empty_backoff_base.unwrap_or(BASE_EMPTY_BACKOFF);
-            let backoff = base
-                .saturating_mul(2u32.pow(empty_retries.saturating_sub(1)))
-                .min(MAX_EMPTY_BACKOFF);
-            tokio::time::sleep(backoff).await;
+            // Emit the nudge FIRST (Copilot review): it's persisted + visible in
+            // the transcript immediately, and the next request is built with it
+            // in context regardless of how long the backoff runs. If a cancel
+            // lands during the backoff, the stray nudge is harmless (a plain
+            // UserMessage the next turn reads as system noise).
             emit(
                 &session,
                 &mut events,
@@ -1327,6 +1324,24 @@ async fn run_turn_inner(
                 now,
             )
             .await?;
+            // Then back off before re-requesting so a transient upstream blip
+            // can clear. Cancellation-aware (Copilot review): a cancel during
+            // the wait falls through to `continue 'turn`, and the loop-top check
+            // aborts the turn promptly instead of sleeping through up to
+            // MAX_EMPTY_BACKOFF. Exponential with a cap: 0.5s, 1s, 2s, 4s, 4s.
+            // Tests inject `Some(Duration::ZERO)` to skip the sleep entirely.
+            let base = config.empty_backoff_base.unwrap_or(BASE_EMPTY_BACKOFF);
+            let backoff = base
+                .saturating_mul(2u32.pow(empty_retries.saturating_sub(1)))
+                .min(MAX_EMPTY_BACKOFF);
+            if !backoff.is_zero() {
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => {}
+                    _ = hard.cancelled() => {}
+                    _ = tokio::time::sleep(backoff) => {}
+                }
+            }
             continue 'turn;
         }
 
