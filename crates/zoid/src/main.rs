@@ -1057,6 +1057,14 @@ fn handle_conversation_click(app: &mut App, layout: &zoid_tui::layout::ShellLayo
     let clicked_line = app.shell.conversation_scroll as usize + (row - conv.y) as usize;
     let width = zoid_tui::layout::conv_text_width(conv.width) as usize;
     let msgs = conversation(app.events.iter());
+    // The click-time line maps must be built from the SAME edit-diff cache +
+    // inline-K window the rendered body used (inline diff lines occupy rows, so
+    // a mismatch shifts every later block's line range and the hit test misses).
+    let inline_k = if app.config.ui.edit_diff {
+        app.config.ui.edit_diff_inline as usize
+    } else {
+        0
+    };
     // Check question choice hits first — a click on a choice row selects +
     // submits it (so the user can click instead of arrow+Enter).
     if app.shell.question.is_some() {
@@ -1067,6 +1075,8 @@ fn handle_conversation_click(app: &mut App, layout: &zoid_tui::layout::ShellLayo
             app.tz_offset_secs,
             width,
             app.shell.question.as_ref(),
+            &app.shell.edit_diffs,
+            inline_k,
         );
         if let Some(hit) = choices.into_iter().find(|h| h.line == clicked_line) {
             answer_question(app, zoid::agent::Answer::Choice(hit.choice));
@@ -1080,6 +1090,8 @@ fn handle_conversation_click(app: &mut App, layout: &zoid_tui::layout::ShellLayo
         app.tz_offset_secs,
         width,
         app.shell.question.as_ref(),
+        &app.shell.edit_diffs,
+        inline_k,
     );
     if let Some(h) = hits
         .into_iter()
