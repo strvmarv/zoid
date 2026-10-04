@@ -1304,7 +1304,7 @@ async fn run_turn_inner(
                 None,
             )
             .await;
-            // Emit the nudge FIRST (Copilot review): it's persisted + visible in
+            // Emit the nudge FIRST: it's persisted + visible in
             // the transcript immediately, and the next request is built with it
             // in context regardless of how long the backoff runs. If a cancel
             // lands during the backoff, the stray nudge is harmless (a plain
@@ -1325,7 +1325,7 @@ async fn run_turn_inner(
             )
             .await?;
             // Then back off before re-requesting so a transient upstream blip
-            // can clear. Cancellation-aware (Copilot review): a cancel during
+            // can clear. Cancellation-aware: a cancel during
             // the wait falls through to `continue 'turn`, and the loop-top check
             // aborts the turn promptly instead of sleeping through up to
             // MAX_EMPTY_BACKOFF. Exponential with a cap: 0.5s, 1s, 2s, 4s, 4s.
