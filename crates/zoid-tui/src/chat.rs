@@ -93,7 +93,7 @@ pub fn conversation_lines_with_diffs(
 }
 
 /// The clickable code-block map (line ranges + source) for the same inputs
-/// `conversation_lines` would render at Normal altitude. Called on demand (on a
+/// `conversation_lines_with_diffs` would render at Normal altitude. Called on demand (on a
 /// click), so the extra build cost is paid then, not every frame. The
 /// edit-diff cache + inline-K window MUST match what the bin passed to the
 /// rendered body: inline diff lines occupy transcript rows, so a mismatch
